@@ -6,11 +6,18 @@ import {
 	type WrappedCanvas,
 } from "mediabunny";
 
+export interface VideoFrameCanvas {
+	canvas: OffscreenCanvas | HTMLCanvasElement;
+	timestamp: number;
+	duration: number;
+}
+
 interface VideoSinkData {
 	sink: CanvasSink;
 	iterator: AsyncGenerator<WrappedCanvas, void, unknown> | null;
 	currentFrame: WrappedCanvas | null;
 	nextFrame: WrappedCanvas | null;
+	previewProxyScale: number;
 	lastTime: number;
 	prefetching: boolean;
 	prefetchPromise: Promise<void> | null;
@@ -24,12 +31,19 @@ export class VideoCache {
 		mediaId,
 		file,
 		time,
+		proxyScale,
 	}: {
 		mediaId: string;
 		file: File;
 		time: number;
-	}): Promise<WrappedCanvas | null> {
-		await this.ensureSink({ mediaId, file });
+		proxyScale?: number;
+	}): Promise<VideoFrameCanvas | null> {
+		const normalizedProxyScale = this.normalizeProxyScale({ proxyScale });
+		await this.ensureSink({
+			mediaId,
+			file,
+			previewProxyScale: normalizedProxyScale,
+		});
 
 		const sinkData = this.sinks.get(mediaId);
 		if (!sinkData) return null;
@@ -47,7 +61,7 @@ export class VideoCache {
 			if (!sinkData.nextFrame && !sinkData.prefetching) {
 				this.startPrefetch({ sinkData });
 			}
-			return sinkData.currentFrame;
+			return this.toPreviewFrame({ frame: sinkData.currentFrame });
 		}
 
 		if (
@@ -61,7 +75,7 @@ export class VideoCache {
 				if (!sinkData.nextFrame && !sinkData.prefetching) {
 					this.startPrefetch({ sinkData });
 				}
-				return frame;
+				return this.toPreviewFrame({ frame });
 			}
 		}
 
@@ -69,7 +83,25 @@ export class VideoCache {
 		if (frame && !sinkData.nextFrame && !sinkData.prefetching) {
 			this.startPrefetch({ sinkData });
 		}
-		return frame;
+		return frame ? this.toPreviewFrame({ frame }) : null;
+	}
+
+	private normalizeProxyScale({ proxyScale }: { proxyScale?: number }): number {
+		if (typeof proxyScale !== "number" || !Number.isFinite(proxyScale))
+			return 1;
+		return Math.max(0.25, Math.min(1, proxyScale));
+	}
+
+	private toPreviewFrame({
+		frame,
+	}: {
+		frame: WrappedCanvas;
+	}): VideoFrameCanvas {
+		return {
+			canvas: frame.canvas,
+			timestamp: frame.timestamp,
+			duration: frame.duration,
+		};
 	}
 
 	private isFrameValid({
@@ -219,18 +251,30 @@ export class VideoCache {
 	private async ensureSink({
 		mediaId,
 		file,
+		previewProxyScale,
 	}: {
 		mediaId: string;
 		file: File;
+		previewProxyScale: number;
 	}): Promise<void> {
-		if (this.sinks.has(mediaId)) return;
+		const current = this.sinks.get(mediaId);
+		if (current) {
+			if (Math.abs(current.previewProxyScale - previewProxyScale) < 0.0001) {
+				return;
+			}
+			this.clearVideo({ mediaId });
+		}
 
 		if (this.initPromises.has(mediaId)) {
 			await this.initPromises.get(mediaId);
 			return;
 		}
 
-		const initPromise = this.initializeSink({ mediaId, file });
+		const initPromise = this.initializeSink({
+			mediaId,
+			file,
+			previewProxyScale,
+		});
 		this.initPromises.set(mediaId, initPromise);
 
 		try {
@@ -242,9 +286,11 @@ export class VideoCache {
 	private async initializeSink({
 		mediaId,
 		file,
+		previewProxyScale,
 	}: {
 		mediaId: string;
 		file: File;
+		previewProxyScale: number;
 	}): Promise<void> {
 		try {
 			const input = new Input({
@@ -262,9 +308,12 @@ export class VideoCache {
 				throw new Error("Video codec not supported for decoding");
 			}
 
+			const proxyScale = Math.max(0.25, Math.min(1, previewProxyScale));
 			const sink = new CanvasSink(videoTrack, {
 				poolSize: 3,
 				fit: "contain",
+				width: Math.max(1, Math.round(videoTrack.displayWidth * proxyScale)),
+				height: Math.max(1, Math.round(videoTrack.displayHeight * proxyScale)),
 			});
 
 			this.sinks.set(mediaId, {
@@ -272,6 +321,7 @@ export class VideoCache {
 				iterator: null,
 				currentFrame: null,
 				nextFrame: null,
+				previewProxyScale,
 				lastTime: -1,
 				prefetching: false,
 				prefetchPromise: null,

@@ -8,6 +8,8 @@ type TextRect = {
 	height: number;
 };
 
+export type TextBackgroundMode = "block" | "line-fit";
+
 export interface TextBlockMeasurement {
 	visualCenterOffset: number;
 	height: number;
@@ -50,10 +52,7 @@ export function measureTextBlock({
 	for (let index = 0; index < lineMetrics.length; index++) {
 		const metrics = lineMetrics[index];
 		const lineY = index * lineHeightPx;
-		top = Math.min(
-			top,
-			lineY - getMetricAscent({ metrics, fallbackFontSize }),
-		);
+		top = Math.min(top, lineY - getMetricAscent({ metrics, fallbackFontSize }));
 		bottom = Math.max(
 			bottom,
 			lineY + getMetricDescent({ metrics, fallbackFontSize }),
@@ -75,7 +74,11 @@ function getTextRect({
 	block: TextBlockMeasurement;
 }): TextRect {
 	const left =
-		textAlign === "left" ? 0 : textAlign === "right" ? -block.maxWidth : -block.maxWidth / 2;
+		textAlign === "left"
+			? 0
+			: textAlign === "right"
+				? -block.maxWidth
+				: -block.maxWidth / 2;
 
 	return {
 		left,
@@ -164,4 +167,199 @@ export function getTextVisualRect({
 		width: right - left,
 		height: bottom - top,
 	};
+}
+
+function getLineLeft({
+	textAlign,
+	lineWidth,
+}: {
+	textAlign: TextElement["textAlign"];
+	lineWidth: number;
+}): number {
+	if (textAlign === "left") return 0;
+	if (textAlign === "right") return -lineWidth;
+	return -lineWidth / 2;
+}
+
+export function getLineFitBackgroundRects({
+	textAlign,
+	block,
+	lineMetrics,
+	lineHeightPx,
+	fallbackFontSize,
+	background,
+	fontSizeRatio = 1,
+}: {
+	textAlign: TextElement["textAlign"];
+	block: TextBlockMeasurement;
+	lineMetrics: TextMetrics[];
+	lineHeightPx: number;
+	fallbackFontSize: number;
+	background: TextElement["background"];
+	fontSizeRatio?: number;
+}): TextRect[] {
+	if (!isTextBackgroundVisible({ background })) {
+		return [];
+	}
+
+	const paddingX =
+		(background.paddingX ?? DEFAULT_TEXT_BACKGROUND.paddingX) * fontSizeRatio;
+	const paddingY =
+		(background.paddingY ?? DEFAULT_TEXT_BACKGROUND.paddingY) * fontSizeRatio;
+	const offsetX = background.offsetX ?? DEFAULT_TEXT_BACKGROUND.offsetX;
+	const offsetY = background.offsetY ?? DEFAULT_TEXT_BACKGROUND.offsetY;
+	const baseAscent = fallbackFontSize * 0.8;
+	const baseDescent = fallbackFontSize * 0.2;
+	const uniformGlyphHeight = baseAscent + baseDescent;
+	const uniformHeight = uniformGlyphHeight + paddingY * 2;
+
+	return lineMetrics.map((metrics, index) => {
+		const lineY = index * lineHeightPx - block.visualCenterOffset;
+		const lineLeft = getLineLeft({
+			textAlign,
+			lineWidth: metrics.width,
+		});
+		return {
+			left: lineLeft - paddingX + offsetX,
+			top: lineY - uniformGlyphHeight / 2 - paddingY + offsetY,
+			width: Math.max(0, metrics.width + paddingX * 2),
+			height: Math.max(0, uniformHeight),
+		};
+	});
+}
+
+export function getTextVisualRectForBackgroundMode({
+	textAlign,
+	block,
+	lineMetrics,
+	lineHeightPx,
+	fallbackFontSize,
+	background,
+	backgroundMode = "block",
+	fontSizeRatio = 1,
+}: {
+	textAlign: TextElement["textAlign"];
+	block: TextBlockMeasurement;
+	lineMetrics: TextMetrics[];
+	lineHeightPx: number;
+	fallbackFontSize: number;
+	background: TextElement["background"];
+	backgroundMode?: TextBackgroundMode;
+	fontSizeRatio?: number;
+}): TextRect {
+	if (backgroundMode !== "line-fit") {
+		return getTextVisualRect({
+			textAlign,
+			block,
+			background,
+			fontSizeRatio,
+		});
+	}
+
+	const textRect = getTextRect({ textAlign, block });
+	const rects = getLineFitBackgroundRects({
+		textAlign,
+		block,
+		lineMetrics,
+		lineHeightPx,
+		fallbackFontSize,
+		background,
+		fontSizeRatio,
+	});
+
+	if (rects.length === 0) return textRect;
+
+	let left = Number.POSITIVE_INFINITY;
+	let top = Number.POSITIVE_INFINITY;
+	let right = Number.NEGATIVE_INFINITY;
+	let bottom = Number.NEGATIVE_INFINITY;
+
+	for (const rect of rects) {
+		left = Math.min(left, rect.left);
+		top = Math.min(top, rect.top);
+		right = Math.max(right, rect.left + rect.width);
+		bottom = Math.max(bottom, rect.top + rect.height);
+	}
+
+	left = Math.min(left, textRect.left);
+	top = Math.min(top, textRect.top);
+	right = Math.max(right, textRect.left + textRect.width);
+	bottom = Math.max(bottom, textRect.top + textRect.height);
+
+	return {
+		left,
+		top,
+		width: right - left,
+		height: bottom - top,
+	};
+}
+
+export function resolveTextPlacement({
+	canvasWidth,
+	canvasHeight,
+	positionX,
+	positionY,
+	scale,
+	visualRect,
+	fitInCanvas,
+}: {
+	canvasWidth: number;
+	canvasHeight: number;
+	positionX: number;
+	positionY: number;
+	scale: number;
+	visualRect: TextRect;
+	fitInCanvas?: boolean;
+}): { x: number; y: number; effectiveScale: number } {
+	let x = positionX;
+	let y = positionY;
+	let effectiveScale = scale;
+
+	if (!fitInCanvas) {
+		return { x, y, effectiveScale };
+	}
+
+	const margin = Math.min(canvasWidth, canvasHeight) * 0.04;
+	const availableWidth = canvasWidth - margin * 2;
+	const availableHeight = canvasHeight - margin * 2;
+	const scaledWidth = visualRect.width * effectiveScale;
+	const scaledHeight = visualRect.height * effectiveScale;
+
+	if (scaledWidth > 0 && scaledHeight > 0) {
+		const fitScale = Math.min(
+			1,
+			availableWidth / scaledWidth,
+			availableHeight / scaledHeight,
+		);
+		effectiveScale *= fitScale;
+	}
+
+	const left = x + visualRect.left * effectiveScale;
+	const right = x + (visualRect.left + visualRect.width) * effectiveScale;
+	const top = y + visualRect.top * effectiveScale;
+	const bottom = y + (visualRect.top + visualRect.height) * effectiveScale;
+
+	if (right - left <= availableWidth) {
+		const minX = margin - visualRect.left * effectiveScale;
+		const maxX =
+			canvasWidth -
+			margin -
+			(visualRect.left + visualRect.width) * effectiveScale;
+		x = Math.min(Math.max(x, minX), maxX);
+	} else {
+		x = canvasWidth / 2;
+	}
+
+	if (bottom - top <= availableHeight) {
+		const minY = margin - visualRect.top * effectiveScale;
+		const maxY =
+			canvasHeight -
+			margin -
+			(visualRect.top + visualRect.height) * effectiveScale;
+		y = Math.min(Math.max(y, minY), maxY);
+	} else {
+		y = canvasHeight / 2;
+	}
+
+	return { x, y, effectiveScale };
 }

@@ -44,4 +44,9 @@ export interface CaptionChunk {
 	text: string;
 	startTime: number;
 	duration: number;
+	wordTimings: Array<{
+		word: string;
+		startTime: number;
+		endTime: number;
+	}>;
 }

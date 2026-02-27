@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useEffect } from "react";
 import useDeepCompareEffect from "use-deep-compare-effect";
 import { useEditor } from "@/hooks/use-editor";
 import { useRafLoop } from "@/hooks/use-raf-loop";
@@ -16,6 +16,25 @@ import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { usePreviewStore } from "@/stores/preview-store";
 import { PreviewContextMenu } from "./context-menu";
 import { PreviewToolbar } from "./toolbar";
+import { videoCache } from "@/services/video-cache/service";
+
+const PREVIEW_PROFILES = {
+	performance: {
+		videoFrameRateCap: 12,
+		renderFrameRateCap: 15,
+		videoProxyScale: 0.4,
+	},
+	balanced: {
+		videoFrameRateCap: 18,
+		renderFrameRateCap: 24,
+		videoProxyScale: 0.6,
+	},
+	full: {
+		videoFrameRateCap: Number.POSITIVE_INFINITY,
+		renderFrameRateCap: Number.POSITIVE_INFINITY,
+		videoProxyScale: 1,
+	},
+} as const;
 
 function usePreviewSize() {
 	const editor = useEditor();
@@ -56,8 +75,23 @@ function RenderTreeController() {
 	const tracks = editor.timeline.getTracks();
 	const mediaAssets = editor.media.getAssets();
 	const activeProject = editor.project.getActive();
+	const { playbackQuality } = usePreviewStore();
+	const previewProfile = PREVIEW_PROFILES[playbackQuality];
+	const previewVideoFrameRateCap = Math.min(
+		activeProject.settings.fps,
+		previewProfile.videoFrameRateCap,
+	);
+	const previewVideoProxyScale = previewProfile.videoProxyScale;
+	const activeProjectId = activeProject.metadata.id;
 
 	const { width, height } = usePreviewSize();
+
+	useEffect(() => {
+		void activeProjectId;
+		void playbackQuality;
+		void previewVideoProxyScale;
+		videoCache.clearAll();
+	}, [activeProjectId, playbackQuality, previewVideoProxyScale]);
 
 	useDeepCompareEffect(() => {
 		if (!activeProject) return;
@@ -70,10 +104,21 @@ function RenderTreeController() {
 			canvasSize: { width, height },
 			background: activeProject.settings.background,
 			isPreview: true,
+			previewFrameRateCap: previewVideoFrameRateCap,
+			previewProxyScale: previewVideoProxyScale,
 		});
 
 		editor.renderer.setRenderTree({ renderTree });
-	}, [tracks, mediaAssets, activeProject?.settings.background, width, height]);
+	}, [
+		tracks,
+		mediaAssets,
+		activeProject?.settings.background,
+		width,
+		height,
+		previewVideoFrameRateCap,
+		previewVideoProxyScale,
+		playbackQuality,
+	]);
 
 	return null;
 }
@@ -91,17 +136,27 @@ function PreviewCanvas({
 	const lastFrameRef = useRef(-1);
 	const lastSceneRef = useRef<RootNode | null>(null);
 	const renderingRef = useRef(false);
+	const pendingRenderRef = useRef<{
+		time: number;
+		frame: number;
+		scene: RootNode;
+	} | null>(null);
 	const { width: nativeWidth, height: nativeHeight } = usePreviewSize();
 	const containerSize = useContainerSize({ containerRef: outerContainerRef });
 	const editor = useEditor();
 	const activeProject = editor.project.getActive();
-	const { overlays } = usePreviewStore();
+	const { overlays, playbackQuality } = usePreviewStore();
+	const previewProfile = PREVIEW_PROFILES[playbackQuality];
+	const renderFrameRateCap = Math.min(
+		activeProject.settings.fps,
+		previewProfile.renderFrameRateCap,
+	);
 
 	const renderer = useMemo(() => {
 		return new CanvasRenderer({
 			width: nativeWidth,
 			height: nativeHeight,
-			fps: activeProject.settings.fps,
+			fps: Math.max(1, activeProject.settings.fps),
 		});
 	}, [nativeWidth, nativeHeight, activeProject.settings.fps]);
 
@@ -137,34 +192,68 @@ function PreviewCanvas({
 	const renderTree = editor.renderer.getRenderTree();
 
 	const render = useCallback(() => {
-		if (canvasRef.current && renderTree && !renderingRef.current) {
-			const time = editor.playback.getCurrentTime();
-			const lastFrameTime = getLastFrameTime({
-				duration: renderTree.duration,
-				fps: renderer.fps,
-			});
-			const renderTime = Math.min(time, lastFrameTime);
-			const frame = Math.floor(renderTime * renderer.fps);
+		if (!canvasRef.current || !renderTree) return;
 
-			if (
-				frame !== lastFrameRef.current ||
-				renderTree !== lastSceneRef.current
-			) {
-				renderingRef.current = true;
-				lastSceneRef.current = renderTree;
-				lastFrameRef.current = frame;
-				renderer
-					.renderToCanvas({
-						node: renderTree,
-						time: renderTime,
-						targetCanvas: canvasRef.current,
-					})
-					.then(() => {
-						renderingRef.current = false;
-					});
-			}
+		const time = editor.playback.getCurrentTime();
+		const lastFrameTime = getLastFrameTime({
+			duration: renderTree.duration,
+			fps: renderer.fps,
+		});
+		const rawRenderTime = Math.min(time, lastFrameTime);
+		const renderTime =
+			Number.isFinite(renderFrameRateCap) && renderFrameRateCap > 0
+				? Math.floor(rawRenderTime * renderFrameRateCap) / renderFrameRateCap
+				: rawRenderTime;
+		const frame = Math.floor(renderTime * renderer.fps);
+
+		if (frame === lastFrameRef.current && renderTree === lastSceneRef.current) {
+			return;
 		}
-	}, [renderer, renderTree, editor.playback]);
+
+		const runRender = ({
+			scene,
+			time,
+			frameNumber,
+		}: {
+			scene: RootNode;
+			time: number;
+			frameNumber: number;
+		}) => {
+			if (!canvasRef.current) return;
+			renderingRef.current = true;
+			lastSceneRef.current = scene;
+			lastFrameRef.current = frameNumber;
+			void renderer
+				.renderToCanvas({
+					node: scene,
+					time,
+					targetCanvas: canvasRef.current,
+				})
+				.then(() => {
+					renderingRef.current = false;
+					const pending = pendingRenderRef.current;
+					if (!pending) return;
+					pendingRenderRef.current = null;
+					if (
+						pending.frame !== lastFrameRef.current ||
+						pending.scene !== lastSceneRef.current
+					) {
+						runRender({
+							scene: pending.scene,
+							time: pending.time,
+							frameNumber: pending.frame,
+						});
+					}
+				});
+		};
+
+		if (renderingRef.current) {
+			pendingRenderRef.current = { scene: renderTree, time: renderTime, frame };
+			return;
+		}
+
+		runRender({ scene: renderTree, time: renderTime, frameNumber: frame });
+	}, [renderer, renderTree, editor.playback, renderFrameRateCap]);
 
 	useRafLoop(render);
 

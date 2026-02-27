@@ -25,19 +25,19 @@ export const TRANSCRIPTION_MODELS: TranscriptionModel[] = [
 	{
 		id: "whisper-tiny",
 		name: "Tiny",
-		huggingFaceId: "onnx-community/whisper-tiny",
+		huggingFaceId: "onnx-community/whisper-tiny_timestamped",
 		description: "Fastest, lower accuracy",
 	},
 	{
 		id: "whisper-small",
 		name: "Small",
-		huggingFaceId: "onnx-community/whisper-small",
+		huggingFaceId: "onnx-community/whisper-small_timestamped",
 		description: "Good balance of speed and accuracy",
 	},
 	{
 		id: "whisper-medium",
 		name: "Medium",
-		huggingFaceId: "onnx-community/whisper-medium",
+		huggingFaceId: "onnx-community/whisper-medium_timestamped",
 		description: "Higher accuracy, slower",
 	},
 	{

@@ -1,4 +1,5 @@
 import type { TScene } from "./timeline";
+import type { TranscriptionSegment } from "./transcription";
 
 export type TBackground =
 	| {
@@ -44,6 +45,17 @@ export interface TProject {
 	settings: TProjectSettings;
 	version: number;
 	timelineViewState?: TTimelineViewState;
+	transcriptionCache?: Record<string, TTranscriptionCacheEntry>;
+}
+
+export interface TTranscriptionCacheEntry {
+	cacheVersion?: number;
+	fingerprint: string;
+	language: string;
+	modelId: string;
+	text: string;
+	segments: TranscriptionSegment[];
+	updatedAt: string;
 }
 
 export type TProjectSortKey = "createdAt" | "updatedAt" | "name" | "duration";

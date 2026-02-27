@@ -4,6 +4,7 @@ import type {
 	TimelineTrack,
 	TimelineElement,
 	ClipboardItem,
+	TextElement,
 } from "@/types/timeline";
 import { calculateTotalDuration } from "@/lib/timeline";
 import {
@@ -212,12 +213,16 @@ export class TimelineManager {
 		}>;
 		pushHistory?: boolean;
 	}): void {
-		const commands = updates.map(
+		const expandedUpdates = this.expandLinkedCaptionUpdates({ updates });
+		if (expandedUpdates.length === 0) return;
+		const effectiveCommands = expandedUpdates.map(
 			({ trackId, elementId, updates: elementUpdates }) =>
 				new UpdateElementCommand(trackId, elementId, elementUpdates),
 		);
 		const command =
-			commands.length === 1 ? commands[0] : new BatchCommand(commands);
+			effectiveCommands.length === 1
+				? effectiveCommands[0]
+				: new BatchCommand(effectiveCommands);
 		if (pushHistory) {
 			this.editor.command.execute({ command });
 		} else {
@@ -238,11 +243,16 @@ export class TimelineManager {
 			updates: Partial<Record<string, unknown>>;
 		}>;
 	}): void {
+		const expandedUpdates = this.expandLinkedCaptionUpdates({ updates });
 		const tracks = this.getTracks();
 		this.previewTracker.begin({ state: tracks });
 
 		let updatedTracks = tracks;
-		for (const { trackId, elementId, updates: elementUpdates } of updates) {
+		for (const {
+			trackId,
+			elementId,
+			updates: elementUpdates,
+		} of expandedUpdates) {
 			updatedTracks = updatedTracks.map((track) => {
 				if (track.id !== trackId) return track;
 				const newElements = track.elements.map((element) =>
@@ -315,5 +325,200 @@ export class TimelineManager {
 	updateTracks(newTracks: TimelineTrack[]): void {
 		this.editor.scenes.updateSceneTracks({ tracks: newTracks });
 		this.notify();
+	}
+
+	private isGeneratedCaptionElement(
+		element: TimelineElement | undefined,
+	): element is TextElement {
+		return Boolean(
+			element &&
+				element.type === "text" &&
+				element.name.startsWith("Caption ") &&
+				(element.captionWordTimings?.length ?? 0) > 0,
+		);
+	}
+
+	private isCaptionLinked(element: TextElement): boolean {
+		return element.captionStyle?.linkedToCaptionGroup !== false;
+	}
+
+	private shouldSyncCaptionUpdate({
+		element,
+		elementUpdates,
+	}: {
+		element: TextElement;
+		elementUpdates: Partial<Record<string, unknown>>;
+	}): boolean {
+		if (!this.isCaptionLinked(element)) return false;
+
+		const captionStyleUpdate = elementUpdates.captionStyle as
+			| TextElement["captionStyle"]
+			| undefined;
+		if (captionStyleUpdate?.linkedToCaptionGroup === false) {
+			return false;
+		}
+
+		const excludedKeys = new Set([
+			"content",
+			"name",
+			"startTime",
+			"duration",
+			"trimStart",
+			"trimEnd",
+			"captionWordTimings",
+		]);
+		return Object.keys(elementUpdates).some((key) => !excludedKeys.has(key));
+	}
+
+	private expandLinkedCaptionUpdates({
+		updates,
+	}: {
+		updates: Array<{
+			trackId: string;
+			elementId: string;
+			updates: Partial<Record<string, unknown>>;
+		}>;
+	}): Array<{
+		trackId: string;
+		elementId: string;
+		updates: Partial<Record<string, unknown>>;
+	}> {
+		const tracks = this.getTracks();
+		const trackById = new Map(tracks.map((track) => [track.id, track]));
+
+		const getElement = ({
+			trackId,
+			elementId,
+		}: {
+			trackId: string;
+			elementId: string;
+		}): TimelineElement | undefined => {
+			const track = trackById.get(trackId);
+			return track?.elements.find((element) => element.id === elementId);
+		};
+
+		const normalizeUpdatesForTarget = ({
+			trackId,
+			elementId,
+			updates: rawUpdates,
+		}: {
+			trackId: string;
+			elementId: string;
+			updates: Partial<Record<string, unknown>>;
+		}): Partial<Record<string, unknown>> => {
+			const element = getElement({ trackId, elementId });
+			if (!this.isGeneratedCaptionElement(element)) {
+				return rawUpdates;
+			}
+
+			const captionStyleUpdate = rawUpdates.captionStyle as
+				| Record<string, unknown>
+				| undefined;
+			if (!captionStyleUpdate) {
+				return rawUpdates;
+			}
+
+			return {
+				...rawUpdates,
+				captionStyle: {
+					...(element.captionStyle ?? {}),
+					...captionStyleUpdate,
+				},
+			};
+		};
+		const result = new Map<
+			string,
+			{
+				trackId: string;
+				elementId: string;
+				updates: Partial<Record<string, unknown>>;
+			}
+		>();
+
+		const upsert = ({
+			trackId,
+			elementId,
+			updates: elementUpdates,
+		}: {
+			trackId: string;
+			elementId: string;
+			updates: Partial<Record<string, unknown>>;
+		}) => {
+			const key = `${trackId}:${elementId}`;
+			const previous = result.get(key);
+			const normalized = normalizeUpdatesForTarget({
+				trackId,
+				elementId,
+				updates: elementUpdates,
+			});
+			const mergedCaptionStyle =
+				previous?.updates.captionStyle && normalized.captionStyle
+					? {
+							...(previous.updates.captionStyle as Record<string, unknown>),
+							...(normalized.captionStyle as Record<string, unknown>),
+						}
+					: normalized.captionStyle;
+			const mergedUpdates: Partial<Record<string, unknown>> = {
+				...(previous?.updates ?? {}),
+				...normalized,
+			};
+			if (mergedCaptionStyle) {
+				mergedUpdates.captionStyle = mergedCaptionStyle;
+			}
+			result.set(key, {
+				trackId,
+				elementId,
+				updates: mergedUpdates,
+			});
+		};
+
+		for (const update of updates) {
+			upsert(update);
+		}
+
+		for (const update of updates) {
+			const track = tracks.find((item) => item.id === update.trackId);
+			const element = track?.elements.find((item) => item.id === update.elementId);
+			if (!this.isGeneratedCaptionElement(element)) continue;
+			if (
+				!this.shouldSyncCaptionUpdate({
+					element,
+					elementUpdates: update.updates,
+				})
+			) {
+				continue;
+			}
+
+			for (const captionTrack of tracks.filter((item) => item.type === "text")) {
+				for (const captionElement of captionTrack.elements) {
+					if (!this.isGeneratedCaptionElement(captionElement)) continue;
+					if (!this.isCaptionLinked(captionElement)) continue;
+					if (
+						captionTrack.id === update.trackId &&
+						captionElement.id === update.elementId
+					) {
+						continue;
+					}
+
+					const nextUpdates = { ...update.updates };
+					if (nextUpdates.captionStyle) {
+						nextUpdates.captionStyle = {
+							...(captionElement.captionStyle ?? {}),
+							...(nextUpdates.captionStyle as Record<string, unknown>),
+							linkedToCaptionGroup:
+								captionElement.captionStyle?.linkedToCaptionGroup ?? true,
+						};
+					}
+
+					upsert({
+						trackId: captionTrack.id,
+						elementId: captionElement.id,
+						updates: nextUpdates,
+					});
+				}
+			}
+		}
+
+		return Array.from(result.values());
 	}
 }

@@ -1,5 +1,6 @@
 import type { FontAtlas } from "@/types/fonts";
 import { SYSTEM_FONTS } from "@/constants/font-constants";
+import { ensureLocalFontsLoaded, hasLocalFont } from "./local-fonts";
 
 const GOOGLE_FONTS_CSS = "https://fonts.googleapis.com/css2";
 
@@ -61,6 +62,12 @@ export async function loadFullFont({
 	family: string;
 	weights?: number[];
 }): Promise<void> {
+	if (hasLocalFont({ family })) {
+		await ensureLocalFontsLoaded({ families: [family] });
+		fullLoaded.add(family);
+		return;
+	}
+
 	if (fullLoaded.has(family)) return;
 
 	const url = `${GOOGLE_FONTS_CSS}?family=${encodeFamily(family)}:wght@${weights.join(";")}&display=swap`;
@@ -85,6 +92,7 @@ export async function loadFonts({
 }: {
 	families: string[];
 }): Promise<void> {
+	await ensureLocalFontsLoaded({ families });
 	const googleFonts = families.filter((family) => !SYSTEM_FONTS.has(family));
 	await Promise.all(googleFonts.map((family) => loadFullFont({ family })));
 }

@@ -125,6 +125,25 @@ export interface TextElement extends BaseTimelineElement {
 	transform: Transform;
 	opacity: number;
 	blendMode?: BlendMode;
+	captionStyle?: {
+		fitInCanvas?: boolean;
+		neverShrinkFont?: boolean;
+		karaokeWordHighlight?: boolean;
+		karaokeHighlightColor?: string;
+		karaokeHighlightTextColor?: string;
+		karaokeHighlightOpacity?: number;
+		karaokeHighlightRoundness?: number;
+		backgroundFitMode?: "block" | "line-fit";
+		wordsOnScreen?: number;
+		maxLinesOnScreen?: number;
+		wordDisplayPreset?: "compact" | "balanced" | "extended" | "custom";
+		linkedToCaptionGroup?: boolean;
+	};
+	captionWordTimings?: Array<{
+		word: string;
+		startTime: number;
+		endTime: number;
+	}>;
 }
 
 export interface StickerElement extends BaseTimelineElement {

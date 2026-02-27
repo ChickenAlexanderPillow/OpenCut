@@ -10,11 +10,15 @@ interface PreviewOverlaysState {
 	bookmarks: boolean;
 }
 
+export type PreviewPlaybackQuality = "performance" | "balanced" | "full";
+
 interface PreviewState {
 	layoutGuide: LayoutGuideSettings;
 	overlays: PreviewOverlaysState;
+	playbackQuality: PreviewPlaybackQuality;
 	setLayoutGuide: (settings: Partial<LayoutGuideSettings>) => void;
 	toggleLayoutGuide: (platform: TPlatformLayout) => void;
+	setPlaybackQuality: ({ quality }: { quality: PreviewPlaybackQuality }) => void;
 	setOverlayVisibility: ({
 		overlay,
 		isVisible,
@@ -38,6 +42,7 @@ export const usePreviewStore = create<PreviewState>()(
 		(set) => ({
 			layoutGuide: { platform: null },
 			overlays: DEFAULT_PREVIEW_OVERLAYS,
+			playbackQuality: "balanced",
 			setLayoutGuide: (settings) => {
 				set((state) => ({
 					layoutGuide: {
@@ -45,6 +50,9 @@ export const usePreviewStore = create<PreviewState>()(
 						...settings,
 					},
 				}));
+			},
+			setPlaybackQuality: ({ quality }) => {
+				set(() => ({ playbackQuality: quality }));
 			},
 			toggleLayoutGuide: (platform) => {
 				set((state) => ({
@@ -72,22 +80,25 @@ export const usePreviewStore = create<PreviewState>()(
 		}),
 		{
 			name: "preview-settings",
-			version: 2,
+			version: 3,
 			migrate: (persistedState) => {
 				const state = persistedState as
 					| {
 							layoutGuide?: LayoutGuideSettings;
 							overlays?: PreviewOverlaysState;
+							playbackQuality?: PreviewPlaybackQuality;
 					  }
 					| undefined;
 				return {
 					layoutGuide: state?.layoutGuide ?? { platform: null },
 					overlays: state?.overlays ?? DEFAULT_PREVIEW_OVERLAYS,
+					playbackQuality: state?.playbackQuality ?? "balanced",
 				};
 			},
 			partialize: (state) => ({
 				layoutGuide: state.layoutGuide,
 				overlays: state.overlays,
+				playbackQuality: state.playbackQuality,
 			}),
 		},
 	),

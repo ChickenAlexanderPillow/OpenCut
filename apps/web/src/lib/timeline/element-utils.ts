@@ -171,6 +171,8 @@ export function buildTextElement({
 		transform: t.transform ?? DEFAULT_TEXT_ELEMENT.transform,
 		opacity: t.opacity ?? DEFAULT_TEXT_ELEMENT.opacity,
 		blendMode: t.blendMode ?? DEFAULT_BLEND_MODE,
+		captionStyle: t.captionStyle,
+		captionWordTimings: t.captionWordTimings,
 	};
 }
 

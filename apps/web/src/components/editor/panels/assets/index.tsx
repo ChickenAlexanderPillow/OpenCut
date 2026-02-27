@@ -1,7 +1,11 @@
 "use client";
 
 import { Separator } from "@/components/ui/separator";
-import { type Tab, useAssetsPanelStore } from "@/stores/assets-panel-store";
+import {
+	TAB_KEYS,
+	type Tab,
+	useAssetsPanelStore,
+} from "@/stores/assets-panel-store";
 import { TabBar } from "./tabbar";
 import { Captions } from "./views/captions";
 import { MediaView } from "./views/assets";
@@ -9,6 +13,7 @@ import { SettingsView } from "./views/settings";
 import { SoundsView } from "./views/sounds";
 import { StickersView } from "./views/stickers";
 import { TextView } from "./views/text";
+import { cn } from "@/utils/ui";
 
 export function AssetsPanel() {
 	const { activeTab } = useAssetsPanelStore();
@@ -46,7 +51,19 @@ export function AssetsPanel() {
 		<div className="panel bg-background flex h-full rounded-sm border overflow-hidden">
 			<TabBar />
 			<Separator orientation="vertical" />
-			<div className="flex-1 overflow-hidden">{viewMap[activeTab]}</div>
+			<div className="flex-1 overflow-hidden relative">
+				{TAB_KEYS.map((tab) => (
+					<div
+						key={tab}
+						className={cn(
+							"absolute inset-0",
+							activeTab === tab ? "block" : "hidden",
+						)}
+					>
+						{viewMap[tab]}
+					</div>
+				))}
+			</div>
 		</div>
 	);
 }

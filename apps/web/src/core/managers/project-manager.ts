@@ -45,6 +45,7 @@ export class ProjectManager {
 	private invalidProjectIds = new Set<string>();
 	private storageMigrationPromise: Promise<void> | null = null;
 	private listeners = new Set<() => void>();
+	private fontSyncTimer: number | null = null;
 	private migrationState: MigrationState = {
 		isMigrating: false,
 		fromVersion: null,
@@ -52,7 +53,10 @@ export class ProjectManager {
 		projectName: null,
 	};
 
-	constructor(private editor: EditorCore) {}
+	constructor(private editor: EditorCore) {
+		this.editor.timeline.subscribe(this.scheduleFontSync);
+		this.editor.scenes.subscribe(this.scheduleFontSync);
+	}
 
 	private async ensureStorageMigrations(): Promise<void> {
 		if (this.storageMigrationPromise) {
@@ -627,5 +631,29 @@ export class ProjectManager {
 
 	private notify(): void {
 		this.listeners.forEach((fn) => fn());
+	}
+
+	private scheduleFontSync = (): void => {
+		if (typeof window === "undefined") return;
+		if (this.fontSyncTimer !== null) {
+			window.clearTimeout(this.fontSyncTimer);
+		}
+		this.fontSyncTimer = window.setTimeout(() => {
+			this.fontSyncTimer = null;
+			void this.syncFontsFromEditor();
+		}, 120);
+	};
+
+	private async syncFontsFromEditor(): Promise<void> {
+		try {
+			const tracks = this.editor.scenes
+				.getScenes()
+				.flatMap((scene) => scene.tracks);
+			const families = collectFontFamilies({ tracks });
+			if (families.length === 0) return;
+			await loadFonts({ families });
+		} catch (error) {
+			console.warn("Failed to sync fonts from timeline:", error);
+		}
 	}
 }

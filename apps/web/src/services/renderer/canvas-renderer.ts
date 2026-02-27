@@ -26,7 +26,10 @@ export class CanvasRenderer {
 			this.canvas.height = height;
 		}
 
-		const context = this.canvas.getContext("2d");
+		const context = this.canvas.getContext("2d", {
+			alpha: false,
+			desynchronized: true,
+		});
 		if (!context) {
 			throw new Error("Failed to get canvas context");
 		}
@@ -47,7 +50,10 @@ export class CanvasRenderer {
 			this.canvas.height = height;
 		}
 
-		const context = this.canvas.getContext("2d");
+		const context = this.canvas.getContext("2d", {
+			alpha: false,
+			desynchronized: true,
+		});
 		if (!context) {
 			throw new Error("Failed to get canvas context");
 		}
@@ -57,6 +63,7 @@ export class CanvasRenderer {
 	}
 
 	private clear() {
+		this.context.setTransform(1, 0, 0, 1, 0, 0);
 		this.context.fillStyle = "black";
 		this.context.fillRect(0, 0, this.canvas.width, this.canvas.height);
 	}
@@ -77,11 +84,15 @@ export class CanvasRenderer {
 	}) {
 		await this.render({ node, time });
 
-		const ctx = targetCanvas.getContext("2d");
+		const ctx = targetCanvas.getContext("2d", {
+			alpha: false,
+			desynchronized: true,
+		});
 		if (!ctx) {
 			throw new Error("Failed to get target canvas context");
 		}
 
+		ctx.imageSmoothingEnabled = true;
 		ctx.drawImage(this.canvas, 0, 0, targetCanvas.width, targetCanvas.height);
 	}
 }

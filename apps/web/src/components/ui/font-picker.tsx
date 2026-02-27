@@ -22,6 +22,10 @@ import {
 	prefetchFontAtlas,
 	clearFontAtlasCache,
 } from "@/lib/fonts/google-fonts";
+import {
+	getLocalFontFamilies,
+	registerLocalFontFile,
+} from "@/lib/fonts/local-fonts";
 import type { FontAtlas, FontAtlasEntry } from "@/types/fonts";
 import { cn } from "@/utils/ui";
 import { ChevronDown, Search, Upload } from "lucide-react";
@@ -60,21 +64,36 @@ export function FontPicker({
 	const [atlas, setAtlas] = useState<FontAtlas | null>(() =>
 		getCachedFontAtlas(),
 	);
+	const [localFonts, setLocalFonts] = useState<string[]>(() =>
+		getLocalFontFamilies(),
+	);
 	const [status, setStatus] = useState<"idle" | "loading" | "error">(() =>
 		getCachedFontAtlas() ? "idle" : "loading",
 	);
 	const searchInputRef = useRef<HTMLInputElement>(null);
+	const localFontInputRef = useRef<HTMLInputElement>(null);
 
-	const fontNames = useMemo(() => {
+	const atlasFontNames = useMemo(() => {
 		if (!atlas) return [];
 		return Object.keys(atlas.fonts).sort();
 	}, [atlas]);
 
+	const fontNames = useMemo(() => {
+		const merged = new Set<string>([...atlasFontNames, ...localFonts]);
+		return [...merged].sort((a, b) => a.localeCompare(b));
+	}, [atlasFontNames, localFonts]);
+
 	const filteredFonts = useMemo(() => {
-		if (!search) return fontNames;
+		const sourceFonts =
+			activeTab === "my-fonts"
+				? localFonts
+				: activeTab === "favorites"
+					? []
+					: fontNames;
+		if (!search) return sourceFonts;
 		const query = search.toLowerCase();
-		return fontNames.filter((name) => name.toLowerCase().includes(query));
-	}, [fontNames, search]);
+		return sourceFonts.filter((name) => name.toLowerCase().includes(query));
+	}, [activeTab, fontNames, localFonts, search]);
 
 	const listHeight = Math.min(
 		MAX_LIST_HEIGHT,
@@ -108,6 +127,11 @@ export function FontPicker({
 			}
 		});
 	}, [open, atlas]);
+
+	useEffect(() => {
+		if (!open) return;
+		setLocalFonts(getLocalFontFamilies());
+	}, [open]);
 
 	useEffect(() => {
 		if (!open) {
@@ -210,7 +234,7 @@ export function FontPicker({
 							No fonts found.
 						</div>
 					)}
-				{status === "idle" && atlas && filteredFonts.length > 0 && (
+				{status === "idle" && filteredFonts.length > 0 && (
 					<List
 						rowCount={filteredFonts.length}
 						rowHeight={ROW_HEIGHT}
@@ -226,14 +250,36 @@ export function FontPicker({
 					/>
 				)}
 				<div className="border-t p-1">
+					<input
+						ref={localFontInputRef}
+						type="file"
+						accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2"
+						className="hidden"
+						onChange={async (event) => {
+							const files = Array.from(event.target.files ?? []);
+							if (files.length === 0) return;
+							let firstLoaded: string | null = null;
+							for (const file of files) {
+								try {
+									const family = await registerLocalFontFile({ file });
+									if (!firstLoaded) firstLoaded = family;
+								} catch {
+									// Ignore invalid font files and continue importing others.
+								}
+							}
+							setLocalFonts(getLocalFontFamilies());
+							if (firstLoaded) {
+								onValueChange?.(firstLoaded);
+								setOpen(false);
+							}
+							event.currentTarget.value = "";
+						}}
+					/>
 					<Button
 						variant="ghost"
 						size="sm"
 						className="w-full justify-start text-muted-foreground h-8 font-normal"
-						onClick={() => {
-							// TODO: Implement local font loading
-							console.log("Load local fonts clicked");
-						}}
+						onClick={() => localFontInputRef.current?.click()}
 					>
 						<Upload className="!size-3.5" />
 						Load local fonts
@@ -266,7 +312,7 @@ function FontSpritePreview({ entry }: { entry: FontAtlasEntry }) {
 }
 
 type FontRowProps = {
-	atlas: FontAtlas;
+	atlas: FontAtlas | null;
 	filteredFonts: string[];
 	selectedFont: string | undefined;
 	onFontSelect: (params: { family: string }) => void;
@@ -281,7 +327,7 @@ function FontRow({
 	onFontSelect,
 }: RowComponentProps<FontRowProps>) {
 	const fontName = filteredFonts[index];
-	const entry = atlas.fonts[fontName];
+	const entry = atlas?.fonts[fontName];
 	const isSelected = fontName === selectedFont;
 
 	return (
@@ -302,7 +348,16 @@ function FontRow({
 			aria-label={fontName}
 		>
 			<div className="min-w-0 overflow-hidden">
-				<FontSpritePreview entry={entry} />
+				{entry ? (
+					<FontSpritePreview entry={entry} />
+				) : (
+					<div
+						className="text-sm truncate"
+						style={{ fontFamily: `"${fontName.replace(/"/g, '\\"')}"` }}
+					>
+						{fontName}
+					</div>
+				)}
 			</div>
 		</button>
 	);

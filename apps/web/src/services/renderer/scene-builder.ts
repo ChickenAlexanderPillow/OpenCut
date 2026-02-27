@@ -20,6 +20,8 @@ export type BuildSceneParams = {
 	duration: number;
 	background: TBackground;
 	isPreview?: boolean;
+	previewFrameRateCap?: number;
+	previewProxyScale?: number;
 };
 
 export function buildScene(params: BuildSceneParams) {
@@ -70,6 +72,10 @@ export function buildScene(params: BuildSceneParams) {
 							transform: element.transform,
 							opacity: element.opacity,
 							blendMode: element.blendMode,
+							...(params.isPreview && {
+								previewFrameRateCap: params.previewFrameRateCap,
+								previewProxyScale: params.previewProxyScale,
+							}),
 						}),
 					);
 				}
@@ -97,6 +103,7 @@ export function buildScene(params: BuildSceneParams) {
 					new TextNode({
 						...element,
 						canvasCenter: { x: canvasSize.width / 2, y: canvasSize.height / 2 },
+						canvasWidth: canvasSize.width,
 						canvasHeight: canvasSize.height,
 						textBaseline: "middle",
 					}),

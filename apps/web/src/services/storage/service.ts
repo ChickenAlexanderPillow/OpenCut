@@ -135,6 +135,7 @@ class StorageService {
 			settings: project.settings,
 			version: project.version,
 			timelineViewState: project.timelineViewState,
+			transcriptionCache: project.transcriptionCache,
 		};
 
 		await this.projectsAdapter.set(project.metadata.id, serializedProject);
@@ -181,6 +182,7 @@ class StorageService {
 			settings: serializedProject.settings,
 			version: serializedProject.version,
 			timelineViewState: serializedProject.timelineViewState,
+			transcriptionCache: serializedProject.transcriptionCache,
 		};
 
 		return { project };

@@ -6,7 +6,11 @@ import {
 	DEFAULT_LINE_HEIGHT,
 	FONT_SIZE_SCALE_REFERENCE,
 } from "@/constants/text-constants";
-import { getTextVisualRect, measureTextBlock } from "@/lib/text/layout";
+import {
+	getTextVisualRectForBackgroundMode,
+	measureTextBlock,
+	resolveTextPlacement,
+} from "@/lib/text/layout";
 
 export interface ElementBounds {
 	cx: number;
@@ -21,6 +25,34 @@ export interface ElementWithBounds {
 	elementId: string;
 	element: TimelineElement;
 	bounds: ElementBounds;
+}
+
+function clampWordCount(value: number): number {
+	return Math.max(1, Math.min(12, Math.round(value)));
+}
+
+function clampLineCount(value: number): number {
+	return Math.max(1, Math.min(4, Math.round(value)));
+}
+
+function buildLinesFromWords({
+	words,
+	maxLines,
+}: {
+	words: string[];
+	maxLines: number;
+}): string[] {
+	if (words.length === 0) return [];
+	const clampedMaxLines = clampLineCount(maxLines);
+	const lineCount = Math.min(clampedMaxLines, words.length);
+	const wordsPerLine = Math.ceil(words.length / lineCount);
+	const lines: string[] = [];
+
+	for (let i = 0; i < words.length; i += wordsPerLine) {
+		lines.push(words.slice(i, i + wordsPerLine).join(" "));
+	}
+
+	return lines;
 }
 
 function getVisualElementBounds({
@@ -62,10 +94,12 @@ export function getElementBounds({
 	element,
 	canvasSize,
 	mediaAsset,
+	currentTime = element.startTime,
 }: {
 	element: TimelineElement;
 	canvasSize: { width: number; height: number };
 	mediaAsset?: MediaAsset | null;
+	currentTime?: number;
 }): ElementBounds | null {
 	if (element.type === "audio") return null;
 	if ("hidden" in element && element.hidden) return null;
@@ -121,7 +155,167 @@ export function getElementBounds({
 				).letterSpacing = `${letterSpacing}px`;
 			}
 
-			const lines = element.content.split("\n");
+			const captionWordTimings = element.captionWordTimings ?? [];
+			const captionWords = captionWordTimings.map((timing) => timing.word);
+			const wordsOnScreenRaw = element.captionStyle?.wordsOnScreen;
+			const wordsOnScreen =
+				typeof wordsOnScreenRaw === "number"
+					? clampWordCount(wordsOnScreenRaw)
+					: null;
+			const neverShrinkFont = element.captionStyle?.neverShrinkFont === true;
+			const fitInCanvas = element.captionStyle?.fitInCanvas;
+			const maxLinesOnScreenRaw = element.captionStyle?.maxLinesOnScreen;
+			const maxLinesOnScreen =
+				typeof maxLinesOnScreenRaw === "number"
+					? clampLineCount(maxLinesOnScreenRaw)
+					: 2;
+			const activeWordIndexFromTimings = (() => {
+				for (let i = captionWordTimings.length - 1; i >= 0; i--) {
+					const timing = captionWordTimings[i];
+					if (currentTime >= timing.startTime && currentTime < timing.endTime) {
+						return i;
+					}
+				}
+				return -1;
+			})();
+			const latestStartedWordIndex = (() => {
+				for (let i = captionWordTimings.length - 1; i >= 0; i--) {
+					if (currentTime >= captionWordTimings[i].startTime) {
+						return i;
+					}
+				}
+				return -1;
+			})();
+			const shouldLimitWordsOnScreen =
+				captionWords.length > 0 && wordsOnScreen !== null && wordsOnScreen > 0;
+			const cappedWordsOnScreen = wordsOnScreen ?? captionWords.length;
+			const activeWordForWindow =
+				latestStartedWordIndex >= 0
+					? latestStartedWordIndex
+					: activeWordIndexFromTimings >= 0
+						? activeWordIndexFromTimings
+						: 0;
+			const backgroundMode = element.captionStyle?.backgroundFitMode ?? "block";
+
+			const getFitPageSize = ({
+				start,
+				maxWords,
+			}: {
+				start: number;
+				maxWords: number;
+			}): number => {
+				if (
+					!neverShrinkFont ||
+					!fitInCanvas ||
+					maxWords <= 1 ||
+					captionWords.length === 0
+				) {
+					return maxWords;
+				}
+
+				for (let size = maxWords; size >= 1; size--) {
+					const candidateWords = captionWords.slice(start, start + size);
+					if (candidateWords.length === 0) continue;
+					const candidateLines = buildLinesFromWords({
+						words: candidateWords,
+						maxLines: maxLinesOnScreen,
+					});
+					const candidateMetrics = candidateLines.map((line) =>
+						ctx.measureText(line),
+					);
+					const candidateBlock = measureTextBlock({
+						lineMetrics: candidateMetrics,
+						lineHeightPx,
+						fallbackFontSize: scaledFontSize,
+					});
+					const fontSizeRatio =
+						element.fontSize / DEFAULT_TEXT_ELEMENT.fontSize;
+					const candidateVisualRect = getTextVisualRectForBackgroundMode({
+						textAlign: element.textAlign,
+						block: candidateBlock,
+						lineMetrics: candidateMetrics,
+						lineHeightPx,
+						fallbackFontSize: scaledFontSize,
+						background: element.background,
+						backgroundMode,
+						fontSizeRatio,
+					});
+					const candidatePlacement = resolveTextPlacement({
+						canvasWidth,
+						canvasHeight,
+						positionX: canvasWidth / 2 + element.transform.position.x,
+						positionY: canvasHeight / 2 + element.transform.position.y,
+						scale: element.transform.scale,
+						visualRect: candidateVisualRect,
+						fitInCanvas,
+					});
+					if (
+						candidatePlacement.effectiveScale >=
+						element.transform.scale - 0.001
+					) {
+						return size;
+					}
+				}
+
+				return 1;
+			};
+
+			const getWindow = (): { chunkStart: number; pageSize: number } => {
+				if (!shouldLimitWordsOnScreen) {
+					return {
+						chunkStart: 0,
+						pageSize: captionWords.length > 0 ? captionWords.length : 0,
+					};
+				}
+
+				let pageStart = 0;
+				while (pageStart < captionWords.length) {
+					const maxPageSize = Math.min(
+						cappedWordsOnScreen,
+						captionWords.length - pageStart,
+					);
+					const pageSize = getFitPageSize({
+						start: pageStart,
+						maxWords: maxPageSize,
+					});
+					if (activeWordForWindow < pageStart + pageSize) {
+						return { chunkStart: pageStart, pageSize };
+					}
+					pageStart += pageSize;
+				}
+
+				const fallbackStart = Math.max(
+					0,
+					captionWords.length - cappedWordsOnScreen,
+				);
+				return {
+					chunkStart: fallbackStart,
+					pageSize: getFitPageSize({
+						start: fallbackStart,
+						maxWords: Math.min(
+							cappedWordsOnScreen,
+							captionWords.length - fallbackStart,
+						),
+					}),
+				};
+			};
+
+			const windowed = getWindow();
+			const renderWords =
+				captionWords.length > 0
+					? captionWords.slice(
+							windowed.chunkStart,
+							windowed.chunkStart + windowed.pageSize,
+						)
+					: [];
+			const renderContent =
+				renderWords.length > 0
+					? buildLinesFromWords({
+							words: renderWords,
+							maxLines: maxLinesOnScreen,
+						}).join("\n")
+					: element.content;
+			const lines = renderContent.split("\n");
 			const lineMetrics = lines.map((line) => ctx.measureText(line));
 			const block = measureTextBlock({
 				lineMetrics,
@@ -129,28 +323,41 @@ export function getElementBounds({
 				fallbackFontSize: scaledFontSize,
 			});
 			const fontSizeRatio = element.fontSize / DEFAULT_TEXT_ELEMENT.fontSize;
-			const visualRect = getTextVisualRect({
+			const visualRect = getTextVisualRectForBackgroundMode({
 				textAlign: element.textAlign,
 				block,
+				lineMetrics,
+				lineHeightPx,
+				fallbackFontSize: scaledFontSize,
 				background: element.background,
+				backgroundMode,
 				fontSizeRatio,
 			});
 			measuredWidth = visualRect.width;
 			measuredHeight = visualRect.height;
+			const placement = resolveTextPlacement({
+				canvasWidth,
+				canvasHeight,
+				positionX: canvasWidth / 2 + element.transform.position.x,
+				positionY: canvasHeight / 2 + element.transform.position.y,
+				scale: element.transform.scale,
+				visualRect,
+				fitInCanvas,
+			});
 			const localCenterX = visualRect.left + visualRect.width / 2;
 			const localCenterY = visualRect.top + visualRect.height / 2;
-			const scaledCenterX = localCenterX * element.transform.scale;
-			const scaledCenterY = localCenterY * element.transform.scale;
+			const scaledCenterX = localCenterX * placement.effectiveScale;
+			const scaledCenterY = localCenterY * placement.effectiveScale;
 			const rotationRad = (element.transform.rotate * Math.PI) / 180;
 			const cos = Math.cos(rotationRad);
 			const sin = Math.sin(rotationRad);
 			const rotatedCenterX = scaledCenterX * cos - scaledCenterY * sin;
 			const rotatedCenterY = scaledCenterX * sin + scaledCenterY * cos;
 			return {
-				cx: canvasWidth / 2 + element.transform.position.x + rotatedCenterX,
-				cy: canvasHeight / 2 + element.transform.position.y + rotatedCenterY,
-				width: measuredWidth * element.transform.scale,
-				height: measuredHeight * element.transform.scale,
+				cx: placement.x + rotatedCenterX,
+				cy: placement.y + rotatedCenterY,
+				width: measuredWidth * placement.effectiveScale,
+				height: measuredHeight * placement.effectiveScale,
 				rotation: element.transform.rotate,
 			};
 		}
@@ -214,6 +421,7 @@ export function getVisibleElementsWithBounds({
 				element,
 				canvasSize,
 				mediaAsset,
+				currentTime,
 			});
 			if (bounds) {
 				result.push({

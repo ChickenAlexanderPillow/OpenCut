@@ -13,6 +13,14 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import { OcSocialIcon } from "@opencut/ui/icons";
 import { Separator } from "@/components/ui/separator";
+import { usePreviewStore } from "@/stores/preview-store";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
 
 export function PreviewToolbar({
 	isFullscreen,
@@ -26,6 +34,7 @@ export function PreviewToolbar({
 	const currentTime = editor.playback.getCurrentTime();
 	const totalDuration = editor.timeline.getTotalDuration();
 	const fps = editor.project.getActive().settings.fps;
+	const { playbackQuality, setPlaybackQuality } = usePreviewStore();
 
 	return (
 		<div className="grid grid-cols-[1fr_auto_1fr] items-center pb-3 pt-5 px-5">
@@ -57,6 +66,23 @@ export function PreviewToolbar({
 			</Button>
 
 			<div className="justify-self-end flex items-center gap-2.5">
+				<Select
+					value={playbackQuality}
+					onValueChange={(value) =>
+						setPlaybackQuality({
+							quality: value as "performance" | "balanced" | "full",
+						})
+					}
+				>
+					<SelectTrigger className="h-7 w-[122px] text-xs">
+						<SelectValue placeholder="Preview quality" />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="performance">Performance</SelectItem>
+						<SelectItem value="balanced">Balanced</SelectItem>
+						<SelectItem value="full">Full quality</SelectItem>
+					</SelectContent>
+				</Select>
 				<Button
 					variant="secondary"
 					size="sm"

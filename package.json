@@ -6,8 +6,8 @@
 		"packages/*"
 	],
 	"scripts": {
-		"dev:web": "turbo run dev --filter=@opencut/web",
-		"build:web": "turbo run build --filter=@opencut/web",
+		"dev:web": "cd apps/web && bun run dev",
+		"build:web": "cd apps/web && bun run build",
 		"dev:tools": "turbo run dev --filter=@opencut/tools",
 		"build:tools": "turbo run build --filter=@opencut/tools",
 		"start:tools": "turbo run start --filter=@opencut/tools",
