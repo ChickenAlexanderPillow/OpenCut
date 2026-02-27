@@ -7,10 +7,16 @@ import { buildScene } from "@/services/renderer/scene-builder";
 import { createTimelineAudioBuffer } from "@/lib/media/audio";
 import { formatTimeCode, getLastFrameTime } from "@/lib/time";
 import { downloadBlob } from "@/utils/browser";
+import type {
+	PreviewRendererMode,
+	RendererCapabilities,
+} from "@/services/renderer/webgpu-types";
+import { getRendererCapabilities } from "@/services/renderer/scene-partition";
 
 export class RendererManager {
 	private renderTree: RootNode | null = null;
 	private listeners = new Set<() => void>();
+	private previewRendererMode: PreviewRendererMode = "auto";
 
 	constructor(private editor: EditorCore) {}
 
@@ -21,6 +27,19 @@ export class RendererManager {
 
 	getRenderTree(): RootNode | null {
 		return this.renderTree;
+	}
+
+	setPreviewRendererMode({ mode }: { mode: PreviewRendererMode }): void {
+		this.previewRendererMode = mode;
+		this.notify();
+	}
+
+	getPreviewRendererMode(): PreviewRendererMode {
+		return this.previewRendererMode;
+	}
+
+	getCapabilities(): RendererCapabilities {
+		return getRendererCapabilities();
 	}
 
 	async saveSnapshot(): Promise<{ success: boolean; error?: string }> {
@@ -70,9 +89,9 @@ export class RendererManager {
 				timeInSeconds: renderTime,
 				fps,
 			}).replace(/:/g, "-");
-			const safeName = activeProject.metadata.name
-				.replace(/[<>:"/\\|?*]/g, "-")
-				.trim() || "snapshot";
+			const safeName =
+				activeProject.metadata.name.replace(/[<>:"/\\|?*]/g, "-").trim() ||
+				"snapshot";
 			const filename = `${safeName}-${timecode}.png`;
 
 			downloadBlob({ blob, filename });
@@ -127,6 +146,7 @@ export class RendererManager {
 				duration,
 				canvasSize,
 				background: activeProject.settings.background,
+				brandOverlays: activeProject.brandOverlays,
 			});
 
 			const exporter = new SceneExporter({
@@ -190,6 +210,8 @@ export class RendererManager {
 	}
 
 	private notify(): void {
-		this.listeners.forEach((fn) => fn());
+		this.listeners.forEach((fn) => {
+			fn();
+		});
 	}
 }

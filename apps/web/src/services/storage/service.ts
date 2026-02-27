@@ -15,6 +15,7 @@ import {
 	runStorageMigrations,
 } from "@/services/storage/migrations";
 import type { Bookmark, TimelineTrack, TScene } from "@/types/timeline";
+import { DEFAULT_BRAND_OVERLAYS } from "@/constants/brand-overlay-constants";
 
 function normalizeBookmarks({ raw }: { raw: unknown }): Bookmark[] {
 	if (!Array.isArray(raw)) return [];
@@ -133,6 +134,10 @@ class StorageService {
 			scenes: serializedScenes,
 			currentSceneId: project.currentSceneId,
 			settings: project.settings,
+			brandOverlays: project.brandOverlays ?? {
+				selectedBrandId: DEFAULT_BRAND_OVERLAYS.selectedBrandId,
+				logo: { ...DEFAULT_BRAND_OVERLAYS.logo },
+			},
 			version: project.version,
 			timelineViewState: project.timelineViewState,
 			transcriptionCache: project.transcriptionCache,
@@ -180,6 +185,15 @@ class StorageService {
 			scenes,
 			currentSceneId: serializedProject.currentSceneId || "",
 			settings: serializedProject.settings,
+			brandOverlays: {
+				selectedBrandId:
+					serializedProject.brandOverlays?.selectedBrandId ??
+					DEFAULT_BRAND_OVERLAYS.selectedBrandId,
+				logo: {
+					...DEFAULT_BRAND_OVERLAYS.logo,
+					...(serializedProject.brandOverlays?.logo ?? {}),
+				},
+			},
 			version: serializedProject.version,
 			timelineViewState: serializedProject.timelineViewState,
 			transcriptionCache: serializedProject.transcriptionCache,

@@ -1,5 +1,6 @@
 import type { CanvasRenderer } from "../canvas-renderer";
 import { VisualNode, type VisualNodeParams } from "./visual-node";
+import type { WebGPUVisualDrawData } from "../webgpu-types";
 
 export interface ImageNodeParams extends VisualNodeParams {
 	url: string;
@@ -85,5 +86,40 @@ export class ImageNode extends VisualNode<ImageNodeParams> {
 			sourceWidth: width || renderer.width,
 			sourceHeight: height || renderer.height,
 		});
+	}
+
+	async getWebGPUDrawData({
+		time,
+		rendererWidth,
+		rendererHeight,
+	}: {
+		time: number;
+		rendererWidth: number;
+		rendererHeight: number;
+	}): Promise<WebGPUVisualDrawData | null> {
+		if (!this.isInRange(time)) return null;
+
+		const { source, width, height } = await this.cachedSource;
+		const sourceWidth = width || rendererWidth;
+		const sourceHeight = height || rendererHeight;
+		const placement = this.getVisualPlacement({
+			rendererWidth,
+			rendererHeight,
+			sourceWidth,
+			sourceHeight,
+		});
+
+		return {
+			source,
+			sourceWidth,
+			sourceHeight,
+			x: placement.x,
+			y: placement.y,
+			width: placement.width,
+			height: placement.height,
+			rotation: this.params.transform.rotate,
+			opacity: this.params.opacity,
+			blendMode: this.params.blendMode,
+		};
 	}
 }

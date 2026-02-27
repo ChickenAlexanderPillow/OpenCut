@@ -13,6 +13,7 @@ import { SettingsView } from "./views/settings";
 import { SoundsView } from "./views/sounds";
 import { StickersView } from "./views/stickers";
 import { TextView } from "./views/text";
+import { OverlayView } from "./views/overlay";
 import { cn } from "@/utils/ui";
 
 export function AssetsPanel() {
@@ -44,6 +45,7 @@ export function AssetsPanel() {
 				Adjustment view coming soon...
 			</div>
 		),
+		overlay: <OverlayView />,
 		settings: <SettingsView />,
 	};
 

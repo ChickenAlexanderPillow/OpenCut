@@ -7,7 +7,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useCallback } from "react";
 import { extractTimelineAudio } from "@/lib/media/mediabunny";
 import { useEditor } from "@/hooks/use-editor";
 import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
@@ -42,20 +42,46 @@ import {
 const TRANSCRIPT_CACHE_VERSION = 3;
 
 export function Captions() {
+	const editor = useEditor();
+
+	const getInitialCaptionBehavior = useCallback(() => {
+		const tracks = editor.timeline.getTracks();
+		for (const track of tracks) {
+			if (track.type !== "text") continue;
+			for (const element of track.elements) {
+				if (element.type !== "text") continue;
+				if (!element.name.startsWith("Caption ")) continue;
+				return {
+					fitInCanvas: element.captionStyle?.fitInCanvas ?? true,
+					karaokeWordHighlight:
+						element.captionStyle?.karaokeWordHighlight ?? true,
+				};
+			}
+		}
+		return {
+			fitInCanvas: true,
+			karaokeWordHighlight: true,
+		};
+	}, [editor]);
+
+	const initialCaptionBehavior = getInitialCaptionBehavior();
 	const [selectedLanguage, setSelectedLanguage] =
 		useState<TranscriptionLanguage>("auto");
 	const [isProcessing, setIsProcessing] = useState(false);
 	const [processingStep, setProcessingStep] = useState("");
 	const [error, setError] = useState<string | null>(null);
-	const [fitCaptionsInCanvas, setFitCaptionsInCanvas] = useState(true);
-	const [highlightSpokenWord, setHighlightSpokenWord] = useState(true);
+	const [fitCaptionsInCanvas, setFitCaptionsInCanvas] = useState(
+		initialCaptionBehavior.fitInCanvas,
+	);
+	const [highlightSpokenWord, setHighlightSpokenWord] = useState(
+		initialCaptionBehavior.karaokeWordHighlight,
+	);
 	const [captionGenerationMode, setCaptionGenerationMode] =
 		useState<CaptionGenerationMode>("segment");
 	const [wordsPerCaption, setWordsPerCaption] = useState(
 		DEFAULT_WORDS_PER_CAPTION,
 	);
 	const containerRef = useRef<HTMLDivElement>(null);
-	const editor = useEditor();
 
 	const buildTranscriptFingerprint = ({
 		mediaAssets,
@@ -146,6 +172,10 @@ export function Captions() {
 					captionStyle: {
 						fitInCanvas: fitCaptionsInCanvas,
 						karaokeWordHighlight: highlightSpokenWord,
+						karaokeHighlightMode: "block",
+						karaokeHighlightEaseInOnly: false,
+						karaokeScaleHighlightedWord: false,
+						karaokeUnderlineThickness: 3,
 						karaokeHighlightColor: "#FDE047",
 						karaokeHighlightTextColor: "#111111",
 						karaokeHighlightOpacity: 1,
@@ -302,7 +332,6 @@ export function Captions() {
 									...(element.captionStyle ?? {}),
 									fitInCanvas,
 									karaokeWordHighlight,
-									karaokeHighlightColor: "#FDE047",
 								},
 							},
 						})),
@@ -327,17 +356,6 @@ export function Captions() {
 		if (!matchedLanguage) return;
 		setSelectedLanguage(matchedLanguage.code);
 	};
-
-	useEffect(() => {
-		applyCaptionBehaviorToExisting({
-			fitInCanvas: fitCaptionsInCanvas,
-			karaokeWordHighlight: highlightSpokenWord,
-		});
-	}, [
-		fitCaptionsInCanvas,
-		highlightSpokenWord,
-		applyCaptionBehaviorToExisting,
-	]);
 
 	const hasValidCachedTranscript = Boolean(getCacheEntry());
 
@@ -418,7 +436,14 @@ export function Captions() {
 					<Checkbox
 						id="captions-fit-canvas"
 						checked={fitCaptionsInCanvas}
-						onCheckedChange={(value) => setFitCaptionsInCanvas(Boolean(value))}
+						onCheckedChange={(value) => {
+							const next = Boolean(value);
+							setFitCaptionsInCanvas(next);
+							applyCaptionBehaviorToExisting({
+								fitInCanvas: next,
+								karaokeWordHighlight: highlightSpokenWord,
+							});
+						}}
 					/>
 					<Label htmlFor="captions-fit-canvas">
 						Keep captions inside canvas bounds
@@ -428,7 +453,14 @@ export function Captions() {
 					<Checkbox
 						id="captions-highlight-word"
 						checked={highlightSpokenWord}
-						onCheckedChange={(value) => setHighlightSpokenWord(Boolean(value))}
+						onCheckedChange={(value) => {
+							const next = Boolean(value);
+							setHighlightSpokenWord(next);
+							applyCaptionBehaviorToExisting({
+								fitInCanvas: fitCaptionsInCanvas,
+								karaokeWordHighlight: next,
+							});
+						}}
 					/>
 					<Label htmlFor="captions-highlight-word">
 						Highlight current spoken word

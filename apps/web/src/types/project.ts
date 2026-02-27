@@ -38,11 +38,45 @@ export interface TTimelineViewState {
 	playheadTime: number;
 }
 
+export type TBrandLogoOverlayPreset =
+	| "top-right"
+	| "top-center"
+	| "bottom-left"
+	| "bottom-center"
+	| "top-right-compact"
+	| "bottom-right"
+	| "top-left";
+
+export interface TBrandLogoOverlayConfig {
+	enabled: boolean;
+	preset: TBrandLogoOverlayPreset;
+	scale?: number;
+	sourceUrl: string | null;
+	sourceName?: string | null;
+	sourceWidth?: number | null;
+	sourceHeight?: number | null;
+}
+
+export interface TBrandPreset {
+	id: string;
+	name: string;
+	builtIn?: boolean;
+	logo: TBrandLogoOverlayConfig;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface TBrandOverlays {
+	selectedBrandId: string | null;
+	logo: TBrandLogoOverlayConfig;
+}
+
 export interface TProject {
 	metadata: TProjectMetadata;
 	scenes: TScene[];
 	currentSceneId: string;
 	settings: TProjectSettings;
+	brandOverlays?: TBrandOverlays;
 	version: number;
 	timelineViewState?: TTimelineViewState;
 	transcriptionCache?: Record<string, TTranscriptionCacheEntry>;

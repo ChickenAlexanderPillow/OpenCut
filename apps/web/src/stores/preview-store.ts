@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { TPlatformLayout } from "@/types/editor";
+import type { PreviewRendererMode } from "@/services/renderer/webgpu-types";
 
 interface LayoutGuideSettings {
 	platform: TPlatformLayout | null;
@@ -16,9 +17,15 @@ interface PreviewState {
 	layoutGuide: LayoutGuideSettings;
 	overlays: PreviewOverlaysState;
 	playbackQuality: PreviewPlaybackQuality;
+	previewRendererMode: PreviewRendererMode;
 	setLayoutGuide: (settings: Partial<LayoutGuideSettings>) => void;
 	toggleLayoutGuide: (platform: TPlatformLayout) => void;
-	setPlaybackQuality: ({ quality }: { quality: PreviewPlaybackQuality }) => void;
+	setPlaybackQuality: ({
+		quality,
+	}: {
+		quality: PreviewPlaybackQuality;
+	}) => void;
+	setPreviewRendererMode: ({ mode }: { mode: PreviewRendererMode }) => void;
 	setOverlayVisibility: ({
 		overlay,
 		isVisible,
@@ -43,6 +50,7 @@ export const usePreviewStore = create<PreviewState>()(
 			layoutGuide: { platform: null },
 			overlays: DEFAULT_PREVIEW_OVERLAYS,
 			playbackQuality: "balanced",
+			previewRendererMode: "auto",
 			setLayoutGuide: (settings) => {
 				set((state) => ({
 					layoutGuide: {
@@ -53,6 +61,9 @@ export const usePreviewStore = create<PreviewState>()(
 			},
 			setPlaybackQuality: ({ quality }) => {
 				set(() => ({ playbackQuality: quality }));
+			},
+			setPreviewRendererMode: ({ mode }) => {
+				set(() => ({ previewRendererMode: mode }));
 			},
 			toggleLayoutGuide: (platform) => {
 				set((state) => ({
@@ -80,25 +91,28 @@ export const usePreviewStore = create<PreviewState>()(
 		}),
 		{
 			name: "preview-settings",
-			version: 3,
+			version: 4,
 			migrate: (persistedState) => {
 				const state = persistedState as
 					| {
 							layoutGuide?: LayoutGuideSettings;
 							overlays?: PreviewOverlaysState;
 							playbackQuality?: PreviewPlaybackQuality;
+							previewRendererMode?: PreviewRendererMode;
 					  }
 					| undefined;
 				return {
 					layoutGuide: state?.layoutGuide ?? { platform: null },
 					overlays: state?.overlays ?? DEFAULT_PREVIEW_OVERLAYS,
 					playbackQuality: state?.playbackQuality ?? "balanced",
+					previewRendererMode: state?.previewRendererMode ?? "auto",
 				};
 			},
 			partialize: (state) => ({
 				layoutGuide: state.layoutGuide,
 				overlays: state.overlays,
 				playbackQuality: state.playbackQuality,
+				previewRendererMode: state.previewRendererMode,
 			}),
 		},
 	),

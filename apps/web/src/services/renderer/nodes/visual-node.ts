@@ -15,6 +15,13 @@ export interface VisualNodeParams {
 	blendMode?: BlendMode;
 }
 
+export interface VisualPlacement {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
 export abstract class VisualNode<
 	Params extends VisualNodeParams = VisualNodeParams,
 > extends BaseNode<Params> {
@@ -44,14 +51,12 @@ export abstract class VisualNode<
 		renderer.context.save();
 
 		const { transform, opacity } = this.params;
-		const containScale = Math.min(
-			renderer.width / sourceWidth,
-			renderer.height / sourceHeight,
-		);
-		const scaledWidth = sourceWidth * containScale * transform.scale;
-		const scaledHeight = sourceHeight * containScale * transform.scale;
-		const x = renderer.width / 2 + transform.position.x - scaledWidth / 2;
-		const y = renderer.height / 2 + transform.position.y - scaledHeight / 2;
+		const placement = this.getVisualPlacement({
+			rendererWidth: renderer.width,
+			rendererHeight: renderer.height,
+			sourceWidth,
+			sourceHeight,
+		});
 
 		renderer.context.globalCompositeOperation = (
 			this.params.blendMode && this.params.blendMode !== "normal"
@@ -61,14 +66,52 @@ export abstract class VisualNode<
 		renderer.context.globalAlpha = opacity;
 
 		if (transform.rotate !== 0) {
-			const centerX = x + scaledWidth / 2;
-			const centerY = y + scaledHeight / 2;
+			const centerX = placement.x + placement.width / 2;
+			const centerY = placement.y + placement.height / 2;
 			renderer.context.translate(centerX, centerY);
 			renderer.context.rotate((transform.rotate * Math.PI) / 180);
 			renderer.context.translate(-centerX, -centerY);
 		}
 
-		renderer.context.drawImage(source, x, y, scaledWidth, scaledHeight);
+		renderer.context.drawImage(
+			source,
+			placement.x,
+			placement.y,
+			placement.width,
+			placement.height,
+		);
 		renderer.context.restore();
+	}
+
+	protected getVisualPlacement({
+		rendererWidth,
+		rendererHeight,
+		sourceWidth,
+		sourceHeight,
+	}: {
+		rendererWidth: number;
+		rendererHeight: number;
+		sourceWidth: number;
+		sourceHeight: number;
+	}): VisualPlacement {
+		const containScale = Math.min(
+			rendererWidth / sourceWidth,
+			rendererHeight / sourceHeight,
+		);
+		const scaledWidth =
+			sourceWidth * containScale * this.params.transform.scale;
+		const scaledHeight =
+			sourceHeight * containScale * this.params.transform.scale;
+		const x =
+			rendererWidth / 2 + this.params.transform.position.x - scaledWidth / 2;
+		const y =
+			rendererHeight / 2 + this.params.transform.position.y - scaledHeight / 2;
+
+		return {
+			x,
+			y,
+			width: scaledWidth,
+			height: scaledHeight,
+		};
 	}
 }

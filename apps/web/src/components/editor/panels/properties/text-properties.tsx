@@ -2,7 +2,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { FontPicker } from "@/components/ui/font-picker";
 import type { TextElement } from "@/types/timeline";
 import { NumberField } from "@/components/ui/number-field";
-import { useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
 	Section,
 	SectionContent,
@@ -36,6 +36,11 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useLocalStorage } from "@/hooks/storage/use-local-storage";
+import { toast } from "sonner";
+import { RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 
 function createOffsetConverter({
 	defaultValue,
@@ -77,7 +82,74 @@ const DEFAULT_KARAOKE_HIGHLIGHT_COLOR = "#FDE047";
 const DEFAULT_KARAOKE_HIGHLIGHT_TEXT_COLOR = "#111111";
 const DEFAULT_KARAOKE_HIGHLIGHT_OPACITY = 1;
 const DEFAULT_KARAOKE_HIGHLIGHT_ROUNDNESS = 4;
+const DEFAULT_KARAOKE_UNDERLINE_THICKNESS = 3;
 const DEFAULT_CAPTION_BACKGROUND_FIT_MODE = "block";
+const CAPTION_PRESETS_STORAGE_KEY = "caption-global-presets:v1";
+
+type CaptionPresetSnapshot = {
+	transform: TextElement["transform"];
+	opacity: TextElement["opacity"];
+	blendMode?: TextElement["blendMode"];
+	fontSize: TextElement["fontSize"];
+	fontFamily: TextElement["fontFamily"];
+	color: TextElement["color"];
+	background: TextElement["background"];
+	textAlign: TextElement["textAlign"];
+	fontWeight: TextElement["fontWeight"];
+	fontStyle: TextElement["fontStyle"];
+	textDecoration: TextElement["textDecoration"];
+	letterSpacing?: TextElement["letterSpacing"];
+	lineHeight?: TextElement["lineHeight"];
+	captionStyle: NonNullable<TextElement["captionStyle"]>;
+};
+
+type CaptionGlobalPreset = {
+	id: string;
+	name: string;
+	builtIn?: boolean;
+	updatedAt: string;
+	snapshot: CaptionPresetSnapshot;
+};
+
+const BUILTIN_BLUE_HIGHLIGHT_PRESET: CaptionGlobalPreset = {
+	id: "builtin-blue-highlight",
+	name: "Blue highlight",
+	builtIn: true,
+	updatedAt: new Date(0).toISOString(),
+	snapshot: {
+		transform: DEFAULT_TEXT_ELEMENT.transform,
+		opacity: DEFAULT_TEXT_ELEMENT.opacity,
+		blendMode: DEFAULT_TEXT_ELEMENT.blendMode,
+		fontSize: 65,
+		fontFamily: DEFAULT_TEXT_ELEMENT.fontFamily,
+		color: DEFAULT_TEXT_ELEMENT.color,
+		background: DEFAULT_TEXT_ELEMENT.background,
+		textAlign: DEFAULT_TEXT_ELEMENT.textAlign,
+		fontWeight: "bold",
+		fontStyle: DEFAULT_TEXT_ELEMENT.fontStyle,
+		textDecoration: DEFAULT_TEXT_ELEMENT.textDecoration,
+		letterSpacing: DEFAULT_TEXT_ELEMENT.letterSpacing,
+		lineHeight: DEFAULT_TEXT_ELEMENT.lineHeight,
+		captionStyle: {
+			fitInCanvas: true,
+			neverShrinkFont: false,
+			karaokeWordHighlight: true,
+			karaokeHighlightMode: "block",
+			karaokeHighlightEaseInOnly: false,
+			karaokeScaleHighlightedWord: false,
+			karaokeUnderlineThickness: DEFAULT_KARAOKE_UNDERLINE_THICKNESS,
+			karaokeHighlightColor: "#3B82F6",
+			karaokeHighlightTextColor: "#FFFFFF",
+			karaokeHighlightOpacity: 1,
+			karaokeHighlightRoundness: 24,
+			backgroundFitMode: "block",
+			wordsOnScreen: 3,
+			maxLinesOnScreen: 2,
+			wordDisplayPreset: "balanced",
+			linkedToCaptionGroup: true,
+		},
+	},
+};
 
 type CaptionWordPreset = keyof typeof CAPTION_WORD_PRESETS;
 
@@ -97,11 +169,76 @@ function clampHighlightRoundness(value: number): number {
 	return Math.max(0, Math.min(200, Math.round(value)));
 }
 
+function clampUnderlineThickness(value: number): number {
+	return Math.max(1, Math.min(24, Math.round(value)));
+}
+
 function getPresetFromWords(words: number): CaptionWordPreset | "custom" {
 	if (words === CAPTION_WORD_PRESETS.compact) return "compact";
 	if (words === CAPTION_WORD_PRESETS.balanced) return "balanced";
 	if (words === CAPTION_WORD_PRESETS.extended) return "extended";
 	return "custom";
+}
+
+function captureCaptionPresetSnapshot({
+	element,
+}: {
+	element: TextElement;
+}): CaptionPresetSnapshot {
+	return {
+		transform: element.transform,
+		opacity: element.opacity,
+		blendMode: element.blendMode,
+		fontSize: element.fontSize,
+		fontFamily: element.fontFamily,
+		color: element.color,
+		background: element.background,
+		textAlign: element.textAlign,
+		fontWeight: element.fontWeight,
+		fontStyle: element.fontStyle,
+		textDecoration: element.textDecoration,
+		letterSpacing: element.letterSpacing,
+		lineHeight: element.lineHeight,
+		captionStyle: {
+			fitInCanvas: element.captionStyle?.fitInCanvas ?? true,
+			neverShrinkFont: element.captionStyle?.neverShrinkFont ?? false,
+			karaokeWordHighlight: element.captionStyle?.karaokeWordHighlight ?? true,
+			karaokeHighlightMode:
+				element.captionStyle?.karaokeHighlightMode ?? "block",
+			karaokeHighlightEaseInOnly:
+				element.captionStyle?.karaokeHighlightEaseInOnly ?? false,
+			karaokeScaleHighlightedWord:
+				element.captionStyle?.karaokeScaleHighlightedWord ?? false,
+			karaokeUnderlineThickness: clampUnderlineThickness(
+				element.captionStyle?.karaokeUnderlineThickness ??
+					DEFAULT_KARAOKE_UNDERLINE_THICKNESS,
+			),
+			karaokeHighlightColor:
+				element.captionStyle?.karaokeHighlightColor ??
+				DEFAULT_KARAOKE_HIGHLIGHT_COLOR,
+			karaokeHighlightTextColor:
+				element.captionStyle?.karaokeHighlightTextColor ??
+				DEFAULT_KARAOKE_HIGHLIGHT_TEXT_COLOR,
+			karaokeHighlightOpacity:
+				element.captionStyle?.karaokeHighlightOpacity ??
+				DEFAULT_KARAOKE_HIGHLIGHT_OPACITY,
+			karaokeHighlightRoundness:
+				element.captionStyle?.karaokeHighlightRoundness ??
+				DEFAULT_KARAOKE_HIGHLIGHT_ROUNDNESS,
+			backgroundFitMode:
+				element.captionStyle?.backgroundFitMode ??
+				DEFAULT_CAPTION_BACKGROUND_FIT_MODE,
+			wordsOnScreen:
+				element.captionStyle?.wordsOnScreen ?? CAPTION_WORD_PRESETS.balanced,
+			maxLinesOnScreen: element.captionStyle?.maxLinesOnScreen ?? 2,
+			wordDisplayPreset:
+				element.captionStyle?.wordDisplayPreset ??
+				getPresetFromWords(
+					element.captionStyle?.wordsOnScreen ?? CAPTION_WORD_PRESETS.balanced,
+				),
+			linkedToCaptionGroup: true,
+		},
+	};
 }
 
 export function TextProperties({
@@ -148,6 +285,190 @@ function CaptionSection({
 			}
 		}
 		return null;
+	};
+
+	const [storedCaptionPresets, setStoredCaptionPresets, isPresetsReady] =
+		useLocalStorage<CaptionGlobalPreset[]>({
+			key: CAPTION_PRESETS_STORAGE_KEY,
+			defaultValue: [BUILTIN_BLUE_HIGHLIGHT_PRESET],
+		});
+	const captionPresets = useMemo(() => {
+		const builtInOverride = storedCaptionPresets.find(
+			(preset) => preset.id === BUILTIN_BLUE_HIGHLIGHT_PRESET.id,
+		);
+		const effectiveBuiltIn = builtInOverride
+			? { ...builtInOverride, builtIn: true }
+			: BUILTIN_BLUE_HIGHLIGHT_PRESET;
+		const withoutBuiltIn = storedCaptionPresets.filter(
+			(preset) => preset.id !== BUILTIN_BLUE_HIGHLIGHT_PRESET.id,
+		);
+		return [effectiveBuiltIn, ...withoutBuiltIn];
+	}, [storedCaptionPresets]);
+	const [selectedCaptionPresetId, setSelectedCaptionPresetId] = useState(
+		BUILTIN_BLUE_HIGHLIGHT_PRESET.id,
+	);
+	const [captionPresetName, setCaptionPresetName] = useState("");
+
+	useEffect(() => {
+		if (!isPresetsReady) return;
+		if (captionPresets.length === 0) {
+			setSelectedCaptionPresetId(BUILTIN_BLUE_HIGHLIGHT_PRESET.id);
+			return;
+		}
+		if (captionPresets.some((preset) => preset.id === selectedCaptionPresetId)) {
+			return;
+		}
+		setSelectedCaptionPresetId(captionPresets[0].id);
+	}, [captionPresets, selectedCaptionPresetId, isPresetsReady]);
+
+	const selectedCaptionPreset =
+		captionPresets.find((preset) => preset.id === selectedCaptionPresetId) ??
+		captionPresets[0];
+
+	useEffect(() => {
+		if (!selectedCaptionPreset) {
+			setCaptionPresetName("");
+			return;
+		}
+		setCaptionPresetName(selectedCaptionPreset.name);
+	}, [selectedCaptionPreset]);
+
+	const getLinkedCaptionTargets = () => {
+		return editor.timeline
+			.getTracks()
+			.filter((track) => track.type === "text")
+			.flatMap((textTrack) =>
+				textTrack.elements
+					.filter(
+						(candidate) =>
+							candidate.type === "text" &&
+							candidate.name.startsWith("Caption ") &&
+							(candidate.captionWordTimings?.length ?? 0) > 0 &&
+							candidate.captionStyle?.linkedToCaptionGroup !== false,
+					)
+					.map((candidate) => ({
+						trackId: textTrack.id,
+						elementId: candidate.id,
+						element: candidate,
+					})),
+			);
+	};
+
+	const applyCaptionPresetToLinkedCaptions = ({
+		preset,
+	}: {
+		preset: CaptionGlobalPreset;
+	}) => {
+		const targets = getLinkedCaptionTargets();
+		if (targets.length === 0) {
+			toast.error("No linked captions found");
+			return;
+		}
+
+		const normalizedCaptionStyle = {
+			karaokeHighlightMode: "block" as const,
+			karaokeUnderlineThickness: DEFAULT_KARAOKE_UNDERLINE_THICKNESS,
+			...preset.snapshot.captionStyle,
+		};
+
+		editor.timeline.updateElements({
+			updates: targets.map((target) => ({
+				trackId: target.trackId,
+				elementId: target.elementId,
+				updates: {
+					transform: preset.snapshot.transform,
+					opacity: preset.snapshot.opacity,
+					blendMode: preset.snapshot.blendMode,
+					fontSize: preset.snapshot.fontSize,
+					fontFamily: preset.snapshot.fontFamily,
+					color: preset.snapshot.color,
+					background: preset.snapshot.background,
+					textAlign: preset.snapshot.textAlign,
+					fontWeight: preset.snapshot.fontWeight,
+					fontStyle: preset.snapshot.fontStyle,
+					textDecoration: preset.snapshot.textDecoration,
+					letterSpacing: preset.snapshot.letterSpacing,
+					lineHeight: preset.snapshot.lineHeight,
+					captionStyle: {
+						...(target.element.captionStyle ?? {}),
+						...normalizedCaptionStyle,
+						linkedToCaptionGroup: true,
+					},
+				},
+			})),
+		});
+	};
+
+	const handleSaveNewCaptionPreset = () => {
+		const name = captionPresetName.trim();
+		if (!name) {
+			toast.error("Preset name is required");
+			return;
+		}
+
+		const presetId = `custom-${Date.now()}`;
+		const preset: CaptionGlobalPreset = {
+			id: presetId,
+			name,
+			updatedAt: new Date().toISOString(),
+			snapshot: captureCaptionPresetSnapshot({ element }),
+		};
+		setStoredCaptionPresets({
+			value: (previous) => {
+				const withoutBuiltIn = previous.filter(
+					(item) => item.id !== BUILTIN_BLUE_HIGHLIGHT_PRESET.id,
+				);
+				return [BUILTIN_BLUE_HIGHLIGHT_PRESET, ...withoutBuiltIn, preset];
+			},
+		});
+		setSelectedCaptionPresetId(presetId);
+		toast.success(`Saved preset "${name}"`);
+	};
+
+	const handleUpdateCaptionPreset = () => {
+		if (!selectedCaptionPreset) return;
+		const name = captionPresetName.trim();
+		if (!name) {
+			toast.error("Preset name is required");
+			return;
+		}
+
+		setStoredCaptionPresets({
+			value: (previous) => {
+				const nextPreset: CaptionGlobalPreset = {
+					id: selectedCaptionPreset.id,
+					name,
+					builtIn: selectedCaptionPreset.builtIn,
+					updatedAt: new Date().toISOString(),
+					snapshot: captureCaptionPresetSnapshot({ element }),
+				};
+				const existingIndex = previous.findIndex(
+					(preset) => preset.id === selectedCaptionPreset.id,
+				);
+				if (existingIndex === -1) {
+					return [...previous, nextPreset];
+				}
+				return previous.map((preset) =>
+					preset.id === selectedCaptionPreset.id ? nextPreset : preset,
+				);
+			},
+		});
+		toast.success(`Updated preset "${name}"`);
+	};
+
+	const handleDeleteCaptionPreset = () => {
+		if (!selectedCaptionPreset) return;
+		if (selectedCaptionPreset.builtIn) {
+			toast.error("Built-in presets cannot be deleted");
+			return;
+		}
+
+		setStoredCaptionPresets({
+			value: (previous) =>
+				previous.filter((preset) => preset.id !== selectedCaptionPreset.id),
+		});
+		setSelectedCaptionPresetId(BUILTIN_BLUE_HIGHLIGHT_PRESET.id);
+		toast.success(`Deleted preset "${selectedCaptionPreset.name}"`);
 	};
 
 	const currentWordsOnScreen = clampWordsOnScreen(
@@ -267,6 +588,35 @@ function CaptionSection({
 			}),
 		onCommit: () => editor.timeline.commitPreview(),
 	});
+	const underlineThickness = usePropertyDraft({
+		displayValue: String(
+			clampUnderlineThickness(
+				element.captionStyle?.karaokeUnderlineThickness ??
+					DEFAULT_KARAOKE_UNDERLINE_THICKNESS,
+			),
+		),
+		parse: (input) => {
+			const parsed = parseFloat(input);
+			if (Number.isNaN(parsed)) return null;
+			return clampUnderlineThickness(parsed);
+		},
+		onPreview: (value) =>
+			editor.timeline.previewElements({
+				updates: [
+					{
+						trackId,
+						elementId: element.id,
+						updates: {
+							captionStyle: {
+								...(element.captionStyle ?? {}),
+								karaokeUnderlineThickness: value,
+							},
+						},
+					},
+				],
+			}),
+		onCommit: () => editor.timeline.commitPreview(),
+	});
 
 	if (!hasCaptionData) {
 		return null;
@@ -277,6 +627,89 @@ function CaptionSection({
 			<SectionHeader title="Caption" />
 			<SectionContent>
 				<SectionFields>
+					<SectionField label="Global preset">
+						<div className="flex gap-2">
+							<Select
+								value={selectedCaptionPresetId}
+								onValueChange={setSelectedCaptionPresetId}
+							>
+								<SelectTrigger className="flex-1">
+									<SelectValue placeholder="Select caption preset" />
+								</SelectTrigger>
+								<SelectContent>
+									{captionPresets.map((preset) => (
+										<SelectItem key={preset.id} value={preset.id}>
+											{preset.name}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+							<Button
+								size="sm"
+								variant="outline"
+								onClick={() => {
+									if (!selectedCaptionPreset) return;
+									applyCaptionPresetToLinkedCaptions({
+										preset: selectedCaptionPreset,
+									});
+									toast.success(
+										`Applied "${selectedCaptionPreset.name}" to linked captions`,
+									);
+								}}
+							>
+								Apply
+							</Button>
+							<Button
+								size="sm"
+								variant="ghost"
+								onClick={() => {
+									if (!selectedCaptionPreset) return;
+									applyCaptionPresetToLinkedCaptions({
+										preset: selectedCaptionPreset,
+									});
+									setCaptionPresetName(selectedCaptionPreset.name);
+									toast.success(
+										`Reset to saved "${selectedCaptionPreset.name}"`,
+									);
+								}}
+							>
+								<RotateCcw />
+								Reset
+							</Button>
+						</div>
+					</SectionField>
+					<SectionField label="Preset name">
+						<Input
+							size="sm"
+							value={captionPresetName}
+							onChange={(event) => setCaptionPresetName(event.target.value)}
+							placeholder="Preset name"
+						/>
+						<div className="mt-2 grid grid-cols-3 gap-2">
+							<Button size="sm" variant="secondary" onClick={handleSaveNewCaptionPreset}>
+								<Save />
+								Save New
+							</Button>
+							<Button
+								size="sm"
+								variant="outline"
+								onClick={handleUpdateCaptionPreset}
+								disabled={!selectedCaptionPreset}
+							>
+								<RefreshCw />
+								Update
+							</Button>
+							<Button
+								size="sm"
+								variant="destructive-foreground"
+								onClick={handleDeleteCaptionPreset}
+								disabled={!selectedCaptionPreset || selectedCaptionPreset.builtIn}
+							>
+								<Trash2 />
+								Delete
+							</Button>
+						</div>
+					</SectionField>
 					<SectionField label="Word preset">
 						<Select
 							value={currentPreset}
@@ -524,6 +957,126 @@ function CaptionSection({
 												captionStyle: {
 													...(element.captionStyle ?? {}),
 													karaokeWordHighlight: Boolean(checked),
+												},
+											},
+										},
+									],
+								})
+							}
+						/>
+					</div>
+					<SectionField label="Highlight style">
+						<Select
+							value={element.captionStyle?.karaokeHighlightMode ?? "block"}
+							onValueChange={(value) =>
+								editor.timeline.updateElements({
+									updates: [
+										{
+											trackId,
+											elementId: element.id,
+											updates: {
+												captionStyle: {
+													...(element.captionStyle ?? {}),
+													karaokeHighlightMode: value as
+														| "block"
+														| "underline"
+														| "word",
+												},
+											},
+										},
+									],
+								})
+							}
+						>
+							<SelectTrigger>
+								<SelectValue placeholder="Select highlight style" />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="block">Block</SelectItem>
+								<SelectItem value="underline">Underline</SelectItem>
+								<SelectItem value="word">Word</SelectItem>
+							</SelectContent>
+						</Select>
+					</SectionField>
+					{(element.captionStyle?.karaokeHighlightMode ?? "block") ===
+						"underline" && (
+						<SectionField label="Underline thickness">
+							<NumberField
+								value={underlineThickness.displayValue}
+								min={1}
+								max={24}
+								onFocus={underlineThickness.onFocus}
+								onChange={underlineThickness.onChange}
+								onBlur={underlineThickness.onBlur}
+								onScrub={underlineThickness.scrubTo}
+								onScrubEnd={underlineThickness.commitScrub}
+								onReset={() =>
+									editor.timeline.updateElements({
+										updates: [
+											{
+												trackId,
+												elementId: element.id,
+												updates: {
+													captionStyle: {
+														...(element.captionStyle ?? {}),
+														karaokeUnderlineThickness:
+															DEFAULT_KARAOKE_UNDERLINE_THICKNESS,
+													},
+												},
+											},
+										],
+									})
+								}
+								isDefault={
+									clampUnderlineThickness(
+										element.captionStyle?.karaokeUnderlineThickness ??
+											DEFAULT_KARAOKE_UNDERLINE_THICKNESS,
+									) === DEFAULT_KARAOKE_UNDERLINE_THICKNESS
+								}
+								icon="U"
+							/>
+						</SectionField>
+					)}
+					<div className="flex items-center justify-between rounded-sm border px-2 py-2">
+						<span className="text-muted-foreground text-xs">
+							Ease-in highlight only
+						</span>
+						<Checkbox
+							checked={element.captionStyle?.karaokeHighlightEaseInOnly ?? false}
+							onCheckedChange={(checked) =>
+								editor.timeline.updateElements({
+									updates: [
+										{
+											trackId,
+											elementId: element.id,
+											updates: {
+												captionStyle: {
+													...(element.captionStyle ?? {}),
+													karaokeHighlightEaseInOnly: Boolean(checked),
+												},
+											},
+										},
+									],
+								})
+							}
+						/>
+					</div>
+					<div className="flex items-center justify-between rounded-sm border px-2 py-2">
+						<span className="text-muted-foreground text-xs">
+							Scale highlighted word (+10%)
+						</span>
+						<Checkbox
+							checked={element.captionStyle?.karaokeScaleHighlightedWord ?? false}
+							onCheckedChange={(checked) =>
+								editor.timeline.updateElements({
+									updates: [
+										{
+											trackId,
+											elementId: element.id,
+											updates: {
+												captionStyle: {
+													...(element.captionStyle ?? {}),
+													karaokeScaleHighlightedWord: Boolean(checked),
 												},
 											},
 										},

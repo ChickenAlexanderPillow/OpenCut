@@ -129,6 +129,10 @@ export interface TextElement extends BaseTimelineElement {
 		fitInCanvas?: boolean;
 		neverShrinkFont?: boolean;
 		karaokeWordHighlight?: boolean;
+		karaokeHighlightMode?: "block" | "underline" | "word";
+		karaokeHighlightEaseInOnly?: boolean;
+		karaokeScaleHighlightedWord?: boolean;
+		karaokeUnderlineThickness?: number;
 		karaokeHighlightColor?: string;
 		karaokeHighlightTextColor?: string;
 		karaokeHighlightOpacity?: number;

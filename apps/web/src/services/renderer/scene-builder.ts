@@ -7,9 +7,11 @@ import { TextNode } from "./nodes/text-node";
 import { StickerNode } from "./nodes/sticker-node";
 import { ColorNode } from "./nodes/color-node";
 import { BlurBackgroundNode } from "./nodes/blur-background-node";
-import type { TBackground, TCanvasSize } from "@/types/project";
+import type { TBackground, TCanvasSize, TBrandOverlays } from "@/types/project";
 import { DEFAULT_BLUR_INTENSITY } from "@/constants/project-constants";
 import { isMainTrack } from "@/lib/timeline";
+import { DEFAULT_BRAND_OVERLAYS } from "@/constants/brand-overlay-constants";
+import { resolveLogoOverlayTransform } from "@/lib/branding/logo-overlay";
 
 const PREVIEW_MAX_IMAGE_SIZE = 2048;
 
@@ -19,6 +21,7 @@ export type BuildSceneParams = {
 	mediaAssets: MediaAsset[];
 	duration: number;
 	background: TBackground;
+	brandOverlays?: TBrandOverlays;
 	isPreview?: boolean;
 	previewFrameRateCap?: number;
 	previewProxyScale?: number;
@@ -127,6 +130,41 @@ export function buildScene(params: BuildSceneParams) {
 		}
 	}
 
+	const overlayNodes = [];
+	const logoOverlay =
+		params.brandOverlays?.logo ?? DEFAULT_BRAND_OVERLAYS.logo;
+	if (logoOverlay.enabled) {
+		const legacyMediaId =
+			(logoOverlay as unknown as { mediaId?: string | null }).mediaId ?? null;
+		const legacyAsset = legacyMediaId ? mediaMap.get(legacyMediaId) : null;
+		const logoUrl = logoOverlay.sourceUrl ?? legacyAsset?.url ?? null;
+		if (logoUrl) {
+			overlayNodes.push(
+				new ImageNode({
+					url: logoUrl,
+					duration,
+					timeOffset: 0,
+					trimStart: 0,
+					trimEnd: 0,
+					transform: resolveLogoOverlayTransform({
+						preset: logoOverlay.preset,
+						scaleMultiplier: logoOverlay.scale ?? 1,
+						canvasSize,
+						mediaWidth:
+							logoOverlay.sourceWidth ?? legacyAsset?.width,
+						mediaHeight:
+							logoOverlay.sourceHeight ?? legacyAsset?.height,
+					}),
+					opacity: 1,
+					blendMode: "normal",
+					...(params.isPreview && {
+						maxSourceSize: PREVIEW_MAX_IMAGE_SIZE,
+					}),
+				}),
+			);
+		}
+	}
+
 	if (background.type === "blur") {
 		rootNode.add(
 			new BlurBackgroundNode({
@@ -137,11 +175,17 @@ export function buildScene(params: BuildSceneParams) {
 		for (const node of contentNodes) {
 			rootNode.add(node);
 		}
+		for (const node of overlayNodes) {
+			rootNode.add(node);
+		}
 	} else {
 		if (background.type === "color" && background.color !== "transparent") {
 			rootNode.add(new ColorNode({ color: background.color }));
 		}
 		for (const node of contentNodes) {
+			rootNode.add(node);
+		}
+		for (const node of overlayNodes) {
 			rootNode.add(node);
 		}
 	}

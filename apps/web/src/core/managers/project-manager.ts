@@ -29,6 +29,7 @@ import {
 import { DEFAULT_TIMELINE_VIEW_STATE } from "@/constants/timeline-constants";
 import { loadFonts } from "@/lib/fonts/google-fonts";
 import { collectFontFamilies } from "@/lib/timeline/element-utils";
+import { DEFAULT_BRAND_OVERLAYS } from "@/constants/brand-overlay-constants";
 
 export interface MigrationState {
 	isMigrating: boolean;
@@ -97,6 +98,10 @@ export class ProjectManager {
 					type: "color",
 					color: DEFAULT_COLOR,
 				},
+			},
+			brandOverlays: {
+				selectedBrandId: DEFAULT_BRAND_OVERLAYS.selectedBrandId,
+				logo: { ...DEFAULT_BRAND_OVERLAYS.logo },
 			},
 			version: CURRENT_PROJECT_VERSION,
 		};
@@ -591,6 +596,7 @@ export class ProjectManager {
 			duration,
 			canvasSize,
 			background,
+			brandOverlays: this.active.brandOverlays,
 		});
 
 		const renderer = new CanvasRenderer({

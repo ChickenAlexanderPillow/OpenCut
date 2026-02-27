@@ -1,6 +1,7 @@
 import type { CanvasRenderer } from "../canvas-renderer";
 import { VisualNode, type VisualNodeParams } from "./visual-node";
 import { videoCache } from "@/services/video-cache/service";
+import type { WebGPUVisualDrawData } from "../webgpu-types";
 
 export interface VideoNodeParams extends VisualNodeParams {
 	url: string;
@@ -48,5 +49,88 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 				sourceHeight: frame.canvas.height,
 			});
 		}
+	}
+
+	async getWebGPUDrawData({
+		time,
+		rendererWidth,
+		rendererHeight,
+	}: {
+		time: number;
+		rendererWidth: number;
+		rendererHeight: number;
+	}): Promise<WebGPUVisualDrawData | null> {
+		if (!this.isInRange(time)) return null;
+
+		const localTime = this.getLocalTime(time);
+		const cap = this.params.previewFrameRateCap;
+		const videoTime =
+			typeof cap === "number" && cap > 0
+				? Math.floor(localTime * cap) / cap
+				: localTime;
+		const gpuFrame = await videoCache.getGPUFrameAt({
+			mediaId: this.params.mediaId,
+			file: this.params.file,
+			time: videoTime,
+			proxyScale: this.params.previewProxyScale,
+		});
+		if (!gpuFrame) {
+			let frame = this.lastFrame;
+			if (videoTime !== this.lastRenderedFrameTime || !frame) {
+				frame = await videoCache.getFrameAt({
+					mediaId: this.params.mediaId,
+					file: this.params.file,
+					time: videoTime,
+					proxyScale: this.params.previewProxyScale,
+				});
+				this.lastRenderedFrameTime = videoTime;
+				this.lastFrame = frame;
+			}
+			if (!frame) return null;
+
+			const sourceWidth = frame.canvas.width;
+			const sourceHeight = frame.canvas.height;
+			const placement = this.getVisualPlacement({
+				rendererWidth,
+				rendererHeight,
+				sourceWidth,
+				sourceHeight,
+			});
+
+			return {
+				source: frame.canvas,
+				sourceWidth,
+				sourceHeight,
+				x: placement.x,
+				y: placement.y,
+				width: placement.width,
+				height: placement.height,
+				rotation: this.params.transform.rotate,
+				opacity: this.params.opacity,
+				blendMode: this.params.blendMode,
+			};
+		}
+
+		const sourceWidth = gpuFrame.width;
+		const sourceHeight = gpuFrame.height;
+		const placement = this.getVisualPlacement({
+			rendererWidth,
+			rendererHeight,
+			sourceWidth,
+			sourceHeight,
+		});
+
+		return {
+			source: gpuFrame.frame,
+			sourceWidth,
+			sourceHeight,
+			x: placement.x,
+			y: placement.y,
+			width: placement.width,
+			height: placement.height,
+			rotation: this.params.transform.rotate,
+			opacity: this.params.opacity,
+			blendMode: this.params.blendMode,
+		};
 	}
 }

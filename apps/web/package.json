@@ -95,6 +95,7 @@
 		"@types/pg": "^8.15.4",
 		"@types/react": "^19",
 		"@types/react-dom": "^19",
+		"@webgpu/types": "^0.1.69",
 		"cross-env": "^7.0.3",
 		"dotenv": "^16.5.0",
 		"drizzle-kit": "^0.31.4",
