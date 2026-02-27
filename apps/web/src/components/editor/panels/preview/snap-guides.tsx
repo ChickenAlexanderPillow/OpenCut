@@ -13,7 +13,7 @@ export function SnapGuides({
 	canvasRef: React.RefObject<HTMLCanvasElement | null>;
 	containerRef: React.RefObject<HTMLDivElement | null>;
 }) {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: ["project"] });
 	const canvasSize = editor.project.getActive().settings.canvasSize;
 	const canvasRect = canvasRef.current?.getBoundingClientRect();
 	const containerRect = containerRef.current?.getBoundingClientRect();

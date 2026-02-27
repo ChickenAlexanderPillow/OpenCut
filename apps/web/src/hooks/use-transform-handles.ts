@@ -99,7 +99,9 @@ export function useTransformHandles({
 }: {
 	canvasRef: React.RefObject<HTMLCanvasElement | null>;
 }) {
-	const editor = useEditor();
+	const editor = useEditor({
+		subscribeTo: ["selection", "timeline", "media", "project", "playback"],
+	});
 	const isShiftHeldRef = useShiftKey();
 	const [activeHandle, setActiveHandle] = useState<HandleType | null>(null);
 	const [snapLines, setSnapLines] = useState<SnapLine[]>([]);
@@ -114,15 +116,19 @@ export function useTransformHandles({
 
 	const tracks = editor.timeline.getTracks();
 	const currentTime = editor.playback.getCurrentTime();
+	const isPlaying = editor.playback.getIsPlaying();
 	const mediaAssets = editor.media.getAssets();
 	const canvasSize = editor.project.getActive().settings.canvasSize;
+	const shouldComputeBounds = selectedElements.length === 1 && !isPlaying;
 
-	const elementsWithBounds = getVisibleElementsWithBounds({
-		tracks,
-		currentTime,
-		canvasSize,
-		mediaAssets,
-	});
+	const elementsWithBounds = shouldComputeBounds
+		? getVisibleElementsWithBounds({
+				tracks,
+				currentTime,
+				canvasSize,
+				mediaAssets,
+			})
+		: [];
 
 	const selectedWithBounds: ElementWithBounds | null =
 		selectedElements.length === 1

@@ -5,6 +5,7 @@ import type { VideoNode } from "./nodes/video-node";
 import {
 	getRendererCapabilities,
 	splitSceneForHybridPreview,
+	type HybridScenePartition,
 } from "./scene-partition";
 import type {
 	RendererCapabilities,
@@ -24,8 +25,12 @@ type GPUState = {
 
 type CachedTexture = {
 	texture: GPUTexture;
+	view: GPUTextureView;
 	width: number;
 	height: number;
+	lastAccessAt: number;
+	estimatedBytes: number;
+	isStaticUploaded: boolean;
 };
 
 function mapBlendMode(mode: WebGPUVisualDrawData["blendMode"]): GPUBlendState {
@@ -67,7 +72,16 @@ export class WebGPUPreviewRenderer {
 	private initPromise: Promise<void> | null = null;
 	private deviceLost = false;
 	private initErrorReason: string | null = null;
-	private textureCache = new WeakMap<object, CachedTexture>();
+	private textureCache = new Map<object, CachedTexture>();
+	private textureCacheBytes = 0;
+	private cpuPreCanvas: HTMLCanvasElement | null = null;
+	private uniformBufferPool: GPUBuffer[] = [];
+	private vertexBufferPool: GPUBuffer[] = [];
+	private cachedPartitionRoot: RootNode | null = null;
+	private cachedPartition: HybridScenePartition | null = null;
+	private static readonly MAX_TEXTURE_CACHE = 16;
+	private static readonly MAX_TEXTURE_CACHE_BYTES = 160 * 1024 * 1024; // 160MB
+	private static readonly TEXTURE_IDLE_TTL_MS = 10_000;
 
 	constructor({
 		width,
@@ -107,11 +121,103 @@ export class WebGPUPreviewRenderer {
 	}
 
 	dispose(): void {
+		this.destroyAllTextures();
+		this.destroyBufferPool();
 		this.state = null;
 		this.initPromise = null;
 		this.deviceLost = false;
 		this.initErrorReason = null;
-		this.textureCache = new WeakMap<object, CachedTexture>();
+		this.textureCache = new Map<object, CachedTexture>();
+		this.cpuPreCanvas = null;
+		this.cachedPartitionRoot = null;
+		this.cachedPartition = null;
+	}
+
+	private getPartition({
+		rootNode,
+	}: {
+		rootNode: RootNode;
+	}): HybridScenePartition {
+		if (this.cachedPartitionRoot === rootNode && this.cachedPartition) {
+			return this.cachedPartition;
+		}
+		const partition = splitSceneForHybridPreview({ rootNode });
+		this.cachedPartitionRoot = rootNode;
+		this.cachedPartition = partition;
+		return partition;
+	}
+
+	private destroyAllTextures(): void {
+		for (const { texture } of this.textureCache.values()) {
+			try {
+				texture.destroy();
+			} catch {}
+		}
+		this.textureCache.clear();
+		this.textureCacheBytes = 0;
+	}
+
+	private destroyBufferPool(): void {
+		for (const buffer of this.uniformBufferPool) {
+			try {
+				buffer.destroy();
+			} catch {}
+		}
+		for (const buffer of this.vertexBufferPool) {
+			try {
+				buffer.destroy();
+			} catch {}
+		}
+		this.uniformBufferPool = [];
+		this.vertexBufferPool = [];
+	}
+
+	private destroyTextureCacheEntry({ key }: { key: object }): void {
+		const entry = this.textureCache.get(key);
+		if (!entry) return;
+		try {
+			entry.texture.destroy();
+		} catch {}
+		this.textureCache.delete(key);
+		this.textureCacheBytes = Math.max(
+			0,
+			this.textureCacheBytes - entry.estimatedBytes,
+		);
+	}
+
+	private pruneIdleTextures(): void {
+		const now = Date.now();
+		for (const [key, entry] of this.textureCache.entries()) {
+			if (now - entry.lastAccessAt <= WebGPUPreviewRenderer.TEXTURE_IDLE_TTL_MS) {
+				continue;
+			}
+			this.destroyTextureCacheEntry({ key });
+		}
+	}
+
+	private evictTexturesIfNeeded({
+		preserveKey,
+	}: {
+		preserveKey?: object;
+	}): void {
+		const shouldEvictByCount =
+			this.textureCache.size >= WebGPUPreviewRenderer.MAX_TEXTURE_CACHE;
+		const shouldEvictByBytes =
+			this.textureCacheBytes > WebGPUPreviewRenderer.MAX_TEXTURE_CACHE_BYTES;
+		if (!shouldEvictByCount && !shouldEvictByBytes) return;
+
+		const entries = Array.from(this.textureCache.entries())
+			.filter(([key]) => key !== preserveKey)
+			.sort((a, b) => a[1].lastAccessAt - b[1].lastAccessAt);
+		for (const [evictKey] of entries) {
+			if (
+				this.textureCache.size < WebGPUPreviewRenderer.MAX_TEXTURE_CACHE &&
+				this.textureCacheBytes <= WebGPUPreviewRenderer.MAX_TEXTURE_CACHE_BYTES
+			) {
+				break;
+			}
+			this.destroyTextureCacheEntry({ key: evictKey });
+		}
 	}
 
 	private getErrorMessage(error: unknown): string {
@@ -447,14 +553,19 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 		sourceWidth: number;
 		sourceHeight: number;
 		device: GPUDevice;
-	}): GPUTexture {
+	}): CachedTexture {
 		const width = Math.max(1, Math.round(sourceWidth));
 		const height = Math.max(1, Math.round(sourceHeight));
 		const key = source as object;
 		const cached = this.textureCache.get(key);
 		if (cached && cached.width === width && cached.height === height) {
-			return cached.texture;
+			cached.lastAccessAt = Date.now();
+			return cached;
 		}
+		if (cached) {
+			this.destroyTextureCacheEntry({ key });
+		}
+		this.evictTexturesIfNeeded({ preserveKey: key });
 
 		const texture = device.createTexture({
 			size: { width, height },
@@ -464,8 +575,59 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				GPUTextureUsage.COPY_DST |
 				GPUTextureUsage.RENDER_ATTACHMENT,
 		});
-		this.textureCache.set(key, { texture, width, height });
-		return texture;
+		const estimatedBytes = width * height * 4;
+		const entry: CachedTexture = {
+			texture,
+			view: texture.createView(),
+			width,
+			height,
+			lastAccessAt: Date.now(),
+			estimatedBytes,
+			isStaticUploaded: false,
+		};
+		this.textureCache.set(key, entry);
+		this.textureCacheBytes += estimatedBytes;
+		this.evictTexturesIfNeeded({ preserveKey: key });
+		return entry;
+	}
+
+	private sourceNeedsUploadEachFrame({
+		source,
+	}: {
+		source: GPUCopyExternalImageSource;
+	}): boolean {
+		if (typeof HTMLImageElement !== "undefined" && source instanceof HTMLImageElement) {
+			return false;
+		}
+		if (typeof ImageBitmap !== "undefined" && source instanceof ImageBitmap) {
+			return false;
+		}
+		return true;
+	}
+
+	private ensureBufferPool({
+		device,
+		drawCount,
+	}: {
+		device: GPUDevice;
+		drawCount: number;
+	}): void {
+		for (let i = this.uniformBufferPool.length; i < drawCount; i++) {
+			this.uniformBufferPool.push(
+				device.createBuffer({
+					size: 16,
+					usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+				}),
+			);
+		}
+		for (let i = this.vertexBufferPool.length; i < drawCount; i++) {
+			this.vertexBufferPool.push(
+				device.createBuffer({
+					size: 6 * 4 * 4,
+					usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+				}),
+			);
+		}
 	}
 
 	async renderToCanvas({
@@ -505,8 +667,9 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				shouldDisableWebGPU: true,
 			};
 		}
+		this.pruneIdleTextures();
 
-		const partition = splitSceneForHybridPreview({ rootNode });
+		const partition = this.getPartition({ rootNode });
 		if (!partition.supported) {
 			return {
 				usedWebGPU: false,
@@ -549,7 +712,9 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 
 		const drawList: WebGPUVisualDrawData[] = [];
 		if (partition.cpuPreNodes.length > 0) {
-			const cpuPreCanvas = document.createElement("canvas");
+			const cpuPreCanvas =
+				this.cpuPreCanvas ?? document.createElement("canvas");
+			this.cpuPreCanvas = cpuPreCanvas;
 			cpuPreCanvas.width = this.width;
 			cpuPreCanvas.height = this.height;
 			await this.renderNodesCpu({
@@ -576,15 +741,13 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 		let externalVideoFrames = 0;
 		let copiedTextureUploads = 0;
 		const videoFramesToClose: VideoFrame[] = [];
+		this.ensureBufferPool({ device, drawCount: drawList.length });
 
-		for (const draw of drawList) {
+		for (const [index, draw] of drawList.entries()) {
 			const isVideoFrameSource =
 				typeof VideoFrame !== "undefined" && draw.source instanceof VideoFrame;
 
-			const uniformBuffer = device.createBuffer({
-				size: 16,
-				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-			});
+			const uniformBuffer = this.uniformBufferPool[index];
 			device.queue.writeBuffer(
 				uniformBuffer,
 				0,
@@ -608,25 +771,33 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 					],
 				});
 			} else {
-				const texture = this.getOrCreateTexture({
+				const textureEntry = this.getOrCreateTexture({
 					source: draw.source,
 					sourceWidth: draw.sourceWidth,
 					sourceHeight: draw.sourceHeight,
 					device,
 				});
-				device.queue.copyExternalImageToTexture(
-					{ source: draw.source },
-					{ texture },
-					{
-						width: Math.max(1, Math.round(draw.sourceWidth)),
-						height: Math.max(1, Math.round(draw.sourceHeight)),
-					},
-				);
-				copiedTextureUploads += 1;
+				const sourceIsDynamic = this.sourceNeedsUploadEachFrame({
+					source: draw.source,
+				});
+				const needsUpload =
+					textureEntry.isStaticUploaded === false || sourceIsDynamic;
+				if (needsUpload) {
+					device.queue.copyExternalImageToTexture(
+						{ source: draw.source },
+						{ texture: textureEntry.texture },
+						{
+							width: Math.max(1, Math.round(draw.sourceWidth)),
+							height: Math.max(1, Math.round(draw.sourceHeight)),
+						},
+					);
+					textureEntry.isStaticUploaded = !sourceIsDynamic;
+					copiedTextureUploads += 1;
+				}
 				bindGroup = device.createBindGroup({
 					layout: pipeline.getBindGroupLayout(0),
 					entries: [
-						{ binding: 0, resource: texture.createView() },
+						{ binding: 0, resource: textureEntry.view },
 						{ binding: 1, resource: sampler },
 						{ binding: 2, resource: { buffer: uniformBuffer } },
 					],
@@ -634,10 +805,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 			}
 
 			const vertices = this.createQuadVertices({ draw });
-			const vertexBuffer = device.createBuffer({
-				size: vertices.byteLength,
-				usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-			});
+			const vertexBuffer = this.vertexBufferPool[index];
 			device.queue.writeBuffer(vertexBuffer, 0, vertices);
 
 			pass.setPipeline(isVideoFrameSource ? externalPipeline : pipeline);
@@ -660,10 +828,14 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				void device.queue
 					.onSubmittedWorkDone()
 					.catch(() => {})
-					.finally(closeFrames);
+					.finally(() => {
+						closeFrames();
+					});
 			} else {
 				// Fallback for environments without queue completion promises.
-				setTimeout(closeFrames, 0);
+				setTimeout(() => {
+					closeFrames();
+				}, 0);
 			}
 		}
 

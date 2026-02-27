@@ -5,7 +5,7 @@ import { findCurrentScene } from "@/lib/scenes";
 import { getBookmarksActiveAtTime } from "@/lib/timeline/bookmarks";
 
 export function BookmarkNoteOverlay() {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: ["playback", "project"] });
 	const currentTime = editor.playback.getCurrentTime();
 	const activeProject = editor.project.getActive();
 

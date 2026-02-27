@@ -79,6 +79,7 @@ export class ProjectManager {
 	}
 
 	async createNewProject({ name }: { name: string }): Promise<string> {
+		this.editor.playback.pause();
 		const mainScene = buildDefaultScene({ name: "Main scene", isMain: true });
 		const newProject: TProject = {
 			metadata: {
@@ -133,6 +134,7 @@ export class ProjectManager {
 		}
 
 		this.editor.save.pause();
+		this.editor.playback.pause();
 		await this.ensureStorageMigrations();
 		this.editor.media.clearAllAssets();
 		this.editor.scenes.clearScenes();
@@ -246,6 +248,7 @@ export class ProjectManager {
 				this.active && idSet.has(this.active.metadata.id);
 
 			if (shouldClearActive) {
+				this.editor.playback.pause();
 				this.active = null;
 				this.editor.media.clearAllAssets();
 				this.editor.scenes.clearScenes();
@@ -258,6 +261,7 @@ export class ProjectManager {
 	}
 
 	closeProject(): void {
+		this.editor.playback.pause();
 		this.active = null;
 		this.notify();
 

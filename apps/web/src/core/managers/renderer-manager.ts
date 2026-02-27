@@ -7,6 +7,7 @@ import { buildScene } from "@/services/renderer/scene-builder";
 import { createTimelineAudioBuffer } from "@/lib/media/audio";
 import { formatTimeCode, getLastFrameTime } from "@/lib/time";
 import { downloadBlob } from "@/utils/browser";
+import { VideoCache } from "@/services/video-cache/service";
 import type {
 	PreviewRendererMode,
 	RendererCapabilities,
@@ -113,6 +114,7 @@ export class RendererManager {
 		const { format, quality, fps, includeAudio, onProgress, onCancel } =
 			options;
 
+		const exportVideoCache = new VideoCache();
 		try {
 			const tracks = this.editor.timeline.getTracks();
 			const mediaAssets = this.editor.media.getAssets();
@@ -147,6 +149,7 @@ export class RendererManager {
 				canvasSize,
 				background: activeProject.settings.background,
 				brandOverlays: activeProject.brandOverlays,
+				videoCache: exportVideoCache,
 			});
 
 			const exporter = new SceneExporter({
@@ -201,6 +204,8 @@ export class RendererManager {
 				success: false,
 				error: error instanceof Error ? error.message : "Unknown export error",
 			};
+		} finally {
+			exportVideoCache.clearAll();
 		}
 	}
 

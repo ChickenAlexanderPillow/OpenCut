@@ -32,7 +32,7 @@ export function TextEditOverlay({
 	onCommit: () => void;
 	onCancel: () => void;
 }) {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: ["timeline", "project"] });
 	const divRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {

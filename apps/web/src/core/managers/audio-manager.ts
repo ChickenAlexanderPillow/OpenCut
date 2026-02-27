@@ -2,6 +2,7 @@ import type { EditorCore } from "@/core";
 import { createAudioContext, createTimelineAudioBuffer } from "@/lib/media/audio";
 
 export class AudioManager {
+	private static readonly PLAYBACK_SAMPLE_RATE = 32000;
 	private audioContext: AudioContext | null = null;
 	private masterGain: GainNode | null = null;
 	private playbackSource: AudioBufferSourceNode | null = null;
@@ -15,8 +16,8 @@ export class AudioManager {
 	private lastVolume = 1;
 	private lastSeekRestartAt = 0;
 	private lastSeekTime = 0;
-	private minSeekRestartIntervalMs = 40;
-	private minSeekTimeDeltaSeconds = 1 / 60;
+	private minSeekRestartIntervalMs = 80;
+	private minSeekTimeDeltaSeconds = 1 / 30;
 	private playbackStartContextTime = 0;
 	private playbackStartTimelineTime = 0;
 	private playbackRequestId = 0;
@@ -24,6 +25,11 @@ export class AudioManager {
 	private driftCorrectionCooldownMs = 120;
 	private driftResyncThresholdSeconds = 0.08;
 	private unsubscribers: Array<() => void> = [];
+	private activeProjectId: string | null = null;
+	private bufferBuildPromise: Promise<void> | null = null;
+	private warmupTimer: number | null = null;
+	private warmupIdleHandle: number | null = null;
+	private quickStartMaxWaitMs = 120;
 
 	constructor(private editor: EditorCore) {
 		this.lastVolume = this.editor.playback.getVolume();
@@ -32,7 +38,10 @@ export class AudioManager {
 			this.editor.playback.subscribe(this.handlePlaybackChange),
 			this.editor.timeline.subscribe(this.handleTimelineOrMediaChange),
 			this.editor.media.subscribe(this.handleTimelineOrMediaChange),
+			this.editor.project.subscribe(this.handleProjectChange),
 		);
+
+		this.activeProjectId = this.editor.project.getActiveOrNull()?.metadata.id ?? null;
 
 		if (typeof window !== "undefined") {
 			window.addEventListener("playback-seek", this.handleSeek);
@@ -56,6 +65,7 @@ export class AudioManager {
 			window.removeEventListener("pointerdown", this.handleUserGesture);
 			window.removeEventListener("keydown", this.handleUserGesture);
 		}
+		this.clearWarmupScheduling();
 		if (this.audioContext) {
 			void this.audioContext.close();
 			this.audioContext = null;
@@ -139,7 +149,31 @@ export class AudioManager {
 
 	private handleTimelineOrMediaChange = (): void => {
 		this.timelineDirty = true;
-		void this.ensureBufferReady();
+		if (this.editor.playback.getIsPlaying() && this.timelineBuffer) {
+			return;
+		}
+		this.scheduleBufferWarmup();
+	};
+
+	private handleProjectChange = (): void => {
+		const nextProjectId = this.editor.project.getActiveOrNull()?.metadata.id ?? null;
+		if (nextProjectId === this.activeProjectId) return;
+
+		this.activeProjectId = nextProjectId;
+
+		// Hard boundary between projects: stop any active source and invalidate buffers.
+		this.playbackRequestId += 1;
+		this.stopSource();
+		this.timelineBuffer = null;
+		this.timelineDuration = 0;
+		this.timelineDirty = true;
+		this.buildGeneration += 1;
+		this.buildingBuffer = false;
+		this.bufferBuildPromise = null;
+		this.clearWarmupScheduling();
+		this.lastSeekRestartAt = 0;
+		this.lastSeekTime = 0;
+		this.lastDriftCorrectionAt = 0;
 	};
 
 	private handleUserGesture = (): void => {
@@ -150,7 +184,9 @@ export class AudioManager {
 		if (this.audioContext) return this.audioContext;
 		if (typeof window === "undefined") return null;
 
-		this.audioContext = createAudioContext();
+		this.audioContext = createAudioContext({
+			sampleRate: AudioManager.PLAYBACK_SAMPLE_RATE,
+		});
 		this.masterGain = this.audioContext.createGain();
 		this.masterGain.gain.value = this.lastVolume;
 		this.masterGain.connect(this.audioContext.destination);
@@ -173,53 +209,105 @@ export class AudioManager {
 		}
 	}
 
+	private scheduleBufferWarmup(): void {
+		this.clearWarmupScheduling();
+		if (typeof window === "undefined") {
+			void this.ensureBufferReady();
+			return;
+		}
+
+		this.warmupTimer = window.setTimeout(() => {
+			this.warmupTimer = null;
+			if ("requestIdleCallback" in window) {
+				this.warmupIdleHandle = (
+					window as typeof window & {
+						requestIdleCallback: (
+							cb: (deadline: { didTimeout: boolean; timeRemaining: () => number }) => void,
+							opts?: { timeout?: number },
+						) => number;
+					}
+				).requestIdleCallback(
+					() => {
+						this.warmupIdleHandle = null;
+						void this.ensureBufferReady();
+					},
+					{ timeout: 1200 },
+				);
+				return;
+			}
+			void this.ensureBufferReady();
+		}, 80);
+	}
+
+	private clearWarmupScheduling(): void {
+		if (typeof window === "undefined") return;
+		if (this.warmupTimer !== null) {
+			window.clearTimeout(this.warmupTimer);
+			this.warmupTimer = null;
+		}
+		if (this.warmupIdleHandle !== null && "cancelIdleCallback" in window) {
+			(
+				window as typeof window & {
+					cancelIdleCallback: (id: number) => void;
+				}
+			).cancelIdleCallback(this.warmupIdleHandle);
+			this.warmupIdleHandle = null;
+		}
+	}
+
 	private async ensureBufferReady(): Promise<void> {
-		if (!this.timelineDirty || this.buildingBuffer) return;
+		if (!this.timelineDirty) return;
+		if (this.bufferBuildPromise) {
+			return this.bufferBuildPromise;
+		}
 
 		const audioContext = this.ensureAudioContext();
 		if (!audioContext) return;
 
 		const generation = ++this.buildGeneration;
 		this.buildingBuffer = true;
+		this.bufferBuildPromise = (async () => {
+			try {
+				const tracks = this.editor.timeline.getTracks();
+				const mediaAssets = this.editor.media.getAssets();
+				const duration = this.editor.timeline.getTotalDuration();
 
-		try {
-			const tracks = this.editor.timeline.getTracks();
-			const mediaAssets = this.editor.media.getAssets();
-			const duration = this.editor.timeline.getTotalDuration();
-
-			if (duration <= 0) {
-				if (generation === this.buildGeneration) {
-					this.timelineBuffer = null;
-					this.timelineDuration = 0;
-					this.timelineDirty = false;
+				if (duration <= 0) {
+					if (generation === this.buildGeneration) {
+						this.timelineBuffer = null;
+						this.timelineDuration = 0;
+						this.timelineDirty = false;
+					}
+					return;
 				}
-				return;
+
+				const buffer = await createTimelineAudioBuffer({
+					tracks,
+					mediaAssets,
+					duration,
+					audioContext,
+					sampleRate: AudioManager.PLAYBACK_SAMPLE_RATE,
+				});
+
+				if (generation !== this.buildGeneration) return;
+
+				this.timelineBuffer = buffer;
+				this.timelineDuration = duration;
+				this.timelineDirty = false;
+
+				if (this.editor.playback.getIsPlaying()) {
+					void this.startPlayback({ time: this.editor.playback.getCurrentTime() });
+				}
+			} catch (error) {
+				console.warn("Failed to build timeline audio buffer:", error);
+			} finally {
+				if (generation === this.buildGeneration) {
+					this.buildingBuffer = false;
+				}
+				this.bufferBuildPromise = null;
 			}
-
-			const buffer = await createTimelineAudioBuffer({
-				tracks,
-				mediaAssets,
-				duration,
-				audioContext,
-				sampleRate: audioContext.sampleRate,
-			});
-
-			if (generation !== this.buildGeneration) return;
-
-			this.timelineBuffer = buffer;
-			this.timelineDuration = duration;
-			this.timelineDirty = false;
-
-			if (this.editor.playback.getIsPlaying()) {
-				void this.startPlayback({ time: this.editor.playback.getCurrentTime() });
-			}
-		} catch (error) {
-			console.warn("Failed to build timeline audio buffer:", error);
-		} finally {
-			if (generation === this.buildGeneration) {
-				this.buildingBuffer = false;
-			}
-		}
+		})();
+		return this.bufferBuildPromise;
 	}
 
 	private stopSource(): void {
@@ -243,8 +331,18 @@ export class AudioManager {
 			return;
 		}
 
-		await this.ensureBufferReady();
-		if (requestId !== this.playbackRequestId) return;
+		const shouldWaitForBuffer = this.timelineDirty || !this.timelineBuffer;
+		if (shouldWaitForBuffer) {
+			const readyInTime = await Promise.race([
+				this.ensureBufferReady().then(() => true),
+				new Promise<boolean>((resolve) =>
+					setTimeout(() => resolve(false), this.quickStartMaxWaitMs),
+				),
+			]);
+			if (!readyInTime || requestId !== this.playbackRequestId) {
+				return;
+			}
+		}
 
 		this.stopSource();
 

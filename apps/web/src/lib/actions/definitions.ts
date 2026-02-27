@@ -85,6 +85,10 @@ export const ACTIONS = {
 		category: "editing",
 		defaultShortcuts: ["w"],
 	},
+	"smart-cut-selected": {
+		description: "Smart cut selected media elements",
+		category: "editing",
+	},
 	"delete-selected": {
 		description: "Delete selected elements",
 		category: "editing",

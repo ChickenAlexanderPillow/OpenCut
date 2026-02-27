@@ -26,6 +26,11 @@ export interface MediaAssetData {
 	fps?: number;
 	ephemeral?: boolean;
 	thumbnailUrl?: string;
+	previewProxyAvailable?: boolean;
+	previewProxyWidth?: number;
+	previewProxyHeight?: number;
+	previewProxyFps?: number;
+	previewProxyQualityRatio?: number;
 }
 
 export type SerializedScene = Omit<TScene, "createdAt" | "updatedAt"> & {

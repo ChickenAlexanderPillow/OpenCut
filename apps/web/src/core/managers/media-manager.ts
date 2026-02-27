@@ -53,6 +53,9 @@ export class MediaManager {
 				URL.revokeObjectURL(asset.thumbnailUrl);
 			}
 		}
+		if (asset?.previewUrl) {
+			URL.revokeObjectURL(asset.previewUrl);
+		}
 
 		this.assets = this.assets.filter((asset) => asset.id !== id);
 		this.notify();
@@ -105,6 +108,9 @@ export class MediaManager {
 			if (asset.thumbnailUrl) {
 				URL.revokeObjectURL(asset.thumbnailUrl);
 			}
+			if (asset.previewUrl) {
+				URL.revokeObjectURL(asset.previewUrl);
+			}
 		});
 
 		const mediaIds = this.assets.map((asset) => asset.id);
@@ -131,6 +137,9 @@ export class MediaManager {
 			}
 			if (asset.thumbnailUrl) {
 				URL.revokeObjectURL(asset.thumbnailUrl);
+			}
+			if (asset.previewUrl) {
+				URL.revokeObjectURL(asset.previewUrl);
 			}
 		});
 

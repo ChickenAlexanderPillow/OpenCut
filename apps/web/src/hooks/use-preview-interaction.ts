@@ -36,7 +36,7 @@ export function usePreviewInteraction({
 }: {
 	canvasRef: React.RefObject<HTMLCanvasElement | null>;
 }) {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: [] });
 	const isShiftHeldRef = useShiftKey();
 	const [isDragging, setIsDragging] = useState(false);
 	const [snapLines, setSnapLines] = useState<SnapLine[]>([]);

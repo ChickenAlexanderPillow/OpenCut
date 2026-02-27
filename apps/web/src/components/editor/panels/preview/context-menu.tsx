@@ -15,7 +15,7 @@ export function PreviewContextMenu({
 	onToggleFullscreen: () => void;
 	containerRef: React.RefObject<HTMLElement | null>;
 }) {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: [] });
 	const { overlays, setOverlayVisibility } = usePreviewStore();
 
 	return (

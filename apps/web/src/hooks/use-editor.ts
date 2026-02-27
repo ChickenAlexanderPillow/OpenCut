@@ -1,7 +1,30 @@
 import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import { EditorCore } from "@/core";
 
-export function useEditor(): EditorCore {
+export type EditorSubscriptionKey =
+	| "playback"
+	| "timeline"
+	| "scenes"
+	| "project"
+	| "media"
+	| "renderer"
+	| "selection";
+
+const DEFAULT_SUBSCRIPTIONS: EditorSubscriptionKey[] = [
+	"playback",
+	"timeline",
+	"scenes",
+	"project",
+	"media",
+	"renderer",
+	"selection",
+];
+
+export function useEditor({
+	subscribeTo = DEFAULT_SUBSCRIPTIONS,
+}: {
+	subscribeTo?: readonly EditorSubscriptionKey[];
+} = {}): EditorCore {
 	const editor = useMemo(() => EditorCore.getInstance(), []);
 	const versionRef = useRef(0);
 
@@ -12,15 +35,29 @@ export function useEditor(): EditorCore {
 				onStoreChange();
 			};
 
-			const unsubscribers = [
-				editor.playback.subscribe(handleStoreChange),
-				editor.timeline.subscribe(handleStoreChange),
-				editor.scenes.subscribe(handleStoreChange),
-				editor.project.subscribe(handleStoreChange),
-				editor.media.subscribe(handleStoreChange),
-				editor.renderer.subscribe(handleStoreChange),
-				editor.selection.subscribe(handleStoreChange),
-			];
+			const unsubscribers: Array<() => void> = [];
+
+			if (subscribeTo.includes("playback")) {
+				unsubscribers.push(editor.playback.subscribe(handleStoreChange));
+			}
+			if (subscribeTo.includes("timeline")) {
+				unsubscribers.push(editor.timeline.subscribe(handleStoreChange));
+			}
+			if (subscribeTo.includes("scenes")) {
+				unsubscribers.push(editor.scenes.subscribe(handleStoreChange));
+			}
+			if (subscribeTo.includes("project")) {
+				unsubscribers.push(editor.project.subscribe(handleStoreChange));
+			}
+			if (subscribeTo.includes("media")) {
+				unsubscribers.push(editor.media.subscribe(handleStoreChange));
+			}
+			if (subscribeTo.includes("renderer")) {
+				unsubscribers.push(editor.renderer.subscribe(handleStoreChange));
+			}
+			if (subscribeTo.includes("selection")) {
+				unsubscribers.push(editor.selection.subscribe(handleStoreChange));
+			}
 
 			return () => {
 				for (const unsubscribe of unsubscribers) {
@@ -28,7 +65,7 @@ export function useEditor(): EditorCore {
 				}
 			};
 		},
-		[editor],
+		[editor, subscribeTo],
 	);
 
 	const getSnapshot = useCallback(() => versionRef.current, []);

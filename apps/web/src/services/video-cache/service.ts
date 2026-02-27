@@ -23,6 +23,7 @@ export interface VideoFrameGPU {
 }
 
 interface VideoSinkData {
+	input: Input;
 	sink: CanvasSink;
 	sampleSink: VideoSampleSink;
 	iterator: AsyncGenerator<WrappedCanvas, void, unknown> | null;
@@ -38,11 +39,17 @@ interface VideoSinkData {
 	prefetchPromise: Promise<void> | null;
 	prefetchingSample: boolean;
 	prefetchSamplePromise: Promise<void> | null;
+	lastAccessAt: number;
+	estimatedBytes: number;
 }
 
 export class VideoCache {
 	private sinks = new Map<string, VideoSinkData>();
 	private initPromises = new Map<string, Promise<void>>();
+	private totalEstimatedBytes = 0;
+	private static readonly MAX_SINKS = 4;
+	private static readonly MAX_TOTAL_ESTIMATED_BYTES = 220 * 1024 * 1024; // 220MB
+	private static readonly PREVIEW_MAX_PIXELS = 1280 * 720;
 
 	async getFrameAt({
 		mediaId,
@@ -64,6 +71,7 @@ export class VideoCache {
 
 		const sinkData = this.sinks.get(mediaId);
 		if (!sinkData) return null;
+		sinkData.lastAccessAt = Date.now();
 
 		if (sinkData.nextFrame && sinkData.nextFrame.timestamp <= time) {
 			sinkData.currentFrame = sinkData.nextFrame;
@@ -123,6 +131,7 @@ export class VideoCache {
 
 		const sinkData = this.sinks.get(mediaId);
 		if (!sinkData) return null;
+		sinkData.lastAccessAt = Date.now();
 
 		if (
 			sinkData.nextSample &&
@@ -174,6 +183,27 @@ export class VideoCache {
 		if (typeof proxyScale !== "number" || !Number.isFinite(proxyScale))
 			return 1;
 		return Math.max(0.25, Math.min(1, proxyScale));
+	}
+
+	private constrainPreviewSize({
+		width,
+		height,
+	}: {
+		width: number;
+		height: number;
+	}): { width: number; height: number } {
+		let constrainedWidth = Math.max(1, Math.round(width));
+		let constrainedHeight = Math.max(1, Math.round(height));
+		const pixels = constrainedWidth * constrainedHeight;
+		if (pixels > VideoCache.PREVIEW_MAX_PIXELS) {
+			const scale = Math.sqrt(VideoCache.PREVIEW_MAX_PIXELS / pixels);
+			constrainedWidth = Math.max(1, Math.round(constrainedWidth * scale));
+			constrainedHeight = Math.max(1, Math.round(constrainedHeight * scale));
+		}
+		return {
+			width: constrainedWidth,
+			height: constrainedHeight,
+		};
 	}
 
 	private toPreviewFrame({
@@ -534,6 +564,47 @@ export class VideoCache {
 			this.initPromises.delete(mediaId);
 		}
 	}
+
+	private evictIfNeeded({ preserveMediaId }: { preserveMediaId?: string }): void {
+		const shouldEvictByCount = this.sinks.size >= VideoCache.MAX_SINKS;
+		const shouldEvictByBytes =
+			this.totalEstimatedBytes > VideoCache.MAX_TOTAL_ESTIMATED_BYTES;
+		if (!shouldEvictByCount && !shouldEvictByBytes) return;
+
+		const candidates = Array.from(this.sinks.entries())
+			.filter(([mediaId]) => mediaId !== preserveMediaId)
+			.sort((a, b) => a[1].lastAccessAt - b[1].lastAccessAt);
+		for (const [evictMediaId] of candidates) {
+			if (
+				this.sinks.size < VideoCache.MAX_SINKS &&
+				this.totalEstimatedBytes <= VideoCache.MAX_TOTAL_ESTIMATED_BYTES
+			) {
+				break;
+			}
+			this.clearVideo({ mediaId: evictMediaId });
+		}
+	}
+
+	private disposeSinkData({ sinkData }: { sinkData: VideoSinkData }): void {
+		if (sinkData.iterator) {
+			void sinkData.iterator.return();
+		}
+		if (sinkData.sampleIterator) {
+			void sinkData.sampleIterator.return();
+		}
+		this.closeSample({ sample: sinkData.currentSample });
+		this.closeSample({ sample: sinkData.nextSample });
+
+		try {
+			(sinkData.sink as unknown as { dispose?: () => void }).dispose?.();
+		} catch {}
+		try {
+			(sinkData.sampleSink as unknown as { dispose?: () => void }).dispose?.();
+		} catch {}
+		try {
+			(sinkData.input as unknown as { dispose?: () => void }).dispose?.();
+		} catch {}
+	}
 	private async initializeSink({
 		mediaId,
 		file,
@@ -544,6 +615,8 @@ export class VideoCache {
 		previewProxyScale: number;
 	}): Promise<void> {
 		try {
+			this.evictIfNeeded({ preserveMediaId: mediaId });
+
 			const input = new Input({
 				source: new BlobSource(file),
 				formats: ALL_FORMATS,
@@ -560,15 +633,32 @@ export class VideoCache {
 			}
 
 			const proxyScale = Math.max(0.25, Math.min(1, previewProxyScale));
+			const scaledWidth = Math.max(
+				1,
+				Math.round(videoTrack.displayWidth * proxyScale),
+			);
+			const scaledHeight = Math.max(
+				1,
+				Math.round(videoTrack.displayHeight * proxyScale),
+			);
+			const constrained = this.constrainPreviewSize({
+				width: scaledWidth,
+				height: scaledHeight,
+			});
+			const proxyWidth = constrained.width;
+			const proxyHeight = constrained.height;
+			const poolSize = 3;
 			const sink = new CanvasSink(videoTrack, {
-				poolSize: 3,
+				poolSize,
 				fit: "contain",
-				width: Math.max(1, Math.round(videoTrack.displayWidth * proxyScale)),
-				height: Math.max(1, Math.round(videoTrack.displayHeight * proxyScale)),
+				width: proxyWidth,
+				height: proxyHeight,
 			});
 			const sampleSink = new VideoSampleSink(videoTrack);
+			const estimatedBytes = proxyWidth * proxyHeight * 4 * poolSize;
 
 			this.sinks.set(mediaId, {
+				input,
 				sink,
 				sampleSink,
 				iterator: null,
@@ -584,7 +674,11 @@ export class VideoCache {
 				prefetchPromise: null,
 				prefetchingSample: false,
 				prefetchSamplePromise: null,
+				lastAccessAt: Date.now(),
+				estimatedBytes,
 			});
+			this.totalEstimatedBytes += estimatedBytes;
+			this.evictIfNeeded({ preserveMediaId: mediaId });
 		} catch (error) {
 			console.error(`Failed to initialize video sink for ${mediaId}:`, error);
 			throw error;
@@ -594,16 +688,12 @@ export class VideoCache {
 	clearVideo({ mediaId }: { mediaId: string }): void {
 		const sinkData = this.sinks.get(mediaId);
 		if (sinkData) {
-			if (sinkData.iterator) {
-				void sinkData.iterator.return();
-			}
-			if (sinkData.sampleIterator) {
-				void sinkData.sampleIterator.return();
-			}
-			this.closeSample({ sample: sinkData.currentSample });
-			this.closeSample({ sample: sinkData.nextSample });
-
+			this.disposeSinkData({ sinkData });
 			this.sinks.delete(mediaId);
+			this.totalEstimatedBytes = Math.max(
+				0,
+				this.totalEstimatedBytes - sinkData.estimatedBytes,
+			);
 		}
 
 		this.initPromises.delete(mediaId);
@@ -623,6 +713,7 @@ export class VideoCache {
 			cachedFrames: Array.from(this.sinks.values()).filter(
 				(s) => s.currentFrame,
 			).length,
+			estimatedBytes: this.totalEstimatedBytes,
 		};
 	}
 }

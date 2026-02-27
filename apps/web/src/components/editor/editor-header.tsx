@@ -24,6 +24,18 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { ShortcutsDialog } from "./dialogs/shortcuts-dialog";
 import Image from "next/image";
 import { cn } from "@/utils/ui";
+import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
+import { useProjectProcessStore } from "@/stores/project-process-store";
+import { Loader2, XCircle } from "lucide-react";
+import {
+	Dialog,
+	DialogBody,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 
 export function EditorHeader() {
 	return (
@@ -33,6 +45,7 @@ export function EditorHeader() {
 				<EditableProjectName />
 			</div>
 			<nav className="flex items-center gap-2">
+				<TranscriptionStatusIndicator />
 				<ExportButton />
 				<ThemeToggle />
 			</nav>
@@ -40,26 +53,53 @@ export function EditorHeader() {
 	);
 }
 
+function TranscriptionStatusIndicator() {
+	const { isRunning, message, progress } = useTranscriptionStatusStore();
+	if (!isRunning) return null;
+
+	return (
+		<div className="flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs">
+			<Loader2 className="size-3.5 animate-spin" />
+			<span className="max-w-56 truncate">
+				{message || "Generating transcript..."}
+				{typeof progress === "number" ? ` ${Math.round(progress)}%` : ""}
+			</span>
+		</div>
+	);
+}
+
 function ProjectDropdown() {
 	const [openDialog, setOpenDialog] = useState<
 		"delete" | "rename" | "shortcuts" | null
 	>(null);
+	const [isExitDialogOpen, setIsExitDialogOpen] = useState(false);
 	const [isExiting, setIsExiting] = useState(false);
 	const router = useRouter();
 	const editor = useEditor();
 	const activeProject = editor.project.getActive();
+	const {
+		processes,
+		cancelProcess,
+		cancelProcessesForProject,
+		clearProcessesForProject,
+	} = useProjectProcessStore();
+	const activeProjectProcesses = processes.filter(
+		(process) => process.projectId === activeProject.metadata.id,
+	);
 
 	const handleExit = async () => {
 		if (isExiting) return;
 		setIsExiting(true);
 
 		try {
+			cancelProcessesForProject({ projectId: activeProject.metadata.id });
 			await editor.project.prepareExit();
-			editor.project.closeProject();
 		} catch (error) {
 			console.error("Failed to prepare project exit:", error);
 		} finally {
+			clearProcessesForProject({ projectId: activeProject.metadata.id });
 			editor.project.closeProject();
+			setIsExitDialogOpen(false);
 			router.push("/projects");
 		}
 	};
@@ -120,7 +160,7 @@ function ProjectDropdown() {
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="start" className="z-100 w-44">
 					<DropdownMenuItem
-						onClick={handleExit}
+						onClick={() => setIsExitDialogOpen(true)}
 						disabled={isExiting}
 						icon={<HugeiconsIcon icon={Logout05Icon} />}
 					>
@@ -163,6 +203,61 @@ function ProjectDropdown() {
 				isOpen={openDialog === "shortcuts"}
 				onOpenChange={(isOpen) => setOpenDialog(isOpen ? "shortcuts" : null)}
 			/>
+			<Dialog open={isExitDialogOpen} onOpenChange={setIsExitDialogOpen}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Leave project?</DialogTitle>
+						<DialogDescription>
+							Any running project tasks will be canceled if you leave now.
+						</DialogDescription>
+					</DialogHeader>
+					<DialogBody>
+						{activeProjectProcesses.length === 0 ? (
+							<div className="text-sm text-muted-foreground">
+								No active background processes for this project.
+							</div>
+						) : (
+							<div className="space-y-2">
+								<div className="text-sm font-medium">Active processes</div>
+								{activeProjectProcesses.map((process) => (
+									<div
+										key={process.id}
+										className="flex items-center justify-between rounded-md border px-3 py-2"
+									>
+										<div className="min-w-0">
+											<div className="truncate text-sm">{process.label}</div>
+											<div className="text-xs text-muted-foreground">
+												{process.kind}
+											</div>
+										</div>
+										<Button
+											size="sm"
+											variant="outline"
+											onClick={() => cancelProcess({ id: process.id })}
+											className="gap-1"
+										>
+											<XCircle className="size-3.5" />
+											Cancel
+										</Button>
+									</div>
+								))}
+							</div>
+						)}
+					</DialogBody>
+					<DialogFooter>
+						<Button
+							variant="secondary"
+							onClick={() => setIsExitDialogOpen(false)}
+							disabled={isExiting}
+						>
+							Stay
+						</Button>
+						<Button onClick={handleExit} disabled={isExiting}>
+							{isExiting ? "Leaving..." : "Leave project"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</>
 	);
 }

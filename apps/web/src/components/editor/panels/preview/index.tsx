@@ -37,8 +37,12 @@ const PREVIEW_PROFILES = {
 	},
 } as const;
 
+const EDITOR_SUBSCRIBE_PROJECT = ["project"] as const;
+const EDITOR_SUBSCRIBE_RENDER_TREE = ["timeline", "media", "project"] as const;
+const EDITOR_SUBSCRIBE_PREVIEW_CANVAS = ["project", "renderer"] as const;
+
 function usePreviewSize() {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PROJECT });
 	const activeProject = editor.project.getActive();
 
 	return {
@@ -72,7 +76,7 @@ export function PreviewPanel() {
 }
 
 function RenderTreeController() {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_RENDER_TREE });
 	const tracks = editor.timeline.getTracks();
 	const mediaAssets = editor.media.getAssets();
 	const activeProject = editor.project.getActive();
@@ -132,11 +136,6 @@ function PreviewCanvas({
 	onToggleFullscreen: () => void;
 	containerRef: React.RefObject<HTMLElement | null>;
 }) {
-	type RuntimeRendererStatus = {
-		active: "webgpu" | "canvas2d";
-		reason?: string;
-	};
-
 	const canvas2dRef = useRef<HTMLCanvasElement>(null);
 	const webgpuCanvasRef = useRef<HTMLCanvasElement>(null);
 	const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -145,15 +144,6 @@ function PreviewCanvas({
 	const lastFrameRef = useRef(-1);
 	const lastSceneRef = useRef<RootNode | null>(null);
 	const runtimeFallbackRef = useRef<string | null>(null);
-	const runtimeRendererStatusRef = useRef<RuntimeRendererStatus>({
-		active: "canvas2d",
-		reason: "Initializing",
-	});
-	const [_runtimeRendererStatus, setRuntimeRendererStatus] =
-		useState<RuntimeRendererStatus>({
-			active: "canvas2d",
-			reason: "Initializing",
-		});
 	const [activeSurface, setActiveSurface] = useState<"canvas2d" | "webgpu">(
 		"canvas2d",
 	);
@@ -163,22 +153,9 @@ function PreviewCanvas({
 		frame: number;
 		scene: RootNode;
 	} | null>(null);
-	const perfRef = useRef<{
-		lastRenderedAt: number;
-		lastPerfSampleAt: number;
-		renderedFramesSinceSample: number;
-		fpsEma: number;
-		renderMsEma: number;
-	}>({
-		lastRenderedAt: 0,
-		lastPerfSampleAt: 0,
-		renderedFramesSinceSample: 0,
-		fpsEma: 0,
-		renderMsEma: 0,
-	});
 	const { width: nativeWidth, height: nativeHeight } = usePreviewSize();
 	const containerSize = useContainerSize({ containerRef: outerContainerRef });
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PREVIEW_CANVAS });
 	const activeProject = editor.project.getActive();
 	const { overlays } = usePreviewStore();
 	const previewRendererMode = "auto" as const;
@@ -272,19 +249,8 @@ function PreviewCanvas({
 			const webgpuCanvas = webgpuCanvasRef.current;
 			if (!canvas2d || !webgpuCanvas) return;
 
-			const updateRendererStatus = (nextStatus: RuntimeRendererStatus) => {
-				const current = runtimeRendererStatusRef.current;
-				if (
-					current.active === nextStatus.active &&
-					current.reason === nextStatus.reason
-				) {
-					return;
-				}
-				runtimeRendererStatusRef.current = nextStatus;
-				setRuntimeRendererStatus(nextStatus);
-				setActiveSurface(
-					nextStatus.active === "webgpu" ? "webgpu" : "canvas2d",
-				);
+			const setSurface = ({ active }: { active: "webgpu" | "canvas2d" }) => {
+				setActiveSurface((prev) => (prev === active ? prev : active));
 			};
 
 			renderingRef.current = true;
@@ -303,10 +269,7 @@ function PreviewCanvas({
 							overlayCanvasRef.current.height,
 						);
 					}
-					updateRendererStatus({
-						active: "canvas2d",
-						reason: runtimeFallbackRef.current ?? "Runtime fallback",
-					});
+					setSurface({ active: "canvas2d" });
 					return renderer.renderToCanvas({
 						node: scene,
 						time,
@@ -323,10 +286,7 @@ function PreviewCanvas({
 					})
 					.then((result) => {
 						if (!result.usedWebGPU) {
-							updateRendererStatus({
-								active: "canvas2d",
-								reason: result.reasonIfFallback ?? "WebGPU unavailable",
-							});
+							setSurface({ active: "canvas2d" });
 							if (result.shouldDisableWebGPU) {
 								runtimeFallbackRef.current =
 									result.reasonIfFallback ?? "WebGPU fallback";
@@ -337,12 +297,7 @@ function PreviewCanvas({
 								targetCanvas: canvas2d,
 							});
 						}
-						updateRendererStatus({
-							active: "webgpu",
-							reason: result.stats
-								? `ext:${result.stats.externalVideoFrames} copy:${result.stats.copiedTextureUploads} draws:${result.stats.totalDraws}`
-								: undefined,
-						});
+						setSurface({ active: "webgpu" });
 					})
 					.catch((error) => {
 						const message =
@@ -358,10 +313,7 @@ function PreviewCanvas({
 						if (fatal) {
 							runtimeFallbackRef.current = message;
 						}
-						updateRendererStatus({
-							active: "canvas2d",
-							reason: message,
-						});
+						setSurface({ active: "canvas2d" });
 						return renderer.renderToCanvas({
 							node: scene,
 							time,
@@ -370,44 +322,7 @@ function PreviewCanvas({
 					});
 			})();
 			void renderPromise.then(() => {
-				const renderMs = performance.now() - renderStart;
-				const p = perfRef.current;
-				p.renderMsEma =
-					p.renderMsEma === 0
-						? renderMs
-						: p.renderMsEma * 0.85 + renderMs * 0.15;
-				p.lastRenderedAt = performance.now();
-				p.renderedFramesSinceSample += 1;
-				if (p.lastPerfSampleAt === 0) {
-					p.lastPerfSampleAt = p.lastRenderedAt;
-				}
-				const perfWindowMs = p.lastRenderedAt - p.lastPerfSampleAt;
-				if (perfWindowMs >= 400) {
-					const measuredFps =
-						(p.renderedFramesSinceSample * 1000) / perfWindowMs;
-					p.fpsEma =
-						p.fpsEma === 0 ? measuredFps : p.fpsEma * 0.7 + measuredFps * 0.3;
-					p.renderedFramesSinceSample = 0;
-					p.lastPerfSampleAt = p.lastRenderedAt;
-				}
-				if (runtimeRendererStatusRef.current.active === "webgpu") {
-					const existing = runtimeRendererStatusRef.current.reason ?? "";
-					const perfSuffix = `target:${activeProject.settings.fps} fps:${p.fpsEma.toFixed(1)} ms:${p.renderMsEma.toFixed(1)}`;
-					const reasonWithoutPerf = existing.replace(
-						/\s\| fps:[\d.]+ ms:[\d.]+$/,
-						"",
-					);
-					const nextReason = reasonWithoutPerf
-						? `${reasonWithoutPerf} | ${perfSuffix}`
-						: perfSuffix;
-					if (nextReason !== runtimeRendererStatusRef.current.reason) {
-						runtimeRendererStatusRef.current = {
-							...runtimeRendererStatusRef.current,
-							reason: nextReason,
-						};
-						setRuntimeRendererStatus(runtimeRendererStatusRef.current);
-					}
-				}
+				void renderStart;
 				renderingRef.current = false;
 				const pending = pendingRenderRef.current;
 				if (!pending) return;
@@ -447,11 +362,6 @@ function PreviewCanvas({
 		void nativeWidth;
 		void nativeHeight;
 		runtimeFallbackRef.current = null;
-		runtimeRendererStatusRef.current = {
-			active: "canvas2d",
-			reason: "Re-evaluating renderer",
-		};
-		setRuntimeRendererStatus(runtimeRendererStatusRef.current);
 		setActiveSurface("canvas2d");
 	}, [previewRendererMode, nativeWidth, nativeHeight]);
 

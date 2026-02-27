@@ -10,6 +10,7 @@ export class PlaybackManager {
 	private listeners = new Set<() => void>();
 	private playbackTimer: number | null = null;
 	private lastUpdate = 0;
+	private lastNotifiedAt = 0;
 
 	constructor(private editor: EditorCore) {}
 
@@ -126,6 +127,7 @@ export class PlaybackManager {
 		}
 
 		this.lastUpdate = performance.now();
+		this.lastNotifiedAt = 0;
 		this.updateTime();
 	}
 
@@ -158,13 +160,21 @@ export class PlaybackManager {
 			);
 		} else {
 			this.currentTime = newTime;
-			this.notify();
+			const activeProject = this.editor.project.getActive();
+			const fps = Math.max(1, Math.min(30, activeProject?.settings.fps ?? 30));
+			const minNotifyIntervalMs = 1000 / fps;
+			const shouldNotify =
+				this.lastNotifiedAt === 0 || now - this.lastNotifiedAt >= minNotifyIntervalMs;
 
-			window.dispatchEvent(
-				new CustomEvent("playback-update", {
-					detail: { time: newTime },
-				}),
-			);
+			if (shouldNotify) {
+				this.lastNotifiedAt = now;
+				this.notify();
+				window.dispatchEvent(
+					new CustomEvent("playback-update", {
+						detail: { time: newTime },
+					}),
+				);
+			}
 		}
 
 		this.playbackTimer = requestAnimationFrame(this.updateTime);

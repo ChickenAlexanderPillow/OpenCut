@@ -94,7 +94,7 @@ export function TransformHandles({
 		handlePointerUp,
 	} = useTransformHandles({ canvasRef });
 
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: ["project"] });
 	const canvasSize = editor.project.getActive().settings.canvasSize;
 
 	if (!hasVisualSelection || !selectedWithBounds) return null;

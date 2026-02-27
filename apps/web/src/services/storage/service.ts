@@ -91,6 +91,10 @@ class StorageService {
 		return { mediaMetadataAdapter, mediaAssetsAdapter };
 	}
 
+	private getPreviewProxyKey({ mediaId }: { mediaId: string }): string {
+		return `${mediaId}__preview_proxy`;
+	}
+
 	private stripAudioBuffers({
 		tracks,
 	}: {
@@ -255,6 +259,12 @@ class StorageService {
 			this.getProjectMediaAdapters({ projectId });
 
 		await mediaAssetsAdapter.set(mediaAsset.id, mediaAsset.file);
+		const previewProxyKey = this.getPreviewProxyKey({ mediaId: mediaAsset.id });
+		if (mediaAsset.previewFile) {
+			await mediaAssetsAdapter.set(previewProxyKey, mediaAsset.previewFile);
+		} else {
+			await mediaAssetsAdapter.remove(previewProxyKey);
+		}
 
 		const metadata: MediaAssetData = {
 			id: mediaAsset.id,
@@ -265,8 +275,14 @@ class StorageService {
 			width: mediaAsset.width,
 			height: mediaAsset.height,
 			duration: mediaAsset.duration,
+			fps: mediaAsset.fps,
 			thumbnailUrl: mediaAsset.thumbnailUrl,
 			ephemeral: mediaAsset.ephemeral,
+			previewProxyAvailable: Boolean(mediaAsset.previewFile),
+			previewProxyWidth: mediaAsset.previewProxyWidth,
+			previewProxyHeight: mediaAsset.previewProxyHeight,
+			previewProxyFps: mediaAsset.previewProxyFps,
+			previewProxyQualityRatio: mediaAsset.previewProxyQualityRatio,
 		};
 
 		await mediaMetadataAdapter.set(mediaAsset.id, metadata);
@@ -282,12 +298,18 @@ class StorageService {
 		const { mediaMetadataAdapter, mediaAssetsAdapter } =
 			this.getProjectMediaAdapters({ projectId });
 
-		const [file, metadata] = await Promise.all([
+		const metadata = await mediaMetadataAdapter.get(id);
+		if (!metadata) return null;
+
+		const previewProxyKey = this.getPreviewProxyKey({ mediaId: id });
+		const [file, previewFile] = await Promise.all([
 			mediaAssetsAdapter.get(id),
-			mediaMetadataAdapter.get(id),
+			metadata.previewProxyAvailable
+				? mediaAssetsAdapter.get(previewProxyKey)
+				: Promise.resolve(null),
 		]);
 
-		if (!file || !metadata) return null;
+		if (!file) return null;
 
 		let url: string;
 		if (metadata.type === "image" && (!file.type || file.type === "")) {
@@ -306,17 +328,29 @@ class StorageService {
 			url = URL.createObjectURL(file);
 		}
 
+		let previewUrl: string | undefined;
+		if (previewFile) {
+			previewUrl = URL.createObjectURL(previewFile);
+		}
+
 		return {
 			id: metadata.id,
 			name: metadata.name,
 			type: metadata.type,
 			file,
 			url,
+			previewFile: previewFile ?? undefined,
+			previewUrl,
 			width: metadata.width,
 			height: metadata.height,
 			duration: metadata.duration,
+			fps: metadata.fps,
 			thumbnailUrl: metadata.thumbnailUrl,
 			ephemeral: metadata.ephemeral,
+			previewProxyWidth: metadata.previewProxyWidth,
+			previewProxyHeight: metadata.previewProxyHeight,
+			previewProxyFps: metadata.previewProxyFps,
+			previewProxyQualityRatio: metadata.previewProxyQualityRatio,
 		};
 	}
 
@@ -351,9 +385,11 @@ class StorageService {
 	}): Promise<void> {
 		const { mediaMetadataAdapter, mediaAssetsAdapter } =
 			this.getProjectMediaAdapters({ projectId });
+		const previewProxyKey = this.getPreviewProxyKey({ mediaId: id });
 
 		await Promise.all([
 			mediaAssetsAdapter.remove(id),
+			mediaAssetsAdapter.remove(previewProxyKey),
 			mediaMetadataAdapter.remove(id),
 		]);
 	}

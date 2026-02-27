@@ -1,6 +1,6 @@
 import type { CanvasRenderer } from "../canvas-renderer";
 import { VisualNode, type VisualNodeParams } from "./visual-node";
-import { videoCache } from "@/services/video-cache/service";
+import { VideoCache, videoCache } from "@/services/video-cache/service";
 import type { WebGPUVisualDrawData } from "../webgpu-types";
 
 export interface VideoNodeParams extends VisualNodeParams {
@@ -9,11 +9,18 @@ export interface VideoNodeParams extends VisualNodeParams {
 	mediaId: string;
 	previewFrameRateCap?: number;
 	previewProxyScale?: number;
+	videoCache?: VideoCache;
 }
 
 export class VideoNode extends VisualNode<VideoNodeParams> {
 	private lastRenderedFrameTime = Number.NaN;
 	private lastFrame: Awaited<ReturnType<typeof videoCache.getFrameAt>> = null;
+	private frameCache: VideoCache;
+
+	constructor(params: VideoNodeParams) {
+		super(params);
+		this.frameCache = params.videoCache ?? videoCache;
+	}
 
 	async render({ renderer, time }: { renderer: CanvasRenderer; time: number }) {
 		await super.render({ renderer, time });
@@ -31,7 +38,7 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 
 		let frame = this.lastFrame;
 		if (videoTime !== this.lastRenderedFrameTime || !frame) {
-			frame = await videoCache.getFrameAt({
+			frame = await this.frameCache.getFrameAt({
 				mediaId: this.params.mediaId,
 				file: this.params.file,
 				time: videoTime,
@@ -68,7 +75,7 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 			typeof cap === "number" && cap > 0
 				? Math.floor(localTime * cap) / cap
 				: localTime;
-		const gpuFrame = await videoCache.getGPUFrameAt({
+		const gpuFrame = await this.frameCache.getGPUFrameAt({
 			mediaId: this.params.mediaId,
 			file: this.params.file,
 			time: videoTime,
@@ -77,7 +84,7 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 		if (!gpuFrame) {
 			let frame = this.lastFrame;
 			if (videoTime !== this.lastRenderedFrameTime || !frame) {
-				frame = await videoCache.getFrameAt({
+				frame = await this.frameCache.getFrameAt({
 					mediaId: this.params.mediaId,
 					file: this.params.file,
 					time: videoTime,

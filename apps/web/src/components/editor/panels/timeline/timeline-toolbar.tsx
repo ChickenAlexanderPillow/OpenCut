@@ -6,7 +6,7 @@ import {
 	TooltipContent,
 } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
-import { SplitSquareHorizontal } from "lucide-react";
+import { SplitSquareHorizontal, WandSparkles } from "lucide-react";
 import {
 	SplitButton,
 	SplitButtonLeft,
@@ -111,6 +111,14 @@ function ToolbarLeftSection() {
 					tooltip="Split right"
 					onClick={({ event }) =>
 						handleAction({ action: "split-right", event })
+					}
+				/>
+
+				<ToolbarButton
+					icon={<WandSparkles className="size-4" />}
+					tooltip="Smart cut selected clips"
+					onClick={({ event }) =>
+						handleAction({ action: "smart-cut-selected", event })
 					}
 				/>
 

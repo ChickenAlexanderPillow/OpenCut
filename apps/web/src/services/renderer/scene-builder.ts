@@ -12,6 +12,7 @@ import { DEFAULT_BLUR_INTENSITY } from "@/constants/project-constants";
 import { isMainTrack } from "@/lib/timeline";
 import { DEFAULT_BRAND_OVERLAYS } from "@/constants/brand-overlay-constants";
 import { resolveLogoOverlayTransform } from "@/lib/branding/logo-overlay";
+import type { VideoCache } from "@/services/video-cache/service";
 
 const PREVIEW_MAX_IMAGE_SIZE = 2048;
 
@@ -25,6 +26,7 @@ export type BuildSceneParams = {
 	isPreview?: boolean;
 	previewFrameRateCap?: number;
 	previewProxyScale?: number;
+	videoCache?: VideoCache;
 };
 
 export function buildScene(params: BuildSceneParams) {
@@ -58,7 +60,16 @@ export function buildScene(params: BuildSceneParams) {
 		for (const element of elements) {
 			if (element.type === "video" || element.type === "image") {
 				const mediaAsset = mediaMap.get(element.mediaId);
-				if (!mediaAsset?.file || !mediaAsset?.url) {
+				if (!mediaAsset) {
+					continue;
+				}
+				const resolvedFile =
+					// Preview decode path uses original media with runtime downscale in video-cache.
+					// Some generated proxy encodes decode slower than source on certain systems.
+					mediaAsset.file;
+				const resolvedUrl =
+					mediaAsset.url;
+				if (!resolvedFile || !resolvedUrl) {
 					continue;
 				}
 
@@ -66,8 +77,9 @@ export function buildScene(params: BuildSceneParams) {
 					contentNodes.push(
 						new VideoNode({
 							mediaId: mediaAsset.id,
-							url: mediaAsset.url,
-							file: mediaAsset.file,
+							url: resolvedUrl,
+							file: resolvedFile,
+							videoCache: params.videoCache,
 							duration: element.duration,
 							timeOffset: element.startTime,
 							trimStart: element.trimStart,
@@ -85,7 +97,7 @@ export function buildScene(params: BuildSceneParams) {
 				if (mediaAsset.type === "image") {
 					contentNodes.push(
 						new ImageNode({
-							url: mediaAsset.url,
+							url: resolvedUrl,
 							duration: element.duration,
 							timeOffset: element.startTime,
 							trimStart: element.trimStart,

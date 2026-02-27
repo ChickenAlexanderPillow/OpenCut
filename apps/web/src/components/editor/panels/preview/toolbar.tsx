@@ -19,7 +19,7 @@ export function PreviewToolbar({
 	isFullscreen: boolean;
 	onToggleFullscreen: () => void;
 }) {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: ["playback", "timeline", "project"] });
 	const isPlaying = editor.playback.getIsPlaying();
 	const currentTime = editor.playback.getCurrentTime();
 	const totalDuration = editor.timeline.getTotalDuration();

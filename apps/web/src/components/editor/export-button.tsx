@@ -30,6 +30,7 @@ import {
 } from "@/components/editor/panels/properties/section";
 import { useEditor } from "@/hooks/use-editor";
 import { DEFAULT_EXPORT_OPTIONS } from "@/constants/export-constants";
+import { useProjectProcessStore } from "@/stores/project-process-store";
 
 export function ExportButton() {
 	const [isExportPopoverOpen, setIsExportPopoverOpen] = useState(false);
@@ -93,27 +94,60 @@ function ExportPopover({
 	const [progress, setProgress] = useState(0);
 	const [exportResult, setExportResult] = useState<ExportResult | null>(null);
 	const cancelRequestedRef = useRef(false);
+	const processIdRef = useRef<string | null>(null);
+	const { registerProcess, updateProcessLabel, removeProcess } =
+		useProjectProcessStore();
 
 	const handleExport = async () => {
 		if (!activeProject) return;
 
 		cancelRequestedRef.current = false;
+		const wasPlayingBeforeExport = editor.playback.getIsPlaying();
+		if (wasPlayingBeforeExport) {
+			editor.playback.pause();
+		}
 		setIsExporting(true);
 		setProgress(0);
 		setExportResult(null);
-
-		const result = await editor.project.export({
-			options: {
-				format,
-				quality,
-				fps: activeProject.settings.fps,
-				includeAudio,
-				onProgress: ({ progress }) => setProgress(progress),
-				onCancel: () => cancelRequestedRef.current,
+		processIdRef.current = registerProcess({
+			projectId: activeProject.metadata.id,
+			kind: "export",
+			label: "Exporting project...",
+			cancel: () => {
+				cancelRequestedRef.current = true;
 			},
 		});
 
-		setIsExporting(false);
+		let result: ExportResult;
+		try {
+			result = await editor.project.export({
+				options: {
+					format,
+					quality,
+					fps: activeProject.settings.fps,
+					includeAudio,
+					onProgress: ({ progress }) => {
+						setProgress(progress);
+						if (processIdRef.current) {
+							updateProcessLabel({
+								id: processIdRef.current,
+								label: `Exporting project... ${Math.round(progress * 100)}%`,
+							});
+						}
+					},
+					onCancel: () => cancelRequestedRef.current,
+				},
+			});
+		} finally {
+			setIsExporting(false);
+			if (processIdRef.current) {
+				removeProcess({ id: processIdRef.current });
+				processIdRef.current = null;
+			}
+			if (wasPlayingBeforeExport && !cancelRequestedRef.current) {
+				editor.playback.play();
+			}
+		}
 
 		if (result.cancelled) {
 			setExportResult(null);
@@ -145,6 +179,10 @@ function ExportPopover({
 
 	const handleCancel = () => {
 		cancelRequestedRef.current = true;
+		if (processIdRef.current) {
+			removeProcess({ id: processIdRef.current });
+			processIdRef.current = null;
+		}
 	};
 
 	return (

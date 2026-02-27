@@ -56,3 +56,4 @@ export const DEFAULT_STRIDE_SECONDS = 5;
 
 export const DEFAULT_WORDS_PER_CAPTION = 3;
 export const MIN_CAPTION_DURATION_SECONDS = 0.8;
+export const TRANSCRIPT_CACHE_VERSION = 3;

@@ -14,6 +14,7 @@ import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
 import {
 	DEFAULT_TRANSCRIPTION_MODEL,
 	DEFAULT_WORDS_PER_CAPTION,
+	TRANSCRIPT_CACHE_VERSION,
 	TRANSCRIPTION_LANGUAGES,
 } from "@/constants/transcription-constants";
 import type {
@@ -38,11 +39,14 @@ import {
 	Sparkles,
 	WandSparkles,
 } from "lucide-react";
-
-const TRANSCRIPT_CACHE_VERSION = 3;
+import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
+import { useProjectProcessStore } from "@/stores/project-process-store";
 
 export function Captions() {
 	const editor = useEditor();
+	const transcriptionStatus = useTranscriptionStatusStore();
+	const { registerProcess, updateProcessLabel, removeProcess } =
+		useProjectProcessStore();
 
 	const getInitialCaptionBehavior = useCallback(() => {
 		const tracks = editor.timeline.getTracks();
@@ -132,11 +136,28 @@ export function Captions() {
 		return cached;
 	};
 
-	const handleProgress = (progress: TranscriptionProgress) => {
+	const handleProgress = (
+		progress: TranscriptionProgress,
+		operationId?: string,
+		processId?: string,
+	) => {
 		if (progress.status === "loading-model") {
 			setProcessingStep(`Loading model ${Math.round(progress.progress)}%`);
 		} else if (progress.status === "transcribing") {
 			setProcessingStep("Transcribing...");
+		}
+		transcriptionStatus.update({
+			operationId,
+			message: progress.message ?? "Generating transcript...",
+			progress: progress.progress,
+		});
+		if (processId) {
+			updateProcessLabel({
+				id: processId,
+				label:
+					progress.message ??
+					`Transcription ${Math.round(progress.progress)}%`,
+			});
 		}
 	};
 
@@ -193,6 +214,8 @@ export function Captions() {
 	};
 
 	const handleTranscribeAndGenerateCaptions = async () => {
+		let transcriptionOperationId: string | undefined;
+		let projectProcessId: string | undefined;
 		try {
 			setIsProcessing(true);
 			setError(null);
@@ -210,6 +233,13 @@ export function Captions() {
 				setProcessingStep("Using cached transcript...");
 				result = { text: cached.text, segments: cached.segments };
 			} else {
+				transcriptionOperationId = transcriptionStatus.start("Extracting audio...");
+				projectProcessId = registerProcess({
+					projectId: activeProject.metadata.id,
+					kind: "transcription",
+					label: "Generating transcript...",
+					cancel: () => transcriptionService.cancel(),
+				});
 				setProcessingStep("Extracting audio...");
 				const audioBlob = await extractTimelineAudio({
 					tracks: editor.timeline.getTracks(),
@@ -226,7 +256,12 @@ export function Captions() {
 					audioData: samples,
 					sampleRate,
 					language: selectedLanguage === "auto" ? undefined : selectedLanguage,
-					onProgress: handleProgress,
+					onProgress: (progress) =>
+						handleProgress(
+							progress,
+							transcriptionOperationId,
+							projectProcessId,
+						),
 				});
 
 				const updatedProject = {
@@ -258,6 +293,10 @@ export function Captions() {
 		} finally {
 			setIsProcessing(false);
 			setProcessingStep("");
+			transcriptionStatus.stop(transcriptionOperationId);
+			if (projectProcessId) {
+				removeProcess({ id: projectProcessId });
+			}
 		}
 	};
 
