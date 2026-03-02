@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useEffect, useState } from "react";
+import { useCallback, useMemo, useRef, useEffect, useState, useLayoutEffect } from "react";
 import useDeepCompareEffect from "use-deep-compare-effect";
 import { useEditor } from "@/hooks/use-editor";
 import { useRafLoop } from "@/hooks/use-raf-loop";
@@ -18,6 +18,21 @@ import { PreviewContextMenu } from "./context-menu";
 import { PreviewToolbar } from "./toolbar";
 import { videoCache } from "@/services/video-cache/service";
 import { WebGPUPreviewRenderer } from "@/services/renderer/webgpu-preview-renderer";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/utils/ui";
+import type { TBackground } from "@/types/project";
+import { SafeAreaOverlay } from "./safe-area-overlay";
+import { SquareDashed } from "lucide-react";
+import {
+	getPreviewCanvasSize,
+	remapCaptionTransformsForPreviewVariant,
+} from "@/lib/preview/preview-format";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 const PREVIEW_PROFILES = {
 	performance: {
@@ -44,22 +59,86 @@ const EDITOR_SUBSCRIBE_PREVIEW_CANVAS = ["project", "renderer"] as const;
 function usePreviewSize() {
 	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PROJECT });
 	const activeProject = editor.project.getActive();
+	const { previewFormatVariant } = usePreviewStore();
+	const baseWidth = activeProject?.settings.canvasSize.width ?? 0;
+	const baseHeight = activeProject?.settings.canvasSize.height ?? 0;
+	const size = getPreviewCanvasSize({
+		projectWidth: baseWidth,
+		projectHeight: baseHeight,
+		previewFormatVariant,
+	});
 
 	return {
-		width: activeProject?.settings.canvasSize.width,
-		height: activeProject?.settings.canvasSize.height,
+		width: size.width,
+		height: size.height,
 	};
 }
 
 export function PreviewPanel() {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const { isFullscreen, toggleFullscreen } = useFullscreen({ containerRef });
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PROJECT });
+	const activeProject = editor.project.getActive();
+	const {
+		previewFormatVariant,
+		setPreviewFormatVariant,
+		overlays,
+		setOverlayVisibility,
+	} = usePreviewStore();
+	const projectWidth = activeProject.settings.canvasSize.width;
+	const projectHeight = activeProject.settings.canvasSize.height;
+	const isProjectSquare = projectWidth === projectHeight;
 
 	return (
 		<div
 			ref={containerRef}
 			className="panel bg-background relative flex size-full min-h-0 min-w-0 flex-col rounded-sm border"
 		>
+			<div className="flex items-center justify-between gap-2 px-2 pt-2">
+				<div className="flex items-center gap-1">
+					<Button
+						variant={previewFormatVariant === "project" ? "secondary" : "ghost"}
+						size="sm"
+						className={cn("h-7 px-2 text-xs")}
+						onClick={() => setPreviewFormatVariant({ variant: "project" })}
+					>
+						Project
+					</Button>
+					{!isProjectSquare && (
+						<Button
+							variant={previewFormatVariant === "square" ? "secondary" : "ghost"}
+							size="sm"
+							className={cn("h-7 px-2 text-xs")}
+							onClick={() => setPreviewFormatVariant({ variant: "square" })}
+						>
+							Square
+						</Button>
+					)}
+				</div>
+				<TooltipProvider>
+					<Tooltip delayDuration={120}>
+						<TooltipTrigger asChild>
+							<Button
+								type="button"
+								variant={overlays.safeAreas ? "secondary" : "ghost"}
+								size="icon"
+								className="h-7 w-7"
+								aria-label="Toggle safe area"
+								aria-pressed={overlays.safeAreas}
+								onClick={() =>
+									setOverlayVisibility({
+										overlay: "safeAreas",
+										isVisible: !overlays.safeAreas,
+									})
+								}
+							>
+								<SquareDashed className="size-4" />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>Safe area</TooltipContent>
+					</Tooltip>
+				</TooltipProvider>
+			</div>
 			<div className="flex min-h-0 min-w-0 flex-1 items-center justify-center p-2 pb-0">
 				<PreviewCanvas
 					onToggleFullscreen={toggleFullscreen}
@@ -85,6 +164,7 @@ function RenderTreeController() {
 	const previewVideoFrameRateCap = activeProject.settings.fps;
 	const previewVideoProxyScale = previewProfile.videoProxyScale;
 	const activeProjectId = activeProject.metadata.id;
+	const { previewFormatVariant, squareFormatSettings } = usePreviewStore();
 
 	const { width, height } = usePreviewSize();
 
@@ -102,12 +182,37 @@ function RenderTreeController() {
 		if (!activeProject) return;
 
 		const duration = editor.timeline.getTotalDuration();
+		const projectWidth = activeProject.settings.canvasSize.width;
+		const projectHeight = activeProject.settings.canvasSize.height;
+		const squareCoverScale =
+			Math.max(projectWidth, projectHeight) /
+			Math.max(1, Math.min(projectWidth, projectHeight));
+		const previewBackground: TBackground =
+			previewFormatVariant === "square"
+				? {
+						type: "blur",
+						blurIntensity: squareFormatSettings.blurIntensity,
+						blurScale: Math.max(
+							1.4,
+							squareCoverScale *
+								Math.max(1, squareFormatSettings.coverOverscanPercent / 100),
+						),
+					}
+				: activeProject.settings.background;
+		const previewTracks =
+			previewFormatVariant === "square"
+				? remapCaptionTransformsForPreviewVariant({
+						tracks,
+						sourceCanvas: { width: projectWidth, height: projectHeight },
+						previewCanvas: { width, height },
+					})
+				: tracks;
 		const renderTree = buildScene({
-			tracks,
+			tracks: previewTracks,
 			mediaAssets,
 			duration,
 			canvasSize: { width, height },
-			background: activeProject.settings.background,
+			background: previewBackground,
 			brandOverlays: activeProject.brandOverlays,
 			isPreview: true,
 			previewFrameRateCap: previewVideoFrameRateCap,
@@ -120,6 +225,8 @@ function RenderTreeController() {
 		mediaAssets,
 		activeProject?.settings.background,
 		activeProject?.brandOverlays,
+		previewFormatVariant,
+		squareFormatSettings,
 		width,
 		height,
 		previewVideoFrameRateCap,
@@ -147,6 +254,22 @@ function PreviewCanvas({
 	const [activeSurface, setActiveSurface] = useState<"canvas2d" | "webgpu">(
 		"canvas2d",
 	);
+	const [safeAreaOverlayReady, setSafeAreaOverlayReady] = useState(true);
+	const [isRenderReadyForSize, setIsRenderReadyForSize] = useState(true);
+	const [showFrozenFrame, setShowFrozenFrame] = useState(false);
+	const [freezeFrameDataUrl, setFreezeFrameDataUrl] = useState<string | null>(
+		null,
+	);
+	const renderReadyRef = useRef(true);
+	const previousDisplaySizeRef = useRef<{ width: number; height: number }>({
+		width: 0,
+		height: 0,
+	});
+	const [transitionHoldSize, setTransitionHoldSize] = useState<{
+		width: number;
+		height: number;
+	} | null>(null);
+	const previousVariantRef = useRef<"project" | "square" | null>(null);
 	const renderingRef = useRef(false);
 	const pendingRenderRef = useRef<{
 		time: number;
@@ -157,9 +280,15 @@ function PreviewCanvas({
 	const containerSize = useContainerSize({ containerRef: outerContainerRef });
 	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PREVIEW_CANVAS });
 	const activeProject = editor.project.getActive();
-	const { overlays } = usePreviewStore();
+	const { overlays, previewFormatVariant } = usePreviewStore();
 	const previewRendererMode = "auto" as const;
 	const renderFrameRateCap = activeProject.settings.fps;
+	const previewBackgroundColor =
+		previewFormatVariant === "square"
+			? "transparent"
+			: activeProject.settings.background.type === "blur"
+				? "transparent"
+				: activeProject.settings.background.color;
 
 	const renderer = useMemo(() => {
 		return new CanvasRenderer({
@@ -214,6 +343,9 @@ function PreviewCanvas({
 
 		return { width: displayWidth, height: displayHeight };
 	}, [nativeWidth, nativeHeight, containerSize.width, containerSize.height]);
+	useEffect(() => {
+		previousDisplaySizeRef.current = displaySize;
+	}, [displaySize.width, displaySize.height]);
 
 	const renderTree = editor.renderer.getRenderTree();
 
@@ -322,6 +454,13 @@ function PreviewCanvas({
 					});
 			})();
 			void renderPromise.then(() => {
+				if (!renderReadyRef.current) {
+					renderReadyRef.current = true;
+					setIsRenderReadyForSize(true);
+					setTransitionHoldSize(null);
+					setShowFrozenFrame(false);
+					setFreezeFrameDataUrl(null);
+				}
 				void renderStart;
 				renderingRef.current = false;
 				const pending = pendingRenderRef.current;
@@ -359,11 +498,66 @@ function PreviewCanvas({
 
 	useEffect(() => {
 		void previewRendererMode;
-		void nativeWidth;
-		void nativeHeight;
 		runtimeFallbackRef.current = null;
 		setActiveSurface("canvas2d");
-	}, [previewRendererMode, nativeWidth, nativeHeight]);
+	}, [previewRendererMode]);
+
+	useLayoutEffect(() => {
+		if (previousVariantRef.current === null) {
+			previousVariantRef.current = previewFormatVariant;
+			return;
+		}
+		if (previousVariantRef.current === previewFormatVariant) {
+			return;
+		}
+		previousVariantRef.current = previewFormatVariant;
+
+		const sourceCanvas =
+			activeSurface === "webgpu" ? webgpuCanvasRef.current : canvas2dRef.current;
+		if (!sourceCanvas) return;
+		const composite = document.createElement("canvas");
+		composite.width = sourceCanvas.width;
+		composite.height = sourceCanvas.height;
+		const compositeCtx = composite.getContext("2d");
+		if (!compositeCtx) return;
+		compositeCtx.clearRect(0, 0, composite.width, composite.height);
+		compositeCtx.drawImage(sourceCanvas, 0, 0);
+		const overlayCanvas = overlayCanvasRef.current;
+		if (overlayCanvas) {
+			compositeCtx.drawImage(overlayCanvas, 0, 0);
+		}
+		const snapshot = composite.toDataURL("image/png");
+		if (!snapshot) return;
+
+		setFreezeFrameDataUrl(snapshot);
+		setShowFrozenFrame(true);
+		renderReadyRef.current = false;
+		setIsRenderReadyForSize(false);
+		const previous = previousDisplaySizeRef.current;
+		if (previous.width > 0 && previous.height > 0) {
+			setTransitionHoldSize(previous);
+		}
+		lastFrameRef.current = -1;
+		lastSceneRef.current = null;
+	}, [previewFormatVariant, activeSurface]);
+
+	const effectiveDisplaySize =
+		isRenderReadyForSize || !transitionHoldSize ? displaySize : transitionHoldSize;
+
+	useEffect(() => {
+		setSafeAreaOverlayReady(false);
+		let raf1 = 0;
+		let raf2 = 0;
+		raf1 = requestAnimationFrame(() => {
+			raf2 = requestAnimationFrame(() => {
+				setSafeAreaOverlayReady(true);
+			});
+		});
+		return () => {
+			if (raf1) cancelAnimationFrame(raf1);
+			if (raf2) cancelAnimationFrame(raf2);
+		};
+	}, [previewFormatVariant, nativeWidth, nativeHeight]);
 
 	const interactionCanvasRef =
 		activeSurface === "webgpu" ? webgpuCanvasRef : canvas2dRef;
@@ -377,22 +571,39 @@ function PreviewCanvas({
 				<ContextMenuTrigger asChild>
 					<div
 						ref={canvasBoundsRef}
+						data-editor-selection-root="preview"
 						className="relative"
-						style={{ width: displaySize.width, height: displaySize.height }}
+						style={{
+							width: effectiveDisplaySize.width,
+							height: effectiveDisplaySize.height,
+						}}
 					>
+						{freezeFrameDataUrl && (
+							<img
+								alt=""
+								className="pointer-events-none absolute inset-0"
+								src={freezeFrameDataUrl}
+								style={{
+									width: effectiveDisplaySize.width,
+									height: effectiveDisplaySize.height,
+									display:
+										showFrozenFrame && !isRenderReadyForSize ? "block" : "none",
+								}}
+							/>
+						)}
 						<canvas
 							ref={canvas2dRef}
 							width={nativeWidth}
 							height={nativeHeight}
 							className="absolute inset-0 block border"
 							style={{
-								width: displaySize.width,
-								height: displaySize.height,
-								display: activeSurface === "canvas2d" ? "block" : "none",
-								background:
-									activeProject.settings.background.type === "blur"
-										? "transparent"
-										: activeProject?.settings.background.color,
+								width: effectiveDisplaySize.width,
+								height: effectiveDisplaySize.height,
+								display:
+									activeSurface === "canvas2d" && isRenderReadyForSize
+										? "block"
+										: "none",
+								background: previewBackgroundColor,
 							}}
 						/>
 						<canvas
@@ -401,9 +612,12 @@ function PreviewCanvas({
 							height={nativeHeight}
 							className="absolute inset-0 block border"
 							style={{
-								width: displaySize.width,
-								height: displaySize.height,
-								display: activeSurface === "webgpu" ? "block" : "none",
+								width: effectiveDisplaySize.width,
+								height: effectiveDisplaySize.height,
+								display:
+									activeSurface === "webgpu" && isRenderReadyForSize
+										? "block"
+										: "none",
 								background: "transparent",
 							}}
 						/>
@@ -413,8 +627,8 @@ function PreviewCanvas({
 							height={nativeHeight}
 							className="pointer-events-none absolute inset-0"
 							style={{
-								width: displaySize.width,
-								height: displaySize.height,
+								width: effectiveDisplaySize.width,
+								height: effectiveDisplaySize.height,
 								background: "transparent",
 							}}
 						/>
@@ -422,6 +636,12 @@ function PreviewCanvas({
 							canvasRef={interactionCanvasRef}
 							containerRef={canvasBoundsRef}
 						/>
+						{overlays.safeAreas && safeAreaOverlayReady && (
+							<SafeAreaOverlay
+								canvasWidth={nativeWidth}
+								canvasHeight={nativeHeight}
+							/>
+						)}
 						{overlays.bookmarks && <BookmarkNoteOverlay />}
 					</div>
 				</ContextMenuTrigger>

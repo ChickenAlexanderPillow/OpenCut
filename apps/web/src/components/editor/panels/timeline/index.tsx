@@ -221,6 +221,7 @@ export function Timeline() {
 
 	return (
 		<section
+			data-editor-selection-root="timeline"
 			className={
 				"panel bg-background relative flex h-full flex-col overflow-hidden rounded-sm border"
 			}

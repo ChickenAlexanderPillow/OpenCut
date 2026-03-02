@@ -3,6 +3,8 @@
 import { useEditor } from "@/hooks/use-editor";
 import type { SnapLine } from "@/lib/preview/preview-snap";
 import { positionToOverlay } from "@/lib/preview/preview-coords";
+import { getPreviewCanvasSize } from "@/lib/preview/preview-format";
+import { usePreviewStore } from "@/stores/preview-store";
 
 export function SnapGuides({
 	lines,
@@ -14,7 +16,13 @@ export function SnapGuides({
 	containerRef: React.RefObject<HTMLDivElement | null>;
 }) {
 	const editor = useEditor({ subscribeTo: ["project"] });
-	const canvasSize = editor.project.getActive().settings.canvasSize;
+	const { previewFormatVariant } = usePreviewStore();
+	const projectCanvas = editor.project.getActive().settings.canvasSize;
+	const canvasSize = getPreviewCanvasSize({
+		projectWidth: projectCanvas.width,
+		projectHeight: projectCanvas.height,
+		previewFormatVariant,
+	});
 	const canvasRect = canvasRef.current?.getBoundingClientRect();
 	const containerRect = containerRef.current?.getBoundingClientRect();
 

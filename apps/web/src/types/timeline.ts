@@ -142,6 +142,8 @@ export interface TextElement extends BaseTimelineElement {
 		maxLinesOnScreen?: number;
 		wordDisplayPreset?: "compact" | "balanced" | "extended" | "custom";
 		linkedToCaptionGroup?: boolean;
+		anchorToSafeAreaBottom?: boolean;
+		safeAreaBottomOffset?: number;
 	};
 	captionWordTimings?: Array<{
 		word: string;

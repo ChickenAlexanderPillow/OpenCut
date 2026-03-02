@@ -1,6 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
+import { useCallback, type PointerEventHandler } from "react";
 import {
 	ResizablePanelGroup,
 	ResizablePanel,
@@ -16,6 +17,7 @@ import { Onboarding } from "@/components/editor/onboarding";
 import { MigrationDialog } from "@/components/editor/dialogs/migration-dialog";
 import { usePanelStore } from "@/stores/panel-store";
 import { usePasteMedia } from "@/hooks/use-paste-media";
+import { useEditor } from "@/hooks/use-editor";
 
 export default function Editor() {
 	const params = useParams();
@@ -38,11 +40,31 @@ export default function Editor() {
 function EditorLayout() {
 	usePasteMedia();
 	const { panels, setPanel } = usePanelStore();
+	const editor = useEditor({ subscribeTo: [] });
+	const handlePointerDownCapture: PointerEventHandler<
+		keyof HTMLElementTagNameMap
+	> = useCallback((event) => {
+			const target = event.target as HTMLElement | null;
+			if (!target) return;
+
+			if (target.closest('[data-editor-selection-root="timeline"]')) return;
+			if (target.closest('[data-editor-selection-root="preview"]')) return;
+			if (
+				target.closest(
+					'input, textarea, select, button, a, [role="button"], [contenteditable="true"]',
+				)
+			) {
+				return;
+			}
+
+			editor.selection.clearSelection();
+	}, [editor]);
 
 	return (
 		<ResizablePanelGroup
 			direction="vertical"
 			className="size-full gap-[0.18rem]"
+			onPointerDownCapture={handlePointerDownCapture}
 			onLayout={(sizes) => {
 				setPanel("mainContent", sizes[0] ?? panels.mainContent);
 				setPanel("timeline", sizes[1] ?? panels.timeline);

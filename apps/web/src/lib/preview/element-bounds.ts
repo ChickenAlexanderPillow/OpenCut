@@ -11,6 +11,7 @@ import {
 	measureTextBlock,
 	resolveTextPlacement,
 } from "@/lib/text/layout";
+import { resolveSafeAreaAnchoredPositionY } from "@/constants/safe-area-constants";
 
 export interface ElementBounds {
 	cx: number;
@@ -244,7 +245,17 @@ export function getElementBounds({
 						canvasWidth,
 						canvasHeight,
 						positionX: canvasWidth / 2 + element.transform.position.x,
-						positionY: canvasHeight / 2 + element.transform.position.y,
+						positionY: resolveSafeAreaAnchoredPositionY({
+							canvasWidth,
+							canvasHeight,
+							transformPositionY: element.transform.position.y,
+							scale: element.transform.scale,
+							visualRect: candidateVisualRect,
+							anchorToSafeAreaBottom:
+								element.captionStyle?.anchorToSafeAreaBottom ?? true,
+							safeAreaBottomOffset:
+								element.captionStyle?.safeAreaBottomOffset ?? 0,
+						}),
 						scale: element.transform.scale,
 						visualRect: candidateVisualRect,
 						fitInCanvas,
@@ -339,7 +350,16 @@ export function getElementBounds({
 				canvasWidth,
 				canvasHeight,
 				positionX: canvasWidth / 2 + element.transform.position.x,
-				positionY: canvasHeight / 2 + element.transform.position.y,
+				positionY: resolveSafeAreaAnchoredPositionY({
+					canvasWidth,
+					canvasHeight,
+					transformPositionY: element.transform.position.y,
+					scale: element.transform.scale,
+					visualRect,
+					anchorToSafeAreaBottom:
+						element.captionStyle?.anchorToSafeAreaBottom ?? true,
+					safeAreaBottomOffset: element.captionStyle?.safeAreaBottomOffset ?? 0,
+				}),
 				scale: element.transform.scale,
 				visualRect,
 				fitInCanvas,

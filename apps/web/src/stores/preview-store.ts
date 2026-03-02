@@ -9,15 +9,24 @@ interface LayoutGuideSettings {
 
 interface PreviewOverlaysState {
 	bookmarks: boolean;
+	safeAreas: boolean;
 }
 
 export type PreviewPlaybackQuality = "performance" | "balanced" | "full";
+export type PreviewFormatVariant = "project" | "square";
+
+interface SquareFormatSettings {
+	blurIntensity: number;
+	coverOverscanPercent: number;
+}
 
 interface PreviewState {
 	layoutGuide: LayoutGuideSettings;
 	overlays: PreviewOverlaysState;
 	playbackQuality: PreviewPlaybackQuality;
 	previewRendererMode: PreviewRendererMode;
+	previewFormatVariant: PreviewFormatVariant;
+	squareFormatSettings: SquareFormatSettings;
 	setLayoutGuide: (settings: Partial<LayoutGuideSettings>) => void;
 	toggleLayoutGuide: (platform: TPlatformLayout) => void;
 	setPlaybackQuality: ({
@@ -26,6 +35,16 @@ interface PreviewState {
 		quality: PreviewPlaybackQuality;
 	}) => void;
 	setPreviewRendererMode: ({ mode }: { mode: PreviewRendererMode }) => void;
+	setPreviewFormatVariant: ({
+		variant,
+	}: {
+		variant: PreviewFormatVariant;
+	}) => void;
+	setSquareFormatSettings: ({
+		settings,
+	}: {
+		settings: Partial<SquareFormatSettings>;
+	}) => void;
 	setOverlayVisibility: ({
 		overlay,
 		isVisible,
@@ -42,6 +61,7 @@ interface PreviewState {
 
 const DEFAULT_PREVIEW_OVERLAYS: PreviewOverlaysState = {
 	bookmarks: true,
+	safeAreas: false,
 };
 
 export const usePreviewStore = create<PreviewState>()(
@@ -51,6 +71,11 @@ export const usePreviewStore = create<PreviewState>()(
 			overlays: DEFAULT_PREVIEW_OVERLAYS,
 			playbackQuality: "balanced",
 			previewRendererMode: "auto",
+			previewFormatVariant: "project",
+			squareFormatSettings: {
+				blurIntensity: 18,
+				coverOverscanPercent: 103,
+			},
 			setLayoutGuide: (settings) => {
 				set((state) => ({
 					layoutGuide: {
@@ -64,6 +89,17 @@ export const usePreviewStore = create<PreviewState>()(
 			},
 			setPreviewRendererMode: ({ mode }) => {
 				set(() => ({ previewRendererMode: mode }));
+			},
+			setPreviewFormatVariant: ({ variant }) => {
+				set(() => ({ previewFormatVariant: variant }));
+			},
+			setSquareFormatSettings: ({ settings }) => {
+				set((state) => ({
+					squareFormatSettings: {
+						...state.squareFormatSettings,
+						...settings,
+					},
+				}));
 			},
 			toggleLayoutGuide: (platform) => {
 				set((state) => ({
@@ -91,7 +127,7 @@ export const usePreviewStore = create<PreviewState>()(
 		}),
 		{
 			name: "preview-settings",
-			version: 4,
+			version: 6,
 			migrate: (persistedState) => {
 				const state = persistedState as
 					| {
@@ -99,13 +135,24 @@ export const usePreviewStore = create<PreviewState>()(
 							overlays?: PreviewOverlaysState;
 							playbackQuality?: PreviewPlaybackQuality;
 							previewRendererMode?: PreviewRendererMode;
+							previewFormatVariant?: PreviewFormatVariant;
+							squareFormatSettings?: Partial<SquareFormatSettings>;
 					  }
 					| undefined;
 				return {
 					layoutGuide: state?.layoutGuide ?? { platform: null },
-					overlays: state?.overlays ?? DEFAULT_PREVIEW_OVERLAYS,
+					overlays: {
+						...DEFAULT_PREVIEW_OVERLAYS,
+						...(state?.overlays ?? {}),
+					},
 					playbackQuality: state?.playbackQuality ?? "balanced",
 					previewRendererMode: state?.previewRendererMode ?? "auto",
+					previewFormatVariant: state?.previewFormatVariant ?? "project",
+					squareFormatSettings: {
+						blurIntensity: state?.squareFormatSettings?.blurIntensity ?? 18,
+						coverOverscanPercent:
+							state?.squareFormatSettings?.coverOverscanPercent ?? 103,
+					},
 				};
 			},
 			partialize: (state) => ({
@@ -113,6 +160,8 @@ export const usePreviewStore = create<PreviewState>()(
 				overlays: state.overlays,
 				playbackQuality: state.playbackQuality,
 				previewRendererMode: state.previewRendererMode,
+				previewFormatVariant: state.previewFormatVariant,
+				squareFormatSettings: state.squareFormatSettings,
 			}),
 		},
 	),

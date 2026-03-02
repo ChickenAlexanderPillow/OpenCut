@@ -147,6 +147,8 @@ const BUILTIN_BLUE_HIGHLIGHT_PRESET: CaptionGlobalPreset = {
 			maxLinesOnScreen: 2,
 			wordDisplayPreset: "balanced",
 			linkedToCaptionGroup: true,
+			anchorToSafeAreaBottom: true,
+			safeAreaBottomOffset: 0,
 		},
 	},
 };
@@ -171,6 +173,10 @@ function clampHighlightRoundness(value: number): number {
 
 function clampUnderlineThickness(value: number): number {
 	return Math.max(1, Math.min(24, Math.round(value)));
+}
+
+function clampSafeAreaBottomOffset(value: number): number {
+	return Math.max(-500, Math.min(500, Math.round(value)));
 }
 
 function getPresetFromWords(words: number): CaptionWordPreset | "custom" {
@@ -237,6 +243,11 @@ function captureCaptionPresetSnapshot({
 					element.captionStyle?.wordsOnScreen ?? CAPTION_WORD_PRESETS.balanced,
 				),
 			linkedToCaptionGroup: true,
+			anchorToSafeAreaBottom:
+				element.captionStyle?.anchorToSafeAreaBottom ?? true,
+			safeAreaBottomOffset: clampSafeAreaBottomOffset(
+				element.captionStyle?.safeAreaBottomOffset ?? 0,
+			),
 		},
 	};
 }
@@ -521,6 +532,32 @@ function CaptionSection({
 							captionStyle: {
 								...(element.captionStyle ?? {}),
 								maxLinesOnScreen: value,
+							},
+						},
+					},
+				],
+			}),
+		onCommit: () => editor.timeline.commitPreview(),
+	});
+	const safeAreaBottomOffset = usePropertyDraft({
+		displayValue: String(
+			clampSafeAreaBottomOffset(element.captionStyle?.safeAreaBottomOffset ?? 0),
+		),
+		parse: (input) => {
+			const parsed = parseFloat(input);
+			if (Number.isNaN(parsed)) return null;
+			return clampSafeAreaBottomOffset(parsed);
+		},
+		onPreview: (value) =>
+			editor.timeline.previewElements({
+				updates: [
+					{
+						trackId,
+						elementId: element.id,
+						updates: {
+							captionStyle: {
+								...(element.captionStyle ?? {}),
+								safeAreaBottomOffset: value,
 							},
 						},
 					},
@@ -917,6 +954,40 @@ function CaptionSection({
 							}
 						/>
 					</div>
+					<SectionField label="Y offset from safe area">
+						<NumberField
+							icon="Y"
+							value={safeAreaBottomOffset.displayValue}
+							min={-500}
+							max={500}
+							onFocus={safeAreaBottomOffset.onFocus}
+							onChange={safeAreaBottomOffset.onChange}
+							onBlur={safeAreaBottomOffset.onBlur}
+							onScrub={safeAreaBottomOffset.scrubTo}
+							onScrubEnd={safeAreaBottomOffset.commitScrub}
+							onReset={() =>
+								editor.timeline.updateElements({
+									updates: [
+										{
+											trackId,
+											elementId: element.id,
+											updates: {
+												captionStyle: {
+													...(element.captionStyle ?? {}),
+													safeAreaBottomOffset: 0,
+												},
+											},
+										},
+									],
+								})
+							}
+							isDefault={
+								clampSafeAreaBottomOffset(
+									element.captionStyle?.safeAreaBottomOffset ?? 0,
+								) === 0
+							}
+						/>
+					</SectionField>
 					<div className="flex items-center justify-between rounded-sm border px-2 py-2">
 						<span className="text-muted-foreground text-xs">
 							Never shrink font size

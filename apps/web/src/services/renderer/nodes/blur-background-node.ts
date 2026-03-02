@@ -3,16 +3,19 @@ import { BaseNode } from "./base-node";
 
 export type BlurBackgroundNodeParams = {
 	blurIntensity: number;
+	blurScale?: number;
 	contentNodes: BaseNode[];
 };
 
 export class BlurBackgroundNode extends BaseNode<BlurBackgroundNodeParams> {
 	private blurIntensity: number;
+	private blurScale: number;
 	private contentNodes: BaseNode[];
 
 	constructor(params: BlurBackgroundNodeParams) {
 		super(params);
 		this.blurIntensity = params.blurIntensity;
+		this.blurScale = params.blurScale ?? 1.4;
 		this.contentNodes = params.contentNodes;
 	}
 
@@ -55,7 +58,7 @@ export class BlurBackgroundNode extends BaseNode<BlurBackgroundNodeParams> {
 
 		renderer.context = originalContext;
 
-		const zoomScale = 1.4;
+		const zoomScale = this.blurScale;
 		const scaledWidth = renderer.width * zoomScale;
 		const scaledHeight = renderer.height * zoomScale;
 		const offsetX = (renderer.width - scaledWidth) / 2;

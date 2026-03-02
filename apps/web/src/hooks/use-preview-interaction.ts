@@ -8,12 +8,17 @@ import {
 	screenPixelsToLogicalThreshold,
 	screenToCanvas,
 } from "@/lib/preview/preview-coords";
+import {
+	getPreviewCanvasSize,
+	remapCaptionTransformsForPreviewVariant,
+} from "@/lib/preview/preview-format";
 import { isVisualElement } from "@/lib/timeline/element-utils";
 import {
 	SNAP_THRESHOLD_SCREEN_PIXELS,
 	snapPosition,
 	type SnapLine,
 } from "@/lib/preview/preview-snap";
+import { usePreviewStore } from "@/stores/preview-store";
 
 const MIN_DRAG_DISTANCE = 0.5;
 
@@ -37,6 +42,7 @@ export function usePreviewInteraction({
 	canvasRef: React.RefObject<HTMLCanvasElement | null>;
 }) {
 	const editor = useEditor({ subscribeTo: [] });
+	const { previewFormatVariant } = usePreviewStore();
 	const isShiftHeldRef = useShiftKey();
 	const [isDragging, setIsDragging] = useState(false);
 	const [snapLines, setSnapLines] = useState<SnapLine[]>([]);
@@ -90,7 +96,20 @@ export function usePreviewInteraction({
 			const tracks = editor.timeline.getTracks();
 			const currentTime = editor.playback.getCurrentTime();
 			const mediaAssets = editor.media.getAssets();
-			const canvasSize = editor.project.getActive().settings.canvasSize;
+			const projectCanvas = editor.project.getActive().settings.canvasSize;
+			const canvasSize = getPreviewCanvasSize({
+				projectWidth: projectCanvas.width,
+				projectHeight: projectCanvas.height,
+				previewFormatVariant,
+			});
+			const previewTracks =
+				previewFormatVariant === "square"
+					? remapCaptionTransformsForPreviewVariant({
+							tracks,
+							sourceCanvas: projectCanvas,
+							previewCanvas: canvasSize,
+						})
+					: tracks;
 
 			const startPos = screenToCanvas({
 				clientX,
@@ -99,7 +118,7 @@ export function usePreviewInteraction({
 			});
 
 			const elementsWithBounds = getVisibleElementsWithBounds({
-				tracks,
+				tracks: previewTracks,
 				currentTime,
 				canvasSize,
 				mediaAssets,
@@ -130,7 +149,7 @@ export function usePreviewInteraction({
 				originalOpacity: textElement.opacity,
 			});
 		},
-		[canvasRef, editor, editingText],
+		[canvasRef, editor, editingText, previewFormatVariant],
 	);
 
 	const handlePointerDown = useCallback(
@@ -148,7 +167,20 @@ export function usePreviewInteraction({
 			const tracks = editor.timeline.getTracks();
 			const currentTime = editor.playback.getCurrentTime();
 			const mediaAssets = editor.media.getAssets();
-			const canvasSize = editor.project.getActive().settings.canvasSize;
+			const projectCanvas = editor.project.getActive().settings.canvasSize;
+			const canvasSize = getPreviewCanvasSize({
+				projectWidth: projectCanvas.width,
+				projectHeight: projectCanvas.height,
+				previewFormatVariant,
+			});
+			const previewTracks =
+				previewFormatVariant === "square"
+					? remapCaptionTransformsForPreviewVariant({
+							tracks,
+							sourceCanvas: projectCanvas,
+							previewCanvas: canvasSize,
+						})
+					: tracks;
 
 			const startPos = screenToCanvas({
 				clientX,
@@ -157,7 +189,7 @@ export function usePreviewInteraction({
 			});
 
 			const elementsWithBounds = getVisibleElementsWithBounds({
-				tracks,
+				tracks: previewTracks,
 				currentTime,
 				canvasSize,
 				mediaAssets,
@@ -205,14 +237,19 @@ export function usePreviewInteraction({
 			setIsDragging(true);
 			currentTarget.setPointerCapture(pointerId);
 		},
-		[editor, canvasRef, editingText],
+		[editor, canvasRef, editingText, previewFormatVariant],
 	);
 
 	const handlePointerMove = useCallback(
 		({ clientX, clientY }: React.PointerEvent) => {
 			if (!dragStateRef.current || !isDragging || !canvasRef.current) return;
 
-			const canvasSize = editor.project.getActive().settings.canvasSize;
+			const projectCanvas = editor.project.getActive().settings.canvasSize;
+			const canvasSize = getPreviewCanvasSize({
+				projectWidth: projectCanvas.width,
+				projectHeight: projectCanvas.height,
+				previewFormatVariant,
+			});
 
 			const currentPos = screenToCanvas({
 				clientX,
@@ -278,7 +315,7 @@ export function usePreviewInteraction({
 
 			editor.timeline.previewElements({ updates });
 		},
-		[isDragging, canvasRef, editor, isShiftHeldRef],
+		[isDragging, canvasRef, editor, isShiftHeldRef, previewFormatVariant],
 	);
 
 	const handlePointerUp = useCallback(

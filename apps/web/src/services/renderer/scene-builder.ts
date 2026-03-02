@@ -181,6 +181,7 @@ export function buildScene(params: BuildSceneParams) {
 		rootNode.add(
 			new BlurBackgroundNode({
 				blurIntensity: background.blurIntensity ?? DEFAULT_BLUR_INTENSITY,
+				blurScale: background.blurScale,
 				contentNodes,
 			}),
 		);

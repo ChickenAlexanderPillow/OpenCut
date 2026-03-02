@@ -11,6 +11,10 @@ import {
 	screenToCanvas,
 } from "@/lib/preview/preview-coords";
 import {
+	getPreviewCanvasSize,
+	remapCaptionTransformsForPreviewVariant,
+} from "@/lib/preview/preview-format";
+import {
 	MIN_SCALE,
 	SNAP_THRESHOLD_SCREEN_PIXELS,
 	snapRotation,
@@ -19,6 +23,7 @@ import {
 } from "@/lib/preview/preview-snap";
 import { isVisualElement } from "@/lib/timeline/element-utils";
 import type { Transform } from "@/types/timeline";
+import { usePreviewStore } from "@/stores/preview-store";
 
 type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 type HandleType = Corner | "rotation";
@@ -102,6 +107,7 @@ export function useTransformHandles({
 	const editor = useEditor({
 		subscribeTo: ["selection", "timeline", "media", "project", "playback"],
 	});
+	const { previewFormatVariant } = usePreviewStore();
 	const isShiftHeldRef = useShiftKey();
 	const [activeHandle, setActiveHandle] = useState<HandleType | null>(null);
 	const [snapLines, setSnapLines] = useState<SnapLine[]>([]);
@@ -118,12 +124,25 @@ export function useTransformHandles({
 	const currentTime = editor.playback.getCurrentTime();
 	const isPlaying = editor.playback.getIsPlaying();
 	const mediaAssets = editor.media.getAssets();
-	const canvasSize = editor.project.getActive().settings.canvasSize;
+	const projectCanvas = editor.project.getActive().settings.canvasSize;
+	const canvasSize = getPreviewCanvasSize({
+		projectWidth: projectCanvas.width,
+		projectHeight: projectCanvas.height,
+		previewFormatVariant,
+	});
+	const previewTracks =
+		previewFormatVariant === "square"
+			? remapCaptionTransformsForPreviewVariant({
+					tracks,
+					sourceCanvas: projectCanvas,
+					previewCanvas: canvasSize,
+				})
+			: tracks;
 	const shouldComputeBounds = selectedElements.length === 1 && !isPlaying;
 
 	const elementsWithBounds = shouldComputeBounds
 		? getVisibleElementsWithBounds({
-				tracks,
+				tracks: previewTracks,
 				currentTime,
 				canvasSize,
 				mediaAssets,

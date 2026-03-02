@@ -2,7 +2,7 @@ import { NumberField } from "@/components/ui/number-field";
 import { useEditor } from "@/hooks/use-editor";
 import { usePropertyDraft } from "../hooks/use-property-draft";
 import { clamp } from "@/utils/math";
-import type { ElementType, Transform } from "@/types/timeline";
+import type { ElementType, TextElement, Transform } from "@/types/timeline";
 import { Section, SectionContent, SectionField, SectionFields, SectionHeader } from "../section";
 import { Button } from "@/components/ui/button";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -13,11 +13,14 @@ import {
 } from "@hugeicons/core-free-icons";
 import { useState } from "react";
 import { DEFAULT_TRANSFORM } from "@/constants/timeline-constants";
+import { Checkbox } from "@/components/ui/checkbox";
 
 type TransformElement = {
 	id: string;
 	transform: Transform;
 	type: ElementType;
+	captionWordTimings?: TextElement["captionWordTimings"];
+	captionStyle?: TextElement["captionStyle"];
 };
 
 function parseFloat_({ input }: { input: string }): number | null {
@@ -116,6 +119,8 @@ export function TransformSection({
 		onPreview: (value) => previewTransform({ rotate: value }),
 		onCommit: commit,
 	});
+	const isGeneratedCaptionText =
+		element.type === "text" && (element.captionWordTimings?.length ?? 0) > 0;
 
 	return (
 		<Section collapsible sectionKey={`${element.type}:transform`}>
@@ -245,6 +250,32 @@ export function TransformSection({
 						isDefault={element.transform.rotate === DEFAULT_TRANSFORM.rotate}
 					/>
 				</SectionField>
+				{isGeneratedCaptionText && (
+					<div className="flex items-center justify-between rounded-sm border px-2 py-2">
+						<span className="text-muted-foreground text-xs">
+							Anchor Y to safe area
+						</span>
+						<Checkbox
+							checked={element.captionStyle?.anchorToSafeAreaBottom ?? true}
+							onCheckedChange={(checked) =>
+								editor.timeline.updateElements({
+									updates: [
+										{
+											trackId,
+											elementId: element.id,
+											updates: {
+												captionStyle: {
+													...(element.captionStyle ?? {}),
+													anchorToSafeAreaBottom: Boolean(checked),
+												},
+											},
+										},
+									],
+								})
+							}
+						/>
+					</div>
+				)}
 			</SectionFields>
 		</SectionContent>
 		</Section>

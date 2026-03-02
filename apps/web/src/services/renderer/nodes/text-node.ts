@@ -15,6 +15,7 @@ import {
 	measureTextBlock,
 	resolveTextPlacement,
 } from "@/lib/text/layout";
+import { resolveSafeAreaAnchoredPositionY } from "@/constants/safe-area-constants";
 
 function scaleFontSize({
 	fontSize,
@@ -301,17 +302,26 @@ export class TextNode extends BaseNode<TextNodeParams> {
 					backgroundMode,
 					fontSizeRatio,
 				});
-				const candidatePlacement = resolveTextPlacement({
-					canvasWidth: this.params.canvasWidth,
-					canvasHeight: this.params.canvasHeight,
-					positionX:
-						this.params.transform.position.x + this.params.canvasCenter.x,
-					positionY:
-						this.params.transform.position.y + this.params.canvasCenter.y,
-					scale: this.params.transform.scale,
-					visualRect: candidateVisualRect,
-					fitInCanvas,
-				});
+					const candidatePlacement = resolveTextPlacement({
+						canvasWidth: this.params.canvasWidth,
+						canvasHeight: this.params.canvasHeight,
+						positionX:
+							this.params.transform.position.x + this.params.canvasCenter.x,
+						positionY: resolveSafeAreaAnchoredPositionY({
+							canvasWidth: this.params.canvasWidth,
+							canvasHeight: this.params.canvasHeight,
+							transformPositionY: this.params.transform.position.y,
+							scale: this.params.transform.scale,
+							visualRect: candidateVisualRect,
+							anchorToSafeAreaBottom:
+								this.params.captionStyle?.anchorToSafeAreaBottom ?? true,
+							safeAreaBottomOffset:
+								this.params.captionStyle?.safeAreaBottomOffset ?? 0,
+						}),
+						scale: this.params.transform.scale,
+						visualRect: candidateVisualRect,
+						fitInCanvas,
+					});
 				if (
 					candidatePlacement.effectiveScale >=
 					this.params.transform.scale - 0.001
@@ -408,7 +418,16 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			canvasWidth: this.params.canvasWidth,
 			canvasHeight: this.params.canvasHeight,
 			positionX: this.params.transform.position.x + this.params.canvasCenter.x,
-			positionY: this.params.transform.position.y + this.params.canvasCenter.y,
+			positionY: resolveSafeAreaAnchoredPositionY({
+				canvasWidth: this.params.canvasWidth,
+				canvasHeight: this.params.canvasHeight,
+				transformPositionY: this.params.transform.position.y,
+				scale: this.params.transform.scale,
+				visualRect,
+				anchorToSafeAreaBottom:
+					this.params.captionStyle?.anchorToSafeAreaBottom ?? true,
+				safeAreaBottomOffset: this.params.captionStyle?.safeAreaBottomOffset ?? 0,
+			}),
 			scale: this.params.transform.scale,
 			visualRect,
 			fitInCanvas,

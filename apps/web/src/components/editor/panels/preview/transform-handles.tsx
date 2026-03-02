@@ -5,10 +5,12 @@ import { useEditor } from "@/hooks/use-editor";
 import { isVisualElement } from "@/lib/timeline/element-utils";
 import { SnapGuides } from "./snap-guides";
 import { canvasToOverlay, getDisplayScale } from "@/lib/preview/preview-coords";
+import { getPreviewCanvasSize } from "@/lib/preview/preview-format";
 import type { ElementBounds } from "@/lib/preview/element-bounds";
 import { cn } from "@/utils/ui";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Rotate01Icon } from "@hugeicons/core-free-icons";
+import { usePreviewStore } from "@/stores/preview-store";
 
 const HANDLE_SIZE = 10;
 const ROTATION_HANDLE_OFFSET = 24;
@@ -95,7 +97,13 @@ export function TransformHandles({
 	} = useTransformHandles({ canvasRef });
 
 	const editor = useEditor({ subscribeTo: ["project"] });
-	const canvasSize = editor.project.getActive().settings.canvasSize;
+	const { previewFormatVariant } = usePreviewStore();
+	const projectCanvas = editor.project.getActive().settings.canvasSize;
+	const canvasSize = getPreviewCanvasSize({
+		projectWidth: projectCanvas.width,
+		projectHeight: projectCanvas.height,
+		previewFormatVariant,
+	});
 
 	if (!hasVisualSelection || !selectedWithBounds) return null;
 

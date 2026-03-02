@@ -207,6 +207,8 @@ export function Captions() {
 						maxLinesOnScreen: 2,
 						wordDisplayPreset: "balanced",
 						linkedToCaptionGroup: true,
+						anchorToSafeAreaBottom: true,
+						safeAreaBottomOffset: 0,
 					},
 				},
 			});
