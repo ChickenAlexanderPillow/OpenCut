@@ -86,6 +86,7 @@ function ProjectDropdown() {
 	const activeProjectProcesses = processes.filter(
 		(process) => process.projectId === activeProject.metadata.id,
 	);
+	const hasActiveProjectProcesses = activeProjectProcesses.length > 0;
 
 	const handleExit = async () => {
 		if (isExiting) return;
@@ -102,6 +103,15 @@ function ProjectDropdown() {
 			setIsExitDialogOpen(false);
 			router.push("/projects");
 		}
+	};
+
+	const handleExitProjectClick = () => {
+		if (hasActiveProjectProcesses) {
+			setIsExitDialogOpen(true);
+			return;
+		}
+
+		void handleExit();
 	};
 
 	const handleSaveProjectName = async (newName: string) => {
@@ -160,7 +170,7 @@ function ProjectDropdown() {
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="start" className="z-100 w-44">
 					<DropdownMenuItem
-						onClick={() => setIsExitDialogOpen(true)}
+						onClick={handleExitProjectClick}
 						disabled={isExiting}
 						icon={<HugeiconsIcon icon={Logout05Icon} />}
 					>
@@ -203,7 +213,10 @@ function ProjectDropdown() {
 				isOpen={openDialog === "shortcuts"}
 				onOpenChange={(isOpen) => setOpenDialog(isOpen ? "shortcuts" : null)}
 			/>
-			<Dialog open={isExitDialogOpen} onOpenChange={setIsExitDialogOpen}>
+			<Dialog
+				open={isExitDialogOpen && hasActiveProjectProcesses}
+				onOpenChange={setIsExitDialogOpen}
+			>
 				<DialogContent>
 					<DialogHeader>
 						<DialogTitle>Leave project?</DialogTitle>

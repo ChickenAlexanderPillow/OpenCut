@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useEffect, useState, useLayoutEffect } from "react";
+import { useCallback, useMemo, useRef, useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import useDeepCompareEffect from "use-deep-compare-effect";
 import { useEditor } from "@/hooks/use-editor";
 import { useRafLoop } from "@/hooks/use-raf-loop";
@@ -85,9 +86,20 @@ export function PreviewPanel() {
 		overlays,
 		setOverlayVisibility,
 	} = usePreviewStore();
+	const [freezeFrameToken, setFreezeFrameToken] = useState(0);
 	const projectWidth = activeProject.settings.canvasSize.width;
 	const projectHeight = activeProject.settings.canvasSize.height;
 	const isProjectSquare = projectWidth === projectHeight;
+
+	const triggerFormatSwitch = useCallback(
+		({ variant }: { variant: "project" | "square" }) => {
+			flushSync(() => {
+				setFreezeFrameToken((value) => value + 1);
+			});
+			setPreviewFormatVariant({ variant });
+		},
+		[setPreviewFormatVariant],
+	);
 
 	return (
 		<div
@@ -100,7 +112,7 @@ export function PreviewPanel() {
 						variant={previewFormatVariant === "project" ? "secondary" : "ghost"}
 						size="sm"
 						className={cn("h-7 px-2 text-xs")}
-						onClick={() => setPreviewFormatVariant({ variant: "project" })}
+						onClick={() => triggerFormatSwitch({ variant: "project" })}
 					>
 						Project
 					</Button>
@@ -109,7 +121,7 @@ export function PreviewPanel() {
 							variant={previewFormatVariant === "square" ? "secondary" : "ghost"}
 							size="sm"
 							className={cn("h-7 px-2 text-xs")}
-							onClick={() => setPreviewFormatVariant({ variant: "square" })}
+							onClick={() => triggerFormatSwitch({ variant: "square" })}
 						>
 							Square
 						</Button>
@@ -141,6 +153,7 @@ export function PreviewPanel() {
 			</div>
 			<div className="flex min-h-0 min-w-0 flex-1 items-center justify-center p-2 pb-0">
 				<PreviewCanvas
+					freezeFrameToken={freezeFrameToken}
 					onToggleFullscreen={toggleFullscreen}
 					containerRef={containerRef}
 				/>
@@ -237,9 +250,11 @@ function RenderTreeController() {
 }
 
 function PreviewCanvas({
+	freezeFrameToken,
 	onToggleFullscreen,
 	containerRef,
 }: {
+	freezeFrameToken: number;
 	onToggleFullscreen: () => void;
 	containerRef: React.RefObject<HTMLElement | null>;
 }) {
@@ -269,7 +284,6 @@ function PreviewCanvas({
 		width: number;
 		height: number;
 	} | null>(null);
-	const previousVariantRef = useRef<"project" | "square" | null>(null);
 	const renderingRef = useRef(false);
 	const pendingRenderRef = useRef<{
 		time: number;
@@ -502,16 +516,7 @@ function PreviewCanvas({
 		setActiveSurface("canvas2d");
 	}, [previewRendererMode]);
 
-	useLayoutEffect(() => {
-		if (previousVariantRef.current === null) {
-			previousVariantRef.current = previewFormatVariant;
-			return;
-		}
-		if (previousVariantRef.current === previewFormatVariant) {
-			return;
-		}
-		previousVariantRef.current = previewFormatVariant;
-
+	useEffect(() => {
 		const sourceCanvas =
 			activeSurface === "webgpu" ? webgpuCanvasRef.current : canvas2dRef.current;
 		if (!sourceCanvas) return;
@@ -539,7 +544,7 @@ function PreviewCanvas({
 		}
 		lastFrameRef.current = -1;
 		lastSceneRef.current = null;
-	}, [previewFormatVariant, activeSurface]);
+	}, [freezeFrameToken, activeSurface]);
 
 	const effectiveDisplaySize =
 		isRenderReadyForSize || !transitionHoldSize ? displaySize : transitionHoldSize;
