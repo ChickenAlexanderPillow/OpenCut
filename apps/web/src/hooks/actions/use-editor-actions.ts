@@ -902,6 +902,8 @@ export function useEditorActions() {
 				const currentProject = editor.project.getActive();
 				let transcriptionOperationId: string | undefined;
 				let projectProcessId: string | undefined;
+				let preparationHeartbeatId: number | undefined;
+				let hasTranscriptionProgress = false;
 
 				try {
 					const linkedProject = currentProject.externalProjectLink;
@@ -969,6 +971,20 @@ export function useEditorActions() {
 						kind: "clip-generation",
 						label: "Generating clips...",
 					});
+					preparationHeartbeatId = window.setInterval(() => {
+						if (hasTranscriptionProgress) return;
+						transcriptionStatus.update({
+							operationId: transcriptionOperationId,
+							message: "Preparing transcript...",
+							progress: null,
+						});
+						if (projectProcessId) {
+							updateProcessLabel({
+								id: projectProcessId,
+								label: "Preparing transcript...",
+							});
+						}
+					}, 900);
 					const projectForTranscript = editor.project.getActive();
 
 					const transcriptResult = await getOrCreateClipTranscriptForAsset({
@@ -976,6 +992,7 @@ export function useEditorActions() {
 						asset: mediaAsset,
 						modelId: "whisper-tiny",
 						onProgress: (progress) => {
+							hasTranscriptionProgress = true;
 							setStatus({
 								status: "transcribing",
 								sourceMediaId: mediaAsset.id,
@@ -1087,6 +1104,7 @@ export function useEditorActions() {
 						});
 						editor.project.setActiveProject({ project: projectWithCache });
 						editor.save.markDirty();
+						await editor.save.flush();
 						toast.error("No clips passed the virality quality gate");
 						return;
 					}
@@ -1105,6 +1123,7 @@ export function useEditorActions() {
 					});
 					editor.project.setActiveProject({ project: projectWithCache });
 					editor.save.markDirty();
+					await editor.save.flush();
 					toast.success(`Generated ${selectedCandidates.length} clip candidate(s)`);
 				} catch (error) {
 					const message =
@@ -1112,6 +1131,9 @@ export function useEditorActions() {
 					setError({ error: message });
 					toast.error(message);
 				} finally {
+					if (preparationHeartbeatId) {
+						window.clearInterval(preparationHeartbeatId);
+					}
 					transcriptionStatus.stop(transcriptionOperationId);
 					if (projectProcessId) {
 						removeProcess({ id: projectProcessId });
@@ -1354,6 +1376,7 @@ export function useEditorActions() {
 					},
 				});
 				editor.save.markDirty();
+				void editor.save.flush();
 			}
 			reset();
 		},

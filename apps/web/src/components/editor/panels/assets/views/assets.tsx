@@ -29,6 +29,7 @@ import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
 import { useEditor } from "@/hooks/use-editor";
 import { useFileUpload } from "@/hooks/use-file-upload";
 import { useRevealItem } from "@/hooks/use-reveal-item";
+import { invokeAction } from "@/lib/actions";
 import { processMediaAssets } from "@/lib/media/processing";
 import { buildElementFromMedia } from "@/lib/timeline/element-utils";
 import { useAssetsPanelStore } from "@/stores/assets-panel-store";
@@ -52,6 +53,7 @@ export function MediaView() {
 
 	const { mediaViewMode, setMediaViewMode, highlightMediaId, clearHighlight } =
 		useAssetsPanelStore();
+	const setActiveTab = useAssetsPanelStore((state) => state.setActiveTab);
 	const { highlightedId, registerElement } = useRevealItem(
 		highlightMediaId,
 		clearHighlight,
@@ -321,6 +323,21 @@ export function MediaView() {
 		</div>
 	);
 
+	const handleGenerateClipsForMedia = ({ mediaId }: { mediaId: string }) => {
+		setActiveTab("clips");
+		invokeAction("generate-viral-clips", {
+			sourceMediaId: mediaId,
+		});
+	};
+	const clipCountsBySource = useMemo(() => {
+		const cache = activeProject.clipGenerationCache ?? {};
+		const counts = new Map<string, number>();
+		for (const [sourceMediaId, entry] of Object.entries(cache)) {
+			counts.set(sourceMediaId, entry.candidates.length);
+		}
+		return counts;
+	}, [activeProject.clipGenerationCache]);
+
 	return (
 		<>
 			<input {...fileInputProps} />
@@ -346,6 +363,8 @@ export function MediaView() {
 						onAddToTimeline={addElementAtTime}
 						highlightedId={highlightedId}
 						registerElement={registerElement}
+						onGenerateClips={handleGenerateClipsForMedia}
+						clipCountsBySource={clipCountsBySource}
 					/>
 				) : (
 					<ListView
@@ -355,10 +374,50 @@ export function MediaView() {
 						onAddToTimeline={addElementAtTime}
 						highlightedId={highlightedId}
 						registerElement={registerElement}
+						onGenerateClips={handleGenerateClipsForMedia}
+						clipCountsBySource={clipCountsBySource}
 					/>
 				)}
 			</PanelView>
 		</>
+	);
+}
+
+function GenerateClipsIconButton({
+	item,
+	onGenerate,
+	clipCount,
+}: {
+	item: MediaAsset;
+	onGenerate: ({ mediaId }: { mediaId: string }) => void;
+	clipCount: number;
+}) {
+	if (item.type !== "video" && item.type !== "audio") return null;
+
+	return (
+		<TooltipProvider>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<div className="relative">
+						<Button
+							size="icon"
+							variant="secondary"
+							className="h-5 w-5"
+							onClick={(event) => {
+								event.stopPropagation();
+								onGenerate({ mediaId: item.id });
+							}}
+						>
+							<HugeiconsIcon icon={Video01Icon} className="size-3.5" />
+						</Button>
+						<div className="bg-background absolute -right-1 -bottom-1 rounded px-1 text-[10px] leading-3.5">
+							{clipCount}
+						</div>
+					</div>
+				</TooltipTrigger>
+				<TooltipContent>Generate clips</TooltipContent>
+			</Tooltip>
+		</TooltipProvider>
 	);
 }
 
@@ -394,6 +453,8 @@ function GridView({
 	onAddToTimeline,
 	highlightedId,
 	registerElement,
+	onGenerateClips,
+	clipCountsBySource,
 }: {
 	items: MediaAsset[];
 	renderPreview: (item: MediaAsset) => React.ReactNode;
@@ -407,6 +468,8 @@ function GridView({
 	}) => boolean;
 	highlightedId: string | null;
 	registerElement: (id: string, element: HTMLElement | null) => void;
+	onGenerateClips: ({ mediaId }: { mediaId: string }) => void;
+	clipCountsBySource: Map<string, number>;
 }) {
 	return (
 		<div
@@ -421,6 +484,13 @@ function GridView({
 						<DraggableItem
 							name={item.name}
 							preview={renderPreview(item)}
+							thumbnailTopRightControl={
+								<GenerateClipsIconButton
+									item={item}
+									onGenerate={onGenerateClips}
+									clipCount={clipCountsBySource.get(item.id) ?? 0}
+								/>
+							}
 							dragData={{
 								id: item.id,
 								type: "media",
@@ -449,6 +519,8 @@ function ListView({
 	onAddToTimeline,
 	highlightedId,
 	registerElement,
+	onGenerateClips,
+	clipCountsBySource,
 }: {
 	items: MediaAsset[];
 	renderPreview: (item: MediaAsset) => React.ReactNode;
@@ -462,6 +534,8 @@ function ListView({
 	}) => boolean;
 	highlightedId: string | null;
 	registerElement: (id: string, element: HTMLElement | null) => void;
+	onGenerateClips: ({ mediaId }: { mediaId: string }) => void;
+	clipCountsBySource: Map<string, number>;
 }) {
 	return (
 		<div className="space-y-1">
@@ -471,6 +545,13 @@ function ListView({
 						<DraggableItem
 							name={item.name}
 							preview={renderPreview(item)}
+							thumbnailTopRightControl={
+								<GenerateClipsIconButton
+									item={item}
+									onGenerate={onGenerateClips}
+									clipCount={clipCountsBySource.get(item.id) ?? 0}
+								/>
+							}
 							dragData={{
 								id: item.id,
 								type: "media",

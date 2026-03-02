@@ -1,16 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { PanelView } from "@/components/editor/panels/assets/views/base-view";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
 import { invokeAction } from "@/lib/actions";
 import { useEditor } from "@/hooks/use-editor";
 import { useClipGenerationStore } from "@/stores/clip-generation-store";
@@ -60,7 +54,7 @@ function CandidateCard({
 	};
 
 	return (
-		<div className="border rounded-sm p-2 space-y-2">
+		<div className="space-y-2 rounded-sm border p-2">
 			<div className="flex items-start justify-between gap-2">
 				<div className="flex items-center gap-2">
 					<Checkbox checked={isSelected} onCheckedChange={onToggle} />
@@ -72,7 +66,7 @@ function CandidateCard({
 						</div>
 					</div>
 				</div>
-				<div className="text-xs font-semibold rounded-sm px-2 py-1 bg-secondary">
+				<div className="bg-secondary rounded-sm px-2 py-1 text-xs font-semibold">
 					{candidate.scoreOverall}/100
 				</div>
 			</div>
@@ -104,28 +98,28 @@ function CandidateCard({
 					onTimeUpdate={handleAudioTimeUpdate}
 				/>
 			) : (
-				<div className="text-xs text-muted-foreground rounded-sm border border-dashed p-2">
+				<div className="text-muted-foreground rounded-sm border border-dashed p-2 text-xs">
 					Preview unavailable until source media is loaded.
 				</div>
 			)}
 			<div className="flex flex-wrap gap-1 text-[11px]">
-				<span className="px-1.5 py-0.5 rounded-sm bg-muted">
+				<span className="bg-muted rounded-sm px-1.5 py-0.5">
 					Hook {candidate.scoreBreakdown.hook}
 				</span>
-				<span className="px-1.5 py-0.5 rounded-sm bg-muted">
+				<span className="bg-muted rounded-sm px-1.5 py-0.5">
 					Emotion {candidate.scoreBreakdown.emotion}
 				</span>
-				<span className="px-1.5 py-0.5 rounded-sm bg-muted">
+				<span className="bg-muted rounded-sm px-1.5 py-0.5">
 					Shareability {candidate.scoreBreakdown.shareability}
 				</span>
-				<span className="px-1.5 py-0.5 rounded-sm bg-muted">
+				<span className="bg-muted rounded-sm px-1.5 py-0.5">
 					Clarity {candidate.scoreBreakdown.clarity}
 				</span>
-				<span className="px-1.5 py-0.5 rounded-sm bg-muted">
+				<span className="bg-muted rounded-sm px-1.5 py-0.5">
 					Momentum {candidate.scoreBreakdown.momentum}
 				</span>
 			</div>
-			<div className="text-xs text-muted-foreground line-clamp-2">
+			<div className="text-muted-foreground line-clamp-2 text-xs">
 				{candidate.transcriptSnippet}
 			</div>
 			<div className="text-xs">{candidate.rationale}</div>
@@ -135,102 +129,56 @@ function CandidateCard({
 
 export function Clips() {
 	const editor = useEditor();
+	const project = editor.project.getActive();
 	const mediaAssets = editor.media.getAssets();
 	const {
 		status,
 		error,
-		candidates,
-		selectedCandidateIds,
-		sourceMediaId: sessionSourceMediaId,
-		toggleCandidateSelection,
+		sourceMediaId: generatingSourceMediaId,
 		hydrate,
+		setSelectedCandidateIds,
 		reset,
 	} = useClipGenerationStore();
-	const activeProject = editor.project.getActive();
+	const [selectedBySource, setSelectedBySource] = useState<Record<string, string[]>>(
+		{},
+	);
 
-	const sourceOptions = useMemo(
-		() =>
-			mediaAssets.filter(
-				(asset) => !asset.ephemeral && (asset.type === "video" || asset.type === "audio"),
-			),
+	const mediaById = useMemo(
+		() => new Map(mediaAssets.map((asset) => [asset.id, asset])),
 		[mediaAssets],
 	);
-	const [sourceMediaId, setSourceMediaId] = useState<string>("");
+	const groups = useMemo(() => {
+		const cache = project.clipGenerationCache ?? {};
+		return Object.values(cache)
+			.filter((entry) => entry.candidates.length > 0 || Boolean(entry.error))
+			.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+	}, [project.clipGenerationCache]);
 
-	useEffect(() => {
-		if (sourceOptions.length === 0) {
-			if (sourceMediaId !== "") {
-				setSourceMediaId("");
-			}
-			return;
-		}
+	const isGenerating =
+		status === "extracting" || status === "transcribing" || status === "scoring";
+	const generatingSourceLabel =
+		(generatingSourceMediaId && mediaById.get(generatingSourceMediaId)?.name) ??
+		generatingSourceMediaId ??
+		"source media";
 
-		const sessionSourceExists = sessionSourceMediaId
-			? sourceOptions.some((asset) => asset.id === sessionSourceMediaId)
-			: false;
-		const currentSourceExists = sourceOptions.some(
-			(asset) => asset.id === sourceMediaId,
-		);
-
-		const nextSourceMediaId = sessionSourceExists
-			? sessionSourceMediaId!
-			: currentSourceExists
-				? sourceMediaId
-				: sourceOptions[0].id;
-
-		if (nextSourceMediaId !== sourceMediaId) {
-			setSourceMediaId(nextSourceMediaId);
-		}
-	}, [sessionSourceMediaId, sourceMediaId, sourceOptions]);
-
-	useEffect(() => {
-		if (candidates.length > 0) return;
-		if (status === "extracting" || status === "transcribing" || status === "scoring") {
-			return;
-		}
-		const cache = activeProject.clipGenerationCache ?? {};
-		const targetSourceMediaId =
-			(sourceMediaId && cache[sourceMediaId] ? sourceMediaId : null) ??
-			(sessionSourceMediaId && cache[sessionSourceMediaId] ? sessionSourceMediaId : null);
-		const fallbackEntry =
-			Object.values(cache).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ??
-			null;
-		const entry = (targetSourceMediaId ? cache[targetSourceMediaId] : null) ?? fallbackEntry;
-		if (!entry) return;
-
-		hydrate({
-			sourceMediaId: entry.sourceMediaId,
-			candidates: entry.candidates,
-			transcriptRef: entry.transcriptRef,
-			error: entry.error,
-		});
-		if (entry.sourceMediaId !== sourceMediaId) {
-			setSourceMediaId(entry.sourceMediaId);
-		}
-	}, [
-		activeProject.clipGenerationCache,
-		candidates.length,
-		hydrate,
-		sessionSourceMediaId,
+	const toggleSelection = ({
 		sourceMediaId,
-		status,
-	]);
-
-	const sourceMedia =
-		sourceOptions.find((asset) => asset.id === sourceMediaId) ??
-		sourceOptions.find((asset) => asset.id === sessionSourceMediaId) ??
-		null;
-	const previewSource: { url: string; type: "video" | "audio" } | null =
-		sourceMedia &&
-		sourceMedia.url &&
-		(sourceMedia.type === "video" || sourceMedia.type === "audio")
-			? {
-					url: sourceMedia.url,
-					type: sourceMedia.type,
-				}
-			: null;
-	const canGenerate = sourceMediaId.length > 0 && status !== "transcribing" && status !== "scoring" && status !== "extracting";
-	const canImport = selectedCandidateIds.length > 0 && status === "ready";
+		candidateId,
+	}: {
+		sourceMediaId: string;
+		candidateId: string;
+	}) => {
+		setSelectedBySource((previous) => {
+			const current = previous[sourceMediaId] ?? [];
+			const exists = current.includes(candidateId);
+			return {
+				...previous,
+				[sourceMediaId]: exists
+					? current.filter((id) => id !== candidateId)
+					: [...current, candidateId],
+			};
+		});
+	};
 
 	return (
 		<PanelView
@@ -242,84 +190,98 @@ export function Clips() {
 					onClick={() => {
 						invokeAction("clear-viral-clips-session");
 						reset();
+						setSelectedBySource({});
 					}}
 				>
 					Clear
 				</Button>
 			}
-			contentClassName="space-y-2 pb-3"
+			contentClassName="space-y-3 pb-3"
 		>
-			<div className="space-y-2">
-				<div className="text-xs text-muted-foreground">Source media</div>
-				<Select value={sourceMediaId} onValueChange={setSourceMediaId}>
-					<SelectTrigger>
-						<SelectValue placeholder="Select video/audio source" />
-					</SelectTrigger>
-					<SelectContent>
-						{sourceOptions.map((asset) => (
-							<SelectItem key={asset.id} value={asset.id}>
-								{asset.name}
-							</SelectItem>
-						))}
-					</SelectContent>
-				</Select>
-				<div className="flex items-center gap-2">
-					<Button
-						disabled={!canGenerate}
-						onClick={() =>
-							invokeAction("generate-viral-clips", {
-								sourceMediaId,
-							})
-						}
-					>
-						{status === "extracting" || status === "transcribing" || status === "scoring"
-							? "Generating..."
-							: "Generate Clips"}
-					</Button>
-					<Button
-						variant="secondary"
-						disabled={!canImport}
-						onClick={() =>
-							invokeAction("import-selected-viral-clips", {
-								candidateIds: selectedCandidateIds,
-							})
-						}
-					>
-						Import Selected ({selectedCandidateIds.length})
-					</Button>
-				</div>
-			</div>
-
 			{error && <div className="text-xs text-red-500">{error}</div>}
-			{status === "error" && candidates.length === 0 && (
-				<div className="rounded-sm border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-200">
-					<div className="font-medium text-red-100">No clips were generated</div>
-					<div className="mt-1">{error ?? "No candidates passed the quality gate."}</div>
+			{isGenerating && (
+				<div className="flex items-center gap-2 rounded-sm border p-2 text-xs">
+					<Spinner className="size-3.5" />
+					<span className="text-muted-foreground">
+						Generating clips for {generatingSourceLabel}...
+					</span>
 				</div>
 			)}
 
-			{candidates.length === 0 && (
-				<div className="text-xs text-muted-foreground">
-					{status === "error"
-						? "Adjust source media or transcript quality and try Generate Clips again."
-						: "Generate clips to see up to 5 ranked candidates."}
+			{groups.length === 0 && (
+				<div className="text-muted-foreground text-xs">
+					No stored clip groups for this project. Use the clip icon on media in Assets to
+					generate clips.
 				</div>
 			)}
 
-			{candidates.map((candidate) => (
-				<CandidateCard
-					key={candidate.id}
-					candidate={candidate}
-					mediaUrl={previewSource?.url ?? null}
-					mediaType={previewSource?.type ?? null}
-					isSelected={selectedCandidateIds.includes(candidate.id)}
-					onToggle={() =>
-						toggleCandidateSelection({
-							candidateId: candidate.id,
-						})
-					}
-				/>
-			))}
+			{groups.map((group) => {
+				const sourceMedia = mediaById.get(group.sourceMediaId) ?? null;
+				const previewSource =
+					sourceMedia &&
+					sourceMedia.url &&
+					(sourceMedia.type === "video" || sourceMedia.type === "audio")
+						? {
+								url: sourceMedia.url,
+								type: sourceMedia.type,
+							}
+						: null;
+				const selectedIds = selectedBySource[group.sourceMediaId] ?? [];
+				const processingThisGroup =
+					isGenerating && generatingSourceMediaId === group.sourceMediaId;
+
+				return (
+					<div key={group.sourceMediaId} className="space-y-2">
+						<div className="text-sm font-semibold">
+							{sourceMedia?.name ?? group.sourceMediaId}
+						</div>
+						<div className="border-t" />
+						<div className="flex items-center gap-2">
+							{processingThisGroup && (
+								<div className="text-muted-foreground flex items-center gap-1.5 text-xs">
+									<Spinner className="size-3.5" />
+									<span>Generating...</span>
+								</div>
+							)}
+							<Button
+								size="sm"
+								variant="secondary"
+								disabled={selectedIds.length === 0}
+								onClick={() => {
+									hydrate({
+										sourceMediaId: group.sourceMediaId,
+										candidates: group.candidates,
+										transcriptRef: group.transcriptRef,
+										error: group.error,
+									});
+									setSelectedCandidateIds({ candidateIds: selectedIds });
+									invokeAction("import-selected-viral-clips", {
+										candidateIds: selectedIds,
+									});
+								}}
+							>
+								Import Selected ({selectedIds.length})
+							</Button>
+						</div>
+						{group.error && <div className="text-xs text-red-400">{group.error}</div>}
+						{group.candidates.map((candidate) => (
+							<CandidateCard
+								key={`${group.sourceMediaId}:${candidate.id}`}
+								candidate={candidate}
+								mediaUrl={previewSource?.url ?? null}
+								mediaType={previewSource?.type ?? null}
+								isSelected={selectedIds.includes(candidate.id)}
+								onToggle={() =>
+									toggleSelection({
+										sourceMediaId: group.sourceMediaId,
+										candidateId: candidate.id,
+									})
+								}
+							/>
+						))}
+					</div>
+				);
+			})}
 		</PanelView>
 	);
 }

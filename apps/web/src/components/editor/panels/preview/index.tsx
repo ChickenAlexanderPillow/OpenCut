@@ -22,6 +22,7 @@ import { WebGPUPreviewRenderer } from "@/services/renderer/webgpu-preview-render
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/ui";
 import type { TBackground } from "@/types/project";
+import type { TimelineTrack } from "@/types/timeline";
 import { SafeAreaOverlay } from "./safe-area-overlay";
 import { SquareDashed } from "lucide-react";
 import {
@@ -52,6 +53,96 @@ const PREVIEW_PROFILES = {
 		videoProxyScale: 1,
 	},
 } as const;
+
+function getCoverToContainScaleRatio({
+	canvasWidth,
+	canvasHeight,
+	sourceWidth,
+	sourceHeight,
+}: {
+	canvasWidth: number;
+	canvasHeight: number;
+	sourceWidth: number;
+	sourceHeight: number;
+}): number {
+	if (
+		canvasWidth <= 0 ||
+		canvasHeight <= 0 ||
+		sourceWidth <= 0 ||
+		sourceHeight <= 0
+	) {
+		return 1;
+	}
+	const widthRatio = canvasWidth / sourceWidth;
+	const heightRatio = canvasHeight / sourceHeight;
+	const contain = Math.min(widthRatio, heightRatio);
+	const cover = Math.max(widthRatio, heightRatio);
+	if (contain <= 0 || !Number.isFinite(contain) || !Number.isFinite(cover)) {
+		return 1;
+	}
+	return cover / contain;
+}
+
+function remapLandscapeVideoScalesForSquarePreview({
+	tracks,
+	mediaById,
+	projectCanvas,
+	previewCanvas,
+}: {
+	tracks: TimelineTrack[];
+	mediaById: Map<
+		string,
+		{
+			width?: number;
+			height?: number;
+		}
+	>;
+	projectCanvas: { width: number; height: number };
+	previewCanvas: { width: number; height: number };
+}): TimelineTrack[] {
+	return tracks.map((track) => {
+		if (track.type !== "video") return track;
+		return {
+			...track,
+			elements: track.elements.map((element) => {
+				if (element.type !== "video") return element;
+				const asset = mediaById.get(element.mediaId);
+				const sourceWidth = asset?.width ?? 0;
+				const sourceHeight = asset?.height ?? 0;
+				if (!(sourceWidth > sourceHeight && sourceHeight > 0)) {
+					return element;
+				}
+
+				const projectCoverRatio = getCoverToContainScaleRatio({
+					canvasWidth: projectCanvas.width,
+					canvasHeight: projectCanvas.height,
+					sourceWidth,
+					sourceHeight,
+				});
+				const previewCoverRatio = getCoverToContainScaleRatio({
+					canvasWidth: previewCanvas.width,
+					canvasHeight: previewCanvas.height,
+					sourceWidth,
+					sourceHeight,
+				});
+				const ratio =
+					projectCoverRatio > 0 ? previewCoverRatio / projectCoverRatio : 1;
+				const nextScale = Math.max(
+					0.01,
+					element.transform.scale * (Number.isFinite(ratio) ? ratio : 1),
+				);
+
+				return {
+					...element,
+					transform: {
+						...element.transform,
+						scale: nextScale,
+					},
+				};
+			}),
+		};
+	});
+}
 
 const EDITOR_SUBSCRIBE_PROJECT = ["project"] as const;
 const EDITOR_SUBSCRIBE_RENDER_TREE = ["timeline", "media", "project"] as const;
@@ -218,6 +309,7 @@ function RenderTreeController() {
 		const duration = editor.timeline.getTotalDuration();
 		const projectWidth = activeProject.settings.canvasSize.width;
 		const projectHeight = activeProject.settings.canvasSize.height;
+		const mediaById = new Map(mediaAssets.map((asset) => [asset.id, asset]));
 		const squareCoverScale =
 			Math.max(projectWidth, projectHeight) /
 			Math.max(1, Math.min(projectWidth, projectHeight));
@@ -238,7 +330,7 @@ function RenderTreeController() {
 							),
 						}
 				: activeProject.settings.background;
-		const previewTracks =
+		const captionMappedTracks =
 			previewFormatVariant === "square"
 				? remapCaptionTransformsForPreviewVariant({
 						tracks,
@@ -246,6 +338,15 @@ function RenderTreeController() {
 						previewCanvas: { width, height },
 					})
 				: tracks;
+		const previewTracks =
+			previewFormatVariant === "square" && hasLandscapeVideoSource
+				? remapLandscapeVideoScalesForSquarePreview({
+						tracks: captionMappedTracks,
+						mediaById,
+						projectCanvas: { width: projectWidth, height: projectHeight },
+						previewCanvas: { width, height },
+					})
+				: captionMappedTracks;
 		const renderTree = buildScene({
 			tracks: previewTracks,
 			mediaAssets,

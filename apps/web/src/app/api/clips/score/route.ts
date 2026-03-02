@@ -4,6 +4,11 @@ import { OpenAIViralityScoringProvider } from "@/lib/clips/providers/openai-prov
 import { mergeScoredCandidates } from "@/lib/clips/scoring";
 
 const MAX_TRANSCRIPT_CHARS = 20000;
+let rateLimitUnavailableLogged = false;
+
+function isRateLimitDisabled(): boolean {
+	return (process.env.DISABLE_RATE_LIMIT ?? "false").toLowerCase() === "true";
+}
 
 const requestSchema = z.object({
 	transcript: z.string().min(1),
@@ -31,12 +36,23 @@ async function runRateLimitIfAvailable({
 }: {
 	request: NextRequest;
 }): Promise<{ limited: boolean }> {
+	if (isRateLimitDisabled()) {
+		return { limited: false };
+	}
+
 	try {
 		const rateLimitModule = await import("@/lib/rate-limit");
 		return await rateLimitModule.checkRateLimit({ request });
 	} catch (error) {
-		// Keep clip scoring available when optional infra/env (e.g. Upstash) is not configured.
-		console.warn("Rate limit check unavailable for clips scoring route:", error);
+		// Keep clip scoring available when optional infra/env is down/unavailable.
+		if (!rateLimitUnavailableLogged) {
+			const message =
+				error instanceof Error ? error.message : "Unknown rate-limit error";
+			console.warn(
+				`Rate limiting disabled for clips scoring route (continuing without limit): ${message}`,
+			);
+			rateLimitUnavailableLogged = true;
+		}
 		return { limited: false };
 	}
 }

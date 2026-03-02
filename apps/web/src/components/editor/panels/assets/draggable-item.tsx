@@ -18,6 +18,7 @@ import { cn } from "@/utils/ui";
 export interface DraggableItemProps {
 	name: string;
 	preview: ReactNode;
+	thumbnailTopRightControl?: ReactNode;
 	dragData: TimelineDragData;
 	onDragStart?: ({ e }: { e: React.DragEvent }) => void;
 	onAddToTimeline?: ({ currentTime }: { currentTime: number }) => void;
@@ -35,6 +36,7 @@ export interface DraggableItemProps {
 export function DraggableItem({
 	name,
 	preview,
+	thumbnailTopRightControl,
 	dragData,
 	onDragStart,
 	onAddToTimeline,
@@ -119,6 +121,11 @@ export function DraggableItem({
 							onDragEnd={isDraggable ? handleDragEnd : undefined}
 						>
 							{preview}
+							{thumbnailTopRightControl ? (
+								<div className="absolute top-2 right-2 z-10">
+									{thumbnailTopRightControl}
+								</div>
+							) : null}
 							{!isDragging && (
 								<PlusButton
 									className="opacity-0 group-hover:opacity-100"
@@ -160,8 +167,13 @@ export function DraggableItem({
 						onDragStart={isDraggable ? handleDragStart : undefined}
 						onDragEnd={isDraggable ? handleDragEnd : undefined}
 					>
-						<div className="size-6 flex-shrink-0 overflow-hidden rounded-[0.35rem]">
+						<div className="relative size-6 flex-shrink-0 overflow-hidden rounded-[0.35rem]">
 							{preview}
+							{thumbnailTopRightControl ? (
+								<div className="absolute top-0 right-0 z-10">
+									{thumbnailTopRightControl}
+								</div>
+							) : null}
 						</div>
 						<span className="w-full flex-1 truncate text-sm text-left">
 							{name}

@@ -189,11 +189,29 @@ async function transcribeAssetInChunks({
 			logicalStart - (chunkIndex === 0 ? 0 : CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS),
 		);
 		const decodeEnd = Math.min(duration, logicalEnd + CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS);
+		onProgress?.({
+			status: "transcribing",
+			progress: Math.round(chunkBaseProgress),
+			message: `Preparing chunk ${chunkIndex + 1}/${chunkCount} audio...`,
+		});
+		let decodeHeartbeatProgress = chunkBaseProgress;
+		const decodeHeartbeatId = window.setInterval(() => {
+			decodeHeartbeatProgress = Math.min(
+				chunkMaxSoftProgress,
+				decodeHeartbeatProgress + Math.max(0.2, 2 / chunkCount),
+			);
+			onProgress?.({
+				status: "transcribing",
+				progress: Math.round(decodeHeartbeatProgress),
+				message: `Preparing chunk ${chunkIndex + 1}/${chunkCount} audio...`,
+			});
+		}, CHUNK_PROGRESS_HEARTBEAT_MS);
 		const decodedChunk = await decodeAudioChunkToMono({
 			asset,
 			startTime: decodeStart,
 			endTime: decodeEnd,
 		});
+		window.clearInterval(decodeHeartbeatId);
 
 		if (!decodedChunk || decodedChunk.samples.length === 0) {
 			onProgress?.({
@@ -525,12 +543,105 @@ export function clipTranscriptSegmentsForWindow({
 	startTime: number;
 	endTime: number;
 }): TranscriptionSegment[] {
+	const getOverlappingWords = ({
+		text,
+		segmentStart,
+		segmentEnd,
+		overlapStart,
+		overlapEnd,
+	}: {
+		text: string;
+		segmentStart: number;
+		segmentEnd: number;
+		overlapStart: number;
+		overlapEnd: number;
+	}): Array<{ word: string; start: number; end: number }> => {
+		const words = text.match(/\S+/g) ?? [];
+		if (words.length === 0) return [];
+		const duration = segmentEnd - segmentStart;
+		if (!Number.isFinite(duration) || duration <= 0) {
+			return [
+				{
+					word: words.join(" "),
+					start: overlapStart,
+					end: overlapEnd,
+				},
+			];
+		}
+
+		const weights = words.map((word) => Math.max(1, word.length));
+		const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+		if (!Number.isFinite(totalWeight) || totalWeight <= 0) return [];
+
+		let accumulatedWeight = 0;
+		const timedWords: Array<{ word: string; start: number; end: number }> = [];
+		for (let index = 0; index < words.length; index++) {
+			const startRatio = accumulatedWeight / totalWeight;
+			accumulatedWeight += weights[index] ?? 1;
+			const endRatio = accumulatedWeight / totalWeight;
+			const wordStart = segmentStart + duration * startRatio;
+			const wordEnd = segmentStart + duration * endRatio;
+			timedWords.push({
+				word: words[index] ?? "",
+				start: wordStart,
+				end: Math.max(wordEnd, wordStart + 0.01),
+			});
+		}
+
+		const overlapping = timedWords.filter(
+			(word) => word.end > overlapStart && word.start < overlapEnd,
+		);
+		if (overlapping.length > 0) return overlapping;
+
+		const midpoint = (overlapStart + overlapEnd) / 2;
+		const nearest = timedWords.reduce((closest, candidate) => {
+			const candidateDistance = Math.abs(
+				(candidate.start + candidate.end) / 2 - midpoint,
+			);
+			if (!closest) {
+				return { item: candidate, distance: candidateDistance };
+			}
+			return candidateDistance < closest.distance
+				? { item: candidate, distance: candidateDistance }
+				: closest;
+		}, null as { item: { word: string; start: number; end: number }; distance: number } | null);
+		return nearest ? [nearest.item] : [];
+	};
+
 	return segments
 		.filter((segment) => segment.end > startTime && segment.start < endTime)
-		.map((segment) => ({
-			text: segment.text,
-			start: Math.max(0, Math.max(startTime, segment.start) - startTime),
-			end: Math.max(0, Math.min(endTime, segment.end) - startTime),
-		}))
-		.filter((segment) => segment.end > segment.start);
+		.map((segment) => {
+			const overlapStart = Math.max(startTime, segment.start);
+			const overlapEnd = Math.min(endTime, segment.end);
+			const overlappingWords = getOverlappingWords({
+				text: segment.text,
+				segmentStart: segment.start,
+				segmentEnd: segment.end,
+				overlapStart,
+				overlapEnd,
+			});
+			if (overlappingWords.length === 0) return null;
+			const rebasedStart = Math.max(
+				0,
+				Math.max(overlapStart, overlappingWords[0].start) - startTime,
+			);
+			const rebasedEnd = Math.max(
+				rebasedStart + 0.01,
+				Math.min(
+					overlapEnd,
+					overlappingWords[overlappingWords.length - 1].end,
+				) - startTime,
+			);
+			return {
+				text: overlappingWords.map((word) => word.word).join(" ").trim(),
+				start: rebasedStart,
+				end: rebasedEnd,
+			};
+		})
+		.filter(
+			(segment): segment is TranscriptionSegment =>
+				segment != null &&
+				segment.end > segment.start &&
+				segment.text.length > 0,
+		);
 }
