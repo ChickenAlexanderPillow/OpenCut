@@ -89,6 +89,20 @@ export const ACTIONS = {
 		description: "Smart cut selected media elements",
 		category: "editing",
 	},
+	"generate-viral-clips": {
+		description: "Generate viral clip candidates from selected source media",
+		category: "editing",
+		args: { sourceMediaId: "string" },
+	},
+	"import-selected-viral-clips": {
+		description: "Import selected viral clip candidates as new scenes",
+		category: "editing",
+		args: { candidateIds: "string[]" },
+	},
+	"clear-viral-clips-session": {
+		description: "Clear generated viral clips session",
+		category: "editing",
+	},
 	"delete-selected": {
 		description: "Delete selected elements",
 		category: "editing",

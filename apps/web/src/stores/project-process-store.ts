@@ -1,6 +1,10 @@
 import { create } from "zustand";
 
-export type ProjectProcessKind = "transcription" | "export" | "other";
+export type ProjectProcessKind =
+	| "transcription"
+	| "clip-generation"
+	| "export"
+	| "other";
 
 export interface ProjectProcessItem {
 	id: string;

@@ -8,6 +8,8 @@ export type TActionArgsMap = {
 	"seek-backward": { seconds: number } | undefined;
 	"jump-forward": { seconds: number } | undefined;
 	"jump-backward": { seconds: number } | undefined;
+	"generate-viral-clips": { sourceMediaId: string } | undefined;
+	"import-selected-viral-clips": { candidateIds: string[] } | undefined;
 };
 
 type TKeysWithValueUndefined<T> = {

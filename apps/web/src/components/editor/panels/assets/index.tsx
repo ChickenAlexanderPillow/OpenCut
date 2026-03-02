@@ -8,6 +8,7 @@ import {
 } from "@/stores/assets-panel-store";
 import { TabBar } from "./tabbar";
 import { Captions } from "./views/captions";
+import { Clips } from "./views/clips";
 import { MediaView } from "./views/assets";
 import { SettingsView } from "./views/settings";
 import { SoundsView } from "./views/sounds";
@@ -21,6 +22,7 @@ export function AssetsPanel() {
 
 	const viewMap: Record<Tab, React.ReactNode> = {
 		media: <MediaView />,
+		clips: <Clips />,
 		sounds: <SoundsView />,
 		text: <TextView />,
 		stickers: <StickersView />,

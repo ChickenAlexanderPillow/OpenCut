@@ -7,6 +7,8 @@
 		"dev": "next dev --turbopack",
 		"build": "next build",
 		"start": "next start",
+		"test:clips:e2e": "bun run tsx scripts/clip-e2e-smoke.ts",
+		"test:clips:aga": "bun scripts/clip-aga-e2e.ts",
 		"lint": "biome check src/",
 		"lint:fix": "biome check src/ --write",
 		"format": "biome format src/ --write",

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { useEditor } from "@/hooks/use-editor";
 import {
@@ -10,6 +10,8 @@ import {
 } from "@/hooks/use-keybindings";
 import { useEditorActions } from "@/hooks/actions/use-editor-actions";
 import { prefetchFontAtlas } from "@/lib/fonts/google-fonts";
+import { useProjectProcessStore } from "@/stores/project-process-store";
+import { useProjectExitStore } from "@/stores/project-exit-store";
 
 interface EditorProviderProps {
 	projectId: string;
@@ -120,17 +122,55 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 
 function EditorRuntimeBindings() {
 	const editor = useEditor();
+	const pathname = usePathname();
+	const activeProject = editor.project.getActiveOrNull();
+	const processes = useProjectProcessStore((state) => state.processes);
+	const requestOpen = useProjectExitStore((state) => state.requestOpen);
+
+	const hasActiveProjectProcesses = activeProject
+		? processes.some((process) => process.projectId === activeProject.metadata.id)
+		: false;
 
 	useEffect(() => {
 		const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-			if (!editor.save.getIsDirty()) return;
+			if (!editor.save.getIsDirty() && !hasActiveProjectProcesses) return;
 			event.preventDefault();
 			(event as unknown as { returnValue: string }).returnValue = "";
 		};
 
 		window.addEventListener("beforeunload", handleBeforeUnload);
 		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-	}, [editor]);
+	}, [editor, hasActiveProjectProcesses]);
+
+	useEffect(() => {
+		const handleLinkClick = (event: MouseEvent) => {
+			if (!hasActiveProjectProcesses) return;
+			if (event.defaultPrevented) return;
+			if (event.button !== 0) return;
+			if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+			const target = event.target as HTMLElement | null;
+			const link = target?.closest("a[href]") as HTMLAnchorElement | null;
+			if (!link) return;
+			if (link.target && link.target !== "_self") return;
+			if (link.hasAttribute("download")) return;
+
+			const url = new URL(link.href, window.location.origin);
+			if (url.origin !== window.location.origin) return;
+			const destination = `${url.pathname}${url.search}${url.hash}`;
+			const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+			if (destination === current) return;
+			if (url.pathname === pathname) return;
+
+			event.preventDefault();
+			requestOpen({ route: destination });
+		};
+
+		document.addEventListener("click", handleLinkClick, true);
+		return () => {
+			document.removeEventListener("click", handleLinkClick, true);
+		};
+	}, [hasActiveProjectProcesses, pathname, requestOpen]);
 
 	useEditorActions();
 	useKeybindingsListener();

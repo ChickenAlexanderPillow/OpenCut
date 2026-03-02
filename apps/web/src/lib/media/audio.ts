@@ -32,14 +32,41 @@ export interface DecodedAudio {
 	sampleRate: number;
 }
 
-export async function decodeAudioToFloat32({
+async function readBlobArrayBufferWithFallback({
 	audioBlob,
+	fallbackUrl,
 }: {
 	audioBlob: Blob;
+	fallbackUrl?: string;
+}): Promise<ArrayBuffer> {
+	try {
+		return await audioBlob.arrayBuffer();
+	} catch (primaryError) {
+		if (!fallbackUrl) {
+			throw primaryError;
+		}
+
+		const response = await fetch(fallbackUrl);
+		if (!response.ok) {
+			throw primaryError;
+		}
+		return await response.arrayBuffer();
+	}
+}
+
+export async function decodeAudioToFloat32({
+	audioBlob,
+	fallbackUrl,
+}: {
+	audioBlob: Blob;
+	fallbackUrl?: string;
 }): Promise<DecodedAudio> {
 	const audioContext = createAudioContext();
-	const arrayBuffer = await audioBlob.arrayBuffer();
-	const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+	const arrayBuffer = await readBlobArrayBufferWithFallback({
+		audioBlob,
+		fallbackUrl,
+	});
+	const audioBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
 
 	// mix down to mono
 	const numChannels = audioBuffer.numberOfChannels;
@@ -53,6 +80,8 @@ export async function decodeAudioToFloat32({
 		}
 		samples[i] = sum / numChannels;
 	}
+
+	void audioContext.close().catch(() => undefined);
 
 	return { samples, sampleRate: audioBuffer.sampleRate };
 }
@@ -148,7 +177,10 @@ async function resolveAudioBufferForElement({
 			const asset = mediaMap.get(element.mediaId);
 			if (!asset || asset.type !== "audio") return null;
 
-			const arrayBuffer = await asset.file.arrayBuffer();
+			const arrayBuffer = await readBlobArrayBufferWithFallback({
+				audioBlob: asset.file,
+				fallbackUrl: asset.url,
+			});
 			return await audioContext.decodeAudioData(arrayBuffer.slice(0));
 		}
 

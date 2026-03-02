@@ -7,7 +7,7 @@ export interface VideoNodeParams extends VisualNodeParams {
 	url: string;
 	file: File;
 	mediaId: string;
-	previewFrameRateCap?: number;
+	frameRateCap?: number;
 	previewProxyScale?: number;
 	videoCache?: VideoCache;
 }
@@ -30,7 +30,7 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 		}
 
 		const localTime = this.getLocalTime(time);
-		const cap = this.params.previewFrameRateCap;
+		const cap = this.params.frameRateCap;
 		const videoTime =
 			typeof cap === "number" && cap > 0
 				? Math.floor(localTime * cap) / cap
@@ -70,7 +70,7 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 		if (!this.isInRange(time)) return null;
 
 		const localTime = this.getLocalTime(time);
-		const cap = this.params.previewFrameRateCap;
+		const cap = this.params.frameRateCap;
 		const videoTime =
 			typeof cap === "number" && cap > 0
 				? Math.floor(localTime * cap) / cap

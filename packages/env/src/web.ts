@@ -27,6 +27,7 @@ const webEnvSchema = z.object({
 	R2_SECRET_ACCESS_KEY: z.string(),
 	R2_BUCKET_NAME: z.string(),
 	MODAL_TRANSCRIPTION_URL: z.url(),
+	OPENAI_API_KEY: z.string().optional(),
 });
 
 export type WebEnv = z.infer<typeof webEnvSchema>;

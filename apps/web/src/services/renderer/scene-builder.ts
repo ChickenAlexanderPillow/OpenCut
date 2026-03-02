@@ -87,8 +87,8 @@ export function buildScene(params: BuildSceneParams) {
 							transform: element.transform,
 							opacity: element.opacity,
 							blendMode: element.blendMode,
+							frameRateCap: params.previewFrameRateCap,
 							...(params.isPreview && {
-								previewFrameRateCap: params.previewFrameRateCap,
 								previewProxyScale: params.previewProxyScale,
 							}),
 						}),

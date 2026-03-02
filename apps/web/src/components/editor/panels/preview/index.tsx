@@ -37,14 +37,14 @@ import {
 
 const PREVIEW_PROFILES = {
 	performance: {
-		videoFrameRateCap: 12,
-		renderFrameRateCap: 15,
-		videoProxyScale: 0.4,
+		videoFrameRateCap: 10,
+		renderFrameRateCap: 12,
+		videoProxyScale: 0.35,
 	},
 	balanced: {
-		videoFrameRateCap: 18,
-		renderFrameRateCap: 24,
-		videoProxyScale: 0.6,
+		videoFrameRateCap: 15,
+		renderFrameRateCap: 18,
+		videoProxyScale: 0.5,
 	},
 	full: {
 		videoFrameRateCap: Number.POSITIVE_INFINITY,
@@ -172,12 +172,17 @@ function RenderTreeController() {
 	const tracks = editor.timeline.getTracks();
 	const mediaAssets = editor.media.getAssets();
 	const activeProject = editor.project.getActive();
-	const previewRendererMode = "auto" as const;
-	const previewProfile = PREVIEW_PROFILES.balanced;
+	const activeProjectId = activeProject.metadata.id;
+	const {
+		previewFormatVariant,
+		squareFormatSettings,
+		playbackQuality,
+		previewRendererMode,
+	} =
+		usePreviewStore();
+	const previewProfile = PREVIEW_PROFILES[playbackQuality];
 	const previewVideoFrameRateCap = activeProject.settings.fps;
 	const previewVideoProxyScale = previewProfile.videoProxyScale;
-	const activeProjectId = activeProject.metadata.id;
-	const { previewFormatVariant, squareFormatSettings } = usePreviewStore();
 
 	const { width, height } = usePreviewSize();
 
@@ -240,6 +245,7 @@ function RenderTreeController() {
 		activeProject?.brandOverlays,
 		previewFormatVariant,
 		squareFormatSettings,
+		playbackQuality,
 		width,
 		height,
 		previewVideoFrameRateCap,
@@ -294,8 +300,8 @@ function PreviewCanvas({
 	const containerSize = useContainerSize({ containerRef: outerContainerRef });
 	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PREVIEW_CANVAS });
 	const activeProject = editor.project.getActive();
-	const { overlays, previewFormatVariant } = usePreviewStore();
-	const previewRendererMode = "auto" as const;
+	const { overlays, previewFormatVariant, previewRendererMode } =
+		usePreviewStore();
 	const renderFrameRateCap = activeProject.settings.fps;
 	const previewBackgroundColor =
 		previewFormatVariant === "square"

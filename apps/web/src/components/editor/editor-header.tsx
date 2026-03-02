@@ -26,6 +26,7 @@ import Image from "next/image";
 import { cn } from "@/utils/ui";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
+import { useProjectExitStore } from "@/stores/project-exit-store";
 import { Loader2, XCircle } from "lucide-react";
 import {
 	Dialog,
@@ -72,11 +73,12 @@ function ProjectDropdown() {
 	const [openDialog, setOpenDialog] = useState<
 		"delete" | "rename" | "shortcuts" | null
 	>(null);
-	const [isExitDialogOpen, setIsExitDialogOpen] = useState(false);
 	const [isExiting, setIsExiting] = useState(false);
 	const router = useRouter();
 	const editor = useEditor();
 	const activeProject = editor.project.getActive();
+	const { isOpen, pendingRoute, requestOpen, close, clearPendingRoute } =
+		useProjectExitStore();
 	const {
 		processes,
 		cancelProcess,
@@ -88,7 +90,7 @@ function ProjectDropdown() {
 	);
 	const hasActiveProjectProcesses = activeProjectProcesses.length > 0;
 
-	const handleExit = async () => {
+	const handleExit = async ({ route }: { route: string | null }) => {
 		if (isExiting) return;
 		setIsExiting(true);
 
@@ -100,18 +102,19 @@ function ProjectDropdown() {
 		} finally {
 			clearProcessesForProject({ projectId: activeProject.metadata.id });
 			editor.project.closeProject();
-			setIsExitDialogOpen(false);
-			router.push("/projects");
+			close();
+			clearPendingRoute();
+			router.push(route || "/projects");
 		}
 	};
 
-	const handleExitProjectClick = () => {
+	const handleExitProjectClick = ({ route }: { route: string | null }) => {
 		if (hasActiveProjectProcesses) {
-			setIsExitDialogOpen(true);
+			requestOpen({ route });
 			return;
 		}
 
-		void handleExit();
+		void handleExit({ route });
 	};
 
 	const handleSaveProjectName = async (newName: string) => {
@@ -170,7 +173,7 @@ function ProjectDropdown() {
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="start" className="z-100 w-44">
 					<DropdownMenuItem
-						onClick={handleExitProjectClick}
+						onClick={() => handleExitProjectClick({ route: "/projects" })}
 						disabled={isExiting}
 						icon={<HugeiconsIcon icon={Logout05Icon} />}
 					>
@@ -214,8 +217,14 @@ function ProjectDropdown() {
 				onOpenChange={(isOpen) => setOpenDialog(isOpen ? "shortcuts" : null)}
 			/>
 			<Dialog
-				open={isExitDialogOpen && hasActiveProjectProcesses}
-				onOpenChange={setIsExitDialogOpen}
+				open={isOpen && hasActiveProjectProcesses}
+				onOpenChange={(next) => {
+					if (next) {
+						requestOpen({ route: pendingRoute });
+						return;
+					}
+					close();
+				}}
 			>
 				<DialogContent>
 					<DialogHeader>
@@ -260,12 +269,15 @@ function ProjectDropdown() {
 					<DialogFooter>
 						<Button
 							variant="secondary"
-							onClick={() => setIsExitDialogOpen(false)}
+							onClick={() => close()}
 							disabled={isExiting}
 						>
 							Stay
 						</Button>
-						<Button onClick={handleExit} disabled={isExiting}>
+						<Button
+							onClick={() => handleExit({ route: pendingRoute })}
+							disabled={isExiting}
+						>
 							{isExiting ? "Leaving..." : "Leave project"}
 						</Button>
 					</DialogFooter>

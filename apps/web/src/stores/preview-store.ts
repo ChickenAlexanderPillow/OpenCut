@@ -69,8 +69,8 @@ export const usePreviewStore = create<PreviewState>()(
 		(set) => ({
 			layoutGuide: { platform: null },
 			overlays: DEFAULT_PREVIEW_OVERLAYS,
-			playbackQuality: "balanced",
-			previewRendererMode: "auto",
+			playbackQuality: "performance",
+			previewRendererMode: "webgpu",
 			previewFormatVariant: "project",
 			squareFormatSettings: {
 				blurIntensity: 18,
@@ -145,8 +145,8 @@ export const usePreviewStore = create<PreviewState>()(
 						...DEFAULT_PREVIEW_OVERLAYS,
 						...(state?.overlays ?? {}),
 					},
-					playbackQuality: state?.playbackQuality ?? "balanced",
-					previewRendererMode: state?.previewRendererMode ?? "auto",
+					playbackQuality: state?.playbackQuality ?? "performance",
+					previewRendererMode: state?.previewRendererMode ?? "webgpu",
 					previewFormatVariant: state?.previewFormatVariant ?? "project",
 					squareFormatSettings: {
 						blurIntensity: state?.squareFormatSettings?.blurIntensity ?? 18,

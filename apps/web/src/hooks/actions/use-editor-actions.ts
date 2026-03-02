@@ -26,6 +26,177 @@ import { transcriptionService } from "@/services/transcription/service";
 import type { TimelineTrack, TextElement } from "@/types/timeline";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
+import { useClipGenerationStore } from "@/stores/clip-generation-store";
+import { buildClipCandidatesFromTranscript } from "@/lib/clips/candidate-builder";
+import { selectTopCandidatesWithQualityGate } from "@/lib/clips/scoring";
+import {
+	clipTranscriptSegmentsForWindow,
+	getOrCreateClipTranscriptForAsset,
+} from "@/lib/clips/transcript";
+import { buildCaptionChunks } from "@/lib/transcription/caption";
+import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
+import { getMainTrack } from "@/lib/timeline/track-utils";
+import type { MediaAsset } from "@/types/assets";
+import { DEFAULT_BLEND_MODE, DEFAULT_OPACITY, DEFAULT_TRANSFORM } from "@/constants/timeline-constants";
+import { DEFAULT_CANVAS_SIZE, DEFAULT_FPS } from "@/constants/project-constants";
+import { getVideoInfo } from "@/lib/media/mediabunny";
+
+const MIN_VIRAL_CLIP_SCORE = 60;
+const MAX_VIRAL_CLIP_COUNT = 5;
+const CLIP_SCORING_TRANSCRIPT_MAX_CHARS = 20000;
+const CLIP_SCORING_TIMEOUT_MS = 60000;
+
+function truncateTranscriptForScoring({
+	transcript,
+}: {
+	transcript: string;
+}): string {
+	if (transcript.length <= CLIP_SCORING_TRANSCRIPT_MAX_CHARS) {
+		return transcript;
+	}
+	return `${transcript.slice(0, CLIP_SCORING_TRANSCRIPT_MAX_CHARS)}\n[Transcript truncated for scoring request]`;
+}
+
+function resolveClipScoringApiCandidates(): string[] {
+	const fallbackBase = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+	const candidates: string[] = [];
+
+	if (typeof window !== "undefined") {
+		const origin = window.location.origin;
+		if (origin.startsWith("http://") || origin.startsWith("https://")) {
+			candidates.push(`${origin}/api/clips/score`);
+			candidates.push("/api/clips/score");
+		} else {
+			candidates.push("/api/clips/score");
+			if (fallbackBase) {
+				candidates.push(`${fallbackBase.replace(/\/$/, "")}/api/clips/score`);
+			}
+		}
+	} else {
+		candidates.push("/api/clips/score");
+		if (fallbackBase) {
+			candidates.push(`${fallbackBase.replace(/\/$/, "")}/api/clips/score`);
+		}
+	}
+
+	return Array.from(new Set(candidates));
+}
+
+async function fetchScoredCandidates({
+	transcript,
+	candidates,
+}: {
+	transcript: string;
+	candidates: Array<{
+		id: string;
+		startTime: number;
+		endTime: number;
+		duration: number;
+		transcriptSnippet: string;
+		localScore: number;
+	}>;
+}): Promise<Response> {
+	const endpoints = resolveClipScoringApiCandidates();
+	let lastNetworkError: Error | null = null;
+
+	for (const endpoint of endpoints) {
+		const controller = new AbortController();
+		const timeoutId = window.setTimeout(() => {
+			controller.abort("Clip scoring request timed out");
+		}, CLIP_SCORING_TIMEOUT_MS);
+
+		try {
+			const response = await fetch(endpoint, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					transcript: truncateTranscriptForScoring({ transcript }),
+					candidates,
+				}),
+				signal: controller.signal,
+			});
+			window.clearTimeout(timeoutId);
+			return response;
+		} catch (error) {
+			window.clearTimeout(timeoutId);
+			lastNetworkError =
+				error instanceof Error ? error : new Error("Failed to reach clip scoring API");
+		}
+	}
+
+	throw lastNetworkError ?? new Error("Failed to reach clip scoring API");
+}
+
+function buildClipElement({
+	asset,
+	startTime,
+	endTime,
+	canvasSize,
+	scaleOverride,
+}: {
+	asset: MediaAsset;
+	startTime: number;
+	endTime: number;
+	canvasSize: { width: number; height: number };
+	scaleOverride?: number;
+}) {
+	const duration = Math.max(0.1, endTime - startTime);
+	const sourceDuration = Math.max(endTime, asset.duration ?? endTime);
+	const trimEnd = Math.max(0, sourceDuration - endTime);
+	const sourceWidth = asset.width ?? 0;
+	const sourceHeight = asset.height ?? 0;
+	const shouldCoverScale =
+		asset.type === "video" &&
+		sourceWidth > 0 &&
+		sourceHeight > 0 &&
+		canvasSize.width > 0 &&
+		canvasSize.height > 0;
+	const coverScale = shouldCoverScale
+		? Math.max(canvasSize.width / sourceWidth, canvasSize.height / sourceHeight) /
+			Math.min(canvasSize.width / sourceWidth, canvasSize.height / sourceHeight)
+		: 1;
+	const effectiveScale =
+		typeof scaleOverride === "number" && Number.isFinite(scaleOverride) && scaleOverride > 0
+			? scaleOverride
+			: coverScale;
+
+	if (asset.type === "video") {
+		return {
+			type: "video" as const,
+			mediaId: asset.id,
+			name: asset.name,
+			duration,
+			startTime: 0,
+			trimStart: startTime,
+			trimEnd,
+			muted: false,
+			hidden: false,
+			transform: {
+				...DEFAULT_TRANSFORM,
+				scale: Number.isFinite(effectiveScale)
+					? Math.max(1, effectiveScale)
+					: 1,
+			},
+			opacity: DEFAULT_OPACITY,
+			blendMode: DEFAULT_BLEND_MODE,
+		};
+	}
+
+	return {
+		type: "audio" as const,
+		sourceType: "upload" as const,
+		mediaId: asset.id,
+		name: asset.name,
+		duration,
+		startTime: 0,
+		trimStart: startTime,
+		trimEnd,
+		volume: 1,
+		muted: false,
+	};
+}
 
 function mergeTimeRanges(
 	ranges: Array<{ start: number; end: number }>,
@@ -177,6 +348,47 @@ export function useEditorActions() {
 	const { selectedElements, setElementSelection } = useElementSelection();
 	const { clipboard, setClipboard, toggleSnapping, rippleEditingEnabled } =
 		useTimelineStore();
+	const { setStatus, setError, setCandidates, reset } = useClipGenerationStore();
+
+	async function resolveVideoCoverScale({
+		asset,
+		canvasSize,
+	}: {
+		asset: MediaAsset;
+		canvasSize: { width: number; height: number };
+	}): Promise<number> {
+		let width = asset.width ?? 0;
+		let height = asset.height ?? 0;
+
+		if ((width <= 0 || height <= 0) && asset.type === "video") {
+			try {
+				const videoInfo = await getVideoInfo({ videoFile: asset.file });
+				if (Number.isFinite(videoInfo.width) && videoInfo.width > 0) {
+					width = videoInfo.width;
+				}
+				if (Number.isFinite(videoInfo.height) && videoInfo.height > 0) {
+					height = videoInfo.height;
+				}
+			} catch (error) {
+				console.warn("Failed to resolve source video dimensions for cover-fit:", error);
+			}
+		}
+
+		if (width <= 0 || height <= 0) {
+			// Conservative portrait fallback that still ensures visible cover for typical 16:9 sources.
+			return canvasSize.height > canvasSize.width ? 3.2 : 1;
+		}
+
+		const widthRatio = canvasSize.width / width;
+		const heightRatio = canvasSize.height / height;
+		if (!Number.isFinite(widthRatio) || !Number.isFinite(heightRatio)) {
+			return 1;
+		}
+		const containScale = Math.min(widthRatio, heightRatio);
+		const coverScale = Math.max(widthRatio, heightRatio);
+		if (containScale <= 0) return 1;
+		return Math.max(1, coverScale / containScale);
+	}
 
 	useActionHandler(
 		"toggle-play",
@@ -555,6 +767,387 @@ export function useEditorActions() {
 					);
 				}
 			})();
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"generate-viral-clips",
+		(args) => {
+			void (async () => {
+				const candidateSourceAssets = editor
+					.media
+					.getAssets()
+					.filter(
+						(asset) =>
+							!asset.ephemeral && (asset.type === "video" || asset.type === "audio"),
+					);
+				const resolvedSourceMediaId =
+					args?.sourceMediaId && args.sourceMediaId.length > 0
+						? args.sourceMediaId
+						: candidateSourceAssets[0]?.id;
+
+				if (!resolvedSourceMediaId) {
+					toast.error("Add a video or audio media file first");
+					return;
+				}
+
+				const mediaAsset = candidateSourceAssets.find(
+					(asset) => asset.id === resolvedSourceMediaId,
+				);
+				if (!mediaAsset || (mediaAsset.type !== "video" && mediaAsset.type !== "audio")) {
+					setError({ error: "Selected media does not support clip generation" });
+					toast.error("Select a video or audio asset to generate clips");
+					return;
+				}
+
+				const currentProject = editor.project.getActive();
+				let transcriptionOperationId: string | undefined;
+				let projectProcessId: string | undefined;
+
+				try {
+					setStatus({
+						status: "extracting",
+						sourceMediaId: mediaAsset.id,
+					});
+					transcriptionOperationId = transcriptionStatus.start("Preparing transcript...");
+					projectProcessId = registerProcess({
+						projectId: currentProject.metadata.id,
+						kind: "clip-generation",
+						label: "Generating clips...",
+					});
+
+					const transcriptResult = await getOrCreateClipTranscriptForAsset({
+						project: currentProject,
+						asset: mediaAsset,
+						modelId: "whisper-tiny",
+						onProgress: (progress) => {
+							setStatus({
+								status: "transcribing",
+								sourceMediaId: mediaAsset.id,
+							});
+							transcriptionStatus.update({
+								operationId: transcriptionOperationId,
+								message: progress.message ?? "Transcribing source media...",
+								progress: progress.progress,
+							});
+							if (projectProcessId) {
+								updateProcessLabel({
+									id: projectProcessId,
+									label:
+										progress.message ??
+										`Transcription ${Math.round(progress.progress)}%`,
+								});
+							}
+						},
+					});
+
+					if (!transcriptResult.fromCache) {
+						const nextProject = {
+							...currentProject,
+							clipTranscriptCache: {
+								...(currentProject.clipTranscriptCache ?? {}),
+								[transcriptResult.cacheKey]: transcriptResult.transcript,
+							},
+						};
+						editor.project.setActiveProject({ project: nextProject });
+						editor.save.markDirty();
+					}
+
+					const mediaDuration =
+						mediaAsset.duration ??
+						transcriptResult.transcript.segments[
+							transcriptResult.transcript.segments.length - 1
+						]?.end ??
+						0;
+					const candidateDrafts = buildClipCandidatesFromTranscript({
+						segments: transcriptResult.transcript.segments,
+						mediaDuration,
+					});
+
+					if (candidateDrafts.length === 0) {
+						setError({ error: "No candidate windows found for this transcript" });
+						toast.error("Could not derive clip candidates from transcript");
+						return;
+					}
+
+					setStatus({
+						status: "scoring",
+						sourceMediaId: mediaAsset.id,
+					});
+					if (projectProcessId) {
+						updateProcessLabel({
+							id: projectProcessId,
+							label: "Scoring clip virality...",
+						});
+					}
+
+					const scoringResponse = await fetchScoredCandidates({
+						transcript: transcriptResult.transcript.text,
+						candidates: candidateDrafts,
+					});
+
+					if (!scoringResponse.ok) {
+						const errorText = await scoringResponse.text();
+						throw new Error(errorText || "Clip scoring failed");
+					}
+
+					const scoringJson = (await scoringResponse.json()) as {
+						candidates?: Array<{
+							id: string;
+							startTime: number;
+							endTime: number;
+							duration: number;
+							title: string;
+							rationale: string;
+							transcriptSnippet: string;
+							scoreOverall: number;
+							scoreBreakdown: {
+								hook: number;
+								emotion: number;
+								shareability: number;
+								clarity: number;
+								momentum: number;
+							};
+						}>;
+					};
+					const scoredCandidates = scoringJson.candidates ?? [];
+					const selectedCandidates = selectTopCandidatesWithQualityGate({
+						candidates: scoredCandidates,
+						minScore: MIN_VIRAL_CLIP_SCORE,
+						maxCount: MAX_VIRAL_CLIP_COUNT,
+					});
+
+					if (selectedCandidates.length === 0) {
+						setError({
+							error:
+								"No clips passed the quality gate. Try another source or longer material.",
+						});
+						toast.error("No clips passed the virality quality gate");
+						return;
+					}
+
+					setCandidates({
+						sourceMediaId: mediaAsset.id,
+						candidates: selectedCandidates,
+						transcriptRef: transcriptResult.transcriptRef,
+					});
+					toast.success(`Generated ${selectedCandidates.length} clip candidate(s)`);
+				} catch (error) {
+					const message =
+						error instanceof Error ? error.message : "Clip generation failed";
+					setError({ error: message });
+					toast.error(message);
+				} finally {
+					transcriptionStatus.stop(transcriptionOperationId);
+					if (projectProcessId) {
+						removeProcess({ id: projectProcessId });
+					}
+				}
+			})();
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"import-selected-viral-clips",
+		(args) => {
+			void (async () => {
+				const clipStoreState = useClipGenerationStore.getState();
+				const sourceMediaId = clipStoreState.sourceMediaId;
+				if (!sourceMediaId) {
+					toast.error("Generate clips first");
+					return;
+				}
+
+				const mediaAsset = editor
+					.media
+					.getAssets()
+					.find((asset) => asset.id === sourceMediaId);
+				if (!mediaAsset || (mediaAsset.type !== "video" && mediaAsset.type !== "audio")) {
+					toast.error("Source media for clips was not found");
+					return;
+				}
+
+				const candidateIds =
+					args?.candidateIds?.length
+						? args.candidateIds
+						: clipStoreState.selectedCandidateIds;
+				if (candidateIds.length === 0) {
+					toast.error("Select one or more clip candidates to import");
+					return;
+				}
+
+				const candidates = candidateIds
+					.map((id) => clipStoreState.candidates.find((candidate) => candidate.id === id))
+					.filter(
+						(candidate): candidate is NonNullable<typeof candidate> =>
+							candidate != null,
+					);
+
+				if (candidates.length === 0) {
+					toast.error("No valid selected clip candidates found");
+					return;
+				}
+
+				const project = editor.project.getActive();
+				if (
+					project.settings.canvasSize.width !== DEFAULT_CANVAS_SIZE.width ||
+					project.settings.canvasSize.height !== DEFAULT_CANVAS_SIZE.height ||
+					project.settings.fps !== DEFAULT_FPS
+				) {
+					await editor.project.updateSettings({
+						settings: {
+							canvasSize: {
+								width: DEFAULT_CANVAS_SIZE.width,
+								height: DEFAULT_CANVAS_SIZE.height,
+							},
+							fps: DEFAULT_FPS,
+							originalCanvasSize:
+								project.settings.originalCanvasSize ??
+								project.settings.canvasSize,
+						},
+					});
+				}
+				const refreshedProject = editor.project.getActive();
+				const projectCanvas = refreshedProject.settings.canvasSize;
+				const transcriptKey = clipStoreState.transcriptRef?.cacheKey ?? null;
+				const transcriptEntry =
+					(transcriptKey &&
+						refreshedProject.clipTranscriptCache?.[transcriptKey]) ||
+					null;
+				const createdSceneIds: string[] = [];
+				const resolvedVideoScale =
+					mediaAsset.type === "video"
+						? await resolveVideoCoverScale({
+								asset: mediaAsset,
+								canvasSize: projectCanvas,
+							})
+						: 1;
+
+				for (let i = 0; i < candidates.length; i++) {
+					const candidate = candidates[i];
+					const sceneName = `Clip ${i + 1} (${Math.round(candidate.duration)}s)`;
+					const sceneId = await editor.scenes.createScene({
+						name: sceneName,
+						isMain: false,
+					});
+					createdSceneIds.push(sceneId);
+					await editor.scenes.switchToScene({ sceneId });
+
+					const tracks = editor.timeline.getTracks();
+					if (mediaAsset.type === "video") {
+						const mainTrack = getMainTrack({ tracks });
+						if (!mainTrack) {
+							toast.error("No main video track found in the new scene");
+							continue;
+						}
+						editor.timeline.insertElement({
+							placement: {
+								mode: "explicit",
+								trackId: mainTrack.id,
+							},
+							element: buildClipElement({
+								asset: mediaAsset,
+								startTime: candidate.startTime,
+								endTime: candidate.endTime,
+								canvasSize: projectCanvas,
+								scaleOverride: resolvedVideoScale,
+							}),
+						});
+					} else {
+						const audioTrackId = editor.timeline.addTrack({
+							type: "audio",
+						});
+						editor.timeline.insertElement({
+							placement: {
+								mode: "explicit",
+								trackId: audioTrackId,
+							},
+							element: buildClipElement({
+								asset: mediaAsset,
+								startTime: candidate.startTime,
+								endTime: candidate.endTime,
+								canvasSize: projectCanvas,
+								scaleOverride: resolvedVideoScale,
+							}),
+						});
+					}
+
+					if (transcriptEntry) {
+						const clippedSegments = clipTranscriptSegmentsForWindow({
+							segments: transcriptEntry.segments,
+							startTime: candidate.startTime,
+							endTime: candidate.endTime,
+						});
+						if (clippedSegments.length > 0) {
+							const captionTrackId = editor.timeline.addTrack({
+								type: "text",
+								index: 0,
+							});
+							const captionChunks = buildCaptionChunks({
+								segments: clippedSegments,
+								mode: "segment",
+							});
+							for (let captionIndex = 0; captionIndex < captionChunks.length; captionIndex++) {
+								const caption = captionChunks[captionIndex];
+								editor.timeline.insertElement({
+									placement: {
+										mode: "explicit",
+										trackId: captionTrackId,
+									},
+									element: {
+										...DEFAULT_TEXT_ELEMENT,
+										name: `Caption ${captionIndex + 1}`,
+										content: caption.text,
+										duration: caption.duration,
+										startTime: caption.startTime,
+										captionWordTimings: caption.wordTimings,
+										fontSize: 65,
+										fontWeight: "bold",
+										captionStyle: {
+											fitInCanvas: true,
+											karaokeWordHighlight: true,
+											karaokeHighlightMode: "block",
+											karaokeHighlightEaseInOnly: false,
+											karaokeScaleHighlightedWord: false,
+											karaokeUnderlineThickness: 3,
+											karaokeHighlightColor: "#FDE047",
+											karaokeHighlightTextColor: "#111111",
+											karaokeHighlightOpacity: 1,
+											karaokeHighlightRoundness: 4,
+											backgroundFitMode: "block",
+											neverShrinkFont: false,
+											wordsOnScreen: 3,
+											maxLinesOnScreen: 2,
+											wordDisplayPreset: "balanced",
+											linkedToCaptionGroup: true,
+											anchorToSafeAreaBottom: true,
+											safeAreaBottomOffset: 0,
+										},
+									},
+								});
+							}
+						}
+					}
+				}
+
+				if (createdSceneIds[0]) {
+					await editor.scenes.switchToScene({ sceneId: createdSceneIds[0] });
+				}
+				useClipGenerationStore.getState().setSelectedCandidateIds({
+					candidateIds: [],
+				});
+				toast.success(`Imported ${createdSceneIds.length} clip scene(s)`);
+			})();
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"clear-viral-clips-session",
+		() => {
+			reset();
 		},
 		undefined,
 	);
