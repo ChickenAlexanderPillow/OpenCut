@@ -37,6 +37,7 @@ import { buildCaptionChunks } from "@/lib/transcription/caption";
 import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
 import { getMainTrack } from "@/lib/timeline/track-utils";
 import type { MediaAsset } from "@/types/assets";
+import type { TProject } from "@/types/project";
 import { DEFAULT_BLEND_MODE, DEFAULT_OPACITY, DEFAULT_TRANSFORM } from "@/constants/timeline-constants";
 import { DEFAULT_CANVAS_SIZE, DEFAULT_FPS } from "@/constants/project-constants";
 import { getVideoInfo } from "@/lib/media/mediabunny";
@@ -45,6 +46,55 @@ const MIN_VIRAL_CLIP_SCORE = 60;
 const MAX_VIRAL_CLIP_COUNT = 5;
 const CLIP_SCORING_TRANSCRIPT_MAX_CHARS = 20000;
 const CLIP_SCORING_TIMEOUT_MS = 60000;
+
+function withProjectClipGenerationCache({
+	project,
+	sourceMediaId,
+	candidates,
+	transcriptRef,
+	error,
+}: {
+	project: TProject;
+	sourceMediaId: string;
+	candidates: Array<{
+		id: string;
+		startTime: number;
+		endTime: number;
+		duration: number;
+		title: string;
+		rationale: string;
+		transcriptSnippet: string;
+		scoreOverall: number;
+		scoreBreakdown: {
+			hook: number;
+			emotion: number;
+			shareability: number;
+			clarity: number;
+			momentum: number;
+		};
+	}>;
+	transcriptRef: {
+		cacheKey: string;
+		modelId: string;
+		language: string;
+		updatedAt: string;
+	} | null;
+	error: string | null;
+}): TProject {
+	return {
+		...project,
+		clipGenerationCache: {
+			...(project.clipGenerationCache ?? {}),
+			[sourceMediaId]: {
+				sourceMediaId,
+				candidates,
+				transcriptRef,
+				error,
+				updatedAt: new Date().toISOString(),
+			},
+		},
+	};
+}
 
 function truncateTranscriptForScoring({
 	transcript,
@@ -196,6 +246,54 @@ function buildClipElement({
 		volume: 1,
 		muted: false,
 	};
+}
+
+function normalizeCaptionChunksForTimeline({
+	captionChunks,
+}: {
+	captionChunks: ReturnType<typeof buildCaptionChunks>;
+}): ReturnType<typeof buildCaptionChunks> {
+	const sorted = [...captionChunks].sort((a, b) => a.startTime - b.startTime);
+	const normalized: ReturnType<typeof buildCaptionChunks> = [];
+	let previousEnd = 0;
+
+	for (const chunk of sorted) {
+		const rawStart = Math.max(0, chunk.startTime);
+		const rawEnd = Math.max(rawStart + 0.04, rawStart + chunk.duration);
+		const adjustedStart = Math.max(rawStart, previousEnd);
+		const adjustedEnd = Math.max(adjustedStart + 0.04, rawEnd);
+		const shiftBy = adjustedStart - rawStart;
+
+		const nextWordTimings = (chunk.wordTimings ?? [])
+			.map((timing) => ({
+				word: timing.word,
+				startTime: Math.max(adjustedStart, timing.startTime + shiftBy),
+				endTime: Math.max(adjustedStart + 0.01, timing.endTime + shiftBy),
+			}))
+			.sort((a, b) => a.startTime - b.startTime);
+
+		for (let wordIndex = 1; wordIndex < nextWordTimings.length; wordIndex++) {
+			const previousTiming = nextWordTimings[wordIndex - 1];
+			const currentTiming = nextWordTimings[wordIndex];
+			if (currentTiming.startTime < previousTiming.endTime) {
+				currentTiming.startTime = previousTiming.endTime;
+				currentTiming.endTime = Math.max(
+					currentTiming.endTime,
+					currentTiming.startTime + 0.01,
+				);
+			}
+		}
+
+		normalized.push({
+			...chunk,
+			startTime: adjustedStart,
+			duration: adjustedEnd - adjustedStart,
+			wordTimings: nextWordTimings,
+		});
+		previousEnd = adjustedEnd;
+	}
+
+	return normalized;
 }
 
 function mergeTimeRanges(
@@ -806,6 +904,61 @@ export function useEditorActions() {
 				let projectProcessId: string | undefined;
 
 				try {
+					const linkedProject = currentProject.externalProjectLink;
+					if (linkedProject) {
+						const linkedKey = `${linkedProject.sourceSystem}:${linkedProject.externalProjectId}`;
+						const hasLinkedTranscript =
+							Boolean(currentProject.externalTranscriptCache?.[linkedKey]);
+						if (!hasLinkedTranscript) {
+							try {
+								const response = await fetch(
+									`/api/external-projects/${encodeURIComponent(currentProject.metadata.id)}/transcript/apply`,
+									{
+										method: "POST",
+										headers: { "Content-Type": "application/json" },
+										body: JSON.stringify({}),
+									},
+								);
+								if (response.ok) {
+									const json = (await response.json()) as {
+										sourceSystem: "thumbnail_decoupled";
+										externalProjectId: string;
+										transcriptText: string;
+										segments: Array<{ text: string; start: number; end: number }>;
+										segmentsCount: number;
+										audioDurationSeconds: number | null;
+										qualityMeta?: Record<string, unknown>;
+										updatedAt: string;
+									};
+									editor.project.setActiveProject({
+										project: {
+											...currentProject,
+											externalTranscriptCache: {
+												...(currentProject.externalTranscriptCache ?? {}),
+												[`${json.sourceSystem}:${json.externalProjectId}`]: {
+													sourceSystem: json.sourceSystem,
+													externalProjectId: json.externalProjectId,
+													transcriptText: json.transcriptText,
+													segments: json.segments,
+													segmentsCount: json.segmentsCount,
+													audioDurationSeconds: json.audioDurationSeconds,
+													qualityMeta: json.qualityMeta,
+													updatedAt: json.updatedAt,
+												},
+											},
+										},
+									});
+									editor.save.markDirty();
+								}
+							} catch (error) {
+								console.warn(
+									"Unable to hydrate linked external transcript cache before clip generation:",
+									error,
+								);
+							}
+						}
+					}
+
 					setStatus({
 						status: "extracting",
 						sourceMediaId: mediaAsset.id,
@@ -816,9 +969,10 @@ export function useEditorActions() {
 						kind: "clip-generation",
 						label: "Generating clips...",
 					});
+					const projectForTranscript = editor.project.getActive();
 
 					const transcriptResult = await getOrCreateClipTranscriptForAsset({
-						project: currentProject,
+						project: projectForTranscript,
 						asset: mediaAsset,
 						modelId: "whisper-tiny",
 						onProgress: (progress) => {
@@ -844,9 +998,9 @@ export function useEditorActions() {
 
 					if (!transcriptResult.fromCache) {
 						const nextProject = {
-							...currentProject,
+							...projectForTranscript,
 							clipTranscriptCache: {
-								...(currentProject.clipTranscriptCache ?? {}),
+								...(projectForTranscript.clipTranscriptCache ?? {}),
 								[transcriptResult.cacheKey]: transcriptResult.transcript,
 							},
 						};
@@ -923,6 +1077,16 @@ export function useEditorActions() {
 							error:
 								"No clips passed the quality gate. Try another source or longer material.",
 						});
+						const projectWithCache = withProjectClipGenerationCache({
+							project: editor.project.getActive(),
+							sourceMediaId: mediaAsset.id,
+							candidates: [],
+							transcriptRef: transcriptResult.transcriptRef,
+							error:
+								"No clips passed the quality gate. Try another source or longer material.",
+						});
+						editor.project.setActiveProject({ project: projectWithCache });
+						editor.save.markDirty();
 						toast.error("No clips passed the virality quality gate");
 						return;
 					}
@@ -932,6 +1096,15 @@ export function useEditorActions() {
 						candidates: selectedCandidates,
 						transcriptRef: transcriptResult.transcriptRef,
 					});
+					const projectWithCache = withProjectClipGenerationCache({
+						project: editor.project.getActive(),
+						sourceMediaId: mediaAsset.id,
+						candidates: selectedCandidates,
+						transcriptRef: transcriptResult.transcriptRef,
+						error: null,
+					});
+					editor.project.setActiveProject({ project: projectWithCache });
+					editor.save.markDirty();
 					toast.success(`Generated ${selectedCandidates.length} clip candidate(s)`);
 				} catch (error) {
 					const message =
@@ -1036,6 +1209,25 @@ export function useEditorActions() {
 					await editor.scenes.switchToScene({ sceneId });
 
 					const tracks = editor.timeline.getTracks();
+					const generatedCaptionElements = tracks
+						.filter((track) => track.type === "text")
+						.flatMap((track) =>
+							track.elements
+								.filter(
+									(element) =>
+										element.type === "text" &&
+										(element.captionWordTimings?.length ?? 0) > 0,
+								)
+								.map((element) => ({
+									trackId: track.id,
+									elementId: element.id,
+								})),
+						);
+					if (generatedCaptionElements.length > 0) {
+						editor.timeline.deleteElements({
+							elements: generatedCaptionElements,
+						});
+					}
 					if (mediaAsset.type === "video") {
 						const mainTrack = getMainTrack({ tracks });
 						if (!mainTrack) {
@@ -1085,11 +1277,17 @@ export function useEditorActions() {
 								type: "text",
 								index: 0,
 							});
-							const captionChunks = buildCaptionChunks({
-								segments: clippedSegments,
-								mode: "segment",
+							const captionChunks = normalizeCaptionChunksForTimeline({
+								captionChunks: buildCaptionChunks({
+									segments: clippedSegments,
+									mode: "segment",
+								}),
 							});
-							for (let captionIndex = 0; captionIndex < captionChunks.length; captionIndex++) {
+							for (
+								let captionIndex = 0;
+								captionIndex < captionChunks.length;
+								captionIndex++
+							) {
 								const caption = captionChunks[captionIndex];
 								editor.timeline.insertElement({
 									placement: {
@@ -1112,10 +1310,10 @@ export function useEditorActions() {
 											karaokeHighlightEaseInOnly: false,
 											karaokeScaleHighlightedWord: false,
 											karaokeUnderlineThickness: 3,
-											karaokeHighlightColor: "#FDE047",
-											karaokeHighlightTextColor: "#111111",
+											karaokeHighlightColor: "#3B82F6",
+											karaokeHighlightTextColor: "#FFFFFF",
 											karaokeHighlightOpacity: 1,
-											karaokeHighlightRoundness: 4,
+											karaokeHighlightRoundness: 24,
 											backgroundFitMode: "block",
 											neverShrinkFont: false,
 											wordsOnScreen: 3,
@@ -1147,6 +1345,16 @@ export function useEditorActions() {
 	useActionHandler(
 		"clear-viral-clips-session",
 		() => {
+			const project = editor.project.getActive();
+			if (project.clipGenerationCache) {
+				editor.project.setActiveProject({
+					project: {
+						...project,
+						clipGenerationCache: {},
+					},
+				});
+				editor.save.markDirty();
+			}
 			reset();
 		},
 		undefined,

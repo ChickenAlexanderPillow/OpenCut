@@ -1,4 +1,12 @@
-import { pgTable, text, timestamp, boolean } from "drizzle-orm/pg-core";
+import {
+	boolean,
+	integer,
+	jsonb,
+	pgTable,
+	text,
+	timestamp,
+	uniqueIndex,
+} from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
 	id: text("id").primaryKey(),
@@ -60,3 +68,52 @@ export const verifications = pgTable("verifications", {
 		() => /* @__PURE__ */ new Date(),
 	),
 }).enableRLS();
+
+export const externalProjects = pgTable(
+	"external_projects",
+	{
+		id: text("id").primaryKey(),
+		sourceSystem: text("source_system").notNull(),
+		externalProjectId: text("external_project_id").notNull(),
+		name: text("name"),
+		mode: text("mode"),
+		sponsored: boolean("sponsored"),
+		show: text("show"),
+		sourceFilePath: text("source_file_path"),
+		sourceAudioWavPath: text("source_audio_wav_path"),
+		relativeKey: text("relative_key"),
+		createdAt: timestamp("created_at")
+			.$defaultFn(() => /* @__PURE__ */ new Date())
+			.notNull(),
+		updatedAt: timestamp("updated_at")
+			.$defaultFn(() => /* @__PURE__ */ new Date())
+			.notNull(),
+	},
+	(table) => [
+		uniqueIndex("external_projects_source_external_uidx").on(
+			table.sourceSystem,
+			table.externalProjectId,
+		),
+		uniqueIndex("external_projects_source_relative_key_uidx").on(
+			table.sourceSystem,
+			table.relativeKey,
+		),
+	],
+);
+
+export const externalProjectTranscripts = pgTable("external_project_transcripts", {
+	id: text("id").primaryKey(),
+	projectId: text("project_id")
+		.notNull()
+		.references(() => externalProjects.id, { onDelete: "cascade" }),
+	transcriptText: text("transcript_text").notNull(),
+	segmentsJson: jsonb("segments_json").$type<
+		Array<{ text: string; start: number; end: number }>
+	>(),
+	segmentsCount: integer("segments_count").notNull().default(0),
+	audioDurationSeconds: integer("audio_duration_seconds"),
+	qualityMetaJson: jsonb("quality_meta_json").$type<Record<string, unknown>>(),
+	updatedAt: timestamp("updated_at")
+		.$defaultFn(() => /* @__PURE__ */ new Date())
+		.notNull(),
+});

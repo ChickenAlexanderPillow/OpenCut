@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
+import { evaluateTranscriptSuitability } from "@/lib/external-projects/transcript-suitability";
 
 export function Captions() {
 	const editor = useEditor();
@@ -136,6 +137,24 @@ export function Captions() {
 		return cached;
 	};
 
+	const getLinkedTranscriptEntry = () => {
+		const activeProject = editor.project.getActive();
+		const entries = Object.values(activeProject.externalTranscriptCache ?? {});
+		if (entries.length === 0) return null;
+		const suitable = entries
+			.map((entry) => ({
+				entry,
+				suitability: evaluateTranscriptSuitability({
+					transcriptText: entry.transcriptText,
+					segments: entry.segments,
+					audioDurationSeconds: entry.audioDurationSeconds,
+				}),
+			}))
+			.filter((item) => item.suitability.isSuitable)
+			.sort((a, b) => b.entry.updatedAt.localeCompare(a.entry.updatedAt));
+		return suitable[0]?.entry ?? null;
+	};
+
 	const handleProgress = (
 		progress: TranscriptionProgress,
 		operationId?: string,
@@ -197,10 +216,10 @@ export function Captions() {
 						karaokeHighlightEaseInOnly: false,
 						karaokeScaleHighlightedWord: false,
 						karaokeUnderlineThickness: 3,
-						karaokeHighlightColor: "#FDE047",
-						karaokeHighlightTextColor: "#111111",
+						karaokeHighlightColor: "#3B82F6",
+						karaokeHighlightTextColor: "#FFFFFF",
 						karaokeHighlightOpacity: 1,
-						karaokeHighlightRoundness: 4,
+						karaokeHighlightRoundness: 24,
 						backgroundFitMode: "block",
 						neverShrinkFont: false,
 						wordsOnScreen: 3,
@@ -231,7 +250,14 @@ export function Captions() {
 				text: string;
 				segments: { text: string; start: number; end: number }[];
 			};
-			if (cached && cached.fingerprint === cacheFingerprint) {
+			const linkedTranscript = getLinkedTranscriptEntry();
+			if (linkedTranscript) {
+				setProcessingStep("Using linked transcript...");
+				result = {
+					text: linkedTranscript.transcriptText,
+					segments: linkedTranscript.segments,
+				};
+			} else if (cached && cached.fingerprint === cacheFingerprint) {
 				setProcessingStep("Using cached transcript...");
 				result = { text: cached.text, segments: cached.segments };
 			} else {

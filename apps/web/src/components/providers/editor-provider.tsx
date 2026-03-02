@@ -12,6 +12,20 @@ import { useEditorActions } from "@/hooks/actions/use-editor-actions";
 import { prefetchFontAtlas } from "@/lib/fonts/google-fonts";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 import { useProjectExitStore } from "@/stores/project-exit-store";
+import { storageService } from "@/services/storage/service";
+import { buildDefaultScene } from "@/lib/scenes";
+import {
+	DEFAULT_CANVAS_SIZE,
+	DEFAULT_COLOR,
+	DEFAULT_FPS,
+} from "@/constants/project-constants";
+import { CURRENT_PROJECT_VERSION } from "@/services/storage/migrations";
+import { DEFAULT_BRAND_OVERLAYS } from "@/constants/brand-overlay-constants";
+import type { TProject } from "@/types/project";
+import { processMediaAssets } from "@/lib/media/processing";
+import {
+	buildClipTranscriptEntryFromLinkedExternalTranscript,
+} from "@/lib/clips/transcript";
 
 interface EditorProviderProps {
 	projectId: string;
@@ -37,6 +51,233 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 	useEffect(() => {
 		let cancelled = false;
 
+		const bootstrapExternalProjectLocally = async ({
+			externalProjectId,
+		}: {
+			externalProjectId: string;
+		}): Promise<boolean> => {
+			const response = await fetch(
+				`/api/external-projects/${encodeURIComponent(externalProjectId)}`,
+				{
+					method: "GET",
+					cache: "no-store",
+				},
+			);
+			if (!response.ok) return false;
+			const payload = (await response.json()) as {
+				project?: {
+					id: string;
+					name: string | null;
+					sourceSystem: "thumbnail_decoupled";
+					externalProjectId: string;
+					relativeKey: string | null;
+				};
+				transcript?: {
+					transcriptText: string;
+					segmentsJson: Array<{ text: string; start: number; end: number }>;
+					segmentsCount: number;
+					audioDurationSeconds: number | null;
+					qualityMetaJson: Record<string, unknown> | null;
+					updatedAt: string;
+				};
+			};
+
+			const externalProject = payload.project;
+			if (!externalProject) return false;
+
+			const mainScene = buildDefaultScene({ name: "Main scene", isMain: true });
+			const now = new Date();
+			const transcript = payload.transcript;
+			const transcriptKey = `${externalProject.sourceSystem}:${externalProject.externalProjectId}`;
+			const localProject: TProject = {
+				metadata: {
+					id: externalProject.id,
+					name: externalProject.name || "Imported Project",
+					duration: 0,
+					createdAt: now,
+					updatedAt: now,
+				},
+				scenes: [mainScene],
+				currentSceneId: mainScene.id,
+				settings: {
+					fps: DEFAULT_FPS,
+					canvasSize: DEFAULT_CANVAS_SIZE,
+					originalCanvasSize: null,
+					background: {
+						type: "color",
+						color: DEFAULT_COLOR,
+					},
+				},
+				brandOverlays: {
+					selectedBrandId: DEFAULT_BRAND_OVERLAYS.selectedBrandId,
+					logo: { ...DEFAULT_BRAND_OVERLAYS.logo },
+				},
+				version: CURRENT_PROJECT_VERSION,
+				externalProjectLink: {
+					sourceSystem: externalProject.sourceSystem,
+					externalProjectId: externalProject.externalProjectId,
+					opencutProjectId: externalProject.id,
+					relativeKey: externalProject.relativeKey ?? undefined,
+					linkedAt: now.toISOString(),
+				},
+				externalTranscriptCache: transcript
+					? {
+							[transcriptKey]: {
+								sourceSystem: externalProject.sourceSystem,
+								externalProjectId: externalProject.externalProjectId,
+								transcriptText: transcript.transcriptText,
+								segments: transcript.segmentsJson ?? [],
+								segmentsCount: transcript.segmentsCount ?? 0,
+								audioDurationSeconds: transcript.audioDurationSeconds ?? null,
+								qualityMeta:
+									transcript.qualityMetaJson ??
+									undefined,
+								updatedAt:
+									transcript.updatedAt ?? now.toISOString(),
+							},
+						}
+					: undefined,
+			};
+			await storageService.saveProject({ project: localProject });
+			return true;
+		};
+
+		const hydrateLinkedProjectUi = async ({
+			externalProjectId,
+		}: {
+			externalProjectId: string;
+		}) => {
+			let sourceAsset =
+				editor
+					.media
+					.getAssets()
+					.find(
+						(asset) =>
+							!asset.ephemeral &&
+							(asset.type === "video" || asset.type === "audio"),
+					) ?? null;
+
+			if (!sourceAsset) {
+				try {
+					const externalResponse = await fetch(
+						`/api/external-projects/${encodeURIComponent(externalProjectId)}`,
+						{
+							method: "GET",
+							cache: "no-store",
+						},
+					);
+					if (!externalResponse.ok) return;
+					const externalPayload = (await externalResponse.json()) as {
+						project?: {
+							id: string;
+							sourceSystem: "thumbnail_decoupled";
+							externalProjectId: string;
+							sourceFilePath: string | null;
+						};
+					};
+					const linkedProject = externalPayload.project;
+					if (!linkedProject?.sourceFilePath) return;
+
+					const mediaResponse = await fetch(
+						`/api/external-projects/${encodeURIComponent(externalProjectId)}/media/source`,
+						{
+							method: "GET",
+							cache: "no-store",
+						},
+					);
+					if (mediaResponse.ok) {
+						const mediaNameHeader =
+							mediaResponse.headers.get("x-source-media-name");
+						const blob = await mediaResponse.blob();
+						const mediaName = mediaNameHeader || "linked-source-media";
+						const mediaFile = new File([blob], mediaName, {
+							type: blob.type || "application/octet-stream",
+						});
+						const processedAssets = await processMediaAssets({
+							files: [mediaFile],
+						});
+						for (const asset of processedAssets) {
+							await editor.media.addMediaAsset({
+								projectId: externalProjectId,
+								asset,
+							});
+						}
+						sourceAsset =
+							editor
+								.media
+								.getAssets()
+								.find(
+									(asset) =>
+										!asset.ephemeral &&
+										(asset.type === "video" || asset.type === "audio"),
+								) ?? null;
+					}
+				} catch (error) {
+					console.warn("Failed to import linked source media into project", error);
+				}
+			}
+
+			if (!sourceAsset) return;
+			const clipCacheKey = `${sourceAsset.id}:whisper-tiny:auto`;
+			const currentProject = editor.project.getActive();
+			if (currentProject.clipTranscriptCache?.[clipCacheKey]) {
+				return;
+			}
+
+			try {
+				const applyResponse = await fetch(
+					`/api/external-projects/${encodeURIComponent(externalProjectId)}/transcript/apply`,
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({}),
+					},
+				);
+				if (!applyResponse.ok) return;
+				const applyPayload = (await applyResponse.json()) as {
+					sourceSystem: "thumbnail_decoupled";
+					externalProjectId: string;
+					transcriptText: string;
+					segments: Array<{ text: string; start: number; end: number }>;
+					segmentsCount: number;
+					audioDurationSeconds: number | null;
+					qualityMeta?: Record<string, unknown>;
+					updatedAt: string;
+					suitability: { isSuitable: boolean; reasons: string[] };
+				};
+				if (!applyPayload.suitability.isSuitable) return;
+
+				const transcriptEntry = buildClipTranscriptEntryFromLinkedExternalTranscript({
+					asset: sourceAsset,
+					modelId: "whisper-tiny",
+					language: "auto",
+					externalTranscript: {
+						sourceSystem: applyPayload.sourceSystem,
+						externalProjectId: applyPayload.externalProjectId,
+						transcriptText: applyPayload.transcriptText,
+						segments: applyPayload.segments,
+						segmentsCount: applyPayload.segmentsCount,
+						audioDurationSeconds: applyPayload.audioDurationSeconds,
+						qualityMeta: applyPayload.qualityMeta,
+						updatedAt: applyPayload.updatedAt,
+					},
+				});
+				if (!transcriptEntry) return;
+
+				const nextProject: TProject = {
+					...currentProject,
+					clipTranscriptCache: {
+						...(currentProject.clipTranscriptCache ?? {}),
+						[transcriptEntry.cacheKey]: transcriptEntry.transcript,
+					},
+				};
+				editor.project.setActiveProject({ project: nextProject });
+				editor.save.markDirty();
+			} catch (error) {
+				console.warn("Failed to hydrate linked transcript cache", error);
+			}
+		};
+
 		const loadProject = async () => {
 			try {
 				setIsLoading(true);
@@ -46,6 +287,12 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 
 				setIsLoading(false);
 				prefetchFontAtlas();
+				const activeProject = editor.project.getActiveOrNull();
+				if (activeProject?.externalProjectLink) {
+					void hydrateLinkedProjectUi({
+						externalProjectId: activeProject.metadata.id,
+					});
+				}
 			} catch (err) {
 				if (cancelled) return;
 
@@ -56,6 +303,19 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 
 				if (isNotFound) {
 					try {
+						const bootstrapped = await bootstrapExternalProjectLocally({
+							externalProjectId: projectId,
+						});
+						if (bootstrapped) {
+							await editor.project.loadProject({ id: projectId });
+							setIsLoading(false);
+							prefetchFontAtlas();
+							void hydrateLinkedProjectUi({
+								externalProjectId: projectId,
+							});
+							return;
+						}
+
 						const newProjectId = await editor.project.createNewProject({
 							name: "Untitled Project",
 						});

@@ -14,6 +14,11 @@ import type {
 	TranscriptionProgress,
 	TranscriptionSegment,
 } from "@/types/transcription";
+import {
+	evaluateTranscriptSuitability,
+	hasValidMonotonicSegments,
+} from "@/lib/external-projects/transcript-suitability";
+import type { ExternalProjectTranscriptCacheEntry } from "@/types/external-projects";
 
 export const CLIP_TRANSCRIPT_CACHE_VERSION = 1;
 const CHUNKED_TRANSCRIPTION_DURATION_THRESHOLD_SECONDS = 4 * 60;
@@ -312,6 +317,88 @@ function getValidClipTranscriptCacheEntry({
 	return { key, entry };
 }
 
+function getBestLinkedExternalTranscript({
+	project,
+}: {
+	project: TProject;
+}): ExternalProjectTranscriptCacheEntry | null {
+	const entries = Object.values(project.externalTranscriptCache ?? {});
+	if (entries.length === 0) return null;
+	const validEntries = entries
+		.map((entry) => {
+			const suitability = evaluateTranscriptSuitability({
+				transcriptText: entry.transcriptText,
+				segments: entry.segments,
+				audioDurationSeconds: entry.audioDurationSeconds,
+			});
+			return {
+				entry,
+				suitability,
+			};
+		})
+		.filter((item) => item.suitability.isSuitable)
+		.sort((a, b) => b.entry.updatedAt.localeCompare(a.entry.updatedAt));
+	return validEntries[0]?.entry ?? null;
+}
+
+function normalizeLinkedSegments({
+	segments,
+}: {
+	segments: TranscriptionSegment[];
+}): TranscriptionSegment[] {
+	if (!hasValidMonotonicSegments({ segments })) {
+		return normalizeTranscriptionSegments({ segments });
+	}
+	return segments;
+}
+
+export function buildClipTranscriptEntryFromLinkedExternalTranscript({
+	asset,
+	modelId,
+	language,
+	externalTranscript,
+}: {
+	asset: MediaAsset;
+	modelId: TranscriptionModelId;
+	language: TranscriptionLanguage;
+	externalTranscript: ExternalProjectTranscriptCacheEntry;
+}): { transcript: ClipTranscriptCacheEntry; cacheKey: string } | null {
+	const suitability = evaluateTranscriptSuitability({
+		transcriptText: externalTranscript.transcriptText,
+		segments: externalTranscript.segments,
+		audioDurationSeconds: externalTranscript.audioDurationSeconds,
+	});
+	if (!suitability.isSuitable) return null;
+
+	const resolvedLanguage = language ?? "auto";
+	const fingerprint = buildClipTranscriptFingerprint({
+		asset,
+		modelId,
+		language: resolvedLanguage,
+	});
+	const cacheKey = getClipTranscriptCacheKey({
+		mediaId: asset.id,
+		modelId,
+		language: resolvedLanguage,
+	});
+
+	return {
+		cacheKey,
+		transcript: {
+			cacheVersion: CLIP_TRANSCRIPT_CACHE_VERSION,
+			mediaId: asset.id,
+			fingerprint,
+			language: resolvedLanguage,
+			modelId,
+			text: externalTranscript.transcriptText,
+			segments: normalizeLinkedSegments({
+				segments: externalTranscript.segments,
+			}),
+			updatedAt: new Date().toISOString(),
+		},
+	};
+}
+
 export async function getOrCreateClipTranscriptForAsset({
 	project,
 	asset,
@@ -349,6 +436,29 @@ export async function getOrCreateClipTranscriptForAsset({
 			},
 			fromCache: true,
 		};
+	}
+
+	const linkedExternalTranscript = getBestLinkedExternalTranscript({ project });
+	if (linkedExternalTranscript) {
+		const derived = buildClipTranscriptEntryFromLinkedExternalTranscript({
+			asset,
+			modelId,
+			language: resolvedLanguage,
+			externalTranscript: linkedExternalTranscript,
+		});
+		if (derived) {
+			return {
+				transcript: derived.transcript,
+				cacheKey: derived.cacheKey,
+				transcriptRef: {
+					cacheKey: derived.cacheKey,
+					modelId,
+					language: resolvedLanguage,
+					updatedAt: derived.transcript.updatedAt,
+				},
+				fromCache: false,
+			};
+		}
 	}
 
 	const result = shouldUseChunkedTranscription({ asset })

@@ -183,6 +183,22 @@ function RenderTreeController() {
 	const previewProfile = PREVIEW_PROFILES[playbackQuality];
 	const previewVideoFrameRateCap = activeProject.settings.fps;
 	const previewVideoProxyScale = previewProfile.videoProxyScale;
+	const hasLandscapeVideoSource = useMemo(() => {
+		const mediaById = new Map(mediaAssets.map((asset) => [asset.id, asset]));
+		for (const track of tracks) {
+			for (const element of track.elements) {
+				if (element.type !== "video") continue;
+				const asset = mediaById.get(element.mediaId);
+				if (!asset) continue;
+				const width = asset.width ?? 0;
+				const height = asset.height ?? 0;
+				if (width > height && height > 0) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}, [mediaAssets, tracks]);
 
 	const { width, height } = usePreviewSize();
 
@@ -207,15 +223,20 @@ function RenderTreeController() {
 			Math.max(1, Math.min(projectWidth, projectHeight));
 		const previewBackground: TBackground =
 			previewFormatVariant === "square"
-				? {
-						type: "blur",
-						blurIntensity: squareFormatSettings.blurIntensity,
-						blurScale: Math.max(
-							1.4,
-							squareCoverScale *
-								Math.max(1, squareFormatSettings.coverOverscanPercent / 100),
-						),
-					}
+				? hasLandscapeVideoSource
+					? {
+							type: "color",
+							color: "#000000",
+						}
+					: {
+							type: "blur",
+							blurIntensity: squareFormatSettings.blurIntensity,
+							blurScale: Math.max(
+								1.4,
+								squareCoverScale *
+									Math.max(1, squareFormatSettings.coverOverscanPercent / 100),
+							),
+						}
 				: activeProject.settings.background;
 		const previewTracks =
 			previewFormatVariant === "square"
@@ -245,6 +266,7 @@ function RenderTreeController() {
 		activeProject?.brandOverlays,
 		previewFormatVariant,
 		squareFormatSettings,
+		hasLandscapeVideoSource,
 		playbackQuality,
 		width,
 		height,

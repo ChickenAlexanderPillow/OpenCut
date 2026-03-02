@@ -1,6 +1,13 @@
 import type { TScene } from "./timeline";
 import type { TranscriptionSegment } from "./transcription";
-import type { ClipTranscriptCacheEntry } from "./clip-generation";
+import type {
+	ClipGenerationProjectCacheEntry,
+	ClipTranscriptCacheEntry,
+} from "./clip-generation";
+import type {
+	ExternalProjectLink,
+	ExternalProjectTranscriptCacheEntry,
+} from "./external-projects";
 
 export type TBackground =
 	| {
@@ -83,6 +90,9 @@ export interface TProject {
 	timelineViewState?: TTimelineViewState;
 	transcriptionCache?: Record<string, TTranscriptionCacheEntry>;
 	clipTranscriptCache?: Record<string, ClipTranscriptCacheEntry>;
+	clipGenerationCache?: Record<string, ClipGenerationProjectCacheEntry>;
+	externalProjectLink?: ExternalProjectLink;
+	externalTranscriptCache?: Record<string, ExternalProjectTranscriptCacheEntry>;
 }
 
 export interface TTranscriptionCacheEntry {

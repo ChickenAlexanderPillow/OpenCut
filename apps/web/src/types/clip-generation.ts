@@ -60,6 +60,14 @@ export interface ClipGenerationSession {
 	transcriptRef: ClipTranscriptRef | null;
 }
 
+export interface ClipGenerationProjectCacheEntry {
+	sourceMediaId: string;
+	candidates: ClipCandidate[];
+	transcriptRef: ClipTranscriptRef | null;
+	error: string | null;
+	updatedAt: string;
+}
+
 export interface ClipTranscriptCacheEntry {
 	cacheVersion?: number;
 	mediaId: string;

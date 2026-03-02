@@ -24,6 +24,11 @@ import {
 	PopoverTrigger,
 } from "@/components/ui/popover";
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
+import { evaluateTranscriptSuitability } from "@/lib/external-projects/transcript-suitability";
 
 export function SettingsView() {
 	const [open, setOpen] = useState(false);
@@ -50,6 +55,11 @@ export function SettingsView() {
 						<div className="size-4 rounded-sm bg-red-500" />
 					</PopoverContent>
 				</Popover>
+				<Section>
+					<SectionContent>
+						<LinkedThumbnailProjectSection />
+					</SectionContent>
+				</Section>
 			</div>
 		</PanelView>
 	);
@@ -161,6 +171,178 @@ function ProjectInfoContent() {
 						))}
 					</SelectContent>
 				</Select>
+			</div>
+		</div>
+	);
+}
+
+function LinkedThumbnailProjectSection() {
+	const editor = useEditor();
+	const activeProject = editor.project.getActive();
+	const [externalProjectId, setExternalProjectId] = useState(
+		activeProject.externalProjectLink?.externalProjectId ?? "",
+	);
+	const [isLinking, setIsLinking] = useState(false);
+	const [isApplying, setIsApplying] = useState(false);
+
+	const isLinked = Boolean(activeProject.externalProjectLink?.externalProjectId);
+	const linkedLabel = isLinked ? "Linked" : "Unlinked";
+
+	const applyLinkedTranscript = async () => {
+		setIsApplying(true);
+		try {
+			const response = await fetch(
+				`/api/external-projects/${encodeURIComponent(activeProject.metadata.id)}/transcript/apply`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({}),
+				},
+			);
+			const json = (await response.json()) as
+				| {
+						error?: string;
+						sourceSystem: "thumbnail_decoupled";
+						externalProjectId: string;
+						transcriptText: string;
+						segments: Array<{ text: string; start: number; end: number }>;
+						segmentsCount: number;
+						audioDurationSeconds: number | null;
+						qualityMeta?: Record<string, unknown>;
+						updatedAt: string;
+						suitability: {
+							isSuitable: boolean;
+							reasons: string[];
+						};
+				  }
+				| { error: string };
+
+			if (!response.ok || "error" in json) {
+				throw new Error(json.error || "Failed to apply transcript");
+			}
+
+			const suitability = evaluateTranscriptSuitability({
+				transcriptText: json.transcriptText,
+				segments: json.segments,
+				audioDurationSeconds: json.audioDurationSeconds,
+			});
+			if (!suitability.isSuitable) {
+				toast.warning(
+					`Linked transcript is currently unsuitable: ${suitability.reasons.join(", ")}`,
+				);
+			}
+
+			const key = `${json.sourceSystem}:${json.externalProjectId}`;
+			editor.project.setActiveProject({
+				project: {
+					...activeProject,
+					externalProjectLink: {
+						sourceSystem: json.sourceSystem,
+						externalProjectId: json.externalProjectId,
+						opencutProjectId: activeProject.metadata.id,
+						linkedAt: new Date().toISOString(),
+					},
+					externalTranscriptCache: {
+						...(activeProject.externalTranscriptCache ?? {}),
+						[key]: {
+							sourceSystem: json.sourceSystem,
+							externalProjectId: json.externalProjectId,
+							transcriptText: json.transcriptText,
+							segments: json.segments,
+							segmentsCount: json.segmentsCount,
+							audioDurationSeconds: json.audioDurationSeconds,
+							qualityMeta: json.qualityMeta,
+							updatedAt: json.updatedAt,
+						},
+					},
+				},
+			});
+			editor.save.markDirty();
+			toast.success("Linked transcript applied");
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Failed to apply transcript",
+			);
+		} finally {
+			setIsApplying(false);
+		}
+	};
+
+	const handleLink = async () => {
+		if (!externalProjectId.trim()) {
+			toast.error("Enter a thumbnail project ID");
+			return;
+		}
+
+		setIsLinking(true);
+		try {
+			const response = await fetch("/api/external-projects/link-thumbnail", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					opencutProjectId: activeProject.metadata.id,
+					sourceSystem: "thumbnail_decoupled",
+					externalProjectId: externalProjectId.trim(),
+				}),
+			});
+			const json = (await response.json()) as
+				| {
+						error?: string;
+						opencutProjectId: string;
+						externalProjectId: string;
+				  }
+				| { error: string };
+			if (!response.ok || "error" in json) {
+				throw new Error(json.error || "Failed to link thumbnail project");
+			}
+
+			editor.project.setActiveProject({
+				project: {
+					...activeProject,
+					externalProjectLink: {
+						sourceSystem: "thumbnail_decoupled",
+						externalProjectId: externalProjectId.trim(),
+						opencutProjectId: activeProject.metadata.id,
+						linkedAt: new Date().toISOString(),
+					},
+				},
+			});
+			editor.save.markDirty();
+			await applyLinkedTranscript();
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? error.message
+					: "Failed to link thumbnail project",
+			);
+		} finally {
+			setIsLinking(false);
+		}
+	};
+
+	return (
+		<div className="flex flex-col gap-2">
+			<div className="flex items-center justify-between">
+				<Label>Linked Thumbnail Project</Label>
+				<Badge variant={isLinked ? "default" : "secondary"}>{linkedLabel}</Badge>
+			</div>
+			<Input
+				value={externalProjectId}
+				onChange={(event) => setExternalProjectId(event.target.value)}
+				placeholder="thumbnail project_id"
+			/>
+			<div className="flex items-center gap-2">
+				<Button size="sm" onClick={handleLink} disabled={isLinking || isApplying}>
+					{isLinking ? "Linking..." : "Link Project"}
+				</Button>
+				<Button
+					size="sm"
+					variant="secondary"
+					onClick={() => void applyLinkedTranscript()}
+					disabled={isApplying || !isLinked}
+				>
+					{isApplying ? "Applying..." : "Apply Transcript Now"}
+				</Button>
 			</div>
 		</div>
 	);

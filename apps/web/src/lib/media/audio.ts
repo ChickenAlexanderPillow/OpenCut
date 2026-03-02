@@ -260,8 +260,17 @@ async function resolveAudioBufferForVideoElement({
 
 		return await offlineContext.startRendering();
 	} catch (error) {
-		console.warn("Failed to decode video audio:", error);
-		return null;
+		console.warn("Failed to decode video audio with mediabunny, trying fallback:", error);
+		try {
+			const arrayBuffer = await readBlobArrayBufferWithFallback({
+				audioBlob: mediaAsset.file,
+				fallbackUrl: mediaAsset.url,
+			});
+			return await audioContext.decodeAudioData(arrayBuffer.slice(0));
+		} catch (fallbackError) {
+			console.warn("Video audio fallback decode failed:", fallbackError);
+			return null;
+		}
 	} finally {
 		input.dispose();
 	}

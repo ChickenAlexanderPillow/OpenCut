@@ -145,6 +145,10 @@ class StorageService {
 			version: project.version,
 			timelineViewState: project.timelineViewState,
 			transcriptionCache: project.transcriptionCache,
+			clipTranscriptCache: project.clipTranscriptCache,
+			clipGenerationCache: project.clipGenerationCache,
+			externalProjectLink: project.externalProjectLink,
+			externalTranscriptCache: project.externalTranscriptCache,
 		};
 
 		await this.projectsAdapter.set(project.metadata.id, serializedProject);
@@ -201,6 +205,10 @@ class StorageService {
 			version: serializedProject.version,
 			timelineViewState: serializedProject.timelineViewState,
 			transcriptionCache: serializedProject.transcriptionCache,
+			clipTranscriptCache: serializedProject.clipTranscriptCache,
+			clipGenerationCache: serializedProject.clipGenerationCache,
+			externalProjectLink: serializedProject.externalProjectLink,
+			externalTranscriptCache: serializedProject.externalTranscriptCache,
 		};
 
 		return { project };

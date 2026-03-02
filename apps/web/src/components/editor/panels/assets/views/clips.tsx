@@ -33,8 +33,8 @@ function CandidateCard({
 	onToggle,
 }: {
 	candidate: ClipCandidate;
-	mediaUrl: string;
-	mediaType: "video" | "audio";
+	mediaUrl: string | null;
+	mediaType: "video" | "audio" | null;
 	isSelected: boolean;
 	onToggle: () => void;
 }) {
@@ -76,7 +76,7 @@ function CandidateCard({
 					{candidate.scoreOverall}/100
 				</div>
 			</div>
-			{mediaType === "video" ? (
+			{mediaUrl && mediaType === "video" ? (
 				<video
 					ref={videoRef}
 					src={mediaUrl}
@@ -89,14 +89,8 @@ function CandidateCard({
 						video.currentTime = candidate.startTime;
 					}}
 					onTimeUpdate={handleVideoTimeUpdate}
-					onMouseEnter={() => {
-						const video = videoRef.current;
-						if (!video) return;
-						video.currentTime = candidate.startTime;
-						void video.play();
-					}}
 				/>
-			) : (
+			) : mediaUrl && mediaType === "audio" ? (
 				<audio
 					ref={audioRef}
 					src={mediaUrl}
@@ -109,6 +103,10 @@ function CandidateCard({
 					}}
 					onTimeUpdate={handleAudioTimeUpdate}
 				/>
+			) : (
+				<div className="text-xs text-muted-foreground rounded-sm border border-dashed p-2">
+					Preview unavailable until source media is loaded.
+				</div>
 			)}
 			<div className="flex flex-wrap gap-1 text-[11px]">
 				<span className="px-1.5 py-0.5 rounded-sm bg-muted">
@@ -145,8 +143,10 @@ export function Clips() {
 		selectedCandidateIds,
 		sourceMediaId: sessionSourceMediaId,
 		toggleCandidateSelection,
+		hydrate,
 		reset,
 	} = useClipGenerationStore();
+	const activeProject = editor.project.getActive();
 
 	const sourceOptions = useMemo(
 		() =>
@@ -183,7 +183,43 @@ export function Clips() {
 		}
 	}, [sessionSourceMediaId, sourceMediaId, sourceOptions]);
 
-	const sourceMedia = sourceOptions.find((asset) => asset.id === sourceMediaId) ?? null;
+	useEffect(() => {
+		if (candidates.length > 0) return;
+		if (status === "extracting" || status === "transcribing" || status === "scoring") {
+			return;
+		}
+		const cache = activeProject.clipGenerationCache ?? {};
+		const targetSourceMediaId =
+			(sourceMediaId && cache[sourceMediaId] ? sourceMediaId : null) ??
+			(sessionSourceMediaId && cache[sessionSourceMediaId] ? sessionSourceMediaId : null);
+		const fallbackEntry =
+			Object.values(cache).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ??
+			null;
+		const entry = (targetSourceMediaId ? cache[targetSourceMediaId] : null) ?? fallbackEntry;
+		if (!entry) return;
+
+		hydrate({
+			sourceMediaId: entry.sourceMediaId,
+			candidates: entry.candidates,
+			transcriptRef: entry.transcriptRef,
+			error: entry.error,
+		});
+		if (entry.sourceMediaId !== sourceMediaId) {
+			setSourceMediaId(entry.sourceMediaId);
+		}
+	}, [
+		activeProject.clipGenerationCache,
+		candidates.length,
+		hydrate,
+		sessionSourceMediaId,
+		sourceMediaId,
+		status,
+	]);
+
+	const sourceMedia =
+		sourceOptions.find((asset) => asset.id === sourceMediaId) ??
+		sourceOptions.find((asset) => asset.id === sessionSourceMediaId) ??
+		null;
 	const previewSource: { url: string; type: "video" | "audio" } | null =
 		sourceMedia &&
 		sourceMedia.url &&
@@ -255,28 +291,35 @@ export function Clips() {
 			</div>
 
 			{error && <div className="text-xs text-red-500">{error}</div>}
-
-			{candidates.length === 0 && (
-				<div className="text-xs text-muted-foreground">
-					Generate clips to see up to 5 ranked candidates.
+			{status === "error" && candidates.length === 0 && (
+				<div className="rounded-sm border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-200">
+					<div className="font-medium text-red-100">No clips were generated</div>
+					<div className="mt-1">{error ?? "No candidates passed the quality gate."}</div>
 				</div>
 			)}
 
-			{previewSource &&
-				candidates.map((candidate) => (
-					<CandidateCard
-						key={candidate.id}
-						candidate={candidate}
-						mediaUrl={previewSource.url}
-						mediaType={previewSource.type}
-						isSelected={selectedCandidateIds.includes(candidate.id)}
-						onToggle={() =>
-							toggleCandidateSelection({
-								candidateId: candidate.id,
-							})
-						}
-					/>
-				))}
+			{candidates.length === 0 && (
+				<div className="text-xs text-muted-foreground">
+					{status === "error"
+						? "Adjust source media or transcript quality and try Generate Clips again."
+						: "Generate clips to see up to 5 ranked candidates."}
+				</div>
+			)}
+
+			{candidates.map((candidate) => (
+				<CandidateCard
+					key={candidate.id}
+					candidate={candidate}
+					mediaUrl={previewSource?.url ?? null}
+					mediaType={previewSource?.type ?? null}
+					isSelected={selectedCandidateIds.includes(candidate.id)}
+					onToggle={() =>
+						toggleCandidateSelection({
+							candidateId: candidate.id,
+						})
+					}
+				/>
+			))}
 		</PanelView>
 	);
 }

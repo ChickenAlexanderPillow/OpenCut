@@ -11,7 +11,6 @@ import { Captions } from "./views/captions";
 import { Clips } from "./views/clips";
 import { MediaView } from "./views/assets";
 import { SettingsView } from "./views/settings";
-import { SoundsView } from "./views/sounds";
 import { StickersView } from "./views/stickers";
 import { TextView } from "./views/text";
 import { OverlayView } from "./views/overlay";
@@ -23,7 +22,6 @@ export function AssetsPanel() {
 	const viewMap: Record<Tab, React.ReactNode> = {
 		media: <MediaView />,
 		clips: <Clips />,
-		sounds: <SoundsView />,
 		text: <TextView />,
 		stickers: <StickersView />,
 		effects: (

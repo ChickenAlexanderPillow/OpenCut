@@ -10,6 +10,7 @@ export type TActionArgsMap = {
 	"jump-backward": { seconds: number } | undefined;
 	"generate-viral-clips": { sourceMediaId: string } | undefined;
 	"import-selected-viral-clips": { candidateIds: string[] } | undefined;
+	"clear-viral-clips-session": undefined;
 };
 
 type TKeysWithValueUndefined<T> = {
