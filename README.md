@@ -94,7 +94,19 @@ To run everything (including a production build of the app) in Docker:
 docker compose up -d
 ```
 
-The app will be available at [http://localhost:3100](http://localhost:3100).
+The app will be available at [http://localhost:3000](http://localhost:3000).
+
+For this repo, the full stack (web + local transcribe + db + redis) can be started with:
+
+```bash
+bun run docker:up
+```
+
+To stop it:
+
+```bash
+bun run docker:down
+```
 
 ## Contributing
 

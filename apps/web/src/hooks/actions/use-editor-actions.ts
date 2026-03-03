@@ -24,13 +24,17 @@ import { extractTimelineAudio } from "@/lib/media/mediabunny";
 import { createAudioContext, decodeAudioToFloat32 } from "@/lib/media/audio";
 import { transcriptionService } from "@/services/transcription/service";
 import type { TimelineTrack, TextElement } from "@/types/timeline";
-import type { TranscriptionSegment } from "@/types/transcription";
+import type {
+	TranscriptionModelId,
+	TranscriptionSegment,
+} from "@/types/transcription";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 import { useClipGenerationStore } from "@/stores/clip-generation-store";
 import { buildClipCandidatesFromTranscript } from "@/lib/clips/candidate-builder";
 import { selectTopCandidatesWithQualityGate } from "@/lib/clips/scoring";
 import {
+	buildClipTranscriptEntryFromLinkedExternalTranscript,
 	getOrCreateClipTranscriptForAsset,
 } from "@/lib/clips/transcript";
 import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
@@ -48,22 +52,23 @@ import { ALL_FORMATS, AudioBufferSink, BlobSource, Input } from "mediabunny";
 const MIN_VIRAL_CLIP_SCORE = 60;
 const MAX_VIRAL_CLIP_COUNT = 5;
 const CLIP_SCORING_TRANSCRIPT_MAX_CHARS = 20000;
-const CLIP_SCORING_TIMEOUT_MS = 60000;
+const CLIP_SCORING_TIMEOUT_MS = 120000;
+const CLIP_SCORING_BATCH_SIZE = 4;
+const CLIP_SCORING_MAX_CANDIDATES = 8;
 const CLIP_IMPORT_TRANSCRIPTION_MODEL = "large-v3";
 const CLIP_TRANSCRIPTION_TIMEOUT_MS = 60000;
 const CLIP_TRANSCRIPTION_MIN_DURATION_SECONDS = 0.35;
 const CLIP_TRANSCRIPTION_MAX_DURATION_SECONDS = 240;
 const CLIP_TRANSCRIPTION_MAX_FILE_BYTES = 20 * 1024 * 1024;
 const CLIP_WORD_TRANSCRIPTION_CACHE_VERSION = 6;
-const MIN_RENDERABLE_WORD_SECONDS = 1 / 30;
 const CAPTION_TAIL_PAD_SECONDS = 1 / 30;
-const MIN_PREFERRED_WORD_SECONDS = 3 / 30;
-const MIN_BORROW_REMAINING_WORD_SECONDS = 1.5 / 30;
-const MAX_BORROW_FRACTION = 0.35;
-const CAPTION_PAGE_WORD_COUNT = 3;
 const clipTranscriptionInFlight = new Map<
 	string,
 	Promise<TranscriptionSegment[] | null>
+>();
+const clipTranscriptInFlight = new Map<
+	string,
+	Promise<Awaited<ReturnType<typeof getOrCreateClipTranscriptForAsset>>>
 >();
 
 function withProjectClipGenerationCache({
@@ -151,15 +156,13 @@ function resolveClipScoringApiCandidates(): string[] {
 	const candidates: string[] = [];
 
 	if (typeof window !== "undefined") {
+		candidates.push("/api/clips/score");
 		const origin = window.location.origin;
 		if (origin.startsWith("http://") || origin.startsWith("https://")) {
 			candidates.push(`${origin}/api/clips/score`);
-			candidates.push("/api/clips/score");
-		} else {
-			candidates.push("/api/clips/score");
-			if (fallbackBase) {
-				candidates.push(`${fallbackBase.replace(/\/$/, "")}/api/clips/score`);
-			}
+		}
+		if (fallbackBase) {
+			candidates.push(`${fallbackBase.replace(/\/$/, "")}/api/clips/score`);
 		}
 	} else {
 		candidates.push("/api/clips/score");
@@ -196,6 +199,26 @@ function resolveClipTranscriptionApiCandidates(): string[] {
 	return Array.from(new Set(candidates));
 }
 
+type ClipScoringResponse = {
+	candidates?: Array<{
+		id: string;
+		startTime: number;
+		endTime: number;
+		duration: number;
+		title: string;
+		rationale: string;
+		transcriptSnippet: string;
+		scoreOverall: number;
+		scoreBreakdown: {
+			hook: number;
+			emotion: number;
+			shareability: number;
+			clarity: number;
+			momentum: number;
+		};
+	}>;
+};
+
 async function fetchScoredCandidates({
 	transcript,
 	candidates,
@@ -209,9 +232,10 @@ async function fetchScoredCandidates({
 		transcriptSnippet: string;
 		localScore: number;
 	}>;
-}): Promise<Response> {
+}): Promise<ClipScoringResponse> {
 	const endpoints = resolveClipScoringApiCandidates();
 	let lastNetworkError: Error | null = null;
+	let lastHttpError: Error | null = null;
 
 	for (const endpoint of endpoints) {
 		const controller = new AbortController();
@@ -232,15 +256,127 @@ async function fetchScoredCandidates({
 				signal: controller.signal,
 			});
 			window.clearTimeout(timeoutId);
-			return response;
+			if (!response.ok) {
+				const errorText = await response.text();
+				const err = new Error(
+					`Clip scoring failed via ${endpoint} (${response.status}): ${errorText || "Unknown error"}`,
+				);
+				lastHttpError = err;
+				// Retry alternate endpoint when infra/proxy endpoint is unhealthy.
+				if (response.status >= 500 || response.status === 404) {
+					continue;
+				}
+				throw err;
+			}
+			return ((await response.json()) as ClipScoringResponse) ?? {};
 		} catch (error) {
 			window.clearTimeout(timeoutId);
 			lastNetworkError =
-				error instanceof Error ? error : new Error("Failed to reach clip scoring API");
+				error instanceof Error
+					? error
+					: new Error(`Failed to reach clip scoring API via ${endpoint}`);
 		}
 	}
 
-	throw lastNetworkError ?? new Error("Failed to reach clip scoring API");
+	throw (
+		lastHttpError ??
+		lastNetworkError ??
+		new Error(
+			`Failed to reach clip scoring API (${endpoints.join(", ")})`,
+		)
+	);
+}
+
+function takeTopLocalCandidatesForScoring({
+	candidateDrafts,
+	maxCount = CLIP_SCORING_MAX_CANDIDATES,
+}: {
+	candidateDrafts: Array<{
+		id: string;
+		startTime: number;
+		endTime: number;
+		duration: number;
+		transcriptSnippet: string;
+		localScore: number;
+	}>;
+	maxCount?: number;
+}) {
+	return candidateDrafts
+		.slice()
+		.sort((a, b) => {
+			if (b.localScore !== a.localScore) return b.localScore - a.localScore;
+			return a.startTime - b.startTime;
+		})
+		.slice(0, maxCount);
+}
+
+async function scoreCandidatesProgressively({
+	transcript,
+	candidateDrafts,
+	onBatchScored,
+}: {
+	transcript: string;
+	candidateDrafts: Array<{
+		id: string;
+		startTime: number;
+		endTime: number;
+		duration: number;
+		transcriptSnippet: string;
+		localScore: number;
+	}>;
+	onBatchScored?: (params: {
+		scoredSoFar: NonNullable<ClipScoringResponse["candidates"]>;
+		latestBatch: NonNullable<ClipScoringResponse["candidates"]>;
+	}) => void;
+}) {
+	const batches: typeof candidateDrafts[] = [];
+	for (let i = 0; i < candidateDrafts.length; i += CLIP_SCORING_BATCH_SIZE) {
+		batches.push(candidateDrafts.slice(i, i + CLIP_SCORING_BATCH_SIZE));
+	}
+	const scoredSoFar: NonNullable<ClipScoringResponse["candidates"]> = [];
+	for (const batch of batches) {
+		const response = await fetchScoredCandidates({
+			transcript,
+			candidates: batch,
+		});
+		const batchCandidates = response.candidates ?? [];
+		scoredSoFar.push(...batchCandidates);
+		onBatchScored?.({
+			scoredSoFar: [...scoredSoFar],
+			latestBatch: batchCandidates,
+		});
+	}
+	return scoredSoFar;
+}
+
+async function getOrCreateClipTranscriptWithReuse({
+	project,
+	asset,
+	modelId,
+	onProgress,
+}: {
+	project: TProject;
+	asset: MediaAsset;
+	modelId: TranscriptionModelId;
+	onProgress?: Parameters<typeof getOrCreateClipTranscriptForAsset>[0]["onProgress"];
+}) {
+	const inFlightKey = `${project.metadata.id}:${asset.id}:${modelId}`;
+	const existing = clipTranscriptInFlight.get(inFlightKey);
+	if (existing) {
+		return await existing;
+	}
+	const task = getOrCreateClipTranscriptForAsset({
+		project,
+		asset,
+		modelId,
+		onProgress,
+	});
+	clipTranscriptInFlight.set(inFlightKey, task);
+	try {
+		return await task;
+	} finally {
+		clipTranscriptInFlight.delete(inFlightKey);
+	}
 }
 
 function buildClipElement({
@@ -314,10 +450,8 @@ function buildClipElement({
 
 function buildContinuousCaptionForClip({
 	segments,
-	redistributeTiming = true,
 }: {
 	segments: Array<{ text: string; start: number; end: number }>;
-	redistributeTiming?: boolean;
 }): {
 	content: string;
 	startTime: number;
@@ -386,19 +520,12 @@ function buildContinuousCaptionForClip({
 		endTime: number;
 	}> = [];
 	for (let i = 0; i < rawWordTimings.length; i++) {
-		const previous = normalizedWordTimings[normalizedWordTimings.length - 1];
 		const nextStart = Math.max(0, rawWordTimings[i].startTime);
-		const stableStart = previous
-			? Math.max(nextStart, previous.startTime + MIN_RENDERABLE_WORD_SECONDS)
-			: nextStart;
-		const nextEnd = Math.max(
-			nextStart + MIN_RENDERABLE_WORD_SECONDS,
-			rawWordTimings[i].endTime,
-		);
+		const nextEnd = Math.max(nextStart + 0.01, rawWordTimings[i].endTime);
 		const normalized = {
 			word: rawWordTimings[i].word.trim(),
-			startTime: stableStart,
-			endTime: Math.max(stableStart + MIN_RENDERABLE_WORD_SECONDS, nextEnd),
+			startTime: nextStart,
+			endTime: nextEnd,
 		};
 		if (!normalized.word) continue;
 		normalizedWordTimings.push(normalized);
@@ -410,112 +537,6 @@ function buildContinuousCaptionForClip({
 			sourceWordCount,
 			normalizedWordCount: normalizedWordTimings.length,
 		});
-	}
-
-	// Redistribute timing so very short words get readable highlight time.
-	// Exception: when next word starts a new on-screen page, keep page transition timing.
-	if (redistributeTiming && normalizedWordTimings.length >= 2) {
-		for (let index = 0; index < normalizedWordTimings.length - 1; index++) {
-			const current = normalizedWordTimings[index];
-			const next = normalizedWordTimings[index + 1];
-			const nextStartsNewPage = (index + 1) % CAPTION_PAGE_WORD_COUNT === 0;
-			if (nextStartsNewPage) {
-				continue;
-			}
-
-			const currentVisibleSeconds = Math.max(
-				0,
-				next.startTime - current.startTime,
-			);
-			if (currentVisibleSeconds >= MIN_PREFERRED_WORD_SECONDS) {
-				continue;
-			}
-
-			const neededSeconds = MIN_PREFERRED_WORD_SECONDS - currentVisibleSeconds;
-			const nextRemainingSeconds = Math.max(0, next.endTime - next.startTime);
-			let transferableSeconds = Math.max(
-				0,
-				nextRemainingSeconds - MIN_BORROW_REMAINING_WORD_SECONDS,
-			);
-			transferableSeconds = Math.min(
-				transferableSeconds,
-				nextRemainingSeconds * MAX_BORROW_FRACTION,
-			);
-
-			if (index + 2 < normalizedWordTimings.length) {
-				const following = normalizedWordTimings[index + 2];
-				const latestNextStart = Math.max(
-					next.startTime,
-					following.startTime - MIN_RENDERABLE_WORD_SECONDS,
-				);
-				transferableSeconds = Math.min(
-					transferableSeconds,
-					latestNextStart - next.startTime,
-				);
-			}
-
-			const shiftSeconds = Math.max(
-				0,
-				Math.min(neededSeconds, transferableSeconds),
-			);
-			if (shiftSeconds <= 0) {
-				continue;
-			}
-
-			next.startTime += shiftSeconds;
-			current.endTime = Math.max(current.endTime, next.startTime);
-			next.endTime = Math.max(
-				next.endTime,
-				next.startTime + MIN_BORROW_REMAINING_WORD_SECONDS,
-			);
-		}
-
-		// Backward pass: allow last word on a page to borrow from previous word.
-		for (let index = 1; index < normalizedWordTimings.length; index++) {
-			const isLastWordOnPage = (index + 1) % CAPTION_PAGE_WORD_COUNT === 0;
-			if (!isLastWordOnPage) continue;
-
-			const current = normalizedWordTimings[index];
-			const previous = normalizedWordTimings[index - 1];
-			const next = normalizedWordTimings[index + 1] ?? null;
-			const currentVisibleSeconds = next
-				? Math.max(0, next.startTime - current.startTime)
-				: Math.max(0, current.endTime - current.startTime);
-
-			if (currentVisibleSeconds >= MIN_PREFERRED_WORD_SECONDS) continue;
-
-			const neededSeconds = MIN_PREFERRED_WORD_SECONDS - currentVisibleSeconds;
-			const previousVisibleSeconds = Math.max(
-				0,
-				current.startTime - previous.startTime,
-			);
-			const transferableSeconds = Math.max(
-				0,
-				previousVisibleSeconds - MIN_BORROW_REMAINING_WORD_SECONDS,
-			);
-			const boundedTransferableSeconds = Math.min(
-				transferableSeconds,
-				previousVisibleSeconds * MAX_BORROW_FRACTION,
-			);
-			const shiftSeconds = Math.max(
-				0,
-				Math.min(neededSeconds, boundedTransferableSeconds),
-			);
-			if (shiftSeconds <= 0) continue;
-
-			current.startTime = Math.max(
-				previous.startTime + MIN_BORROW_REMAINING_WORD_SECONDS,
-				current.startTime - shiftSeconds,
-			);
-			previous.endTime = Math.max(
-				previous.endTime,
-				previous.startTime + MIN_BORROW_REMAINING_WORD_SECONDS,
-			);
-			current.endTime = Math.max(
-				current.endTime,
-				current.startTime + MIN_RENDERABLE_WORD_SECONDS,
-			);
-		}
 	}
 
 	const content = normalizedWordTimings.map((timing) => timing.word).join(" ").trim();
@@ -1066,8 +1087,13 @@ export function useEditorActions() {
 	const { registerProcess, updateProcessLabel, removeProcess } =
 		useProjectProcessStore();
 	const { selectedElements, setElementSelection } = useElementSelection();
-	const { clipboard, setClipboard, toggleSnapping, rippleEditingEnabled } =
-		useTimelineStore();
+	const {
+		clipboard,
+		setClipboard,
+		toggleSnapping,
+		rippleEditingEnabled,
+		requestFitView,
+	} = useTimelineStore();
 	const { setStatus, setError, setCandidates, reset } = useClipGenerationStore();
 
 	async function resolveVideoCoverScale({
@@ -1529,11 +1555,12 @@ export function useEditorActions() {
 				let hasTranscriptionProgress = false;
 
 				try {
-					const linkedProject = currentProject.externalProjectLink;
-					if (linkedProject) {
-						const linkedKey = `${linkedProject.sourceSystem}:${linkedProject.externalProjectId}`;
-						const hasLinkedTranscript =
-							Boolean(currentProject.externalTranscriptCache?.[linkedKey]);
+					const mediaLinkedProject = currentProject.externalMediaLinks?.[mediaAsset.id];
+					if (mediaLinkedProject) {
+						const linkedKey = `${mediaLinkedProject.sourceSystem}:${mediaLinkedProject.externalProjectId}`;
+						const hasLinkedTranscript = Boolean(
+							currentProject.externalTranscriptCache?.[linkedKey],
+						);
 						if (!hasLinkedTranscript) {
 							try {
 								const response = await fetch(
@@ -1541,7 +1568,10 @@ export function useEditorActions() {
 									{
 										method: "POST",
 										headers: { "Content-Type": "application/json" },
-										body: JSON.stringify({}),
+										body: JSON.stringify({
+											sourceSystem: mediaLinkedProject.sourceSystem,
+											externalProjectId: mediaLinkedProject.externalProjectId,
+										}),
 									},
 								);
 								if (response.ok) {
@@ -1555,11 +1585,12 @@ export function useEditorActions() {
 										qualityMeta?: Record<string, unknown>;
 										updatedAt: string;
 									};
+									const latestProject = editor.project.getActive();
 									editor.project.setActiveProject({
 										project: {
-											...currentProject,
+											...latestProject,
 											externalTranscriptCache: {
-												...(currentProject.externalTranscriptCache ?? {}),
+												...(latestProject.externalTranscriptCache ?? {}),
 												[`${json.sourceSystem}:${json.externalProjectId}`]: {
 													sourceSystem: json.sourceSystem,
 													externalProjectId: json.externalProjectId,
@@ -1577,10 +1608,23 @@ export function useEditorActions() {
 								}
 							} catch (error) {
 								console.warn(
-									"Unable to hydrate linked external transcript cache before clip generation:",
+									"Unable to hydrate media-linked external transcript before clip generation:",
 									error,
 								);
 							}
+						}
+
+						// If this media is explicitly linked, do not fall back to local transcription.
+						// Fail fast when transcript cannot be resolved so linkage issues are visible.
+						const latestProject = editor.project.getActive();
+						const hasResolvedLinkedTranscript = Boolean(
+							latestProject.externalTranscriptCache?.[linkedKey]?.transcriptText?.trim() &&
+								(latestProject.externalTranscriptCache?.[linkedKey]?.segments?.length ?? 0) > 0,
+						);
+						if (!hasResolvedLinkedTranscript) {
+							throw new Error(
+								`Linked transcript not found for media ${mediaAsset.name} (${mediaLinkedProject.externalProjectId}). Skipping fallback transcription.`,
+							);
 						}
 					}
 
@@ -1609,32 +1653,77 @@ export function useEditorActions() {
 						}
 					}, 900);
 					const projectForTranscript = editor.project.getActive();
-
-					const transcriptResult = await getOrCreateClipTranscriptForAsset({
-						project: projectForTranscript,
-						asset: mediaAsset,
-						modelId: "whisper-tiny",
-						onProgress: (progress) => {
-							hasTranscriptionProgress = true;
-							setStatus({
-								status: "transcribing",
-								sourceMediaId: mediaAsset.id,
-							});
-							transcriptionStatus.update({
-								operationId: transcriptionOperationId,
-								message: progress.message ?? "Transcribing source media...",
-								progress: progress.progress,
-							});
-							if (projectProcessId) {
-								updateProcessLabel({
-									id: projectProcessId,
-									label:
-										progress.message ??
-										`Transcription ${Math.round(progress.progress)}%`,
+					const mediaLinkedProjectResolved =
+						projectForTranscript.externalMediaLinks?.[mediaAsset.id];
+					let transcriptResult:
+						| Awaited<ReturnType<typeof getOrCreateClipTranscriptWithReuse>>
+						| null = null;
+					if (mediaLinkedProjectResolved) {
+						const linkedKey = `${mediaLinkedProjectResolved.sourceSystem}:${mediaLinkedProjectResolved.externalProjectId}`;
+						const linkedTranscript =
+							projectForTranscript.externalTranscriptCache?.[linkedKey];
+						if (!linkedTranscript) {
+							throw new Error(
+								`Linked transcript missing in cache for media ${mediaAsset.name} (${mediaLinkedProjectResolved.externalProjectId}).`,
+							);
+						}
+						const derived = buildClipTranscriptEntryFromLinkedExternalTranscript({
+							asset: mediaAsset,
+							modelId: "whisper-tiny",
+							language: "auto",
+							externalTranscript: linkedTranscript,
+							requireSuitability: false,
+						});
+						if (!derived) {
+							throw new Error(
+								`Linked transcript is empty/invalid for media ${mediaAsset.name} (${mediaLinkedProjectResolved.externalProjectId}).`,
+							);
+						}
+						transcriptResult = {
+							transcript: derived.transcript,
+							cacheKey: derived.cacheKey,
+							transcriptRef: {
+								cacheKey: derived.cacheKey,
+								modelId: "whisper-tiny",
+								language: "auto",
+								updatedAt: derived.transcript.updatedAt,
+							},
+							fromCache: true,
+							source: "media-linked",
+						};
+					} else {
+						transcriptResult = await getOrCreateClipTranscriptWithReuse({
+							project: projectForTranscript,
+							asset: mediaAsset,
+							modelId: "whisper-tiny",
+							onProgress: (progress) => {
+								hasTranscriptionProgress = true;
+								setStatus({
+									status: "transcribing",
+									sourceMediaId: mediaAsset.id,
 								});
-							}
-						},
-					});
+								transcriptionStatus.update({
+									operationId: transcriptionOperationId,
+									message: progress.message ?? "Transcribing source media...",
+									progress: progress.progress,
+								});
+								if (projectProcessId) {
+									updateProcessLabel({
+										id: projectProcessId,
+										label:
+											progress.message ??
+											`Transcription ${Math.round(progress.progress)}%`,
+									});
+								}
+							},
+						});
+					}
+
+					if (mediaLinkedProjectResolved && transcriptResult.source !== "media-linked") {
+						throw new Error(
+							`Linked media transcript was not selected for ${mediaAsset.name}. Source resolved: ${transcriptResult.source}`,
+						);
+					}
 
 					if (!transcriptResult.fromCache) {
 						const nextProject = {
@@ -1648,22 +1737,51 @@ export function useEditorActions() {
 						editor.save.markDirty();
 					}
 
-					const mediaDuration =
-						mediaAsset.duration ??
-						transcriptResult.transcript.segments[
-							transcriptResult.transcript.segments.length - 1
-						]?.end ??
-						0;
-					const candidateDrafts = buildClipCandidatesFromTranscript({
-						segments: transcriptResult.transcript.segments,
-						mediaDuration,
-					});
+					if (transcriptResult.fromCache) {
+						hasTranscriptionProgress = true;
+						transcriptionStatus.update({
+							operationId: transcriptionOperationId,
+							message:
+								transcriptResult.source === "media-linked"
+									? "Using linked transcript for this media"
+									: "Using cached transcript",
+							progress: 100,
+						});
+						if (transcriptResult.source === "media-linked") {
+							toast.success("Linked transcript found and being used");
+						}
+					}
+
+					const [mediaDuration, candidateDrafts] = await Promise.all([
+						Promise.resolve(
+							mediaAsset.duration ??
+								transcriptResult.transcript.segments[
+									transcriptResult.transcript.segments.length - 1
+								]?.end ??
+								0,
+						),
+						Promise.resolve(
+							buildClipCandidatesFromTranscript({
+								segments: transcriptResult.transcript.segments,
+								mediaDuration:
+									mediaAsset.duration ??
+									transcriptResult.transcript.segments[
+										transcriptResult.transcript.segments.length - 1
+									]?.end ??
+									0,
+							}),
+						),
+					]);
 
 					if (candidateDrafts.length === 0) {
 						setError({ error: "No candidate windows found for this transcript" });
 						toast.error("Could not derive clip candidates from transcript");
 						return;
 					}
+
+					const scoringPool = takeTopLocalCandidatesForScoring({
+						candidateDrafts,
+					});
 
 					setStatus({
 						status: "scoring",
@@ -1672,40 +1790,76 @@ export function useEditorActions() {
 					if (projectProcessId) {
 						updateProcessLabel({
 							id: projectProcessId,
-							label: "Scoring clip virality...",
+							label: `Scoring clip virality (0/${scoringPool.length})...`,
 						});
 					}
 
-					const scoringResponse = await fetchScoredCandidates({
+					let scoredCountSoFar = 0;
+					const progressiveSelected: NonNullable<ClipScoringResponse["candidates"]> = [];
+					const progressiveSelectedIds = new Set<string>();
+					const scoredCandidates = await scoreCandidatesProgressively({
 						transcript: transcriptResult.transcript.text,
-						candidates: candidateDrafts,
+						candidateDrafts: scoringPool,
+						onBatchScored: ({ scoredSoFar, latestBatch }) => {
+							scoredCountSoFar = scoredSoFar.length;
+							if (projectProcessId) {
+								updateProcessLabel({
+									id: projectProcessId,
+									label: `Scoring clip virality (${scoredCountSoFar}/${scoringPool.length})...`,
+								});
+							}
+							let batchSelected = selectTopCandidatesWithQualityGate({
+								candidates: latestBatch,
+								minScore: MIN_VIRAL_CLIP_SCORE,
+								maxOverlapRatio: 0,
+								maxCount: MAX_VIRAL_CLIP_COUNT,
+							});
+							if (batchSelected.length === 0 && latestBatch.length > 0) {
+								const topScore = Math.max(
+									0,
+									Math.min(
+										100,
+										Math.round(
+											Math.max(
+												...latestBatch.map((candidate) => candidate.scoreOverall),
+											),
+										),
+									),
+								);
+								const relaxedMinScore = Math.max(35, Math.min(59, topScore - 8));
+								batchSelected = selectTopCandidatesWithQualityGate({
+									candidates: latestBatch,
+									minScore: relaxedMinScore,
+									maxOverlapRatio: 0,
+									maxCount: MAX_VIRAL_CLIP_COUNT,
+								});
+							}
+							for (const candidate of batchSelected) {
+								if (progressiveSelectedIds.has(candidate.id)) continue;
+								if (progressiveSelected.length >= MAX_VIRAL_CLIP_COUNT) break;
+								progressiveSelected.push(candidate);
+								progressiveSelectedIds.add(candidate.id);
+							}
+							if (progressiveSelected.length > 0) {
+								setCandidates({
+									sourceMediaId: mediaAsset.id,
+									candidates: [...progressiveSelected],
+									transcriptRef: transcriptResult.transcriptRef,
+									status: "scoring",
+								});
+								editor.project.setActiveProject({
+									project: withProjectClipGenerationCache({
+										project: editor.project.getActive(),
+										sourceMediaId: mediaAsset.id,
+										candidates: [...progressiveSelected],
+										transcriptRef: transcriptResult.transcriptRef,
+										error: null,
+									}),
+								});
+								editor.save.markDirty();
+							}
+						},
 					});
-
-					if (!scoringResponse.ok) {
-						const errorText = await scoringResponse.text();
-						throw new Error(errorText || "Clip scoring failed");
-					}
-
-					const scoringJson = (await scoringResponse.json()) as {
-						candidates?: Array<{
-							id: string;
-							startTime: number;
-							endTime: number;
-							duration: number;
-							title: string;
-							rationale: string;
-							transcriptSnippet: string;
-							scoreOverall: number;
-							scoreBreakdown: {
-								hook: number;
-								emotion: number;
-								shareability: number;
-								clarity: number;
-								momentum: number;
-							};
-						}>;
-					};
-					const scoredCandidates = scoringJson.candidates ?? [];
 					let selectedCandidates = selectTopCandidatesWithQualityGate({
 						candidates: scoredCandidates,
 						minScore: MIN_VIRAL_CLIP_SCORE,
@@ -1734,6 +1888,21 @@ export function useEditorActions() {
 						relaxedQualityGateUsed = selectedCandidates.length > 0;
 					}
 
+					// Do not replace clips already drip-fed; only append unseen finalists.
+					if (progressiveSelected.length > 0) {
+						const finalMerged = [...progressiveSelected];
+						const finalIds = new Set(finalMerged.map((candidate) => candidate.id));
+						for (const candidate of selectedCandidates) {
+							if (finalMerged.length >= MAX_VIRAL_CLIP_COUNT) break;
+							if (finalIds.has(candidate.id)) continue;
+							finalMerged.push(candidate);
+							finalIds.add(candidate.id);
+						}
+						if (finalMerged.length > 0) {
+							selectedCandidates = finalMerged;
+						}
+					}
+
 					if (selectedCandidates.length === 0) {
 						setError({
 							error:
@@ -1758,6 +1927,7 @@ export function useEditorActions() {
 						sourceMediaId: mediaAsset.id,
 						candidates: selectedCandidates,
 						transcriptRef: transcriptResult.transcriptRef,
+						status: "ready",
 					});
 					const projectWithCache = withProjectClipGenerationCache({
 						project: editor.project.getActive(),
@@ -1962,24 +2132,11 @@ export function useEditorActions() {
 								clipAudioBuffer,
 								continuousCaption: (() => {
 									if (clippedSegments.length === 0) return null;
-									let caption = buildContinuousCaptionForClip({
+									const caption = buildContinuousCaptionForClip({
 										segments: clippedSegments,
-										redistributeTiming: true,
 									});
 									if (!caption) return null;
 									if (
-										!hasExactWordSequenceMatch({
-											segments: clippedSegments,
-											caption,
-										})
-									) {
-										caption = buildContinuousCaptionForClip({
-											segments: clippedSegments,
-											redistributeTiming: false,
-										});
-									}
-									if (
-										!caption ||
 										!hasExactWordSequenceMatch({
 											segments: clippedSegments,
 											caption,
@@ -2157,6 +2314,7 @@ export function useEditorActions() {
 					if (createdSceneIds[0]) {
 						await editor.scenes.switchToScene({ sceneId: createdSceneIds[0] });
 						await editor.audio.primeCurrentTimelineAudio();
+						requestFitView();
 					}
 					const normalizedProject = normalizeGeneratedCaptionsInProject({
 						project: editor.project.getActive(),
@@ -2228,6 +2386,36 @@ export function useEditorActions() {
 				})),
 			);
 			setElementSelection({ elements: allElements });
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"select-all-captions",
+		() => {
+			const captionElements = editor
+				.timeline
+				.getTracks()
+				.filter((track) => track.type === "text")
+				.flatMap((track) =>
+					track.elements
+						.filter(
+							(element) =>
+								element.type === "text" &&
+								element.name.startsWith("Caption ") &&
+								element.captionStyle?.linkedToCaptionGroup !== false,
+						)
+						.map((element) => ({
+							trackId: track.id,
+							elementId: element.id,
+						})),
+				);
+			if (captionElements.length === 0) {
+				toast.error("No captions found");
+				return;
+			}
+			setElementSelection({ elements: captionElements });
+			toast.success(`Selected ${captionElements.length} caption(s)`);
 		},
 		undefined,
 	);

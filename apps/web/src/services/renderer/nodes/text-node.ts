@@ -158,6 +158,31 @@ function buildLinesFromWords({
 	return lines;
 }
 
+function isSentenceEndingWord(word: string): boolean {
+	const trimmed = word.trim();
+	if (!trimmed) return false;
+	return /[.!?]["')\]]*$/.test(trimmed);
+}
+
+function resolveSentenceBoundedPageSize({
+	words,
+	start,
+	maxPageSize,
+}: {
+	words: string[];
+	start: number;
+	maxPageSize: number;
+}): number {
+	if (maxPageSize <= 1) return Math.max(1, maxPageSize);
+	const endExclusive = Math.min(words.length, start + maxPageSize);
+	for (let i = start; i < endExclusive; i++) {
+		if (isSentenceEndingWord(words[i] ?? "")) {
+			return Math.max(1, i - start + 1);
+		}
+	}
+	return maxPageSize;
+}
+
 export type TextNodeParams = TextElement & {
 	canvasCenter: { x: number; y: number };
 	canvasWidth: number;
@@ -347,10 +372,15 @@ export class TextNode extends BaseNode<TextNodeParams> {
 
 			let pageStart = 0;
 			while (pageStart < captionWords.length) {
-				const maxPageSize = Math.min(
+				const unsnappedMaxPageSize = Math.min(
 					cappedWordsOnScreen,
 					captionWords.length - pageStart,
 				);
+				const maxPageSize = resolveSentenceBoundedPageSize({
+					words: captionWords,
+					start: pageStart,
+					maxPageSize: unsnappedMaxPageSize,
+				});
 				const pageSize = getFitPageSize({
 					start: pageStart,
 					maxWords: maxPageSize,
@@ -369,10 +399,14 @@ export class TextNode extends BaseNode<TextNodeParams> {
 				chunkStart: fallbackStart,
 				pageSize: getFitPageSize({
 					start: fallbackStart,
-					maxWords: Math.min(
+					maxWords: resolveSentenceBoundedPageSize({
+						words: captionWords,
+						start: fallbackStart,
+						maxPageSize: Math.min(
 						cappedWordsOnScreen,
 						captionWords.length - fallbackStart,
 					),
+					}),
 				}),
 			};
 		};

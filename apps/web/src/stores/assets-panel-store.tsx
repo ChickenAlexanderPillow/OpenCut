@@ -2,7 +2,6 @@ import type { ElementType } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import {
-	ArrowRightDoubleIcon,
 	ClosedCaptionIcon,
 	Folder03Icon,
 	Happy01Icon,
@@ -11,8 +10,6 @@ import {
 	MagicWand05Icon,
 	TextIcon,
 	Settings01Icon,
-	SlidersHorizontalIcon,
-	ColorsIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
 
@@ -22,10 +19,7 @@ export const TAB_KEYS = [
 	"text",
 	"stickers",
 	"effects",
-	"transitions",
 	"captions",
-	"filters",
-	"adjustment",
 	"overlay",
 	"settings",
 ] as const;
@@ -59,21 +53,9 @@ export const tabs = {
 		icon: createHugeiconsIcon({ icon: MagicWand05Icon }),
 		label: "Effects",
 	},
-	transitions: {
-		icon: createHugeiconsIcon({ icon: ArrowRightDoubleIcon }),
-		label: "Transitions",
-	},
 	captions: {
 		icon: createHugeiconsIcon({ icon: ClosedCaptionIcon }),
 		label: "Captions",
-	},
-	filters: {
-		icon: createHugeiconsIcon({ icon: ColorsIcon }),
-		label: "Filters",
-	},
-	adjustment: {
-		icon: createHugeiconsIcon({ icon: SlidersHorizontalIcon }),
-		label: "Adjustment",
 	},
 	overlay: {
 		icon: createHugeiconsIcon({ icon: Image02Icon }),

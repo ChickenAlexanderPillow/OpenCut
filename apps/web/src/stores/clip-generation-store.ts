@@ -29,10 +29,12 @@ interface ClipGenerationStore extends ClipGenerationSession {
 		sourceMediaId,
 		candidates,
 		transcriptRef,
+		status,
 	}: {
 		sourceMediaId: string;
 		candidates: ClipCandidate[];
 		transcriptRef: ClipTranscriptRef;
+		status?: ClipGenerationStatus;
 	}) => void;
 	toggleCandidateSelection: ({ candidateId }: { candidateId: string }) => void;
 	setSelectedCandidateIds: ({ candidateIds }: { candidateIds: string[] }) => void;
@@ -75,10 +77,10 @@ export const useClipGenerationStore = create<ClipGenerationStore>()(
 					status: "error",
 					error,
 				})),
-			setCandidates: ({ sourceMediaId, candidates, transcriptRef }) =>
+			setCandidates: ({ sourceMediaId, candidates, transcriptRef, status }) =>
 				set(() => ({
 					sourceMediaId,
-					status: "ready",
+					status: status ?? "ready",
 					error: null,
 					candidates,
 					selectedCandidateIds: [],

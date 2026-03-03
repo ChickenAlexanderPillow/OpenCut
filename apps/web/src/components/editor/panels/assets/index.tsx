@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { Separator } from "@/components/ui/separator";
 import {
 	TAB_KEYS,
@@ -17,7 +18,14 @@ import { OverlayView } from "./views/overlay";
 import { cn } from "@/utils/ui";
 
 export function AssetsPanel() {
-	const { activeTab } = useAssetsPanelStore();
+	const { activeTab, setActiveTab } = useAssetsPanelStore();
+	const resolvedActiveTab = TAB_KEYS.includes(activeTab) ? activeTab : "media";
+
+	useEffect(() => {
+		if (activeTab !== resolvedActiveTab) {
+			setActiveTab(resolvedActiveTab);
+		}
+	}, [activeTab, resolvedActiveTab, setActiveTab]);
 
 	const viewMap: Record<Tab, React.ReactNode> = {
 		media: <MediaView />,
@@ -29,22 +37,7 @@ export function AssetsPanel() {
 				Effects view coming soon...
 			</div>
 		),
-		transitions: (
-			<div className="text-muted-foreground p-4">
-				Transitions view coming soon...
-			</div>
-		),
 		captions: <Captions />,
-		filters: (
-			<div className="text-muted-foreground p-4">
-				Filters view coming soon...
-			</div>
-		),
-		adjustment: (
-			<div className="text-muted-foreground p-4">
-				Adjustment view coming soon...
-			</div>
-		),
 		overlay: <OverlayView />,
 		settings: <SettingsView />,
 	};
@@ -59,7 +52,7 @@ export function AssetsPanel() {
 						key={tab}
 						className={cn(
 							"absolute inset-0",
-							activeTab === tab ? "block" : "hidden",
+							resolvedActiveTab === tab ? "block" : "hidden",
 						)}
 					>
 						{viewMap[tab]}

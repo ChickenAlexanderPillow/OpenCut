@@ -14,10 +14,48 @@ describe("buildClipCandidatesFromTranscript", () => {
 
 		expect(candidates.length).toBeGreaterThan(0);
 		for (const candidate of candidates) {
-			expect(candidate.duration).toBeGreaterThanOrEqual(30);
-			expect(candidate.duration).toBeLessThanOrEqual(90);
+			expect(candidate.duration).toBeGreaterThanOrEqual(20);
+			expect(candidate.duration).toBeLessThanOrEqual(60);
 			expect(candidate.startTime).toBeGreaterThanOrEqual(0);
 			expect(candidate.endTime).toBeLessThanOrEqual(200);
+		}
+	});
+
+	test("cuts before a second question in the same candidate window", () => {
+		const candidates = buildClipCandidatesFromTranscript({
+			mediaDuration: 180,
+			segments: [
+				{ text: "What is your strategy for growth?", start: 10, end: 16 },
+				{ text: "We focus on retention and long term value.", start: 16, end: 28 },
+				{ text: "Can you share a specific example?", start: 28, end: 34 },
+				{ text: "Yes, we launched an onboarding experiment.", start: 34, end: 44 },
+			],
+		});
+
+		expect(candidates.length).toBeGreaterThan(0);
+		for (const candidate of candidates) {
+			const snippetQuestions = (candidate.transcriptSnippet.match(/\?/g) ?? []).length;
+			expect(snippetQuestions).toBeLessThanOrEqual(1);
+		}
+	});
+
+	test("cuts trailing unanswered follow-up question from candidate windows", () => {
+		const candidates = buildClipCandidatesFromTranscript({
+			mediaDuration: 180,
+			minClipSeconds: 20,
+			targetClipSeconds: 35,
+			maxClipSeconds: 60,
+			segments: [
+				{ text: "How are you approaching this year?", start: 10, end: 15 },
+				{ text: "We are focused on distribution and retention.", start: 15, end: 27 },
+				{ text: "Can you comment on next quarter guidance?", start: 27, end: 33 },
+			],
+		});
+
+		expect(candidates.length).toBeGreaterThan(0);
+		for (const candidate of candidates) {
+			const snippet = candidate.transcriptSnippet.toLowerCase();
+			expect(snippet).not.toContain("next quarter guidance");
 		}
 	});
 
@@ -45,5 +83,39 @@ describe("buildClipCandidatesFromTranscript", () => {
 		});
 
 		expect(candidates).toHaveLength(0);
+	});
+
+	test("clips snippet text to overlapped window for partially overlapped segments", () => {
+		const candidates = buildClipCandidatesFromTranscript({
+			mediaDuration: 120,
+			minClipSeconds: 20,
+			targetClipSeconds: 20,
+			maxClipSeconds: 40,
+			segments: [
+				{
+					text: "Hello viewers Tim Poole here on The Huddle and I am with Gronja Hurst CEO of the Betting and Gaming Council",
+					start: 0,
+					end: 30,
+				},
+				{
+					text: "the only real winner out of this process is going to be the black market",
+					start: 30,
+					end: 38,
+				},
+			],
+		});
+
+		expect(candidates.length).toBeGreaterThan(0);
+		const candidateNearBoundary = candidates.find(
+			(candidate) =>
+				candidate.transcriptSnippet.toLowerCase().includes("black market"),
+		);
+		expect(candidateNearBoundary).toBeDefined();
+		expect(candidateNearBoundary?.transcriptSnippet.toLowerCase()).not.toContain(
+			"hello viewers",
+		);
+		expect(candidateNearBoundary?.transcriptSnippet.toLowerCase()).toContain(
+			"black market",
+		);
 	});
 });

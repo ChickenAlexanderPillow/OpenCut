@@ -359,6 +359,26 @@ function getBestLinkedExternalTranscript({
 	return validEntries[0]?.entry ?? null;
 }
 
+function getLinkedExternalTranscriptForMedia({
+	project,
+	mediaId,
+}: {
+	project: TProject;
+	mediaId: string;
+}): ExternalProjectTranscriptCacheEntry | null {
+	const mediaLink = project.externalMediaLinks?.[mediaId];
+	if (!mediaLink) return null;
+	const key = `${mediaLink.sourceSystem}:${mediaLink.externalProjectId}`;
+	const entry = project.externalTranscriptCache?.[key];
+	if (!entry) return null;
+	const suitability = evaluateTranscriptSuitability({
+		transcriptText: entry.transcriptText,
+		segments: entry.segments,
+		audioDurationSeconds: entry.audioDurationSeconds,
+	});
+	return suitability.isSuitable ? entry : null;
+}
+
 function normalizeLinkedSegments({
 	segments,
 }: {
@@ -375,18 +395,26 @@ export function buildClipTranscriptEntryFromLinkedExternalTranscript({
 	modelId,
 	language,
 	externalTranscript,
+	requireSuitability = true,
 }: {
 	asset: MediaAsset;
 	modelId: TranscriptionModelId;
 	language: TranscriptionLanguage;
 	externalTranscript: ExternalProjectTranscriptCacheEntry;
+	requireSuitability?: boolean;
 }): { transcript: ClipTranscriptCacheEntry; cacheKey: string } | null {
 	const suitability = evaluateTranscriptSuitability({
 		transcriptText: externalTranscript.transcriptText,
 		segments: externalTranscript.segments,
 		audioDurationSeconds: externalTranscript.audioDurationSeconds,
 	});
-	if (!suitability.isSuitable) return null;
+	if (requireSuitability && !suitability.isSuitable) return null;
+	if (
+		externalTranscript.transcriptText.trim().length === 0 ||
+		externalTranscript.segments.length === 0
+	) {
+		return null;
+	}
 
 	const resolvedLanguage = language ?? "auto";
 	const fingerprint = buildClipTranscriptFingerprint({
@@ -434,8 +462,37 @@ export async function getOrCreateClipTranscriptForAsset({
 	cacheKey: string;
 	transcriptRef: ClipTranscriptRef;
 	fromCache: boolean;
+	source: "media-linked" | "cache" | "global-linked" | "local-transcription";
 }> {
 	const resolvedLanguage = language ?? "auto";
+	const linkedTranscriptForMedia = getLinkedExternalTranscriptForMedia({
+		project,
+		mediaId: asset.id,
+	});
+	if (linkedTranscriptForMedia) {
+		const derived = buildClipTranscriptEntryFromLinkedExternalTranscript({
+			asset,
+			modelId,
+			language: resolvedLanguage,
+			externalTranscript: linkedTranscriptForMedia,
+			requireSuitability: false,
+		});
+		if (derived) {
+			return {
+				transcript: derived.transcript,
+				cacheKey: derived.cacheKey,
+				transcriptRef: {
+					cacheKey: derived.cacheKey,
+					modelId,
+					language: resolvedLanguage,
+					updatedAt: derived.transcript.updatedAt,
+				},
+				fromCache: true,
+				source: "media-linked",
+			};
+		}
+	}
+
 	const validCache = getValidClipTranscriptCacheEntry({
 		project,
 		asset,
@@ -453,6 +510,7 @@ export async function getOrCreateClipTranscriptForAsset({
 				updatedAt: validCache.entry.updatedAt,
 			},
 			fromCache: true,
+			source: "cache",
 		};
 	}
 
@@ -474,7 +532,8 @@ export async function getOrCreateClipTranscriptForAsset({
 					language: resolvedLanguage,
 					updatedAt: derived.transcript.updatedAt,
 				},
-				fromCache: false,
+				fromCache: true,
+				source: "global-linked",
 			};
 		}
 	}
@@ -531,6 +590,7 @@ export async function getOrCreateClipTranscriptForAsset({
 			updatedAt,
 		},
 		fromCache: false,
+		source: "local-transcription",
 	};
 }
 

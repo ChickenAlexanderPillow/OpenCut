@@ -48,6 +48,7 @@ function CandidateCard({
 	candidate,
 	fullQuoteText,
 	mediaUrl,
+	mediaFile,
 	mediaType,
 	onImport,
 	isImporting,
@@ -55,6 +56,7 @@ function CandidateCard({
 	candidate: ClipCandidate;
 	fullQuoteText: string;
 	mediaUrl: string | null;
+	mediaFile: File | null;
 	mediaType: "video" | "audio" | null;
 	onImport: () => void;
 	isImporting: boolean;
@@ -67,13 +69,25 @@ function CandidateCard({
 	const [isMuted, setIsMuted] = useState(false);
 	const [isPreviewLoading, setIsPreviewLoading] = useState(Boolean(mediaUrl));
 	const [previewError, setPreviewError] = useState<string | null>(null);
-	const clipPreviewUrl = mediaUrl
+	const resolvedMediaUrl = useMemo(() => {
+		if (mediaUrl) return mediaUrl;
+		if (mediaFile) return URL.createObjectURL(mediaFile);
+		return null;
+	}, [mediaUrl, mediaFile]);
+
+	useEffect(() => {
+		if (!resolvedMediaUrl || mediaUrl || !mediaFile) return;
+		return () => URL.revokeObjectURL(resolvedMediaUrl);
+	}, [resolvedMediaUrl, mediaUrl, mediaFile]);
+
+	const clipPreviewUrl = resolvedMediaUrl
 		? buildClipPreviewUrl({
-				mediaUrl,
+				mediaUrl: resolvedMediaUrl,
 				startTime: candidate.startTime,
 				endTime: candidate.endTime,
 			})
 		: null;
+	const resolvedQuoteText = fullQuoteText.trim() || candidate.transcriptSnippet;
 
 	useEffect(() => {
 		setIsPreviewLoading(Boolean(clipPreviewUrl));
@@ -384,7 +398,7 @@ function CandidateCard({
 				<div
 					className={`text-muted-foreground pr-7 ${isQuoteExpanded ? "" : "line-clamp-2"}`}
 				>
-					"{isQuoteExpanded ? fullQuoteText : candidate.transcriptSnippet}"
+					"{resolvedQuoteText}"
 				</div>
 				<Button
 					type="button"
@@ -562,6 +576,7 @@ export function Clips() {
 										.trim() || candidate.transcriptSnippet
 								}
 								mediaUrl={previewSource?.url ?? null}
+								mediaFile={sourceMedia?.file ?? null}
 								mediaType={previewSource?.type ?? null}
 								onImport={() => {
 									setImportingCandidateId(candidate.id);

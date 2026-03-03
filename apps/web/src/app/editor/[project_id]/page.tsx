@@ -49,6 +49,7 @@ function EditorLayout() {
 
 			if (target.closest('[data-editor-selection-root="timeline"]')) return;
 			if (target.closest('[data-editor-selection-root="preview"]')) return;
+			if (target.closest('[data-editor-selection-root="properties"]')) return;
 			if (
 				target.closest(
 					'input, textarea, select, button, a, [role="button"], [contenteditable="true"]',

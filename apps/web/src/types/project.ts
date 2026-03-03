@@ -93,6 +93,7 @@ export interface TProject {
 	clipWordTranscriptionCache?: Record<string, TClipWordTranscriptionCacheEntry>;
 	clipGenerationCache?: Record<string, ClipGenerationProjectCacheEntry>;
 	externalProjectLink?: ExternalProjectLink;
+	externalMediaLinks?: Record<string, ExternalProjectLink>;
 	externalTranscriptCache?: Record<string, ExternalProjectTranscriptCacheEntry>;
 }
 

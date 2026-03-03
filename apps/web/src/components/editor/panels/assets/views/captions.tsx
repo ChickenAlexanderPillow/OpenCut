@@ -7,7 +7,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef } from "react";
 import { extractTimelineAudio } from "@/lib/media/mediabunny";
 import { useEditor } from "@/hooks/use-editor";
 import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
@@ -17,7 +17,6 @@ import {
 } from "@/constants/caption-presets";
 import {
 	DEFAULT_TRANSCRIPTION_MODEL,
-	DEFAULT_WORDS_PER_CAPTION,
 	TRANSCRIPT_CACHE_VERSION,
 	TRANSCRIPTION_LANGUAGES,
 } from "@/constants/transcription-constants";
@@ -34,15 +33,8 @@ import {
 } from "@/lib/transcription/caption";
 import { Spinner } from "@/components/ui/spinner";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import {
-	Database,
-	Languages,
-	ListChecks,
-	Sparkles,
-	WandSparkles,
-} from "lucide-react";
+import { Database, Languages, WandSparkles } from "lucide-react";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 import { evaluateTranscriptSuitability } from "@/lib/external-projects/transcript-suitability";
@@ -52,44 +44,11 @@ export function Captions() {
 	const transcriptionStatus = useTranscriptionStatusStore();
 	const { registerProcess, updateProcessLabel, removeProcess } =
 		useProjectProcessStore();
-
-	const getInitialCaptionBehavior = useCallback(() => {
-		const tracks = editor.timeline.getTracks();
-		for (const track of tracks) {
-			if (track.type !== "text") continue;
-			for (const element of track.elements) {
-				if (element.type !== "text") continue;
-				if (!element.name.startsWith("Caption ")) continue;
-				return {
-					fitInCanvas: element.captionStyle?.fitInCanvas ?? true,
-					karaokeWordHighlight:
-						element.captionStyle?.karaokeWordHighlight ?? true,
-				};
-			}
-		}
-		return {
-			fitInCanvas: true,
-			karaokeWordHighlight: true,
-		};
-	}, [editor]);
-
-	const initialCaptionBehavior = getInitialCaptionBehavior();
 	const [selectedLanguage, setSelectedLanguage] =
 		useState<TranscriptionLanguage>("auto");
 	const [isProcessing, setIsProcessing] = useState(false);
 	const [processingStep, setProcessingStep] = useState("");
 	const [error, setError] = useState<string | null>(null);
-	const [fitCaptionsInCanvas, setFitCaptionsInCanvas] = useState(
-		initialCaptionBehavior.fitInCanvas,
-	);
-	const [highlightSpokenWord, setHighlightSpokenWord] = useState(
-		initialCaptionBehavior.karaokeWordHighlight,
-	);
-	const [captionGenerationMode, setCaptionGenerationMode] =
-		useState<CaptionGenerationMode>("segment");
-	const [wordsPerCaption, setWordsPerCaption] = useState(
-		DEFAULT_WORDS_PER_CAPTION,
-	);
 	const containerRef = useRef<HTMLDivElement>(null);
 
 	const buildTranscriptFingerprint = ({
@@ -191,8 +150,7 @@ export function Captions() {
 	}) => {
 		const captionChunks = buildCaptionChunks({
 			segments,
-			mode: captionGenerationMode,
-			wordsPerChunk: wordsPerCaption,
+			mode: "segment" satisfies CaptionGenerationMode,
 		});
 
 		const captionTrackId = editor.timeline.addTrack({
@@ -214,8 +172,8 @@ export function Captions() {
 					...BLUE_HIGHLIGHT_CAPTION_TEXT_PROPS,
 					captionStyle: {
 						...BLUE_HIGHLIGHT_CAPTION_STYLE,
-						fitInCanvas: fitCaptionsInCanvas,
-						karaokeWordHighlight: highlightSpokenWord,
+						fitInCanvas: true,
+						karaokeWordHighlight: true,
 					},
 				},
 			});
@@ -240,7 +198,7 @@ export function Captions() {
 			};
 			const linkedTranscript = getLinkedTranscriptEntry();
 			if (linkedTranscript) {
-				setProcessingStep("Using linked transcript...");
+				setProcessingStep("Using linked transcript");
 				result = {
 					text: linkedTranscript.transcriptText,
 					segments: linkedTranscript.segments,
@@ -335,70 +293,6 @@ export function Captions() {
 		}
 	};
 
-	const handleSelectAllCaptions = () => {
-		const tracks = editor.timeline.getTracks();
-		const elements = tracks
-			.filter((track) => track.type === "text")
-			.flatMap((track) =>
-				track.elements
-					.filter(
-						(element) =>
-							element.type === "text" &&
-							element.name.startsWith("Caption ") &&
-							element.captionStyle?.linkedToCaptionGroup !== false,
-					)
-					.map((element) => ({
-						trackId: track.id,
-						elementId: element.id,
-					})),
-			);
-
-		if (elements.length === 0) {
-			toast.error("No captions found");
-			return;
-		}
-
-		editor.selection.setSelectedElements({ elements });
-		toast.success(`Selected ${elements.length} caption(s)`);
-	};
-
-	const applyCaptionBehaviorToExisting = useCallback(
-		({
-			fitInCanvas,
-			karaokeWordHighlight,
-		}: {
-			fitInCanvas: boolean;
-			karaokeWordHighlight: boolean;
-		}) => {
-			const tracks = editor.timeline.getTracks();
-			const updates = tracks
-				.filter((track) => track.type === "text")
-				.flatMap((track) =>
-					track.elements
-						.filter(
-							(element) =>
-								element.type === "text" && element.name.startsWith("Caption "),
-						)
-						.map((element) => ({
-							trackId: track.id,
-							elementId: element.id,
-							updates: {
-								captionStyle: {
-									...(element.captionStyle ?? {}),
-									fitInCanvas,
-									karaokeWordHighlight,
-								},
-							},
-						})),
-				);
-
-			if (updates.length > 0) {
-				editor.timeline.updateElements({ updates, pushHistory: false });
-			}
-		},
-		[editor],
-	);
-
 	const handleLanguageChange = ({ value }: { value: string }) => {
 		if (value === "auto") {
 			setSelectedLanguage("auto");
@@ -445,81 +339,11 @@ export function Captions() {
 
 			<div className="rounded-md border p-3 space-y-2">
 				<div className="flex items-center gap-2">
-					<Sparkles className="text-muted-foreground size-4" />
 					<Label>Caption options</Label>
 				</div>
-				<div className="space-y-1.5">
-					<Label>Caption grouping</Label>
-					<Select
-						value={captionGenerationMode}
-						onValueChange={(value) =>
-							setCaptionGenerationMode(value as CaptionGenerationMode)
-						}
-					>
-						<SelectTrigger>
-							<SelectValue placeholder="Select grouping mode" />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="segment">Segment (recommended)</SelectItem>
-							<SelectItem value="chunked">Chunked</SelectItem>
-						</SelectContent>
-					</Select>
-				</div>
-				{captionGenerationMode === "chunked" && (
-					<div className="space-y-1.5">
-						<Label>Words per caption chunk</Label>
-						<Select
-							value={String(wordsPerCaption)}
-							onValueChange={(value) =>
-								setWordsPerCaption(Math.max(1, Number.parseInt(value, 10) || 1))
-							}
-						>
-							<SelectTrigger>
-								<SelectValue placeholder="Words per chunk" />
-							</SelectTrigger>
-							<SelectContent>
-								{[2, 3, 4, 5, 6].map((value) => (
-									<SelectItem key={value} value={String(value)}>
-										{value} words
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
-					</div>
-				)}
-				<div className="flex items-center gap-2">
-					<Checkbox
-						id="captions-fit-canvas"
-						checked={fitCaptionsInCanvas}
-						onCheckedChange={(value) => {
-							const next = Boolean(value);
-							setFitCaptionsInCanvas(next);
-							applyCaptionBehaviorToExisting({
-								fitInCanvas: next,
-								karaokeWordHighlight: highlightSpokenWord,
-							});
-						}}
-					/>
-					<Label htmlFor="captions-fit-canvas">
-						Keep captions inside canvas bounds
-					</Label>
-				</div>
-				<div className="flex items-center gap-2">
-					<Checkbox
-						id="captions-highlight-word"
-						checked={highlightSpokenWord}
-						onCheckedChange={(value) => {
-							const next = Boolean(value);
-							setHighlightSpokenWord(next);
-							applyCaptionBehaviorToExisting({
-								fitInCanvas: fitCaptionsInCanvas,
-								karaokeWordHighlight: next,
-							});
-						}}
-					/>
-					<Label htmlFor="captions-highlight-word">
-						Highlight current spoken word
-					</Label>
+				<div className="text-xs text-muted-foreground">
+					Captions are generated as transcript segments with canvas bounds and
+					word highlighting enabled by default.
 				</div>
 			</div>
 
@@ -554,21 +378,6 @@ export function Captions() {
 				</Button>
 			</div>
 
-			<div className="rounded-md border p-3 space-y-2">
-				<div className="flex items-center gap-2">
-					<ListChecks className="text-muted-foreground size-4" />
-					<Label>Manage captions</Label>
-				</div>
-				<Button
-					className="w-full"
-					variant="outline"
-					onClick={handleSelectAllCaptions}
-					disabled={isProcessing}
-				>
-					<ListChecks className="mr-1 size-4" />
-					Select all captions in timeline
-				</Button>
-			</div>
 		</PanelView>
 	);
 }

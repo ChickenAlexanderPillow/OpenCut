@@ -5,17 +5,9 @@ import { usePreviewStore } from "@/stores/preview-store";
 import {
 	Section,
 	SectionContent,
-	SectionField,
 	SectionFields,
 	SectionHeader,
 } from "./section";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { dimensionToAspectRatio } from "@/utils/geometry";
 import { Label } from "@/components/ui/label";
@@ -37,7 +29,6 @@ export function EmptyView() {
 	const activeProject = editor.project.getActive();
 	const {
 		previewFormatVariant,
-		setPreviewFormatVariant,
 		squareFormatSettings,
 		setSquareFormatSettings,
 	} = usePreviewStore();
@@ -66,29 +57,10 @@ export function EmptyView() {
 								{aspectRatioLabel} ({canvas.width} x {canvas.height})
 							</div>
 						</div>
-						<SectionField label="Preview format">
-							<Select
-								value={previewFormatVariant}
-								onValueChange={(value) =>
-									setPreviewFormatVariant({
-										variant: value === "square" ? "square" : "project",
-									})
-								}
-							>
-								<SelectTrigger className="w-full">
-									<SelectValue placeholder="Select preview format" />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem value="project">Project</SelectItem>
-									{!isProjectSquare && (
-										<SelectItem value="square">Square</SelectItem>
-									)}
-								</SelectContent>
-							</Select>
-						</SectionField>
 						{previewFormatVariant === "square" && !isProjectSquare && (
 							<>
-								<SectionField label="Square blur intensity">
+								<div className="flex flex-col gap-1.5">
+									<Label>Square blur intensity</Label>
 									<Input
 										type="number"
 										min={0}
@@ -109,8 +81,9 @@ export function EmptyView() {
 											});
 										}}
 									/>
-								</SectionField>
-								<SectionField label="Background cover overscan %">
+								</div>
+								<div className="flex flex-col gap-1.5">
+									<Label>Background cover overscan %</Label>
 									<Input
 										type="number"
 										min={100}
@@ -131,7 +104,7 @@ export function EmptyView() {
 											});
 										}}
 									/>
-								</SectionField>
+								</div>
 							</>
 						)}
 					</SectionFields>

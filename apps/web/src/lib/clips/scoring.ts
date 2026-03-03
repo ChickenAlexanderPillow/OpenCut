@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { VIRALITY_PROMPT_EXAMPLES } from "@/lib/clips/virality-examples";
 import type {
 	ClipCandidate,
 	ClipCandidateDraft,
@@ -10,6 +11,8 @@ const scoredCandidateSchema = z.object({
 	title: z.string().min(1),
 	rationale: z.string().min(1),
 	scoreOverall: z.number(),
+	confidence: z.number().optional(),
+	failureFlags: z.array(z.string()).optional(),
 	scoreBreakdown: z.object({
 		hook: z.number(),
 		emotion: z.number(),
@@ -78,15 +81,30 @@ export function buildScoringPrompt({
 	return [
 		"You are a social video clipping analyst.",
 		"Score each candidate for virality potential from 0 to 100.",
+		"Prioritize clips that are likely to retain viewers, trigger comments/shares, and stand alone without extra context.",
 		"Return strict JSON only in this format:",
-		'{"candidates":[{"id":"string","title":"string","rationale":"string","scoreOverall":0,"scoreBreakdown":{"hook":0,"emotion":0,"shareability":0,"clarity":0,"momentum":0}}]}',
+		'{"candidates":[{"id":"string","title":"string","rationale":"string","scoreOverall":0,"confidence":0,"failureFlags":["string"],"scoreBreakdown":{"hook":0,"emotion":0,"shareability":0,"clarity":0,"momentum":0}}]}',
 		"Rubric:",
 		"- hook: first-second attention and curiosity",
 		"- emotion: emotional charge and intensity",
 		"- shareability: quotable/repost likelihood",
 		"- clarity: easy to understand quickly",
 		"- momentum: narrative progression and payoff",
+		"Hard penalties (apply aggressively):",
+		"- Mid-thought starts/ends or abrupt cutoff ending",
+		"- Heavy dependence on missing context",
+		"- Redundant/repetitive phrasing with weak payoff",
+		"- Low information density or long filler stretches",
+		"Scoring anchors:",
+		"- 85-100: exceptional hook + clear payoff + high quoteability",
+		"- 70-84: strong and useful, minor weaknesses",
+		"- 60-69: usable but average; limited viral upside",
+		"- <60: weak viral potential or quality issues",
+		"Set failureFlags from: ['cutoff_start','cutoff_end','context_missing','low_density','repetitive','weak_payoff']. Use [] when none.",
+		`Reference examples (style anchors, not exact matches):\n${JSON.stringify(VIRALITY_PROMPT_EXAMPLES)}`,
+		"Generalization rule: do not reward candidates for matching specific domains (e.g. B2B/sales/payroll/SEO). Score only on transferable virality patterns: hook strength, clarity, emotional charge, shareability, and payoff.",
 		"Do not invent timings or IDs. Use the given candidate IDs.",
+		"Prefer distinct moments over semantically duplicate moments.",
 		`Transcript:\n${transcript}`,
 		`Candidates:\n${JSON.stringify(
 			candidates.map((candidate) => ({

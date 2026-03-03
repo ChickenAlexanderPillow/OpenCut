@@ -50,6 +50,18 @@ function parseAudioDurationSeconds(value: string | undefined): number | null {
 	return mins * 60 + secs;
 }
 
+function resolveThumbnailApiBases(): string[] {
+	const configured = webEnv.THUMBNAIL_API_BASE?.trim();
+	const candidates = [
+		configured,
+		"http://host.docker.internal:9000",
+		"http://localhost:9000",
+	]
+		.filter((value): value is string => Boolean(value))
+		.map((value) => value.replace(/\/+$/, ""));
+	return Array.from(new Set(candidates));
+}
+
 export async function POST(request: Request) {
 	if (!webEnv.EXTERNAL_PROJECTS_ENABLED) {
 		return NextResponse.json(
@@ -69,29 +81,53 @@ export async function POST(request: Request) {
 		);
 	}
 
-	if (!webEnv.THUMBNAIL_API_BASE) {
-		return NextResponse.json(
-			{ error: "THUMBNAIL_API_BASE is not configured" },
-			{ status: 500 },
-		);
-	}
-
 	try {
 		const source = validation.data;
-		const endpoint = `${webEnv.THUMBNAIL_API_BASE.replace(/\/+$/, "")}/projects/${encodeURIComponent(source.externalProjectId)}`;
-		const response = await fetch(endpoint, {
-			method: "GET",
-			cache: "no-store",
-		});
-		if (!response.ok) {
-			if (response.status === 404) {
-				return NextResponse.json(
-					{ error: "Thumbnail project not found" },
-					{ status: 404 },
+		const apiBases = resolveThumbnailApiBases();
+		if (apiBases.length === 0) {
+			return NextResponse.json(
+				{ error: "THUMBNAIL_API_BASE is not configured" },
+				{ status: 500 },
+			);
+		}
+
+		let response: Response | null = null;
+		let lastError: Error | null = null;
+		for (const base of apiBases) {
+			const endpoint = `${base}/projects/${encodeURIComponent(source.externalProjectId)}`;
+			try {
+				const candidateResponse = await fetch(endpoint, {
+					method: "GET",
+					cache: "no-store",
+				});
+				if (candidateResponse.ok) {
+					response = candidateResponse;
+					break;
+				}
+				if (candidateResponse.status === 404) {
+					return NextResponse.json(
+						{ error: "Thumbnail project not found" },
+						{ status: 404 },
+					);
+				}
+				const text = await candidateResponse.text();
+				lastError = new Error(
+					`Thumbnail API error via ${base} (${candidateResponse.status}): ${text}`,
 				);
+			} catch (error) {
+				lastError =
+					error instanceof Error
+						? error
+						: new Error(`Failed to reach thumbnail API via ${base}`);
 			}
-			const text = await response.text();
-			throw new Error(`Thumbnail API error (${response.status}): ${text}`);
+		}
+		if (!response) {
+			throw (
+				lastError ??
+				new Error(
+					`Failed to reach thumbnail API. Tried: ${apiBases.join(", ")}`,
+				)
+			);
 		}
 
 		const payload = thumbnailProjectSchema.safeParse(await response.json());

@@ -12,6 +12,8 @@ interface TimelineStore {
 	toggleSnapping: () => void;
 	rippleEditingEnabled: boolean;
 	toggleRippleEditing: () => void;
+	fitViewRequestId: number;
+	requestFitView: () => void;
 	clipboard: {
 		items: ClipboardItem[];
 	} | null;
@@ -37,6 +39,11 @@ export const useTimelineStore = create<TimelineStore>()(
 				set((state) => ({
 					rippleEditingEnabled: !state.rippleEditingEnabled,
 				}));
+			},
+
+			fitViewRequestId: 0,
+			requestFitView: () => {
+				set((state) => ({ fitViewRequestId: state.fitViewRequestId + 1 }));
 			},
 
 			clipboard: null,

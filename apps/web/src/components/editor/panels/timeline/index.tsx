@@ -17,7 +17,7 @@ import {
 	ContextMenuTrigger,
 } from "../../../ui/context-menu";
 import { useTimelineZoom } from "@/hooks/timeline/use-timeline-zoom";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { TimelineTrackContent } from "./timeline-track";
 import { TimelinePlayhead } from "./timeline-playhead";
 import { SelectionBox } from "../../selection-box";
@@ -54,10 +54,11 @@ import { useEditor } from "@/hooks/use-editor";
 import { useTimelinePlayhead } from "@/hooks/timeline/use-timeline-playhead";
 import { DragLine } from "./drag-line";
 import { invokeAction } from "@/lib/actions";
+import { ListChecks } from "lucide-react";
 
 export function Timeline() {
 	const tracksContainerHeight = { min: 0, max: 800 };
-	const { snappingEnabled } = useTimelineStore();
+	const { snappingEnabled, fitViewRequestId } = useTimelineStore();
 	const { clearElementSelection, setElementSelection } = useElementSelection();
 	const editor = useEditor();
 	const timeline = editor.timeline;
@@ -211,6 +212,26 @@ export function Timeline() {
 		seek,
 	});
 
+	const fitTimelineToView = useCallback(() => {
+		setZoomLevel(minZoomLevel);
+		const scrollElement = tracksScrollRef.current;
+		if (scrollElement) {
+			scrollElement.scrollLeft = 0;
+			editor.project.setTimelineViewState({
+				viewState: {
+					zoomLevel: minZoomLevel,
+					scrollLeft: 0,
+					playheadTime: editor.playback.getCurrentTime(),
+				},
+			});
+		}
+	}, [editor, minZoomLevel, setZoomLevel]);
+
+	useEffect(() => {
+		if (fitViewRequestId <= 0) return;
+		fitTimelineToView();
+	}, [fitViewRequestId, fitTimelineToView]);
+
 	useScrollSync({
 		tracksScrollRef,
 		trackLabelsScrollRef,
@@ -232,6 +253,7 @@ export function Timeline() {
 				zoomLevel={zoomLevel}
 				minZoom={minZoomLevel}
 				setZoomLevel={({ zoom }) => setZoomLevel(zoom)}
+				fitToView={fitTimelineToView}
 			/>
 
 			<div
@@ -272,6 +294,20 @@ export function Timeline() {
 												}}
 											>
 												<div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+													{trackHasLinkedCaptions({ track }) && (
+														<button
+															type="button"
+															className="text-muted-foreground hover:text-foreground cursor-pointer"
+															onClick={(event) => {
+																event.stopPropagation();
+																invokeAction("select-all-captions");
+															}}
+															title="Select all captions"
+															aria-label="Select all captions"
+														>
+															<ListChecks className="size-3.5" />
+														</button>
+													)}
 													{process.env.NODE_ENV === "development" &&
 														isMainTrack(track) && (
 															<div className="bg-red-500 size-1.5 rounded-full" />
@@ -520,6 +556,16 @@ export function Timeline() {
 				</div>
 			</div>
 		</section>
+	);
+}
+
+function trackHasLinkedCaptions({ track }: { track: TimelineTrack }) {
+	if (track.type !== "text") return false;
+	return track.elements.some(
+		(element) =>
+			element.type === "text" &&
+			element.name.startsWith("Caption ") &&
+			element.captionStyle?.linkedToCaptionGroup !== false,
 	);
 }
 

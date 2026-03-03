@@ -16,5 +16,7 @@
 	},
 	"[typescript]": {
 		"editor.defaultFormatter": "biomejs.biome"
-	}
+	},
+	"python.terminal.useEnvFile": true,
+	"python.envFile": "${workspaceFolder}/apps/web/.env.local"
 }

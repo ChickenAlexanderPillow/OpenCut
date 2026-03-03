@@ -2,9 +2,9 @@ import { generateUUID } from "@/utils/id";
 import type { ClipCandidateDraft } from "@/types/clip-generation";
 import type { TranscriptionSegment } from "@/types/transcription";
 
-const DEFAULT_MIN_CLIP_SECONDS = 30;
-const DEFAULT_MAX_CLIP_SECONDS = 90;
-const DEFAULT_TARGET_CLIP_SECONDS = 45;
+const DEFAULT_MIN_CLIP_SECONDS = 20;
+const DEFAULT_MAX_CLIP_SECONDS = 60;
+const DEFAULT_TARGET_CLIP_SECONDS = 35;
 const DEFAULT_MAX_OUTPUT = 12;
 const CLUSTER_GAP_SECONDS = 6;
 
@@ -49,6 +49,32 @@ function startsLikelyContinuation(text: string): boolean {
 	return /[a-z]/.test(firstChar);
 }
 
+function isQuestionSegment(text: string): boolean {
+	return /\?/.test(text);
+}
+
+function hasMeaningfulAnswerAfterQuestion({
+	segments,
+	questionIndex,
+	lastIndex,
+}: {
+	segments: TranscriptionSegment[];
+	questionIndex: number;
+	lastIndex: number;
+}): boolean {
+	for (let i = questionIndex + 1; i <= lastIndex; i++) {
+		const segment = segments[i];
+		if (!segment) continue;
+		if (isQuestionSegment(segment.text)) continue;
+		const duration = Math.max(0, segment.end - segment.start);
+		const words = segment.text.match(/\S+/g) ?? [];
+		if (duration >= 0.75 && words.length >= 2) {
+			return true;
+		}
+	}
+	return false;
+}
+
 function buildSnippet({
 	segments,
 	startTime,
@@ -60,7 +86,35 @@ function buildSnippet({
 }): string {
 	const text = segments
 		.filter((segment) => segment.end > startTime && segment.start < endTime)
-		.map((segment) => segment.text.trim())
+		.map((segment) => {
+			const fullText = segment.text.trim();
+			if (!fullText) return "";
+			const overlapStart = Math.max(startTime, segment.start);
+			const overlapEnd = Math.min(endTime, segment.end);
+			const overlapDuration = Math.max(0, overlapEnd - overlapStart);
+			const segmentDuration = Math.max(0.001, segment.end - segment.start);
+			if (overlapDuration <= 0) return "";
+			if (
+				overlapDuration >= segmentDuration * 0.95 ||
+				segmentDuration <= 0.2
+			) {
+				return fullText;
+			}
+
+			const words = fullText.match(/\S+/g) ?? [];
+			if (words.length <= 1) return fullText;
+			const fromRatio = (overlapStart - segment.start) / segmentDuration;
+			const toRatio = (overlapEnd - segment.start) / segmentDuration;
+			const startIndex = Math.max(
+				0,
+				Math.min(words.length - 1, Math.floor(fromRatio * words.length)),
+			);
+			const endIndexExclusive = Math.max(
+				startIndex + 1,
+				Math.min(words.length, Math.ceil(toRatio * words.length)),
+			);
+			return words.slice(startIndex, endIndexExclusive).join(" ").trim();
+		})
 		.filter(Boolean)
 		.join(" ");
 	return truncateText({ text, maxLength: 220 });
@@ -169,8 +223,66 @@ function snapWindowToSentenceBoundaries({
 		}
 	}
 
+	let cutForFollowUpQuestion = false;
+	const updatedOverlap = getOverlapBounds({
+		segments,
+		startTime: adjustedStart,
+		endTime: adjustedEnd,
+	});
+	if (updatedOverlap) {
+		const questionIndices: number[] = [];
+		for (let i = updatedOverlap.first; i <= updatedOverlap.last; i++) {
+			if (isQuestionSegment(segments[i]?.text ?? "")) {
+				questionIndices.push(i);
+				if (questionIndices.length >= 2) break;
+			}
+		}
+		if (questionIndices.length >= 2) {
+			const secondQuestionIndex = questionIndices[1]!;
+			const secondQuestion = segments[secondQuestionIndex];
+			const prior = segments[secondQuestionIndex - 1];
+			const cutoffAt = prior
+				? Math.max(prior.end, secondQuestion.start)
+				: secondQuestion.start;
+			if (Number.isFinite(cutoffAt) && cutoffAt > adjustedStart + 0.5) {
+				adjustedEnd = Math.min(adjustedEnd, cutoffAt);
+				cutForFollowUpQuestion = true;
+			}
+		}
+
+		const refreshedOverlap = getOverlapBounds({
+			segments,
+			startTime: adjustedStart,
+			endTime: adjustedEnd,
+		});
+		if (refreshedOverlap) {
+			for (let i = refreshedOverlap.last; i >= refreshedOverlap.first; i--) {
+				const segment = segments[i];
+				if (!segment) continue;
+				if (!isQuestionSegment(segment.text)) continue;
+				const hasAnswer = hasMeaningfulAnswerAfterQuestion({
+					segments,
+					questionIndex: i,
+					lastIndex: refreshedOverlap.last,
+				});
+				if (hasAnswer) break;
+				const prior = segments[i - 1];
+				const cutoffAt = prior ? Math.max(prior.end, segment.start) : segment.start;
+				if (Number.isFinite(cutoffAt) && cutoffAt > adjustedStart + 0.5) {
+					adjustedEnd = Math.min(adjustedEnd, cutoffAt);
+					cutForFollowUpQuestion = true;
+				}
+				break;
+			}
+		}
+	}
+
 	if (adjustedEnd - adjustedStart < minClipSeconds) {
-		adjustedEnd = Math.min(mediaDuration, adjustedStart + minClipSeconds);
+		if (cutForFollowUpQuestion) {
+			adjustedStart = Math.max(0, adjustedEnd - minClipSeconds);
+		} else {
+			adjustedEnd = Math.min(mediaDuration, adjustedStart + minClipSeconds);
+		}
 	}
 	if (adjustedEnd - adjustedStart > maxClipSeconds) {
 		adjustedEnd = adjustedStart + maxClipSeconds;

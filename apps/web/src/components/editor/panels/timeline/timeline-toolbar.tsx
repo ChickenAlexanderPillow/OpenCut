@@ -6,7 +6,7 @@ import {
 	TooltipContent,
 } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
-import { SplitSquareHorizontal, WandSparkles } from "lucide-react";
+import { Maximize2, SplitSquareHorizontal, WandSparkles } from "lucide-react";
 import {
 	SplitButton,
 	SplitButtonLeft,
@@ -41,10 +41,12 @@ export function TimelineToolbar({
 	zoomLevel,
 	minZoom,
 	setZoomLevel,
+	fitToView,
 }: {
 	zoomLevel: number;
 	minZoom: number;
 	setZoomLevel: ({ zoom }: { zoom: number }) => void;
+	fitToView: () => void;
 }) {
 	const handleZoom = ({ direction }: { direction: "in" | "out" }) => {
 		const newZoomLevel =
@@ -69,6 +71,7 @@ export function TimelineToolbar({
 					minZoom={minZoom}
 					onZoomChange={(zoom) => setZoomLevel({ zoom })}
 					onZoom={handleZoom}
+					onFitToView={fitToView}
 				/>
 			</div>
 		</ScrollArea>
@@ -193,11 +196,13 @@ function ToolbarRightSection({
 	minZoom,
 	onZoomChange,
 	onZoom,
+	onFitToView,
 }: {
 	zoomLevel: number;
 	minZoom: number;
 	onZoomChange: (zoom: number) => void;
 	onZoom: (options: { direction: "in" | "out" }) => void;
+	onFitToView: () => void;
 }) {
 	const {
 		snappingEnabled,
@@ -251,6 +256,16 @@ function ToolbarRightSection({
 				>
 					<HugeiconsIcon icon={SearchAddIcon} />
 				</Button>
+				<TooltipProvider delayDuration={200}>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button variant="text" size="icon" onClick={onFitToView}>
+								<Maximize2 className="size-4" />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>Fit to view</TooltipContent>
+					</Tooltip>
+				</TooltipProvider>
 			</div>
 		</div>
 	);

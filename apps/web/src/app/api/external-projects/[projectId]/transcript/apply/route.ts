@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getExternalProjectByOpenCutId } from "@/lib/external-projects/service";
+import {
+	getExternalProjectByOpenCutId,
+	getExternalProjectBySource,
+} from "@/lib/external-projects/service";
 import { evaluateTranscriptSuitability } from "@/lib/external-projects/transcript-suitability";
 
 const requestSchema = z.object({
@@ -25,7 +28,15 @@ export async function POST(
 			);
 		}
 
-		const result = await getExternalProjectByOpenCutId({ projectId });
+		const requestedSource = validation.data.sourceSystem;
+		const requestedExternalProjectId = validation.data.externalProjectId?.trim();
+		const result =
+			requestedSource && requestedExternalProjectId
+				? await getExternalProjectBySource({
+						sourceSystem: requestedSource,
+						externalProjectId: requestedExternalProjectId,
+					})
+				: await getExternalProjectByOpenCutId({ projectId });
 		if (!result || !result.transcript) {
 			return NextResponse.json(
 				{ error: "Linked transcript not found" },

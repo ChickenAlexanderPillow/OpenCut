@@ -149,6 +149,7 @@ class StorageService {
 			clipWordTranscriptionCache: project.clipWordTranscriptionCache,
 			clipGenerationCache: project.clipGenerationCache,
 			externalProjectLink: project.externalProjectLink,
+			externalMediaLinks: project.externalMediaLinks,
 			externalTranscriptCache: project.externalTranscriptCache,
 		};
 
@@ -210,6 +211,7 @@ class StorageService {
 			clipWordTranscriptionCache: serializedProject.clipWordTranscriptionCache,
 			clipGenerationCache: serializedProject.clipGenerationCache,
 			externalProjectLink: serializedProject.externalProjectLink,
+			externalMediaLinks: serializedProject.externalMediaLinks,
 			externalTranscriptCache: serializedProject.externalTranscriptCache,
 		};
 

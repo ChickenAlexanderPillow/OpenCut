@@ -17,7 +17,10 @@ export function PropertiesPanel() {
 	});
 
 	return (
-		<div className="panel bg-background h-full rounded-sm border border-t-0 overflow-hidden">
+		<div
+			className="panel bg-background h-full rounded-sm border border-t-0 overflow-hidden"
+			data-editor-selection-root="properties"
+		>
 			{selectedElements.length > 0 ? (
 				<ScrollArea className="h-full scrollbar-hidden">
 					{elementsWithTracks.map(({ track, element }) => {

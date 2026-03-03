@@ -128,6 +128,10 @@ export const ACTIONS = {
 		category: "selection",
 		defaultShortcuts: ["ctrl+a"],
 	},
+	"select-all-captions": {
+		description: "Select all caption elements",
+		category: "selection",
+	},
 	"duplicate-selected": {
 		description: "Duplicate selected element",
 		category: "selection",

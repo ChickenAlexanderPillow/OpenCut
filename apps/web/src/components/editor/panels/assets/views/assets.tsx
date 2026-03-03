@@ -34,6 +34,7 @@ import { processMediaAssets } from "@/lib/media/processing";
 import { buildElementFromMedia } from "@/lib/timeline/element-utils";
 import { useAssetsPanelStore } from "@/stores/assets-panel-store";
 import type { MediaAsset } from "@/types/assets";
+import type { ExternalSourceSystem } from "@/types/external-projects";
 import { cn } from "@/utils/ui";
 import {
 	CloudUploadIcon,
@@ -118,6 +119,18 @@ export function MediaView() {
 		if (!activeProject) {
 			toast.error("No active project");
 			return;
+		}
+
+		if (activeProject.externalMediaLinks?.[id]) {
+			const nextLinks = { ...(activeProject.externalMediaLinks ?? {}) };
+			delete nextLinks[id];
+			editor.project.setActiveProject({
+				project: {
+					...activeProject,
+					externalMediaLinks: nextLinks,
+				},
+			});
+			editor.save.markDirty();
 		}
 
 		await editor.media.removeMediaAsset({
@@ -338,6 +351,122 @@ export function MediaView() {
 			sourceMediaId: mediaId,
 		});
 	};
+	const handleLinkThumbnailProjectForMedia = async ({
+		mediaId,
+	}: {
+		mediaId: string;
+	}) => {
+		const existing =
+			activeProject.externalMediaLinks?.[mediaId]?.externalProjectId ?? "";
+		const entered = window.prompt(
+			"Enter thumbnail project_id to link transcript to this media asset:",
+			existing,
+		);
+		const externalProjectId = entered?.trim();
+		if (!externalProjectId) return;
+
+		try {
+			const linkResponse = await fetch("/api/external-projects/link-thumbnail", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					opencutProjectId: activeProject.metadata.id,
+					sourceSystem: "thumbnail_decoupled" as const,
+					externalProjectId,
+				}),
+			});
+			const linkJson = (await linkResponse.json()) as { error?: string };
+			if (!linkResponse.ok || linkJson.error) {
+				throw new Error(linkJson.error || "Failed to link thumbnail project");
+			}
+
+			const applyResponse = await fetch(
+				`/api/external-projects/${encodeURIComponent(activeProject.metadata.id)}/transcript/apply`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						sourceSystem: "thumbnail_decoupled" as ExternalSourceSystem,
+						externalProjectId,
+					}),
+				},
+			);
+			const applyJson = (await applyResponse.json()) as
+				| {
+						error?: string;
+						sourceSystem: ExternalSourceSystem;
+						externalProjectId: string;
+						transcriptText: string;
+						segments: Array<{ text: string; start: number; end: number }>;
+						segmentsCount: number;
+						audioDurationSeconds: number | null;
+						qualityMeta?: Record<string, unknown>;
+						updatedAt: string;
+				  }
+				| { error: string };
+			if (!applyResponse.ok || "error" in applyJson) {
+				throw new Error(applyJson.error || "Failed to hydrate linked transcript");
+			}
+
+			const cacheKey = `${applyJson.sourceSystem}:${applyJson.externalProjectId}`;
+			const latestProject = editor.project.getActive();
+			editor.project.setActiveProject({
+				project: {
+					...latestProject,
+					externalMediaLinks: {
+						...(latestProject.externalMediaLinks ?? {}),
+						[mediaId]: {
+							sourceSystem: applyJson.sourceSystem,
+							externalProjectId: applyJson.externalProjectId,
+							opencutProjectId: latestProject.metadata.id,
+							linkedAt: new Date().toISOString(),
+						},
+					},
+					externalTranscriptCache: {
+						...(latestProject.externalTranscriptCache ?? {}),
+						[cacheKey]: {
+							sourceSystem: applyJson.sourceSystem,
+							externalProjectId: applyJson.externalProjectId,
+							transcriptText: applyJson.transcriptText,
+							segments: applyJson.segments,
+							segmentsCount: applyJson.segmentsCount,
+							audioDurationSeconds: applyJson.audioDurationSeconds,
+							qualityMeta: applyJson.qualityMeta,
+							updatedAt: applyJson.updatedAt,
+						},
+					},
+				},
+			});
+			editor.save.markDirty();
+			await editor.save.flush();
+			toast.success("Linked thumbnail transcript to media");
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? error.message
+					: "Failed to link thumbnail transcript",
+			);
+		}
+	};
+
+	const handleUnlinkThumbnailProjectForMedia = ({
+		mediaId,
+	}: {
+		mediaId: string;
+	}) => {
+		const latestProject = editor.project.getActive();
+		const nextLinks = { ...(latestProject.externalMediaLinks ?? {}) };
+		delete nextLinks[mediaId];
+		editor.project.setActiveProject({
+			project: {
+				...latestProject,
+				externalMediaLinks: nextLinks,
+			},
+		});
+		editor.save.markDirty();
+		void editor.save.flush();
+		toast.success("Removed media transcript link");
+	};
 	const clipCountsBySource = useMemo(() => {
 		const cache = activeProject.clipGenerationCache ?? {};
 		const counts = new Map<string, number>();
@@ -374,6 +503,11 @@ export function MediaView() {
 						registerElement={registerElement}
 						onGenerateClips={handleGenerateClipsForMedia}
 						clipCountsBySource={clipCountsBySource}
+						onLinkThumbnailProject={handleLinkThumbnailProjectForMedia}
+						onUnlinkThumbnailProject={handleUnlinkThumbnailProjectForMedia}
+						linkedExternalProjectIdsByMedia={
+							activeProject.externalMediaLinks ?? {}
+						}
 					/>
 				) : (
 					<ListView
@@ -385,6 +519,11 @@ export function MediaView() {
 						registerElement={registerElement}
 						onGenerateClips={handleGenerateClipsForMedia}
 						clipCountsBySource={clipCountsBySource}
+						onLinkThumbnailProject={handleLinkThumbnailProjectForMedia}
+						onUnlinkThumbnailProject={handleUnlinkThumbnailProjectForMedia}
+						linkedExternalProjectIdsByMedia={
+							activeProject.externalMediaLinks ?? {}
+						}
 					/>
 				)}
 			</PanelView>
@@ -436,16 +575,38 @@ function MediaItemWithContextMenu({
 	item,
 	children,
 	onRemove,
+	onLinkThumbnailProject,
+	onUnlinkThumbnailProject,
+	linkedExternalProjectId,
 }: {
 	item: MediaAsset;
 	children: React.ReactNode;
 	onRemove: ({ event, id }: { event: React.MouseEvent; id: string }) => void;
+	onLinkThumbnailProject: ({ mediaId }: { mediaId: string }) => void;
+	onUnlinkThumbnailProject: ({ mediaId }: { mediaId: string }) => void;
+	linkedExternalProjectId?: string;
 }) {
 	return (
 		<ContextMenu>
 			<ContextMenuTrigger>{children}</ContextMenuTrigger>
 			<ContextMenuContent>
 				<ContextMenuItem>Export clips</ContextMenuItem>
+				{item.type === "video" || item.type === "audio" ? (
+					<ContextMenuItem
+						onClick={() => onLinkThumbnailProject({ mediaId: item.id })}
+					>
+						{linkedExternalProjectId
+							? `Relink Transcript (${linkedExternalProjectId})`
+							: "Link Transcript Project..."}
+					</ContextMenuItem>
+				) : null}
+				{linkedExternalProjectId ? (
+					<ContextMenuItem
+						onClick={() => onUnlinkThumbnailProject({ mediaId: item.id })}
+					>
+						Unlink Transcript Project
+					</ContextMenuItem>
+				) : null}
 				<ContextMenuItem
 					variant="destructive"
 					onClick={(event) => onRemove({ event, id: item.id })}
@@ -466,6 +627,9 @@ function GridView({
 	registerElement,
 	onGenerateClips,
 	clipCountsBySource,
+	onLinkThumbnailProject,
+	onUnlinkThumbnailProject,
+	linkedExternalProjectIdsByMedia,
 }: {
 	items: MediaAsset[];
 	renderPreview: (item: MediaAsset) => React.ReactNode;
@@ -481,6 +645,9 @@ function GridView({
 	registerElement: (id: string, element: HTMLElement | null) => void;
 	onGenerateClips: ({ mediaId }: { mediaId: string }) => void;
 	clipCountsBySource: Map<string, number>;
+	onLinkThumbnailProject: ({ mediaId }: { mediaId: string }) => void;
+	onUnlinkThumbnailProject: ({ mediaId }: { mediaId: string }) => void;
+	linkedExternalProjectIdsByMedia: Record<string, { externalProjectId: string }>;
 }) {
 	return (
 		<div
@@ -491,7 +658,15 @@ function GridView({
 		>
 			{items.map((item) => (
 				<div key={item.id} ref={(el) => registerElement(item.id, el)}>
-					<MediaItemWithContextMenu item={item} onRemove={onRemove}>
+					<MediaItemWithContextMenu
+						item={item}
+						onRemove={onRemove}
+						onLinkThumbnailProject={onLinkThumbnailProject}
+						onUnlinkThumbnailProject={onUnlinkThumbnailProject}
+						linkedExternalProjectId={
+							linkedExternalProjectIdsByMedia[item.id]?.externalProjectId
+						}
+					>
 						<DraggableItem
 							name={item.name}
 							preview={renderPreview(item)}
@@ -532,6 +707,9 @@ function ListView({
 	registerElement,
 	onGenerateClips,
 	clipCountsBySource,
+	onLinkThumbnailProject,
+	onUnlinkThumbnailProject,
+	linkedExternalProjectIdsByMedia,
 }: {
 	items: MediaAsset[];
 	renderPreview: (item: MediaAsset) => React.ReactNode;
@@ -547,12 +725,23 @@ function ListView({
 	registerElement: (id: string, element: HTMLElement | null) => void;
 	onGenerateClips: ({ mediaId }: { mediaId: string }) => void;
 	clipCountsBySource: Map<string, number>;
+	onLinkThumbnailProject: ({ mediaId }: { mediaId: string }) => void;
+	onUnlinkThumbnailProject: ({ mediaId }: { mediaId: string }) => void;
+	linkedExternalProjectIdsByMedia: Record<string, { externalProjectId: string }>;
 }) {
 	return (
 		<div className="space-y-1">
 			{items.map((item) => (
 				<div key={item.id} ref={(el) => registerElement(item.id, el)}>
-					<MediaItemWithContextMenu item={item} onRemove={onRemove}>
+					<MediaItemWithContextMenu
+						item={item}
+						onRemove={onRemove}
+						onLinkThumbnailProject={onLinkThumbnailProject}
+						onUnlinkThumbnailProject={onUnlinkThumbnailProject}
+						linkedExternalProjectId={
+							linkedExternalProjectIdsByMedia[item.id]?.externalProjectId
+						}
+					>
 						<DraggableItem
 							name={item.name}
 							preview={renderPreview(item)}
