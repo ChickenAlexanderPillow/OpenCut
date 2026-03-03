@@ -97,8 +97,17 @@ export function resolveSafeAreaAnchoredPositionY({
 	const defaultPositionY = canvasHeight / 2 + transformPositionY;
 	if (!anchorToSafeAreaBottom && !anchorToSafeAreaTop) return defaultPositionY;
 
-	const safeArea = resolveSafeAreaPreset({ width: canvasWidth, height: canvasHeight });
-	if (!safeArea) return defaultPositionY;
+	const safeArea = resolveSafeAreaPreset({ width: canvasWidth, height: canvasHeight }) ?? {
+		id: "linkedin-1x1" as const,
+		label: "Generic safe area",
+		description: "Fallback 5% inset safe area",
+		inset: {
+			top: 0.05,
+			right: 0.05,
+			bottom: 0.05,
+			left: 0.05,
+		},
+	};
 
 	if (anchorToSafeAreaTop) {
 		const safeTopY = canvasHeight * safeArea.inset.top;

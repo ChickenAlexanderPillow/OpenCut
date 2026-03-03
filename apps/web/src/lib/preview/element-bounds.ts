@@ -10,6 +10,7 @@ import {
 	getTextVisualRectForBackgroundMode,
 	measureTextBlock,
 	resolveTextPlacement,
+	wrapTextToWidth,
 } from "@/lib/text/layout";
 import { resolveSafeAreaAnchoredPositionY } from "@/constants/safe-area-constants";
 
@@ -330,7 +331,17 @@ export function getElementBounds({
 							maxLines: maxLinesOnScreen,
 						}).join("\n")
 					: element.content;
-			const lines = renderContent.split("\n");
+			const maxWrapWidth = canvasWidth - Math.min(canvasWidth, canvasHeight) * 0.08;
+			const shouldWrapToMaintainFontSize =
+				captionWords.length === 0 && Boolean(fitInCanvas);
+			const wrappedContent = shouldWrapToMaintainFontSize
+				? wrapTextToWidth({
+						text: renderContent,
+						maxWidth: maxWrapWidth,
+						measure: (candidate) => ctx.measureText(candidate).width,
+					}).join("\n")
+				: renderContent;
+			const lines = wrappedContent.split("\n");
 			const lineMetrics = lines.map((line) => ctx.measureText(line));
 			const block = measureTextBlock({
 				lineMetrics,

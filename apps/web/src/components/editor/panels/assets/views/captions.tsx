@@ -33,7 +33,6 @@ import {
 } from "@/lib/transcription/caption";
 import { Spinner } from "@/components/ui/spinner";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { Database, Languages, WandSparkles } from "lucide-react";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
@@ -47,7 +46,6 @@ export function Captions() {
 		useProjectProcessStore();
 	const [selectedLanguage, setSelectedLanguage] =
 		useState<TranscriptionLanguage>("auto");
-	const [includeSceneTitle, setIncludeSceneTitle] = useState(false);
 	const [isProcessing, setIsProcessing] = useState(false);
 	const [processingStep, setProcessingStep] = useState("");
 	const [error, setError] = useState<string | null>(null);
@@ -120,86 +118,6 @@ export function Captions() {
 		return suitable[0]?.entry ?? null;
 	};
 
-	const upsertSceneTitleTrack = () => {
-		const activeScene = editor.scenes.getActiveScene();
-		const tracks = editor.timeline.getTracks();
-		const totalDuration = editor.timeline.getTotalDuration();
-		const titleDuration = totalDuration > 0 ? Math.min(5, totalDuration) : 5;
-		const titleElement = {
-			...DEFAULT_TEXT_ELEMENT,
-			name: "Scene Title",
-			content: activeScene.name,
-			startTime: 0,
-			duration: titleDuration,
-			fontSize: 30,
-			color: "#ffffff",
-			strokeColor: "#000000",
-			strokeWidth: 2,
-			background: {
-				...DEFAULT_TEXT_ELEMENT.background,
-				color: "transparent",
-			},
-			captionStyle: {
-				isSceneTitle: true,
-				anchorToSafeAreaBottom: false,
-				anchorToSafeAreaTop: true,
-				safeAreaTopOffset: 0,
-			},
-		};
-		const existing = tracks
-			.filter((track) => track.type === "text")
-			.flatMap((track) =>
-				track.elements
-					.filter((element) => element.captionStyle?.isSceneTitle === true)
-					.map((element) => ({ trackId: track.id, elementId: element.id })),
-			)[0];
-
-		if (existing) {
-			editor.timeline.updateElements({
-				updates: [
-					{
-						trackId: existing.trackId,
-						elementId: existing.elementId,
-						updates: titleElement,
-					},
-				],
-			});
-			return;
-		}
-
-		const titleTrackId = editor.timeline.addTrack({
-			type: "text",
-			index: 0,
-		});
-		editor.timeline.insertElement({
-			placement: { mode: "explicit", trackId: titleTrackId },
-			element: titleElement,
-		});
-	};
-
-	const removeSceneTitleTrack = () => {
-		const tracks = editor.timeline.getTracks();
-		const sceneTitleElements = tracks
-			.filter((track) => track.type === "text")
-			.flatMap((track) =>
-				track.elements
-					.filter((element) => element.captionStyle?.isSceneTitle === true)
-					.map((element) => ({ trackId: track.id, elementId: element.id })),
-			);
-		const affectedTrackIds = new Set(sceneTitleElements.map((item) => item.trackId));
-
-		if (sceneTitleElements.length === 0) return;
-		editor.timeline.deleteElements({ elements: sceneTitleElements });
-
-		const latestTracks = editor.timeline.getTracks();
-		for (const track of latestTracks) {
-			if (!affectedTrackIds.has(track.id)) continue;
-			if (track.type !== "text") continue;
-			if (track.elements.length > 0) continue;
-			editor.timeline.removeTrack({ trackId: track.id });
-		}
-	};
-
 	const handleProgress = (
 		progress: TranscriptionProgress,
 		operationId?: string,
@@ -227,15 +145,9 @@ export function Captions() {
 
 	const generateCaptionsFromSegments = ({
 		segments,
-		includeSceneTitleTrack,
 	}: {
 		segments: { text: string; start: number; end: number }[];
-		includeSceneTitleTrack?: boolean;
 	}) => {
-		if (includeSceneTitleTrack) {
-			upsertSceneTitleTrack();
-		}
-
 		const captionChunks = buildCaptionChunks({
 			segments,
 			mode: "segment" satisfies CaptionGenerationMode,
@@ -348,7 +260,6 @@ export function Captions() {
 			setProcessingStep("Generating captions...");
 			generateCaptionsFromSegments({
 				segments: result.segments,
-				includeSceneTitleTrack: includeSceneTitle,
 			});
 		} catch (error) {
 			console.error("Transcription failed:", error);
@@ -379,7 +290,6 @@ export function Captions() {
 			setProcessingStep("Generating captions from cache...");
 			generateCaptionsFromSegments({
 				segments: cached.segments,
-				includeSceneTitleTrack: includeSceneTitle,
 			});
 		} finally {
 			setIsProcessing(false);
@@ -435,26 +345,6 @@ export function Captions() {
 				<div className="flex items-center gap-2">
 					<WandSparkles className="text-muted-foreground size-4" />
 					<Label>Generate</Label>
-				</div>
-				<div className="flex items-center justify-between rounded-sm border px-2 py-2">
-					<div className="space-y-0.5">
-						<p className="text-sm font-medium">Add scene title track</p>
-						<p className="text-muted-foreground text-xs">
-							Uses scene name as a 5s editable title at safe-area top.
-						</p>
-					</div>
-					<Checkbox
-						checked={includeSceneTitle}
-						onCheckedChange={(checked) => {
-							const enabled = Boolean(checked);
-							setIncludeSceneTitle(enabled);
-							if (enabled) {
-								upsertSceneTitleTrack();
-							} else {
-								removeSceneTitleTrack();
-							}
-						}}
-					/>
 				</div>
 				{error && (
 					<div className="bg-destructive/10 border-destructive/20 rounded-md border p-3">

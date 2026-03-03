@@ -264,11 +264,184 @@ export function TextProperties({
 			<ContentSection element={element} trackId={trackId} />
 			<TransformSection element={element} trackId={trackId} />
 			<BlendingSection element={element} trackId={trackId} />
+			<CanvasFittingSection element={element} trackId={trackId} />
 			<CaptionSection element={element} trackId={trackId} />
 			<TypographySection element={element} trackId={trackId} />
 			<SpacingSection element={element} trackId={trackId} />
 			<BackgroundSection element={element} trackId={trackId} />
 		</div>
+	);
+}
+
+function CanvasFittingSection({
+	element,
+	trackId,
+}: {
+	element: TextElement;
+	trackId: string;
+}) {
+	const editor = useEditor();
+	const hasCaptionData = (element.captionWordTimings?.length ?? 0) > 0;
+	if (hasCaptionData) {
+		return null;
+	}
+
+	const safeAreaOffset = usePropertyDraft({
+		displayValue: String(
+			clampSafeAreaBottomOffset(
+				(element.captionStyle?.anchorToSafeAreaTop ?? false)
+					? (element.captionStyle?.safeAreaTopOffset ?? 0)
+					: (element.captionStyle?.safeAreaBottomOffset ?? 0),
+			),
+		),
+		parse: (input) => {
+			const parsed = parseFloat(input);
+			if (Number.isNaN(parsed)) return null;
+			return clampSafeAreaBottomOffset(parsed);
+		},
+		onPreview: (value) =>
+			editor.timeline.previewElements({
+				updates: [
+					{
+						trackId,
+						elementId: element.id,
+						updates: {
+							captionStyle: {
+								...(element.captionStyle ?? {}),
+								...((element.captionStyle?.anchorToSafeAreaTop ?? false)
+									? { safeAreaTopOffset: value }
+									: { safeAreaBottomOffset: value }),
+							},
+						},
+					},
+				],
+			}),
+		onCommit: () => editor.timeline.commitPreview(),
+	});
+
+	return (
+		<Section collapsible sectionKey="text:canvas-fitting">
+			<SectionHeader title="Canvas Fitting" />
+			<SectionContent>
+				<SectionFields>
+					<div className="flex items-center justify-between rounded-sm border px-2 py-2">
+						<span className="text-muted-foreground text-xs">
+							Keep inside canvas
+						</span>
+						<Checkbox
+							checked={element.captionStyle?.fitInCanvas ?? false}
+							onCheckedChange={(checked) =>
+								editor.timeline.updateElements({
+									updates: [
+										{
+											trackId,
+											elementId: element.id,
+											updates: {
+												captionStyle: {
+													...(element.captionStyle ?? {}),
+													fitInCanvas: Boolean(checked),
+												},
+											},
+										},
+									],
+								})
+							}
+						/>
+					</div>
+					<div className="flex items-center justify-between rounded-sm border px-2 py-2">
+						<span className="text-muted-foreground text-xs">
+							Never shrink font size
+						</span>
+						<Checkbox
+							checked={element.captionStyle?.neverShrinkFont ?? false}
+							onCheckedChange={(checked) =>
+								editor.timeline.updateElements({
+									updates: [
+										{
+											trackId,
+											elementId: element.id,
+											updates: {
+												captionStyle: {
+													...(element.captionStyle ?? {}),
+													neverShrinkFont: Boolean(checked),
+												},
+											},
+										},
+									],
+								})
+							}
+						/>
+					</div>
+					<div className="flex items-center justify-between rounded-sm border px-2 py-2">
+						<span className="text-muted-foreground text-xs">
+							Anchor to safe area top
+						</span>
+						<Checkbox
+							checked={element.captionStyle?.anchorToSafeAreaTop ?? false}
+							onCheckedChange={(checked) =>
+								editor.timeline.updateElements({
+									updates: [
+										{
+											trackId,
+											elementId: element.id,
+											updates: {
+												captionStyle: {
+													...(element.captionStyle ?? {}),
+													anchorToSafeAreaTop: Boolean(checked),
+													anchorToSafeAreaBottom: Boolean(checked)
+														? false
+														: (element.captionStyle?.anchorToSafeAreaBottom ??
+															false),
+												},
+											},
+										},
+									],
+								})
+							}
+						/>
+					</div>
+					<SectionField label="Y offset from safe area">
+						<NumberField
+							icon="Y"
+							value={safeAreaOffset.displayValue}
+							min={-500}
+							max={500}
+							onFocus={safeAreaOffset.onFocus}
+							onChange={safeAreaOffset.onChange}
+							onBlur={safeAreaOffset.onBlur}
+							onScrub={safeAreaOffset.scrubTo}
+							onScrubEnd={safeAreaOffset.commitScrub}
+							onReset={() =>
+								editor.timeline.updateElements({
+									updates: [
+										{
+											trackId,
+											elementId: element.id,
+											updates: {
+												captionStyle: {
+													...(element.captionStyle ?? {}),
+													...((element.captionStyle?.anchorToSafeAreaTop ??
+														false)
+														? { safeAreaTopOffset: 0 }
+														: { safeAreaBottomOffset: 0 }),
+												},
+											},
+										},
+									],
+								})
+							}
+							isDefault={
+								clampSafeAreaBottomOffset(
+									(element.captionStyle?.anchorToSafeAreaTop ?? false)
+										? (element.captionStyle?.safeAreaTopOffset ?? 0)
+										: (element.captionStyle?.safeAreaBottomOffset ?? 0),
+								) === 0
+							}
+						/>
+					</SectionField>
+				</SectionFields>
+			</SectionContent>
+		</Section>
 	);
 }
 

@@ -358,8 +358,49 @@ export function resolveTextPlacement({
 			(visualRect.top + visualRect.height) * effectiveScale;
 		y = Math.min(Math.max(y, minY), maxY);
 	} else {
-		y = canvasHeight / 2;
+		// Preserve top anchoring behavior when content is taller than available area.
+		y = margin - visualRect.top * effectiveScale;
 	}
 
 	return { x, y, effectiveScale };
+}
+
+export function wrapTextToWidth({
+	text,
+	maxWidth,
+	measure,
+}: {
+	text: string;
+	maxWidth: number;
+	measure: (candidate: string) => number;
+}): string[] {
+	if (!text) return [""];
+	if (maxWidth <= 0) return text.split("\n");
+
+	const wrappedLines: string[] = [];
+	const paragraphs = text.split("\n");
+
+	for (const paragraph of paragraphs) {
+		const words = paragraph.trim().split(/\s+/).filter(Boolean);
+		if (words.length === 0) {
+			wrappedLines.push("");
+			continue;
+		}
+
+		let currentLine = words[0];
+		for (let i = 1; i < words.length; i++) {
+			const word = words[i];
+			const nextLine = `${currentLine} ${word}`;
+			if (measure(nextLine) <= maxWidth) {
+				currentLine = nextLine;
+				continue;
+			}
+
+			wrappedLines.push(currentLine);
+			currentLine = word;
+		}
+		wrappedLines.push(currentLine);
+	}
+
+	return wrappedLines;
 }

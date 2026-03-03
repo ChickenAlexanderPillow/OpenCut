@@ -5,7 +5,7 @@ import {
 	TIMELINE_CONSTANTS,
 } from "./timeline-constants";
 
-export const MIN_FONT_SIZE = 5;
+export const MIN_FONT_SIZE = 3;
 export const MAX_FONT_SIZE = 300;
 
 /**
@@ -32,7 +32,7 @@ export const DEFAULT_TEXT_ELEMENT: Omit<TextElement, "id"> = {
 	type: "text",
 	name: "Text",
 	content: "Default text",
-	fontSize: 15,
+	fontSize: 5,
 	fontFamily: "Arial",
 	color: "#ffffff",
 	strokeColor: "#000000",

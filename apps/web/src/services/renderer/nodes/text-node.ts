@@ -14,6 +14,7 @@ import {
 	getTextVisualRectForBackgroundMode,
 	measureTextBlock,
 	resolveTextPlacement,
+	wrapTextToWidth,
 } from "@/lib/text/layout";
 import { resolveSafeAreaAnchoredPositionY } from "@/constants/safe-area-constants";
 
@@ -438,10 +439,21 @@ export class TextNode extends BaseNode<TextNodeParams> {
 						maxLines: maxLinesOnScreen,
 					}).join("\n")
 				: this.params.content;
+		const maxWrapWidth =
+			this.params.canvasWidth - Math.min(this.params.canvasWidth, this.params.canvasHeight) * 0.08;
+		const shouldWrapToMaintainFontSize =
+			!hasWordTimings && Boolean(fitInCanvas) && renderWords.length === 0;
+		const wrappedContent = shouldWrapToMaintainFontSize
+			? wrapTextToWidth({
+					text: renderContent,
+					maxWidth: maxWrapWidth,
+					measure: (candidate) => renderer.context.measureText(candidate).width,
+				}).join("\n")
+			: renderContent;
 		const renderActiveWordIndex =
 			activeWordIndex >= 0 ? activeWordIndex - windowed.chunkStart : -1;
 
-		const lines = renderContent.split("\n");
+		const lines = wrappedContent.split("\n");
 		const baseline = this.params.textBaseline ?? "middle";
 
 		renderer.context.textBaseline = baseline;
