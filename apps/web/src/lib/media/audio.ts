@@ -158,20 +158,24 @@ export async function collectAudioElements({
 				pendingElements.push(
 					(async () => {
 						const elementGain = trackGain * clampGain(element.volume ?? 1);
-						if (element.buffer) {
-							return {
-								buffer: element.buffer,
-								startTime: element.startTime,
-								duration: element.duration,
-								trimStart: element.trimStart,
-								trimEnd: element.trimEnd,
-								transcriptCuts: element.transcriptEdit?.cuts,
-								muted: element.muted || isTrackMuted,
-								gain: elementGain,
-							};
-						}
 						if (element.sourceType === "upload") {
 							const mediaAsset = mediaMap.get(element.mediaId);
+							if (!mediaAsset) {
+								// Fallback for transient states where media metadata is not yet available.
+								if (element.buffer) {
+									return {
+										buffer: element.buffer,
+										startTime: element.startTime,
+										duration: element.duration,
+										trimStart: element.trimStart,
+										trimEnd: element.trimEnd,
+										transcriptCuts: element.transcriptEdit?.cuts,
+										muted: element.muted || isTrackMuted,
+										gain: elementGain,
+									};
+								}
+								return null;
+							}
 							if (mediaAsset?.type === "video") {
 								const resolvedAudio = await resolveAudioBufferForVideoElement({
 									mediaAsset,
@@ -187,14 +191,27 @@ export async function collectAudioElements({
 									buffer: resolvedAudio.buffer,
 									startTime: element.startTime,
 									duration: element.duration,
-									// Video-backed upload audio is decoded to the element window already.
-									trimStart: 0,
+									// If decode is windowed, trimStart is already baked into the buffer.
+									// For full-file fallback decode, preserve element trimStart.
+									trimStart: resolvedAudio.windowed ? 0 : element.trimStart,
 									trimEnd: element.trimEnd,
 									transcriptCuts: element.transcriptEdit?.cuts,
 									muted: element.muted || isTrackMuted,
 									gain: elementGain,
 								};
 							}
+						}
+						if (element.buffer) {
+							return {
+								buffer: element.buffer,
+								startTime: element.startTime,
+								duration: element.duration,
+								trimStart: element.trimStart,
+								trimEnd: element.trimEnd,
+								transcriptCuts: element.transcriptEdit?.cuts,
+								muted: element.muted || isTrackMuted,
+								gain: elementGain,
+							};
 						}
 
 						const audioBuffer = await resolveAudioBufferForElement({
@@ -825,11 +842,17 @@ function mixAudioChannels({
 							cuts: transcriptCuts,
 						})
 					: elapsedInTimelineSeconds;
-			const sourceIndex =
-				sourceStartSample + Math.floor(sourceElapsedSeconds * buffer.sampleRate);
-			if (sourceIndex >= sourceData.length) break;
+			const sourcePosition =
+				sourceStartSample + sourceElapsedSeconds * buffer.sampleRate;
+			const leftIndex = Math.floor(sourcePosition);
+			if (leftIndex >= sourceData.length) break;
+			const rightIndex = Math.min(leftIndex + 1, sourceData.length - 1);
+			const alpha = sourcePosition - leftIndex;
+			const leftSample = sourceData[leftIndex] ?? 0;
+			const rightSample = sourceData[rightIndex] ?? leftSample;
+			const sample = leftSample * (1 - alpha) + rightSample * alpha;
 
-			outputData[outputIndex] += sourceData[sourceIndex] * gain;
+			outputData[outputIndex] += sample * gain;
 		}
 	}
 }

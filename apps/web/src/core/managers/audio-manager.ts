@@ -9,6 +9,7 @@ export class AudioManager {
 	private timelineDuration = 0;
 	private timelineDirty = true;
 	private buildingBuffer = false;
+	private rebuildRequestedDuringBuild = false;
 	private buildGeneration = 0;
 	private lastIsPlaying = false;
 	private lastIsScrubbing = false;
@@ -24,9 +25,11 @@ export class AudioManager {
 	private driftCorrectionCooldownMs = 120;
 	private driftResyncThresholdSeconds = 0.08;
 	private unsubscribers: Array<() => void> = [];
+	private lastAudioFingerprint = "";
 
 	constructor(private editor: EditorCore) {
 		this.lastVolume = this.editor.playback.getVolume();
+		this.lastAudioFingerprint = this.computeAudioFingerprint();
 
 		this.unsubscribers.push(
 			this.editor.playback.subscribe(this.handlePlaybackChange),
@@ -139,7 +142,16 @@ export class AudioManager {
 	};
 
 	private handleTimelineOrMediaChange = (): void => {
+		const nextFingerprint = this.computeAudioFingerprint();
+		if (nextFingerprint === this.lastAudioFingerprint) {
+			return;
+		}
+		this.lastAudioFingerprint = nextFingerprint;
 		this.timelineDirty = true;
+		if (this.buildingBuffer) {
+			this.rebuildRequestedDuringBuild = true;
+			return;
+		}
 		void this.ensureBufferReady();
 	};
 
@@ -195,13 +207,18 @@ export class AudioManager {
 	}
 
 	private async ensureBufferReady(): Promise<void> {
-		if (!this.timelineDirty || this.buildingBuffer) return;
+		if (!this.timelineDirty) return;
+		if (this.buildingBuffer) {
+			this.rebuildRequestedDuringBuild = true;
+			return;
+		}
 
 		const audioContext = this.ensureAudioContext();
 		if (!audioContext) return;
 
 		const generation = ++this.buildGeneration;
 		this.buildingBuffer = true;
+		this.rebuildRequestedDuringBuild = false;
 
 		try {
 			const tracks = this.editor.timeline.getTracks();
@@ -226,6 +243,7 @@ export class AudioManager {
 			});
 
 			if (generation !== this.buildGeneration) return;
+			if (this.rebuildRequestedDuringBuild) return;
 
 			this.timelineBuffer = buffer;
 			this.timelineDuration = duration;
@@ -239,6 +257,9 @@ export class AudioManager {
 		} finally {
 			if (generation === this.buildGeneration) {
 				this.buildingBuffer = false;
+			}
+			if (this.rebuildRequestedDuringBuild || this.timelineDirty) {
+				void this.ensureBufferReady();
 			}
 		}
 	}
@@ -299,5 +320,83 @@ export class AudioManager {
 	async primeCurrentTimelineAudio(): Promise<void> {
 		await this.unlockAudioContext();
 		await this.ensureBufferReady();
+	}
+
+	private computeAudioFingerprint(): string {
+		const tracks = this.editor.timeline.getTracks();
+		const mediaAssets = this.editor.media.getAssets();
+		const mediaById = new Map(mediaAssets.map((asset) => [asset.id, asset]));
+		if (tracks.length === 0) return "tracks:empty";
+
+		const referencedMediaIds = new Set<string>();
+		const trackParts: string[] = [];
+
+		for (const track of tracks) {
+			const muted = "muted" in track ? String(Boolean(track.muted)) : "0";
+			const volume = track.type === "audio" ? String(track.volume ?? 1) : "1";
+			const elementParts: string[] = [];
+			for (const element of track.elements) {
+				if (element.type === "audio") {
+					if (element.sourceType === "upload") referencedMediaIds.add(element.mediaId);
+					elementParts.push(
+						[
+							element.type,
+							element.id,
+							element.sourceType,
+							element.sourceType === "upload" ? element.mediaId : element.sourceUrl,
+							element.startTime,
+							element.duration,
+							element.trimStart,
+							element.trimEnd,
+							element.volume,
+							element.muted ? 1 : 0,
+							element.transcriptEdit?.updatedAt ?? "",
+						].join(":"),
+					);
+					continue;
+				}
+				if (element.type === "video") {
+					referencedMediaIds.add(element.mediaId);
+					elementParts.push(
+						[
+							element.type,
+							element.id,
+							element.mediaId,
+							element.startTime,
+							element.duration,
+							element.trimStart,
+							element.trimEnd,
+							element.muted ? 1 : 0,
+							element.transcriptEdit?.updatedAt ?? "",
+						].join(":"),
+					);
+				}
+			}
+			trackParts.push(
+				[
+					track.id,
+					track.type,
+					muted,
+					volume,
+					elementParts.join("|"),
+				].join("#"),
+			);
+		}
+
+		const mediaParts = Array.from(referencedMediaIds)
+			.sort()
+			.map((mediaId) => {
+				const media = mediaById.get(mediaId);
+				if (!media) return `${mediaId}:missing`;
+				return [
+					media.id,
+					media.type,
+					media.file.size,
+					media.file.lastModified,
+					media.duration ?? "",
+				].join(":");
+			});
+
+		return `${trackParts.join("||")}@@${mediaParts.join("||")}`;
 	}
 }

@@ -1101,8 +1101,7 @@ async function decodeAssetWindowToAudioBuffer({
 	try {
 		const windowStart = Math.max(0, startTime);
 		const windowEnd = Math.max(windowStart, endTime);
-		const windowDuration = windowEnd - windowStart;
-		if (windowDuration <= 0) {
+		if (windowEnd - windowStart <= 0) {
 			return null;
 		}
 
@@ -1115,9 +1114,9 @@ async function decodeAssetWindowToAudioBuffer({
 			});
 		}
 		const sink = new AudioBufferSink(audioTrack);
-		const chunks: Array<{ buffer: AudioBuffer; timestamp: number }> = [];
-		for await (const { buffer, timestamp } of sink.buffers(windowStart, windowEnd)) {
-			chunks.push({ buffer, timestamp });
+		const chunks: AudioBuffer[] = [];
+		for await (const { buffer } of sink.buffers(windowStart, windowEnd)) {
+			chunks.push(buffer);
 		}
 		if (chunks.length === 0) {
 			return await sliceClipBufferFromFullDecode({
@@ -1127,48 +1126,35 @@ async function decodeAssetWindowToAudioBuffer({
 			});
 		}
 
-		const sampleRate = chunks[0].buffer.sampleRate;
-		const channels = Math.max(1, chunks[0].buffer.numberOfChannels);
-		const totalSamples = Math.max(1, Math.ceil(windowDuration * sampleRate));
+		const sampleRate = chunks[0].sampleRate;
+		const channels = Math.max(1, chunks[0].numberOfChannels);
+		let totalSamples = 0;
+		for (const chunk of chunks) {
+			totalSamples += chunk.length;
+		}
+		if (totalSamples <= 0) {
+			return await sliceClipBufferFromFullDecode({
+				asset,
+				startTime: windowStart,
+				endTime: windowEnd,
+			});
+		}
+
 		const mergedByChannel = Array.from(
 			{ length: channels },
 			() => new Float32Array(totalSamples),
 		);
 
-		for (const { buffer, timestamp } of chunks) {
-			const chunkSampleRate = buffer.sampleRate;
-			if (!Number.isFinite(timestamp) || chunkSampleRate <= 0) continue;
-			const chunkStart = timestamp;
-			const chunkEnd = chunkStart + buffer.length / chunkSampleRate;
-			const overlapStart = Math.max(windowStart, chunkStart);
-			const overlapEnd = Math.min(windowEnd, chunkEnd);
-			if (overlapEnd <= overlapStart) continue;
-
-			const chunkOffset = Math.max(
-				0,
-				Math.floor((overlapStart - chunkStart) * chunkSampleRate),
-			);
-			const outputOffset = Math.max(
-				0,
-				Math.floor((overlapStart - windowStart) * sampleRate),
-			);
-			const overlapSamples = Math.max(
-				0,
-				Math.min(
-					buffer.length - chunkOffset,
-					totalSamples - outputOffset,
-					Math.ceil((overlapEnd - overlapStart) * sampleRate),
-				),
-			);
-			if (overlapSamples <= 0) continue;
-
+		let writeOffset = 0;
+		for (const chunk of chunks) {
+			const chunkLength = chunk.length;
+			if (chunkLength <= 0) continue;
 			for (let channelIndex = 0; channelIndex < channels; channelIndex++) {
-				const sourceChannel = Math.min(channelIndex, buffer.numberOfChannels - 1);
-				const sourceData = buffer
-					.getChannelData(sourceChannel)
-					.subarray(chunkOffset, chunkOffset + overlapSamples);
-				mergedByChannel[channelIndex].set(sourceData, outputOffset);
+				const sourceChannel = Math.min(channelIndex, chunk.numberOfChannels - 1);
+				const sourceData = chunk.getChannelData(sourceChannel);
+				mergedByChannel[channelIndex].set(sourceData, writeOffset);
 			}
+			writeOffset += chunkLength;
 		}
 
 		const context = createAudioContext({ sampleRate });
@@ -2116,6 +2102,7 @@ export function useEditorActions() {
 						};
 						editor.project.setActiveProject({ project: nextProject });
 						editor.save.markDirty();
+						await editor.save.flush();
 					}
 
 					if (transcriptResult.fromCache) {
@@ -2587,7 +2574,7 @@ export function useEditorActions() {
 
 						for (let i = 0; i < preparedImports.length; i++) {
 							const prepared = preparedImports[i];
-							const { candidate, clipAudioBuffer, continuousCaption, captionSource } = prepared;
+							const { candidate, continuousCaption, captionSource } = prepared;
 							updateProcessLabel({
 								id: projectProcessId,
 								label: `Importing clips (${i + 1}/${preparedImports.length}): creating scene...`,
@@ -2681,11 +2668,10 @@ export function useEditorActions() {
 									name: `${mediaAsset.name} audio`,
 									duration: candidate.duration,
 									startTime: 0,
-									trimStart: clipAudioBuffer ? 0 : candidate.startTime,
-									trimEnd: clipAudioBuffer ? 0 : trimEnd,
+									trimStart: candidate.startTime,
+									trimEnd,
 									volume: 1,
 									muted: false,
-									...(clipAudioBuffer ? { buffer: clipAudioBuffer } : {}),
 								},
 							});
 							if (!boundMediaElementId) {

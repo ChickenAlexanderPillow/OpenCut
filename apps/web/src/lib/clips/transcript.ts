@@ -28,6 +28,15 @@ const CHUNK_PROGRESS_HEARTBEAT_MS = 1200;
 const CLIP_TRANSCRIPTION_API_TIMEOUT_MS = 120000;
 const CLIP_TRANSCRIPTION_API_MODEL = "large-v3";
 
+function normalizeDurationForFingerprint({
+	duration,
+}: {
+	duration: number | undefined;
+}): number {
+	if (typeof duration !== "number" || !Number.isFinite(duration)) return 0;
+	return Number(duration.toFixed(3));
+}
+
 function buildClipTranscriptFingerprint({
 	asset,
 	modelId,
@@ -42,9 +51,10 @@ function buildClipTranscriptFingerprint({
 		mediaId: asset.id,
 		modelId,
 		language,
+		// OPFS can normalize file timestamps when rehydrating files.
+		// Keep fingerprint stable across reloads by excluding lastModified.
 		fileSize: asset.file.size,
-		lastModified: asset.file.lastModified,
-		duration: asset.duration ?? 0,
+		duration: normalizeDurationForFingerprint({ duration: asset.duration }),
 	});
 }
 
