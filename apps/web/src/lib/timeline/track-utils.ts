@@ -123,6 +123,7 @@ export function buildEmptyTrack({
 				type: "audio",
 				elements: [],
 				muted: false,
+				volume: 1,
 			};
 		default:
 			throw new Error(`Unsupported track type: ${type}`);

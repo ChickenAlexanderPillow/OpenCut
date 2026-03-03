@@ -339,16 +339,6 @@ export function Captions() {
 
 			<div className="rounded-md border p-3 space-y-2">
 				<div className="flex items-center gap-2">
-					<Label>Caption options</Label>
-				</div>
-				<div className="text-xs text-muted-foreground">
-					Captions are generated as transcript segments with canvas bounds and
-					word highlighting enabled by default.
-				</div>
-			</div>
-
-			<div className="rounded-md border p-3 space-y-2">
-				<div className="flex items-center gap-2">
 					<WandSparkles className="text-muted-foreground size-4" />
 					<Label>Generate</Label>
 				</div>

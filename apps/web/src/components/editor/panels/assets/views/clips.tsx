@@ -6,6 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { invokeAction } from "@/lib/actions";
 import { useEditor } from "@/hooks/use-editor";
+import {
+	buildClipRatingFeedbackModel,
+	getCandidateScoreWithRatingFeedback,
+	rankCandidatesWithRatingFeedback,
+} from "@/lib/clips/rating-feedback";
 import { useClipGenerationStore } from "@/stores/clip-generation-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 import type { ClipCandidate } from "@/types/clip-generation";
@@ -16,6 +21,8 @@ import {
 	Pause,
 	Play,
 	RotateCcw,
+	ThumbsDown,
+	ThumbsUp,
 	Volume2,
 	VolumeX,
 } from "lucide-react";
@@ -90,19 +97,23 @@ function buildWindowTranscriptText({
 
 function CandidateCard({
 	candidate,
+	feedbackModel,
 	fullQuoteText,
 	mediaUrl,
 	mediaFile,
 	mediaType,
 	onImport,
+	onRate,
 	isImporting,
 }: {
 	candidate: ClipCandidate;
+	feedbackModel: ReturnType<typeof buildClipRatingFeedbackModel>;
 	fullQuoteText: string;
 	mediaUrl: string | null;
 	mediaFile: File | null;
 	mediaType: "video" | "audio" | null;
 	onImport: () => void;
+	onRate: (rating: -1 | 1) => void;
 	isImporting: boolean;
 }) {
 	const editor = useEditor({ subscribeTo: [] });
@@ -133,6 +144,12 @@ function CandidateCard({
 			})
 		: null;
 	const resolvedQuoteText = fullQuoteText.trim() || candidate.transcriptSnippet;
+	const adjustedScore = getCandidateScoreWithRatingFeedback({
+		candidate,
+		feedbackModel,
+	});
+	const isThumbUpActive = candidate.userRating === 1;
+	const isThumbDownActive = candidate.userRating === -1;
 
 	useEffect(() => {
 		setIsPreviewLoading(Boolean(clipPreviewUrl));
@@ -330,8 +347,30 @@ function CandidateCard({
 				</div>
 				<div className="flex items-center gap-1.5">
 					<div className="bg-secondary rounded-sm px-2 py-1 text-xs font-semibold">
-						{candidate.scoreOverall}/100
+						{adjustedScore}/100
 					</div>
+					<Button
+						type="button"
+						size="icon"
+						variant={isThumbUpActive ? "default" : "secondary"}
+						className="h-7 w-7"
+						onClick={() => onRate(1)}
+						title="Rate clip up"
+						aria-label="Rate clip up"
+					>
+						<ThumbsUp className="size-3.5" />
+					</Button>
+					<Button
+						type="button"
+						size="icon"
+						variant={isThumbDownActive ? "destructive" : "secondary"}
+						className="h-7 w-7"
+						onClick={() => onRate(-1)}
+						title="Rate clip down"
+						aria-label="Rate clip down"
+					>
+						<ThumbsDown className="size-3.5" />
+					</Button>
 					<Button
 						type="button"
 						size="icon"
@@ -645,6 +684,13 @@ export function Clips() {
 						: null;
 				const processingThisGroup =
 					isGenerating && generatingSourceMediaId === group.sourceMediaId;
+				const feedbackModel = buildClipRatingFeedbackModel({
+					candidates: group.candidates,
+				});
+				const rankedCandidates = rankCandidatesWithRatingFeedback({
+					candidates: group.candidates,
+					feedbackModel,
+				});
 
 				return (
 					<div
@@ -683,10 +729,11 @@ export function Clips() {
 							<div className="border-t" />
 						</div>
 						{group.error && <div className="text-xs text-red-400">{group.error}</div>}
-						{group.candidates.map((candidate) => (
+						{rankedCandidates.map((candidate) => (
 							<CandidateCard
 								key={`${group.sourceMediaId}:${candidate.id}`}
 								candidate={candidate}
+								feedbackModel={feedbackModel}
 								fullQuoteText={
 									buildWindowTranscriptText({
 										segments: transcriptSegments,
@@ -709,6 +756,37 @@ export function Clips() {
 									invokeAction("import-selected-viral-clips", {
 										candidateIds: [candidate.id],
 									});
+								}}
+								onRate={(rating) => {
+									const activeProject = editor.project.getActive();
+									const cache = activeProject.clipGenerationCache ?? {};
+									const currentGroup = cache[group.sourceMediaId];
+									if (!currentGroup) return;
+									const nextCandidates = currentGroup.candidates.map((entry) => {
+										if (entry.id !== candidate.id) return entry;
+										const existingRating: -1 | 0 | 1 = entry.userRating ?? 0;
+										const nextRating: -1 | 0 | 1 =
+											existingRating === rating ? 0 : rating;
+										return {
+											...entry,
+											userRating: nextRating,
+										};
+									});
+									editor.project.setActiveProject({
+										project: {
+											...activeProject,
+											clipGenerationCache: {
+												...cache,
+												[group.sourceMediaId]: {
+													...currentGroup,
+													candidates: nextCandidates,
+													updatedAt: new Date().toISOString(),
+												},
+											},
+										},
+									});
+									editor.save.markDirty();
+									void editor.save.flush();
 								}}
 								isImporting={importingCandidateId === candidate.id && hasClipImportProcess}
 							/>

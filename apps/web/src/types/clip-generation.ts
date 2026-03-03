@@ -34,6 +34,7 @@ export interface ClipCandidate {
 	transcriptSnippet: string;
 	scoreOverall: number;
 	scoreBreakdown: ViralityBreakdown;
+	userRating?: -1 | 0 | 1;
 }
 
 export interface ClipTranscriptRef {

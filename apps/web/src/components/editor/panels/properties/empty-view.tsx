@@ -110,9 +110,6 @@ export function EmptyView() {
 					</SectionFields>
 				</SectionContent>
 			</Section>
-			<div className="text-muted-foreground px-4 py-3 text-xs">
-				Select a timeline element to edit element-specific properties.
-			</div>
 		</div>
 	);
 }

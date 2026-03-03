@@ -326,6 +326,17 @@ export function Timeline() {
 															}
 														/>
 													)}
+													{track.type === "audio" && (
+														<AudioTrackVolumeHandle
+															volume={track.volume ?? 1}
+															onChange={(nextVolume) => {
+																editor.timeline.setAudioTrackVolume({
+																	trackId: track.id,
+																	volume: nextVolume,
+																});
+															}}
+														/>
+													)}
 													{canTrackBeHidden(track) && (
 														<TrackToggleIcon
 															isOff={track.hidden}
@@ -601,5 +612,38 @@ function TrackToggleIcon({
 				/>
 			)}
 		</>
+	);
+}
+
+function AudioTrackVolumeHandle({
+	volume,
+	onChange,
+}: {
+	volume: number;
+	onChange: (volume: number) => void;
+}) {
+	const normalizedVolume = Math.max(0, Math.min(2, volume));
+	return (
+		<div
+			className="flex w-14 items-center"
+			onMouseDown={(event) => event.stopPropagation()}
+			onClick={(event) => event.stopPropagation()}
+		>
+			<input
+				type="range"
+				min={0}
+				max={200}
+				step={1}
+				value={Math.round(normalizedVolume * 100)}
+				onChange={(event) => {
+					const next = Number.parseInt(event.target.value, 10);
+					if (!Number.isFinite(next)) return;
+					onChange(Math.max(0, Math.min(2, next / 100)));
+				}}
+				className="h-1.5 w-full cursor-pointer accent-foreground"
+				aria-label="Audio track volume"
+				title={`Track volume ${Math.round(normalizedVolume * 100)}%`}
+			/>
+		</div>
 	);
 }

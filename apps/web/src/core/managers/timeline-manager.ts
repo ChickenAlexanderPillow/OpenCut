@@ -186,6 +186,25 @@ export class TimelineManager {
 		this.editor.command.execute({ command });
 	}
 
+	setAudioTrackVolume({
+		trackId,
+		volume,
+	}: {
+		trackId: string;
+		volume: number;
+	}): void {
+		const clampedVolume = Math.max(0, Math.min(2, volume));
+		const tracks = this.getTracks();
+		const updatedTracks = tracks.map((track) => {
+			if (track.id !== trackId || track.type !== "audio") return track;
+			return {
+				...track,
+				volume: clampedVolume,
+			};
+		});
+		this.updateTracks(updatedTracks);
+	}
+
 	splitElements({
 		elements,
 		splitTime,

@@ -34,6 +34,10 @@ import { useClipGenerationStore } from "@/stores/clip-generation-store";
 import { buildClipCandidatesFromTranscript } from "@/lib/clips/candidate-builder";
 import { selectTopCandidatesWithQualityGate } from "@/lib/clips/scoring";
 import {
+	buildClipRatingFeedbackModel,
+	rankCandidatesWithRatingFeedback,
+} from "@/lib/clips/rating-feedback";
+import {
 	buildClipTranscriptEntryFromLinkedExternalTranscript,
 	getOrCreateClipTranscriptForAsset,
 } from "@/lib/clips/transcript";
@@ -45,6 +49,7 @@ import { normalizeGeneratedCaptionsInProject } from "@/lib/captions/generated-ca
 import { getMainTrack } from "@/lib/timeline/track-utils";
 import type { MediaAsset } from "@/types/assets";
 import type { TProject } from "@/types/project";
+import type { ClipCandidate } from "@/types/clip-generation";
 import { DEFAULT_BLEND_MODE, DEFAULT_OPACITY, DEFAULT_TRANSFORM } from "@/constants/timeline-constants";
 import { getVideoInfo } from "@/lib/media/mediabunny";
 import { ALL_FORMATS, AudioBufferSink, BlobSource, Input } from "mediabunny";
@@ -81,23 +86,7 @@ function withProjectClipGenerationCache({
 }: {
 	project: TProject;
 	sourceMediaId: string;
-	candidates: Array<{
-		id: string;
-		startTime: number;
-		endTime: number;
-		duration: number;
-		title: string;
-		rationale: string;
-		transcriptSnippet: string;
-		scoreOverall: number;
-		scoreBreakdown: {
-			hook: number;
-			emotion: number;
-			shareability: number;
-			clarity: number;
-			momentum: number;
-		};
-	}>;
+	candidates: ClipCandidate[];
 	transcriptRef: {
 		cacheKey: string;
 		modelId: string;
@@ -1786,6 +1775,11 @@ export function useEditorActions() {
 					const scoringPool = takeTopLocalCandidatesForScoring({
 						candidateDrafts,
 					});
+					const priorCandidatesForFeedback =
+						editor.project.getActive().clipGenerationCache?.[mediaAsset.id]?.candidates ?? [];
+					const feedbackModel = buildClipRatingFeedbackModel({
+						candidates: priorCandidatesForFeedback,
+					});
 
 					setStatus({
 						status: "scoring",
@@ -1801,7 +1795,7 @@ export function useEditorActions() {
 					let scoredCountSoFar = 0;
 					const progressiveSelected: NonNullable<ClipScoringResponse["candidates"]> = [];
 					const progressiveSelectedIds = new Set<string>();
-					const scoredCandidates = await scoreCandidatesProgressively({
+					const scoredCandidatesRaw = await scoreCandidatesProgressively({
 						transcript: transcriptResult.transcript.text,
 						candidateDrafts: scoringPool,
 						onBatchScored: ({ scoredSoFar, latestBatch }) => {
@@ -1812,27 +1806,33 @@ export function useEditorActions() {
 									label: `Scoring clip virality (${scoredCountSoFar}/${scoringPool.length})...`,
 								});
 							}
-							let batchSelected = selectTopCandidatesWithQualityGate({
+							const adjustedLatestBatch = rankCandidatesWithRatingFeedback({
 								candidates: latestBatch,
+								feedbackModel,
+							});
+							let batchSelected = selectTopCandidatesWithQualityGate({
+								candidates: adjustedLatestBatch,
 								minScore: MIN_VIRAL_CLIP_SCORE,
 								maxOverlapRatio: 0,
 								maxCount: MAX_VIRAL_CLIP_COUNT,
 							});
-							if (batchSelected.length === 0 && latestBatch.length > 0) {
+							if (batchSelected.length === 0 && adjustedLatestBatch.length > 0) {
 								const topScore = Math.max(
 									0,
 									Math.min(
 										100,
 										Math.round(
 											Math.max(
-												...latestBatch.map((candidate) => candidate.scoreOverall),
+												...adjustedLatestBatch.map(
+													(candidate) => candidate.scoreOverall,
+												),
 											),
 										),
 									),
 								);
 								const relaxedMinScore = Math.max(35, Math.min(59, topScore - 8));
 								batchSelected = selectTopCandidatesWithQualityGate({
-									candidates: latestBatch,
+									candidates: adjustedLatestBatch,
 									minScore: relaxedMinScore,
 									maxOverlapRatio: 0,
 									maxCount: MAX_VIRAL_CLIP_COUNT,
@@ -1863,6 +1863,10 @@ export function useEditorActions() {
 								editor.save.markDirty();
 							}
 						},
+					});
+					const scoredCandidates = rankCandidatesWithRatingFeedback({
+						candidates: scoredCandidatesRaw,
+						feedbackModel,
 					});
 					let selectedCandidates = selectTopCandidatesWithQualityGate({
 						candidates: scoredCandidates,
@@ -2273,10 +2277,11 @@ export function useEditorActions() {
 									name: `${mediaAsset.name} audio`,
 									duration: candidate.duration,
 									startTime: 0,
-									trimStart: candidate.startTime,
-									trimEnd,
+									trimStart: clipAudioBuffer ? 0 : candidate.startTime,
+									trimEnd: clipAudioBuffer ? 0 : trimEnd,
 									volume: 1,
 									muted: false,
+									...(clipAudioBuffer ? { buffer: clipAudioBuffer } : {}),
 								},
 							});
 

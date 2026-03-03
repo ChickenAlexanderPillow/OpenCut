@@ -43,6 +43,7 @@ export interface AudioTrack extends BaseTrack {
 	type: "audio";
 	elements: AudioElement[];
 	muted: boolean;
+	volume?: number;
 }
 
 export interface StickerTrack extends BaseTrack {
