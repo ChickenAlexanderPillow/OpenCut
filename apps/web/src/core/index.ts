@@ -8,6 +8,7 @@ import { CommandManager } from "./managers/commands";
 import { SaveManager } from "./managers/save-manager";
 import { AudioManager } from "./managers/audio-manager";
 import { SelectionManager } from "./managers/selection-manager";
+import { AppLifecycleManager } from "./managers/app-lifecycle-manager";
 
 export class EditorCore {
 	private static instance: EditorCore | null = null;
@@ -22,6 +23,7 @@ export class EditorCore {
 	public readonly save: SaveManager;
 	public readonly audio: AudioManager;
 	public readonly selection: SelectionManager;
+	public readonly lifecycle: AppLifecycleManager;
 
 	private constructor() {
 		this.command = new CommandManager();
@@ -34,6 +36,7 @@ export class EditorCore {
 		this.save = new SaveManager(this);
 		this.audio = new AudioManager(this);
 		this.selection = new SelectionManager(this);
+		this.lifecycle = new AppLifecycleManager(this);
 		this.save.start();
 	}
 
@@ -45,6 +48,8 @@ export class EditorCore {
 	}
 
 	static reset(): void {
+		EditorCore.instance?.lifecycle.dispose();
+		EditorCore.instance?.audio.dispose();
 		EditorCore.instance = null;
 	}
 }

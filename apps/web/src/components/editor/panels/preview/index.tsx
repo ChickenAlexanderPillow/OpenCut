@@ -404,6 +404,9 @@ function PreviewCanvas({
 	const lastFrameRef = useRef(-1);
 	const lastSceneRef = useRef<RootNode | null>(null);
 	const runtimeFallbackRef = useRef<string | null>(null);
+	const [isPageVisible, setIsPageVisible] = useState(
+		typeof document === "undefined" ? true : !document.hidden,
+	);
 	const [activeSurface, setActiveSurface] = useState<"canvas2d" | "webgpu">(
 		"canvas2d",
 	);
@@ -653,7 +656,18 @@ function PreviewCanvas({
 		previewRendererMode,
 	]);
 
-	useRafLoop(render);
+	useEffect(() => {
+		if (typeof document === "undefined") return;
+		const handleVisibilityChange = () => {
+			setIsPageVisible(!document.hidden);
+		};
+		document.addEventListener("visibilitychange", handleVisibilityChange);
+		return () => {
+			document.removeEventListener("visibilitychange", handleVisibilityChange);
+		};
+	}, []);
+
+	useRafLoop(render, { enabled: isPageVisible });
 
 	useEffect(() => {
 		void previewRendererMode;

@@ -174,6 +174,26 @@ export class AudioManager {
 		}
 	}
 
+	async suspendContext(): Promise<void> {
+		if (!this.audioContext) return;
+		if (this.audioContext.state !== "running") return;
+		try {
+			await this.audioContext.suspend();
+		} catch (error) {
+			console.warn("Failed to suspend audio context:", error);
+		}
+	}
+
+	async resumeContext(): Promise<void> {
+		if (!this.audioContext) return;
+		if (this.audioContext.state !== "suspended") return;
+		try {
+			await this.audioContext.resume();
+		} catch (error) {
+			console.warn("Failed to resume audio context:", error);
+		}
+	}
+
 	private async ensureBufferReady(): Promise<void> {
 		if (!this.timelineDirty || this.buildingBuffer) return;
 
