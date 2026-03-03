@@ -532,6 +532,7 @@ function transformAudioTrack({
 		type: "audio",
 		elements: transformedElements,
 		muted: false,
+		volume: 1,
 	};
 }
 

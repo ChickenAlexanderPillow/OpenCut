@@ -125,6 +125,7 @@ async function decodeAndMixAudioSource({
 		startTime: number;
 		duration: number;
 		trimStart: number;
+		gain: number;
 	};
 	mixBuffers: Float32Array[];
 	totalSamples: number;
@@ -170,7 +171,7 @@ async function decodeAndMixAudioSource({
 				const leftSample = channelData[leftIndex] ?? 0;
 				const rightSample = channelData[rightIndex] ?? leftSample;
 				outputChannel[outputIdx] +=
-					leftSample * (1 - alpha) + rightSample * alpha;
+					(leftSample * (1 - alpha) + rightSample * alpha) * source.gain;
 			}
 		}
 	}
