@@ -1,0 +1,11 @@
+C:\Users\Design\AppData\Local\Programs\Python\Python313\Lib\site-packages\ctranslate2\__init__.py:8: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+INFO:     Started server process [99736]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)
+forrtl: error (200): program aborting due to window-CLOSE event
+Image              PC                Routine            Line        Source             
+KERNELBASE.dll     00007FFD92129DED  Unknown               Unknown  Unknown
+KERNEL32.dll       00007FFD94B9E8D7  Unknown               Unknown  Unknown
+ntdll.dll          00007FFD954CC48C  Unknown               Unknown  Unknown

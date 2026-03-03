@@ -36,7 +36,22 @@ async function fetchFromMarble<T>({
 }
 
 export async function getPosts() {
-	return fetchFromMarble<MarblePostList>({ endpoint: "posts" });
+	try {
+		return await fetchFromMarble<MarblePostList>({ endpoint: "posts" });
+	} catch (error) {
+		console.warn("Falling back to empty blog posts list:", error);
+		return {
+			posts: [],
+			pagination: {
+				limit: 0,
+				currpage: 1,
+				nextPage: null,
+				prevPage: null,
+				totalItems: 0,
+				totalPages: 0,
+			},
+		} satisfies MarblePostList;
+	}
 }
 
 export async function getTags() {

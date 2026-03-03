@@ -47,6 +47,26 @@ services:
       retries: 5
       start_period: 10s
 
+  local-transcribe:
+    build:
+      context: .
+      dockerfile: ./services/local-transcribe-whisperx/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      - LOCAL_TRANSCRIBE_MODEL=${LOCAL_TRANSCRIBE_MODEL:-large-v3}
+      - LOCAL_TRANSCRIBE_DEVICE=${LOCAL_TRANSCRIBE_DEVICE:-cuda}
+      - LOCAL_TRANSCRIBE_COMPUTE_TYPE=${LOCAL_TRANSCRIBE_COMPUTE_TYPE:-float16}
+      - LOCAL_TRANSCRIBE_API_KEY=${LOCAL_TRANSCRIBE_API_KEY:-}
+    gpus: all
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=3).read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
   web:
     build:
       context: .
@@ -56,14 +76,14 @@ services:
         - FREESOUND_API_KEY=${FREESOUND_API_KEY}
     restart: unless-stopped
     ports:
-      - "3100:3000"
+      - "${WEB_PORT:-3000}:3000"
     environment:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://opencut:opencut@db:5432/opencut
       - BETTER_AUTH_SECRET=your-production-secret-key-here
       - UPSTASH_REDIS_REST_URL=http://serverless-redis-http:80
       - UPSTASH_REDIS_REST_TOKEN=example_token
-      - NEXT_PUBLIC_SITE_URL=http://localhost:3100
+      - NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
       - NEXT_PUBLIC_MARBLE_API_URL=https://api.marblecms.com
       - MARBLE_WORKSPACE_KEY=${MARBLE_WORKSPACE_KEY:-placeholder}
       - FREESOUND_CLIENT_ID=${FREESOUND_CLIENT_ID}
@@ -74,10 +94,20 @@ services:
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-placeholder}
       - R2_BUCKET_NAME=${R2_BUCKET_NAME:-opencut-transcription}
       - MODAL_TRANSCRIPTION_URL=${MODAL_TRANSCRIPTION_URL:-http://localhost:0}
+      - LOCAL_TRANSCRIBE_ENABLED=${LOCAL_TRANSCRIBE_ENABLED:-true}
+      - LOCAL_TRANSCRIBE_URL=${LOCAL_TRANSCRIBE_URL:-http://local-transcribe:8765}
+      - LOCAL_TRANSCRIBE_TIMEOUT_MS=${LOCAL_TRANSCRIBE_TIMEOUT_MS:-120000}
+      - LOCAL_TRANSCRIBE_API_KEY=${LOCAL_TRANSCRIBE_API_KEY:-}
+      - LOCAL_TRANSCRIBE_MODEL=${LOCAL_TRANSCRIBE_MODEL:-large-v3}
+      - LOCAL_TRANSCRIBE_COMPUTE_TYPE=${LOCAL_TRANSCRIBE_COMPUTE_TYPE:-float16}
+      - LOCAL_TRANSCRIBE_DEVICE=${LOCAL_TRANSCRIBE_DEVICE:-cuda}
+      - LOCAL_TRANSCRIBE_FALLBACK_OPENAI=${LOCAL_TRANSCRIBE_FALLBACK_OPENAI:-false}
     depends_on:
       db:
         condition: service_healthy
       serverless-redis-http:
+        condition: service_healthy
+      local-transcribe:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]

@@ -28,6 +28,27 @@ const webEnvSchema = z.object({
 	R2_BUCKET_NAME: z.string(),
 	MODAL_TRANSCRIPTION_URL: z.url(),
 	OPENAI_API_KEY: z.string().optional(),
+	LOCAL_TRANSCRIBE_ENABLED: z
+		.string()
+		.optional()
+		.transform((value) => (value ?? "true").toLowerCase() === "true"),
+	LOCAL_TRANSCRIBE_URL: z.url().optional(),
+	LOCAL_TRANSCRIBE_TIMEOUT_MS: z
+		.string()
+		.optional()
+		.transform((value) => {
+			if (!value) return 120000;
+			const parsed = Number.parseInt(value, 10);
+			return Number.isFinite(parsed) && parsed > 0 ? parsed : 120000;
+		}),
+	LOCAL_TRANSCRIBE_API_KEY: z.string().optional(),
+	LOCAL_TRANSCRIBE_MODEL: z.string().optional(),
+	LOCAL_TRANSCRIBE_COMPUTE_TYPE: z.string().optional(),
+	LOCAL_TRANSCRIBE_DEVICE: z.string().optional(),
+	LOCAL_TRANSCRIBE_FALLBACK_OPENAI: z
+		.string()
+		.optional()
+		.transform((value) => (value ?? "false").toLowerCase() === "true"),
 	TRANSCRIPT_INGEST_SECRET: z.string().optional(),
 	EXTERNAL_PROJECTS_ENABLED: z
 		.string()

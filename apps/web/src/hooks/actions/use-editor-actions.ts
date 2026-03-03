@@ -49,12 +49,12 @@ const MIN_VIRAL_CLIP_SCORE = 60;
 const MAX_VIRAL_CLIP_COUNT = 5;
 const CLIP_SCORING_TRANSCRIPT_MAX_CHARS = 20000;
 const CLIP_SCORING_TIMEOUT_MS = 60000;
-const CLIP_IMPORT_TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
+const CLIP_IMPORT_TRANSCRIPTION_MODEL = "large-v3";
 const CLIP_TRANSCRIPTION_TIMEOUT_MS = 60000;
 const CLIP_TRANSCRIPTION_MIN_DURATION_SECONDS = 0.35;
 const CLIP_TRANSCRIPTION_MAX_DURATION_SECONDS = 240;
 const CLIP_TRANSCRIPTION_MAX_FILE_BYTES = 20 * 1024 * 1024;
-const CLIP_WORD_TRANSCRIPTION_CACHE_VERSION = 5;
+const CLIP_WORD_TRANSCRIPTION_CACHE_VERSION = 6;
 const MIN_RENDERABLE_WORD_SECONDS = 1 / 30;
 const CAPTION_TAIL_PAD_SECONDS = 1 / 30;
 const MIN_PREFERRED_WORD_SECONDS = 3 / 30;
@@ -672,7 +672,7 @@ function encodeMonoPcm16WavBlob({
 	return new Blob([buffer], { type: "audio/wav" });
 }
 
-async function transcribeClipAudioWithOpenAI({
+async function transcribeClipAudioWithApi({
 	wavBlob,
 	cacheKey,
 }: {
@@ -707,6 +707,8 @@ async function transcribeClipAudioWithOpenAI({
 			const json = (await response.json()) as {
 				segments?: Array<{ text: string; start: number; end: number }>;
 				granularity?: "word" | "segment" | "none";
+				engine?: string;
+				model?: string;
 			};
 			if (json.granularity && json.granularity !== "word") {
 				throw new Error(
@@ -725,6 +727,17 @@ async function transcribeClipAudioWithOpenAI({
 					start: Math.max(0, segment.start),
 					end: Math.max(segment.start + 0.01, segment.end),
 				}));
+			if (segments.length > 0) {
+				const durationSeconds =
+					segments[segments.length - 1]!.end - segments[0]!.start;
+				console.info("Clip transcription debug", {
+					cacheKey,
+					engine: json.engine ?? "unknown",
+					model: json.model ?? "unknown",
+					wordCount: segments.length,
+					durationSeconds,
+				});
+			}
 			return segments.length > 0 ? segments : null;
 		} catch (error) {
 			window.clearTimeout(timeoutId);
@@ -764,7 +777,7 @@ async function transcribeDecodedClipAudioWordLevel({
 		if (wavBlob.size <= 0 || wavBlob.size > CLIP_TRANSCRIPTION_MAX_FILE_BYTES) {
 			return null;
 		}
-		return await transcribeClipAudioWithOpenAI({
+		return await transcribeClipAudioWithApi({
 			wavBlob,
 			cacheKey,
 		});

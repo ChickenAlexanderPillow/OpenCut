@@ -1,0 +1,14 @@
+▲ Next.js 16.1.3 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.1.38:3000
+- Environments: .env.local, .env
+
+✓ Starting...
+✓ Ready in 855ms
+ GET /editor/03-exports-audio-allwyn-digital-huddle-sponsored-aa2c7ab1 200 in 1315ms (compile: 796ms, proxy.ts: 89ms, render: 431ms)
+ GET /api/health 200 in 77ms (compile: 64ms, render: 13ms)
+ POST /api/clips/transcribe 503 in 10.2s (compile: 86ms, render: 10.1s)
+ POST /api/clips/transcribe 503 in 9.3s (compile: 1692µs, render: 9.3s)
+ POST /api/clips/transcribe 200 in 21.2s (compile: 1470µs, render: 21.2s)
+ POST /api/clips/transcribe 200 in 5.2s (compile: 3ms, render: 5.1s)
+ POST /api/clips/transcribe 200 in 5.2s (compile: 3ms, render: 5.2s)
