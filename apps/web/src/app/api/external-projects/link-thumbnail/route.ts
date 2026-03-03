@@ -1,7 +1,11 @@
 import { webEnv } from "@opencut/env/web";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { upsertExternalProject } from "@/lib/external-projects/service";
+import {
+	getExternalProjectByOpenCutId,
+	upsertExternalProject,
+} from "@/lib/external-projects/service";
+import { evaluateTranscriptSuitability } from "@/lib/external-projects/transcript-suitability";
 
 const MAX_TRANSCRIPT_CHARS = 300_000;
 const MAX_SEGMENT_COUNT = 20_000;
@@ -83,6 +87,33 @@ export async function POST(request: Request) {
 
 	try {
 		const source = validation.data;
+		const linkedByOpenCutId = await getExternalProjectByOpenCutId({
+			projectId: source.externalProjectId,
+		});
+		if (
+			linkedByOpenCutId &&
+			linkedByOpenCutId.project.sourceSystem === source.sourceSystem &&
+			linkedByOpenCutId.transcript
+		) {
+			const segments =
+				(linkedByOpenCutId.transcript.segmentsJson as Array<{
+					text: string;
+					start: number;
+					end: number;
+				}>) ?? [];
+			const suitability = evaluateTranscriptSuitability({
+				transcriptText: linkedByOpenCutId.transcript.transcriptText,
+				segments,
+				audioDurationSeconds: linkedByOpenCutId.transcript.audioDurationSeconds,
+			});
+			return NextResponse.json({
+				opencutProjectId: linkedByOpenCutId.project.id,
+				sourceSystem: source.sourceSystem,
+				externalProjectId: linkedByOpenCutId.project.externalProjectId,
+				suitability,
+			});
+		}
+
 		const apiBases = resolveThumbnailApiBases();
 		if (apiBases.length === 0) {
 			return NextResponse.json(

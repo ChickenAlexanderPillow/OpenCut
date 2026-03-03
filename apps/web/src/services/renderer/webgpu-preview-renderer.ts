@@ -79,6 +79,8 @@ export class WebGPUPreviewRenderer {
 	private vertexBufferPool: GPUBuffer[] = [];
 	private cachedPartitionRoot: RootNode | null = null;
 	private cachedPartition: HybridScenePartition | null = null;
+	private pendingVideoFramesToClose: VideoFrame[] = [];
+	private closeVideoFramesTaskInFlight = false;
 	private static readonly MAX_TEXTURE_CACHE = 16;
 	private static readonly MAX_TEXTURE_CACHE_BYTES = 160 * 1024 * 1024; // 160MB
 	private static readonly TEXTURE_IDLE_TTL_MS = 10_000;
@@ -131,6 +133,49 @@ export class WebGPUPreviewRenderer {
 		this.cpuPreCanvas = null;
 		this.cachedPartitionRoot = null;
 		this.cachedPartition = null;
+		this.pendingVideoFramesToClose = [];
+		this.closeVideoFramesTaskInFlight = false;
+	}
+
+	private flushPendingVideoFrames(): void {
+		if (this.pendingVideoFramesToClose.length === 0) return;
+		const frames = this.pendingVideoFramesToClose.splice(
+			0,
+			this.pendingVideoFramesToClose.length,
+		);
+		for (const frame of frames) {
+			try {
+				frame.close();
+			} catch {}
+		}
+	}
+
+	private schedulePendingVideoFrameClose({
+		device,
+	}: {
+		device: GPUDevice;
+	}): void {
+		if (this.closeVideoFramesTaskInFlight) return;
+		if (this.pendingVideoFramesToClose.length === 0) return;
+
+		this.closeVideoFramesTaskInFlight = true;
+		const finalize = () => {
+			this.flushPendingVideoFrames();
+			this.closeVideoFramesTaskInFlight = false;
+			if (this.pendingVideoFramesToClose.length > 0) {
+				this.schedulePendingVideoFrameClose({ device });
+			}
+		};
+
+		if (typeof device.queue.onSubmittedWorkDone === "function") {
+			void device.queue
+				.onSubmittedWorkDone()
+				.catch(() => {})
+				.finally(finalize);
+			return;
+		}
+
+		setTimeout(finalize, 0);
 	}
 
 	private getPartition({
@@ -817,26 +862,8 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 		pass.end();
 		device.queue.submit([encoder.finish()]);
 		if (videoFramesToClose.length > 0) {
-			const closeFrames = () => {
-				for (const frame of videoFramesToClose) {
-					try {
-						frame.close();
-					} catch {}
-				}
-			};
-			if (typeof device.queue.onSubmittedWorkDone === "function") {
-				void device.queue
-					.onSubmittedWorkDone()
-					.catch(() => {})
-					.finally(() => {
-						closeFrames();
-					});
-			} else {
-				// Fallback for environments without queue completion promises.
-				setTimeout(() => {
-					closeFrames();
-				}, 0);
-			}
+			this.pendingVideoFramesToClose.push(...videoFramesToClose);
+			this.schedulePendingVideoFrameClose({ device });
 		}
 
 		if (overlayCanvas) {

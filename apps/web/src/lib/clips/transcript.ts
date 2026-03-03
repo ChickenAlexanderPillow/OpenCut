@@ -1,6 +1,5 @@
 import { DEFAULT_TRANSCRIPTION_MODEL } from "@/constants/transcription-constants";
 import { decodeAudioToFloat32 } from "@/lib/media/audio";
-import { transcriptionService } from "@/services/transcription/service";
 import type { MediaAsset } from "@/types/assets";
 import type { TProject } from "@/types/project";
 import { ALL_FORMATS, AudioBufferSink, BlobSource, Input } from "mediabunny";
@@ -26,6 +25,8 @@ const CHUNKED_TRANSCRIPTION_FILE_SIZE_THRESHOLD_BYTES = 180 * 1024 * 1024;
 const CHUNKED_TRANSCRIPTION_WINDOW_SECONDS = 60;
 const CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS = 1.5;
 const CHUNK_PROGRESS_HEARTBEAT_MS = 1200;
+const CLIP_TRANSCRIPTION_API_TIMEOUT_MS = 120000;
+const CLIP_TRANSCRIPTION_API_MODEL = "large-v3";
 
 function buildClipTranscriptFingerprint({
 	asset,
@@ -61,6 +62,153 @@ function getClipTranscriptCacheKey({
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
+}
+
+function encodeMonoPcm16WavBlob({
+	samples,
+	sampleRate,
+}: {
+	samples: Float32Array;
+	sampleRate: number;
+}): Blob {
+	const numChannels = 1;
+	const bitsPerSample = 16;
+	const bytesPerSample = bitsPerSample / 8;
+	const dataSize = samples.length * bytesPerSample;
+	const buffer = new ArrayBuffer(44 + dataSize);
+	const view = new DataView(buffer);
+
+	const writeString = (offset: number, value: string) => {
+		for (let i = 0; i < value.length; i++) {
+			view.setUint8(offset + i, value.charCodeAt(i));
+		}
+	};
+
+	writeString(0, "RIFF");
+	view.setUint32(4, 36 + dataSize, true);
+	writeString(8, "WAVE");
+	writeString(12, "fmt ");
+	view.setUint32(16, 16, true);
+	view.setUint16(20, 1, true);
+	view.setUint16(22, numChannels, true);
+	view.setUint32(24, sampleRate, true);
+	view.setUint32(28, sampleRate * numChannels * bytesPerSample, true);
+	view.setUint16(32, numChannels * bytesPerSample, true);
+	view.setUint16(34, bitsPerSample, true);
+	writeString(36, "data");
+	view.setUint32(40, dataSize, true);
+
+	let offset = 44;
+	for (let i = 0; i < samples.length; i++) {
+		const value = Math.max(-1, Math.min(1, samples[i]));
+		const int16 = value < 0 ? value * 0x8000 : value * 0x7fff;
+		view.setInt16(offset, int16, true);
+		offset += 2;
+	}
+
+	return new Blob([buffer], { type: "audio/wav" });
+}
+
+function resolveClipTranscriptionApiCandidates(): string[] {
+	const fallbackBase = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+	const candidates: string[] = [];
+
+	if (typeof window !== "undefined") {
+		const origin = window.location.origin;
+		if (origin.startsWith("http://") || origin.startsWith("https://")) {
+			candidates.push(`${origin}/api/clips/transcribe`);
+		}
+		candidates.push("/api/clips/transcribe");
+		if (fallbackBase) {
+			candidates.push(`${fallbackBase.replace(/\/$/, "")}/api/clips/transcribe`);
+		}
+	} else {
+		candidates.push("/api/clips/transcribe");
+		if (fallbackBase) {
+			candidates.push(`${fallbackBase.replace(/\/$/, "")}/api/clips/transcribe`);
+		}
+	}
+
+	return Array.from(new Set(candidates));
+}
+
+async function transcribeWithClipApi({
+	samples,
+	sampleRate,
+	language,
+	modelId,
+	cacheKey,
+}: {
+	samples: Float32Array;
+	sampleRate: number;
+	language: TranscriptionLanguage;
+	modelId: TranscriptionModelId;
+	cacheKey: string;
+}): Promise<{ text: string; segments: TranscriptionSegment[] }> {
+	const wavBlob = encodeMonoPcm16WavBlob({ samples, sampleRate });
+	if (wavBlob.size <= 0) {
+		return { text: "", segments: [] };
+	}
+
+	const endpoints = resolveClipTranscriptionApiCandidates();
+	let lastError: Error | null = null;
+
+	for (const endpoint of endpoints) {
+		const controller = new AbortController();
+		const timeoutId = window.setTimeout(() => {
+			controller.abort("Clip transcription request timed out");
+		}, CLIP_TRANSCRIPTION_API_TIMEOUT_MS);
+
+		try {
+			const form = new FormData();
+			form.append("file", wavBlob, "clip.wav");
+			form.append("model", CLIP_TRANSCRIPTION_API_MODEL);
+			form.append("cacheKey", cacheKey);
+			if (language !== "auto") {
+				form.append("language", language);
+			}
+			form.append("sourceModel", modelId);
+
+			const response = await fetch(endpoint, {
+				method: "POST",
+				body: form,
+				signal: controller.signal,
+			});
+			window.clearTimeout(timeoutId);
+
+			if (!response.ok) {
+				const body = await response.text();
+				throw new Error(`Clip transcription failed (${response.status}): ${body}`);
+			}
+
+			const payload = (await response.json()) as {
+				segments?: Array<{ text: string; start: number; end: number }>;
+				granularity?: "word" | "segment" | "none";
+			};
+			if (payload.granularity && payload.granularity !== "word") {
+				throw new Error(
+					`Clip transcription returned ${payload.granularity}-level timing; word-level timing is required`,
+				);
+			}
+			const segments = normalizeTranscriptionSegments({
+				segments: (payload.segments ?? []).map((segment) => ({
+					text: segment.text,
+					start: segment.start,
+					end: segment.end,
+				})),
+			});
+			return {
+				text: segments.map((segment) => segment.text).join(" ").trim(),
+				segments,
+			};
+		} catch (error) {
+			window.clearTimeout(timeoutId);
+			lastError =
+				error instanceof Error ? error : new Error("Failed to reach clip transcription API");
+		}
+	}
+
+	throw lastError ?? new Error("Failed to reach clip transcription API");
 }
 
 function normalizeTranscriptionSegments({
@@ -157,12 +305,12 @@ async function transcribeAssetInChunks({
 			audioBlob: asset.file,
 			fallbackUrl: asset.url,
 		});
-		const result = await transcriptionService.transcribe({
-			audioData: decoded.samples,
+		const result = await transcribeWithClipApi({
+			samples: decoded.samples,
 			sampleRate: decoded.sampleRate,
-			language: language === "auto" ? undefined : language,
+			language,
 			modelId,
-			onProgress,
+			cacheKey: `${asset.id}:${modelId}:${language}:full`,
 		});
 		return {
 			text: result.text,
@@ -243,28 +391,16 @@ async function transcribeAssetInChunks({
 			});
 		}, CHUNK_PROGRESS_HEARTBEAT_MS);
 
-		let chunkResult: Awaited<ReturnType<typeof transcriptionService.transcribe>>;
+		let chunkResult: Awaited<ReturnType<typeof transcribeWithClipApi>>;
 		try {
-			chunkResult = await transcriptionService.transcribe({
-				audioData: decodedChunk.samples,
+			chunkResult = await transcribeWithClipApi({
+				samples: decodedChunk.samples,
 				sampleRate: decodedChunk.sampleRate,
-				language: language === "auto" ? undefined : language,
+				language,
 				modelId,
-				onProgress: (chunkProgress) => {
-					const completedRatio = chunkIndex / chunkCount;
-					const currentRatio =
-						(chunkProgress.progress / 100) * (1 / chunkCount) + completedRatio;
-					chunkProgressFromWorker = Math.max(
-						chunkProgressFromWorker,
-						clamp(currentRatio * 100, chunkBaseProgress, chunkMaxSoftProgress),
-					);
-					onProgress?.({
-						status: chunkProgress.status,
-						progress: Math.round(clamp(currentRatio * 100, 0, 100)),
-						message: `Transcribing chunk ${chunkIndex + 1}/${chunkCount}...`,
-					});
-				},
+				cacheKey: `${asset.id}:${modelId}:${language}:chunk:${chunkIndex}:${decodeStart.toFixed(3)}:${decodeEnd.toFixed(3)}`,
 			});
+			chunkProgressFromWorker = chunkMaxSoftProgress;
 		} finally {
 			window.clearInterval(heartbeatId);
 		}
@@ -369,7 +505,13 @@ function getLinkedExternalTranscriptForMedia({
 	const mediaLink = project.externalMediaLinks?.[mediaId];
 	if (!mediaLink) return null;
 	const key = `${mediaLink.sourceSystem}:${mediaLink.externalProjectId}`;
-	const entry = project.externalTranscriptCache?.[key];
+	const entry =
+		project.externalTranscriptCache?.[key] ??
+		Object.values(project.externalTranscriptCache ?? {}).find(
+			(candidate) =>
+				candidate.sourceSystem === mediaLink.sourceSystem &&
+				candidate.externalProjectId === mediaLink.externalProjectId,
+		);
 	if (!entry) return null;
 	const suitability = evaluateTranscriptSuitability({
 		transcriptText: entry.transcriptText,
@@ -550,12 +692,12 @@ export async function getOrCreateClipTranscriptForAsset({
 					audioBlob: asset.file,
 					fallbackUrl: asset.url,
 				});
-				return await transcriptionService.transcribe({
-					audioData: samples,
+				return await transcribeWithClipApi({
+					samples,
 					sampleRate,
-					language: resolvedLanguage === "auto" ? undefined : resolvedLanguage,
+					language: resolvedLanguage,
 					modelId,
-					onProgress,
+					cacheKey: `${asset.id}:${modelId}:${resolvedLanguage}:single`,
 				});
 			})();
 

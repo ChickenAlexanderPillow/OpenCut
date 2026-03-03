@@ -30,13 +30,19 @@ export async function POST(
 
 		const requestedSource = validation.data.sourceSystem;
 		const requestedExternalProjectId = validation.data.externalProjectId?.trim();
-		const result =
+		let result =
 			requestedSource && requestedExternalProjectId
 				? await getExternalProjectBySource({
 						sourceSystem: requestedSource,
 						externalProjectId: requestedExternalProjectId,
 					})
 				: await getExternalProjectByOpenCutId({ projectId });
+		if (!result && requestedExternalProjectId) {
+			// Allow callers that accidentally pass an OpenCut project id as externalProjectId.
+			result = await getExternalProjectByOpenCutId({
+				projectId: requestedExternalProjectId,
+			});
+		}
 		if (!result || !result.transcript) {
 			return NextResponse.json(
 				{ error: "Linked transcript not found" },
