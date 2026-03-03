@@ -128,7 +128,8 @@ export async function collectAudioElements({
 
 	for (const track of tracks) {
 		if (canTracktHaveAudio(track) && track.muted) continue;
-		const trackGain = track.type === "audio" ? clampGain(track.volume ?? 1) : 1;
+		const trackGain =
+			track.type === "audio" ? mapTrackVolumeToGain(track.volume ?? 1) : 1;
 
 		for (const element of track.elements) {
 			if (!canElementHaveAudio(element)) continue;
@@ -400,6 +401,69 @@ function clampGain(value: number): number {
 	return Math.max(0, Math.min(2, value));
 }
 
+function mapTrackVolumeToGain(trackVolume: number): number {
+	const clamped = clampGain(trackVolume);
+	// Perceptual taper: low control values attenuate more strongly.
+	if (clamped <= 1) {
+		return clamped * clamped * clamped;
+	}
+	return 1 + (clamped - 1);
+}
+
+export async function decodeMediaFileToAudioBuffer({
+	file,
+	sampleRate,
+}: {
+	file: File;
+	sampleRate?: number;
+}): Promise<AudioBuffer | null> {
+	const context = createAudioContext(
+		typeof sampleRate === "number" ? { sampleRate } : undefined,
+	);
+	const input = new Input({
+		source: new BlobSource(file),
+		formats: ALL_FORMATS,
+	});
+
+	try {
+		const audioTrack = await input.getPrimaryAudioTrack();
+		if (audioTrack) {
+			const sink = new AudioBufferSink(audioTrack);
+			const chunks: AudioBuffer[] = [];
+			let totalSamples = 0;
+			for await (const { buffer } of sink.buffers()) {
+				chunks.push(buffer);
+				totalSamples += buffer.length;
+			}
+			if (chunks.length > 0 && totalSamples > 0) {
+				const first = chunks[0];
+				const channels = Math.max(1, first.numberOfChannels);
+				const merged = context.createBuffer(channels, totalSamples, first.sampleRate);
+				for (let channelIndex = 0; channelIndex < channels; channelIndex++) {
+					const channelData = new Float32Array(totalSamples);
+					let offset = 0;
+					for (const chunk of chunks) {
+						const sourceChannel = Math.min(channelIndex, chunk.numberOfChannels - 1);
+						channelData.set(chunk.getChannelData(sourceChannel), offset);
+						offset += chunk.length;
+					}
+					merged.copyToChannel(channelData, channelIndex);
+				}
+				return merged;
+			}
+		}
+
+		const arrayBuffer = await file.arrayBuffer();
+		return await context.decodeAudioData(arrayBuffer.slice(0));
+	} catch (error) {
+		console.warn("Failed to decode media file to audio buffer:", error);
+		return null;
+	} finally {
+		input.dispose();
+		void context.close().catch(() => undefined);
+	}
+}
+
 async function fetchLibraryAudioSource({
 	element,
 	gain,
@@ -527,7 +591,8 @@ export async function collectAudioMixSources({
 
 	for (const track of tracks) {
 		if (canTracktHaveAudio(track) && track.muted) continue;
-		const trackGain = track.type === "audio" ? clampGain(track.volume ?? 1) : 1;
+		const trackGain =
+			track.type === "audio" ? mapTrackVolumeToGain(track.volume ?? 1) : 1;
 
 		for (const element of track.elements) {
 			if (!canElementHaveAudio(element)) continue;
@@ -588,7 +653,8 @@ export async function collectAudioClips({
 
 	for (const track of tracks) {
 		const isTrackMuted = canTracktHaveAudio(track) && track.muted;
-		const trackGain = track.type === "audio" ? clampGain(track.volume ?? 1) : 1;
+		const trackGain =
+			track.type === "audio" ? mapTrackVolumeToGain(track.volume ?? 1) : 1;
 
 		for (const element of track.elements) {
 			if (!canElementHaveAudio(element)) continue;

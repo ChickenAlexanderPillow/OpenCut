@@ -32,6 +32,7 @@ export class AudioManager {
 			this.editor.playback.subscribe(this.handlePlaybackChange),
 			this.editor.timeline.subscribe(this.handleTimelineOrMediaChange),
 			this.editor.media.subscribe(this.handleTimelineOrMediaChange),
+			this.editor.scenes.subscribe(this.handleTimelineOrMediaChange),
 		);
 
 		if (typeof window !== "undefined") {
@@ -254,16 +255,19 @@ export class AudioManager {
 		if (this.timelineDuration <= 0) return;
 
 		const clampedTime = Math.max(0, Math.min(this.timelineDuration, time));
-		if (clampedTime >= this.timelineDuration) return;
+		const startTime =
+			clampedTime >= this.timelineDuration
+				? Math.max(0, this.timelineDuration - 1 / 120)
+				: clampedTime;
 
 		const source = audioContext.createBufferSource();
 		source.buffer = this.timelineBuffer;
 		source.connect(this.masterGain ?? audioContext.destination);
-		source.start(audioContext.currentTime, clampedTime);
+		source.start(audioContext.currentTime, startTime);
 
 		this.playbackSource = source;
 		this.playbackStartContextTime = audioContext.currentTime;
-		this.playbackStartTimelineTime = clampedTime;
+		this.playbackStartTimelineTime = startTime;
 
 		source.addEventListener("ended", () => {
 			if (this.playbackSource === source) {

@@ -1316,7 +1316,7 @@ function ContentSection({
 				<Textarea
 					placeholder="Name"
 					value={content.displayValue}
-					className="min-h-20"
+					className="min-h-60"
 					onFocus={content.onFocus}
 					onChange={content.onChange}
 					onBlur={content.onBlur}

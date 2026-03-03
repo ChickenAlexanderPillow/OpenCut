@@ -6,6 +6,7 @@ import {
 	TaskAdd02Icon,
 	ViewIcon,
 	ViewOffSlashIcon,
+	VolumeLowIcon,
 	VolumeHighIcon,
 	VolumeOffIcon,
 } from "@hugeicons/core-free-icons";
@@ -312,7 +313,8 @@ export function Timeline() {
 														isMainTrack(track) && (
 															<div className="bg-red-500 size-1.5 rounded-full" />
 														)}
-													{canTracktHaveAudio(track) && (
+													{canTracktHaveAudio(track) &&
+														track.type !== "audio" && (
 														<TrackToggleIcon
 															isOff={track.muted}
 															icons={{
@@ -327,7 +329,7 @@ export function Timeline() {
 														/>
 													)}
 													{track.type === "audio" && (
-														<AudioTrackVolumeHandle
+														<AudioTrackVolumeScrubber
 															volume={track.volume ?? 1}
 															onChange={(nextVolume) => {
 																editor.timeline.setAudioTrackVolume({
@@ -615,7 +617,7 @@ function TrackToggleIcon({
 	);
 }
 
-function AudioTrackVolumeHandle({
+function AudioTrackVolumeScrubber({
 	volume,
 	onChange,
 }: {
@@ -623,27 +625,126 @@ function AudioTrackVolumeHandle({
 	onChange: (volume: number) => void;
 }) {
 	const normalizedVolume = Math.max(0, Math.min(2, volume));
+	const [isHovering, setIsHovering] = useState(false);
+	const [isDragging, setIsDragging] = useState(false);
+	const startXRef = useRef(0);
+	const startVolumeRef = useRef(normalizedVolume);
+	const hasDraggedRef = useRef(false);
+	const lastNonZeroVolumeRef = useRef(normalizedVolume > 0 ? normalizedVolume : 1);
+	const dragFrameRef = useRef<number | null>(null);
+
+	useEffect(() => {
+		if (normalizedVolume > 0.001) {
+			lastNonZeroVolumeRef.current = normalizedVolume;
+		}
+	}, [normalizedVolume]);
+
+	useEffect(() => {
+		return () => {
+			if (dragFrameRef.current != null) {
+				window.cancelAnimationFrame(dragFrameRef.current);
+				dragFrameRef.current = null;
+			}
+		};
+	}, []);
+
+	const displayedPercent = Math.round(normalizedVolume * 100);
+	const icon =
+		normalizedVolume <= 0.001
+			? VolumeOffIcon
+			: normalizedVolume < 0.75
+				? VolumeLowIcon
+				: VolumeHighIcon;
+
+	const setVolumeFromPointerDelta = ({
+		clientX,
+	}: {
+		clientX: number;
+	}) => {
+		const deltaX = clientX - startXRef.current;
+		const rawNext = startVolumeRef.current + deltaX * 0.005;
+		const nextVolume = Math.max(0, Math.min(2, rawNext));
+		onChange(nextVolume);
+	};
+
+	const startDrag = ({ clientX }: { clientX: number }) => {
+		startXRef.current = clientX;
+		startVolumeRef.current = normalizedVolume;
+		hasDraggedRef.current = false;
+		setIsDragging(true);
+	};
+
+	const handlePointerMove = (event: PointerEvent) => {
+		const deltaX = Math.abs(event.clientX - startXRef.current);
+		if (!hasDraggedRef.current && deltaX >= 2) {
+			hasDraggedRef.current = true;
+		}
+		if (!hasDraggedRef.current) return;
+		event.preventDefault();
+		if (dragFrameRef.current != null) return;
+		dragFrameRef.current = window.requestAnimationFrame(() => {
+			dragFrameRef.current = null;
+			setVolumeFromPointerDelta({ clientX: event.clientX });
+		});
+	};
+
+	const stopDrag = () => {
+		if (!hasDraggedRef.current) {
+			if (normalizedVolume <= 0.001) {
+				onChange(lastNonZeroVolumeRef.current || 1);
+			} else {
+				lastNonZeroVolumeRef.current = normalizedVolume;
+				onChange(0);
+			}
+		}
+		setIsDragging(false);
+		hasDraggedRef.current = false;
+		if (dragFrameRef.current != null) {
+			window.cancelAnimationFrame(dragFrameRef.current);
+			dragFrameRef.current = null;
+		}
+	};
+
+	useEffect(() => {
+		if (!isDragging) return;
+		window.addEventListener("pointermove", handlePointerMove);
+		window.addEventListener("pointerup", stopDrag);
+		window.addEventListener("pointercancel", stopDrag);
+		return () => {
+			window.removeEventListener("pointermove", handlePointerMove);
+			window.removeEventListener("pointerup", stopDrag);
+			window.removeEventListener("pointercancel", stopDrag);
+		};
+	}, [isDragging]);
+
 	return (
 		<div
-			className="flex w-14 items-center"
+			className="relative flex items-center"
 			onMouseDown={(event) => event.stopPropagation()}
 			onClick={(event) => event.stopPropagation()}
+			onMouseEnter={() => setIsHovering(true)}
+			onMouseLeave={() => setIsHovering(false)}
 		>
-			<input
-				type="range"
-				min={0}
-				max={200}
-				step={1}
-				value={Math.round(normalizedVolume * 100)}
-				onChange={(event) => {
-					const next = Number.parseInt(event.target.value, 10);
-					if (!Number.isFinite(next)) return;
-					onChange(Math.max(0, Math.min(2, next / 100)));
+			<button
+				type="button"
+				className={`flex items-center justify-center rounded p-0.5 ${
+					isDragging ? "bg-muted" : ""
+				}`}
+				onPointerDown={(event) => {
+					event.stopPropagation();
+					event.currentTarget.setPointerCapture(event.pointerId);
+					startDrag({ clientX: event.clientX });
 				}}
-				className="h-1.5 w-full cursor-pointer accent-foreground"
-				aria-label="Audio track volume"
-				title={`Track volume ${Math.round(normalizedVolume * 100)}%`}
-			/>
+				aria-label="Adjust audio track volume"
+				title="Click to mute/unmute. Drag left/right to adjust volume."
+			>
+				<HugeiconsIcon icon={icon} className="text-muted-foreground size-4 cursor-ew-resize" />
+			</button>
+			{(isHovering || isDragging) && (
+				<div className="bg-background text-foreground absolute top-[-1.35rem] left-1/2 -translate-x-1/2 rounded border px-1.5 py-0.5 text-[10px] leading-none">
+					{displayedPercent}%
+				</div>
+			)}
 		</div>
 	);
 }

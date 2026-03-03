@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
+import { decodeMediaFileToAudioBuffer } from "@/lib/media/audio";
 
 interface AudioWaveformProps {
 	audioUrl?: string;
 	audioBuffer?: AudioBuffer;
+	audioFile?: File;
 	height?: number;
 	className?: string;
+}
+
+const decodedBufferCache = new Map<string, Promise<AudioBuffer | null>>();
+
+function getDecodedBufferCacheKey(file: File): string {
+	return `${file.name}:${file.size}:${file.lastModified}:${file.type}`;
 }
 
 function extractPeaks({
@@ -42,6 +50,7 @@ function extractPeaks({
 export function AudioWaveform({
 	audioUrl,
 	audioBuffer,
+	audioFile,
 	height = 32,
 	className = "",
 }: AudioWaveformProps) {
@@ -56,9 +65,10 @@ export function AudioWaveform({
 		const ws = wavesurfer.current;
 
 		const initWaveSurfer = async () => {
-			if (!waveformRef.current || (!audioUrl && !audioBuffer)) return;
+			if (!waveformRef.current || (!audioUrl && !audioBuffer && !audioFile)) return;
 
-			if (audioBuffer && canvasRef.current) {
+			const drawBufferToCanvas = (buffer: AudioBuffer): boolean => {
+				if (!canvasRef.current || !waveformRef.current) return false;
 				const canvas = canvasRef.current;
 				const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
 				const width = Math.max(256, waveformRef.current.clientWidth || 256);
@@ -70,16 +80,14 @@ export function AudioWaveform({
 
 				const ctx = canvas.getContext("2d");
 				if (!ctx) {
-					setError(true);
-					setIsLoading(false);
-					return;
+					return false;
 				}
 
 				ctx.scale(dpr, dpr);
 				ctx.clearRect(0, 0, width, pixelHeight);
 
 				const peaks = extractPeaks({
-					buffer: audioBuffer,
+					buffer,
 					length: Math.max(64, Math.floor(width / 2)),
 				});
 				const channelPeaks = peaks[0] ?? [];
@@ -98,9 +106,42 @@ export function AudioWaveform({
 					ctx.fillRect(x, centerY - barHeight, barWidth, barHeight * 2);
 				}
 
+				return true;
+			};
+
+			if (audioBuffer) {
+				const drawn = drawBufferToCanvas(audioBuffer);
+				if (!drawn) {
+					setError(true);
+					setIsLoading(false);
+					return;
+				}
+
 				setIsLoading(false);
 				setError(false);
 				return;
+			}
+
+			if (audioFile) {
+				try {
+					const cacheKey = getDecodedBufferCacheKey(audioFile);
+					let decodeTask = decodedBufferCache.get(cacheKey);
+					if (!decodeTask) {
+						decodeTask = decodeMediaFileToAudioBuffer({ file: audioFile });
+						decodedBufferCache.set(cacheKey, decodeTask);
+					}
+					const decodedBuffer = await decodeTask;
+					if (decodedBuffer) {
+						const drawn = drawBufferToCanvas(decodedBuffer);
+						if (drawn) {
+							setIsLoading(false);
+							setError(false);
+							return;
+						}
+					}
+				} catch (error) {
+					console.warn("Waveform file decode fallback failed:", error);
+				}
 			}
 
 			try {
@@ -213,7 +254,7 @@ export function AudioWaveform({
 				});
 			}
 		};
-	}, [audioUrl, audioBuffer, height]);
+	}, [audioUrl, audioBuffer, audioFile, height]);
 
 	if (error) {
 		return (

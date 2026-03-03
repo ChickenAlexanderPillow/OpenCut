@@ -390,6 +390,11 @@ function ElementContent({
 						<AudioWaveform
 							audioBuffer={audioBuffer}
 							audioUrl={audioUrl}
+							audioFile={
+								element.sourceType === "upload"
+									? mediaAssets.find((asset) => asset.id === element.mediaId)?.file
+									: undefined
+							}
 							height={24}
 							className="w-full"
 						/>
