@@ -177,6 +177,7 @@ export function useElementInteraction({
 	const pendingDragRef = useRef<PendingDragState | null>(null);
 	const lastMouseXRef = useRef(0);
 	const mouseDownLocationRef = useRef<{ x: number; y: number } | null>(null);
+	const lastProcessedMoveTsRef = useRef(0);
 
 	const startDrag = useCallback(
 		({
@@ -263,6 +264,12 @@ export function useElementInteraction({
 		if (!dragState.isDragging && !isPendingDrag) return;
 
 		const handleMouseMove = ({ clientX, clientY }: MouseEvent) => {
+			const now = performance.now();
+			if (now - lastProcessedMoveTsRef.current < 12) {
+				return;
+			}
+			lastProcessedMoveTsRef.current = now;
+
 			let startedDragThisEvent = false;
 			const timeline = timelineRef.current;
 			const scrollContainer = tracksScrollRef.current;

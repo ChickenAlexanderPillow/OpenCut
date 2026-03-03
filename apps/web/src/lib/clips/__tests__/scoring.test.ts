@@ -97,4 +97,66 @@ describe("clip scoring", () => {
 		expect(results).toHaveLength(1);
 		expect(results[0]?.id).toBe("b");
 	});
+
+	test("enforces distinct non-overlapping clips by default", () => {
+		const results = selectTopCandidatesWithQualityGate({
+			candidates: [
+				{
+					id: "a",
+					startTime: 0,
+					endTime: 50,
+					duration: 50,
+					title: "A",
+					rationale: "A",
+					transcriptSnippet: "A",
+					scoreOverall: 95,
+					scoreBreakdown: {
+						hook: 95,
+						emotion: 90,
+						shareability: 90,
+						clarity: 90,
+						momentum: 90,
+					},
+				},
+				{
+					id: "b",
+					startTime: 45,
+					endTime: 90,
+					duration: 45,
+					title: "B",
+					rationale: "B",
+					transcriptSnippet: "B",
+					scoreOverall: 93,
+					scoreBreakdown: {
+						hook: 93,
+						emotion: 90,
+						shareability: 90,
+						clarity: 90,
+						momentum: 90,
+					},
+				},
+				{
+					id: "c",
+					startTime: 90,
+					endTime: 130,
+					duration: 40,
+					title: "C",
+					rationale: "C",
+					transcriptSnippet: "C",
+					scoreOverall: 92,
+					scoreBreakdown: {
+						hook: 92,
+						emotion: 90,
+						shareability: 90,
+						clarity: 90,
+						momentum: 90,
+					},
+				},
+			],
+			minScore: 60,
+			maxCount: 5,
+		});
+
+		expect(results.map((item) => item.id)).toEqual(["a", "c"]);
+	});
 });

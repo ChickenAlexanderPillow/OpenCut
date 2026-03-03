@@ -15,7 +15,7 @@ describe("buildClipCandidatesFromTranscript", () => {
 		expect(candidates.length).toBeGreaterThan(0);
 		for (const candidate of candidates) {
 			expect(candidate.duration).toBeGreaterThanOrEqual(30);
-			expect(candidate.duration).toBeLessThanOrEqual(60);
+			expect(candidate.duration).toBeLessThanOrEqual(90);
 			expect(candidate.startTime).toBeGreaterThanOrEqual(0);
 			expect(candidate.endTime).toBeLessThanOrEqual(200);
 		}

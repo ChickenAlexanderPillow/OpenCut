@@ -54,6 +54,9 @@ export function MediaView() {
 	const { mediaViewMode, setMediaViewMode, highlightMediaId, clearHighlight } =
 		useAssetsPanelStore();
 	const setActiveTab = useAssetsPanelStore((state) => state.setActiveTab);
+	const requestClipSectionFocus = useAssetsPanelStore(
+		(state) => state.requestClipSectionFocus,
+	);
 	const { highlightedId, registerElement } = useRevealItem(
 		highlightMediaId,
 		clearHighlight,
@@ -324,7 +327,13 @@ export function MediaView() {
 	);
 
 	const handleGenerateClipsForMedia = ({ mediaId }: { mediaId: string }) => {
+		const existingCount = clipCountsBySource.get(mediaId) ?? 0;
+		if (existingCount > 0) {
+			requestClipSectionFocus(mediaId);
+			return;
+		}
 		setActiveTab("clips");
+		requestClipSectionFocus(mediaId);
 		invokeAction("generate-viral-clips", {
 			sourceMediaId: mediaId,
 		});
@@ -415,7 +424,9 @@ function GenerateClipsIconButton({
 						</div>
 					</div>
 				</TooltipTrigger>
-				<TooltipContent>Generate clips</TooltipContent>
+				<TooltipContent>
+					{clipCount > 0 ? "View clips" : "Generate clips"}
+				</TooltipContent>
 			</Tooltip>
 		</TooltipProvider>
 	);

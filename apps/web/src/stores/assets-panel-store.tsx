@@ -1,5 +1,6 @@
 import type { ElementType } from "react";
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import {
 	ArrowRightDoubleIcon,
 	ClosedCaptionIcon,
@@ -95,19 +96,38 @@ interface AssetsPanelStore {
 	highlightMediaId: string | null;
 	requestRevealMedia: (mediaId: string) => void;
 	clearHighlight: () => void;
+	clipFocusMediaId: string | null;
+	requestClipSectionFocus: (mediaId: string) => void;
+	clearClipSectionFocus: () => void;
 
 	/* Media */
 	mediaViewMode: MediaViewMode;
 	setMediaViewMode: (mode: MediaViewMode) => void;
 }
 
-export const useAssetsPanelStore = create<AssetsPanelStore>((set) => ({
-	activeTab: "media",
-	setActiveTab: (tab) => set({ activeTab: tab }),
-	highlightMediaId: null,
-	requestRevealMedia: (mediaId) =>
-		set({ activeTab: "media", highlightMediaId: mediaId }),
-	clearHighlight: () => set({ highlightMediaId: null }),
-	mediaViewMode: "grid",
-	setMediaViewMode: (mode) => set({ mediaViewMode: mode }),
-}));
+export const useAssetsPanelStore = create<AssetsPanelStore>()(
+	persist(
+		(set) => ({
+			activeTab: "media",
+			setActiveTab: (tab) => set({ activeTab: tab }),
+			highlightMediaId: null,
+			requestRevealMedia: (mediaId) =>
+				set({ activeTab: "media", highlightMediaId: mediaId }),
+			clearHighlight: () => set({ highlightMediaId: null }),
+			clipFocusMediaId: null,
+			requestClipSectionFocus: (mediaId) =>
+				set({ activeTab: "clips", clipFocusMediaId: mediaId }),
+			clearClipSectionFocus: () => set({ clipFocusMediaId: null }),
+			mediaViewMode: "grid",
+			setMediaViewMode: (mode) => set({ mediaViewMode: mode }),
+		}),
+		{
+			name: "assets-panel-state",
+			version: 1,
+			partialize: (state) => ({
+				activeTab: state.activeTab,
+				mediaViewMode: state.mediaViewMode,
+			}),
+		},
+	),
+);

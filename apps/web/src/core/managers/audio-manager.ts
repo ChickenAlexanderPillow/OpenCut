@@ -1,47 +1,41 @@
 import type { EditorCore } from "@/core";
-import { createAudioContext, createTimelineAudioBuffer } from "@/lib/media/audio";
+import { collectAudioClips } from "@/lib/media/audio";
+import { useProjectProcessStore } from "@/stores/project-process-store";
+
+type ActiveClip = {
+	id: string;
+	sourceKey: string;
+	startTime: number;
+	duration: number;
+	trimStart: number;
+	muted: boolean;
+	media: HTMLMediaElement;
+};
 
 export class AudioManager {
-	private static readonly PLAYBACK_SAMPLE_RATE = 32000;
-	private audioContext: AudioContext | null = null;
-	private masterGain: GainNode | null = null;
-	private playbackSource: AudioBufferSourceNode | null = null;
-	private timelineBuffer: AudioBuffer | null = null;
-	private timelineDuration = 0;
+	private clips: ActiveClip[] = [];
+	private sourceObjectUrls = new Map<string, string>();
 	private timelineDirty = true;
-	private buildingBuffer = false;
+	private buildPromise: Promise<void> | null = null;
 	private buildGeneration = 0;
-	private lastIsPlaying = false;
-	private lastIsScrubbing = false;
-	private lastVolume = 1;
-	private lastSeekRestartAt = 0;
-	private lastSeekTime = 0;
-	private minSeekRestartIntervalMs = 80;
-	private minSeekTimeDeltaSeconds = 1 / 30;
-	private playbackStartContextTime = 0;
-	private playbackStartTimelineTime = 0;
-	private playbackRequestId = 0;
-	private lastDriftCorrectionAt = 0;
-	private driftCorrectionCooldownMs = 120;
-	private driftResyncThresholdSeconds = 0.08;
-	private unsubscribers: Array<() => void> = [];
 	private activeProjectId: string | null = null;
-	private bufferBuildPromise: Promise<void> | null = null;
-	private warmupTimer: number | null = null;
-	private warmupIdleHandle: number | null = null;
-	private quickStartMaxWaitMs = 120;
+	private unsubscribers: Array<() => void> = [];
+	private processId: string | null = null;
+	private lastVolume = 1;
+	private lastIsPlaying = false;
+	private suspendSync = false;
 
 	constructor(private editor: EditorCore) {
 		this.lastVolume = this.editor.playback.getVolume();
+		this.activeProjectId = this.editor.project.getActiveOrNull()?.metadata.id ?? null;
 
 		this.unsubscribers.push(
 			this.editor.playback.subscribe(this.handlePlaybackChange),
-			this.editor.timeline.subscribe(this.handleTimelineOrMediaChange),
-			this.editor.media.subscribe(this.handleTimelineOrMediaChange),
+			this.editor.timeline.subscribe(this.handleTimelineChange),
+			this.editor.scenes.subscribe(this.handleTimelineChange),
+			this.editor.media.subscribe(this.handleTimelineChange),
 			this.editor.project.subscribe(this.handleProjectChange),
 		);
-
-		this.activeProjectId = this.editor.project.getActiveOrNull()?.metadata.id ?? null;
 
 		if (typeof window !== "undefined") {
 			window.addEventListener("playback-seek", this.handleSeek);
@@ -54,7 +48,6 @@ export class AudioManager {
 	}
 
 	dispose(): void {
-		this.stopSource();
 		for (const unsub of this.unsubscribers) {
 			unsub();
 		}
@@ -65,307 +58,321 @@ export class AudioManager {
 			window.removeEventListener("pointerdown", this.handleUserGesture);
 			window.removeEventListener("keydown", this.handleUserGesture);
 		}
-		this.clearWarmupScheduling();
-		if (this.audioContext) {
-			void this.audioContext.close();
-			this.audioContext = null;
-			this.masterGain = null;
+		this.stopAllMedia();
+		this.clearAllObjectUrls();
+		if (this.processId) {
+			useProjectProcessStore.getState().removeProcess({ id: this.processId });
+			this.processId = null;
 		}
 	}
 
 	private handlePlaybackChange = (): void => {
 		const isPlaying = this.editor.playback.getIsPlaying();
-		const isScrubbing = this.editor.playback.getIsScrubbing();
 		const volume = this.editor.playback.getVolume();
 
 		if (volume !== this.lastVolume) {
 			this.lastVolume = volume;
-			this.updateGain();
-		}
-
-		if (isPlaying !== this.lastIsPlaying) {
-			this.lastIsPlaying = isPlaying;
-			if (isPlaying) {
-				void this.startPlayback({ time: this.editor.playback.getCurrentTime() });
-			} else {
-				this.playbackRequestId += 1;
-				this.stopSource();
+			for (const clip of this.clips) {
+				clip.media.volume = this.lastVolume;
 			}
 		}
 
-		// Scrub end is a hard resync point to avoid brief AV drift.
-		if (this.lastIsScrubbing && !isScrubbing && isPlaying) {
-			this.lastSeekRestartAt = 0;
-			this.lastSeekTime = Number.NaN;
-			void this.startPlayback({ time: this.editor.playback.getCurrentTime() });
-		}
-		this.lastIsScrubbing = isScrubbing;
-	};
+		if (isPlaying === this.lastIsPlaying) return;
+		this.lastIsPlaying = isPlaying;
 
-	private handleSeek = (event: Event): void => {
-		const detail = (event as CustomEvent<{ time: number }>).detail;
-		if (!detail) return;
-		const time = detail.time;
-		const isScrubbing = this.editor.playback.getIsScrubbing();
-
-		if (!this.editor.playback.getIsPlaying()) {
-			this.stopSource();
+		if (!isPlaying) {
+			this.pauseAllMedia();
 			return;
 		}
 
-		const now = Date.now();
-		const timeDelta = Math.abs(time - this.lastSeekTime);
-		const shouldThrottle =
-			isScrubbing &&
-			now - this.lastSeekRestartAt < this.minSeekRestartIntervalMs &&
-			timeDelta < this.minSeekTimeDeltaSeconds;
-		if (shouldThrottle) return;
-
-		this.lastSeekRestartAt = now;
-		this.lastSeekTime = time;
-		void this.startPlayback({ time });
+		void this.startAtCurrentTime();
 	};
 
-	private handlePlaybackUpdate = (event: Event): void => {
-		if (!this.editor.playback.getIsPlaying()) return;
-		if (this.editor.playback.getIsScrubbing()) return;
-		if (!this.audioContext || !this.playbackSource) return;
-
-		const detail = (event as CustomEvent<{ time: number }>).detail;
-		if (!detail) return;
-
-		const expectedTimelineFromAudio =
-			this.playbackStartTimelineTime +
-			(this.audioContext.currentTime - this.playbackStartContextTime);
-		const drift = detail.time - expectedTimelineFromAudio;
-
-		if (Math.abs(drift) < this.driftResyncThresholdSeconds) return;
-		const now = Date.now();
-		if (now - this.lastDriftCorrectionAt < this.driftCorrectionCooldownMs) return;
-
-		this.lastDriftCorrectionAt = now;
-		void this.startPlayback({ time: detail.time });
-	};
-
-	private handleTimelineOrMediaChange = (): void => {
+	private handleTimelineChange = (): void => {
 		this.timelineDirty = true;
-		if (this.editor.playback.getIsPlaying() && this.timelineBuffer) {
+		if (!this.editor.playback.getIsPlaying()) {
+			void this.ensureClipsReady();
 			return;
 		}
-		this.scheduleBufferWarmup();
+		void this.rebuildAndSync();
 	};
 
 	private handleProjectChange = (): void => {
 		const nextProjectId = this.editor.project.getActiveOrNull()?.metadata.id ?? null;
 		if (nextProjectId === this.activeProjectId) return;
-
 		this.activeProjectId = nextProjectId;
 
-		// Hard boundary between projects: stop any active source and invalidate buffers.
-		this.playbackRequestId += 1;
-		this.stopSource();
-		this.timelineBuffer = null;
-		this.timelineDuration = 0;
 		this.timelineDirty = true;
 		this.buildGeneration += 1;
-		this.buildingBuffer = false;
-		this.bufferBuildPromise = null;
-		this.clearWarmupScheduling();
-		this.lastSeekRestartAt = 0;
-		this.lastSeekTime = 0;
-		this.lastDriftCorrectionAt = 0;
+		this.buildPromise = null;
+		this.pauseAllMedia();
+		this.disposeClipMedia();
+		this.clearAllObjectUrls();
+		if (this.processId) {
+			useProjectProcessStore.getState().removeProcess({ id: this.processId });
+			this.processId = null;
+		}
+	};
+
+	private handleSeek = (event: Event): void => {
+		const detail = (event as CustomEvent<{ time: number }>).detail;
+		if (!detail) return;
+		void this.syncToTimelineTime({
+			time: detail.time,
+			forceSeek: true,
+		});
+	};
+
+	private handlePlaybackUpdate = (event: Event): void => {
+		const detail = (event as CustomEvent<{ time: number }>).detail;
+		if (!detail) return;
+		if (!this.editor.playback.getIsPlaying()) return;
+		if (this.editor.playback.getIsScrubbing()) return;
+		void this.syncToTimelineTime({
+			time: detail.time,
+			forceSeek: false,
+		});
 	};
 
 	private handleUserGesture = (): void => {
-		void this.unlockAudioContext();
+		if (!this.editor.playback.getIsPlaying()) return;
+		void this.startAtCurrentTime();
 	};
 
-	private ensureAudioContext(): AudioContext | null {
-		if (this.audioContext) return this.audioContext;
-		if (typeof window === "undefined") return null;
-
-		this.audioContext = createAudioContext({
-			sampleRate: AudioManager.PLAYBACK_SAMPLE_RATE,
-		});
-		this.masterGain = this.audioContext.createGain();
-		this.masterGain.gain.value = this.lastVolume;
-		this.masterGain.connect(this.audioContext.destination);
-		return this.audioContext;
+	private ensureObjectUrl({
+		sourceKey,
+		file,
+	}: {
+		sourceKey: string;
+		file: File;
+	}): string {
+		const existing = this.sourceObjectUrls.get(sourceKey);
+		if (existing) return existing;
+		const url = URL.createObjectURL(file);
+		this.sourceObjectUrls.set(sourceKey, url);
+		return url;
 	}
 
-	private updateGain(): void {
-		if (!this.masterGain) return;
-		this.masterGain.gain.value = this.lastVolume;
-	}
-
-	private async unlockAudioContext(): Promise<void> {
-		const audioContext = this.ensureAudioContext();
-		if (!audioContext) return;
-		if (audioContext.state !== "suspended") return;
-		try {
-			await audioContext.resume();
-		} catch (error) {
-			console.warn("Failed to resume audio context:", error);
-		}
-	}
-
-	private scheduleBufferWarmup(): void {
-		this.clearWarmupScheduling();
-		if (typeof window === "undefined") {
-			void this.ensureBufferReady();
-			return;
-		}
-
-		this.warmupTimer = window.setTimeout(() => {
-			this.warmupTimer = null;
-			if ("requestIdleCallback" in window) {
-				this.warmupIdleHandle = (
-					window as typeof window & {
-						requestIdleCallback: (
-							cb: (deadline: { didTimeout: boolean; timeRemaining: () => number }) => void,
-							opts?: { timeout?: number },
-						) => number;
-					}
-				).requestIdleCallback(
-					() => {
-						this.warmupIdleHandle = null;
-						void this.ensureBufferReady();
-					},
-					{ timeout: 1200 },
-				);
-				return;
-			}
-			void this.ensureBufferReady();
-		}, 80);
-	}
-
-	private clearWarmupScheduling(): void {
-		if (typeof window === "undefined") return;
-		if (this.warmupTimer !== null) {
-			window.clearTimeout(this.warmupTimer);
-			this.warmupTimer = null;
-		}
-		if (this.warmupIdleHandle !== null && "cancelIdleCallback" in window) {
-			(
-				window as typeof window & {
-					cancelIdleCallback: (id: number) => void;
-				}
-			).cancelIdleCallback(this.warmupIdleHandle);
-			this.warmupIdleHandle = null;
-		}
-	}
-
-	private async ensureBufferReady(): Promise<void> {
+	private async ensureClipsReady(): Promise<void> {
 		if (!this.timelineDirty) return;
-		if (this.bufferBuildPromise) {
-			return this.bufferBuildPromise;
+		if (this.buildPromise) {
+			return this.buildPromise;
 		}
-
-		const audioContext = this.ensureAudioContext();
-		if (!audioContext) return;
 
 		const generation = ++this.buildGeneration;
-		this.buildingBuffer = true;
-		this.bufferBuildPromise = (async () => {
+		const projectId = this.activeProjectId;
+		if (!this.processId && projectId) {
+			this.processId = useProjectProcessStore.getState().registerProcess({
+				projectId,
+				kind: "other",
+				label: "Preparing timeline audio...",
+			});
+		}
+
+		this.buildPromise = (async () => {
 			try {
 				const tracks = this.editor.timeline.getTracks();
 				const mediaAssets = this.editor.media.getAssets();
-				const duration = this.editor.timeline.getTotalDuration();
-
-				if (duration <= 0) {
-					if (generation === this.buildGeneration) {
-						this.timelineBuffer = null;
-						this.timelineDuration = 0;
-						this.timelineDirty = false;
-					}
-					return;
-				}
-
-				const buffer = await createTimelineAudioBuffer({
+				const clipSources = await collectAudioClips({
 					tracks,
 					mediaAssets,
-					duration,
-					audioContext,
-					sampleRate: AudioManager.PLAYBACK_SAMPLE_RATE,
 				});
-
 				if (generation !== this.buildGeneration) return;
 
-				this.timelineBuffer = buffer;
-				this.timelineDuration = duration;
-				this.timelineDirty = false;
+				const nextKeys = new Set(clipSources.map((clip) => clip.sourceKey));
+				for (const [key, url] of this.sourceObjectUrls) {
+					if (nextKeys.has(key)) continue;
+					URL.revokeObjectURL(url);
+					this.sourceObjectUrls.delete(key);
+				}
 
-				if (this.editor.playback.getIsPlaying()) {
-					void this.startPlayback({ time: this.editor.playback.getCurrentTime() });
+				this.pauseAllMedia();
+				this.disposeClipMedia();
+
+				const nextClips: ActiveClip[] = [];
+				for (const clip of clipSources) {
+					const url = this.ensureObjectUrl({
+						sourceKey: clip.sourceKey,
+						file: clip.file,
+					});
+					const media = document.createElement(
+						clip.file.type.startsWith("video/") ? "video" : "audio",
+					);
+					media.preload = "auto";
+					media.src = url;
+					media.volume = this.lastVolume;
+					if (media instanceof HTMLVideoElement) {
+						media.playsInline = true;
+					}
+					media.loop = false;
+					media.muted = clip.muted || this.lastVolume <= 0;
+					nextClips.push({
+						id: clip.id,
+						sourceKey: clip.sourceKey,
+						startTime: clip.startTime,
+						duration: clip.duration,
+						trimStart: clip.trimStart,
+						muted: clip.muted,
+						media,
+					});
 				}
+
+				this.clips = nextClips;
+				this.timelineDirty = false;
 			} catch (error) {
-				console.warn("Failed to build timeline audio buffer:", error);
+				console.warn("Failed to build timeline audio clips:", error);
 			} finally {
-				if (generation === this.buildGeneration) {
-					this.buildingBuffer = false;
+				if (this.processId) {
+					useProjectProcessStore.getState().removeProcess({ id: this.processId });
+					this.processId = null;
 				}
-				this.bufferBuildPromise = null;
+				this.buildPromise = null;
 			}
 		})();
-		return this.bufferBuildPromise;
+
+		return this.buildPromise;
 	}
 
-	private stopSource(): void {
-		if (!this.playbackSource) return;
-		try {
-			this.playbackSource.stop();
-		} catch {}
-		this.playbackSource.disconnect();
-		this.playbackSource = null;
+	private async rebuildAndSync(): Promise<void> {
+		const time = this.editor.playback.getCurrentTime();
+		this.buildGeneration += 1;
+		this.buildPromise = null;
+		this.timelineDirty = true;
+		await this.ensureClipsReady();
+		if (!this.editor.playback.getIsPlaying()) return;
+		await this.syncToTimelineTime({
+			time,
+			forceSeek: true,
+		});
 	}
 
-	private async startPlayback({ time }: { time: number }): Promise<void> {
-		const requestId = ++this.playbackRequestId;
-		const audioContext = this.ensureAudioContext();
-		if (!audioContext) return;
-
-		await this.unlockAudioContext();
-		if (requestId !== this.playbackRequestId) return;
-		if (audioContext.state !== "running") {
-			console.warn("Audio context is not running; playback audio is unavailable.");
-			return;
+	private pauseAllMedia(): void {
+		for (const clip of this.clips) {
+			try {
+				clip.media.pause();
+			} catch {}
 		}
+	}
 
-		const shouldWaitForBuffer = this.timelineDirty || !this.timelineBuffer;
-		if (shouldWaitForBuffer) {
-			const readyInTime = await Promise.race([
-				this.ensureBufferReady().then(() => true),
-				new Promise<boolean>((resolve) =>
-					setTimeout(() => resolve(false), this.quickStartMaxWaitMs),
-				),
-			]);
-			if (!readyInTime || requestId !== this.playbackRequestId) {
-				return;
+	private stopAllMedia(): void {
+		for (const clip of this.clips) {
+			try {
+				clip.media.pause();
+			} catch {}
+			clip.media.src = "";
+		}
+		this.clips = [];
+	}
+
+	private disposeClipMedia(): void {
+		for (const clip of this.clips) {
+			try {
+				clip.media.pause();
+			} catch {}
+			clip.media.src = "";
+		}
+		this.clips = [];
+	}
+
+	private clearAllObjectUrls(): void {
+		for (const [, url] of this.sourceObjectUrls) {
+			URL.revokeObjectURL(url);
+		}
+		this.sourceObjectUrls.clear();
+	}
+
+	private async syncToTimelineTime({
+		time,
+		forceSeek,
+	}: {
+		time: number;
+		forceSeek: boolean;
+	}): Promise<void> {
+		if (this.suspendSync) return;
+		await this.ensureClipsReady();
+
+		const isPlaying = this.editor.playback.getIsPlaying();
+		const volume = this.editor.playback.getVolume();
+
+		for (const clip of this.clips) {
+			const endTime = clip.startTime + clip.duration;
+			const active = time >= clip.startTime && time < endTime;
+			clip.media.volume = volume;
+			clip.media.muted = clip.muted || volume <= 0;
+
+			if (!active || !isPlaying) {
+				if (!clip.media.paused) {
+					try {
+						clip.media.pause();
+					} catch {}
+				}
+				continue;
+			}
+
+			const mediaTime = Math.max(0, clip.trimStart + (time - clip.startTime));
+			const drift = Math.abs((clip.media.currentTime || 0) - mediaTime);
+			if (
+				forceSeek ||
+				!Number.isFinite(clip.media.currentTime) ||
+				drift > 0.08
+			) {
+				try {
+					clip.media.currentTime = mediaTime;
+				} catch {}
+			}
+
+			if (clip.media.paused && !clip.media.muted) {
+				try {
+					await clip.media.play();
+				} catch {}
 			}
 		}
+	}
 
-		this.stopSource();
+	private async startAtCurrentTime(): Promise<void> {
+		await this.syncToTimelineTime({
+			time: this.editor.playback.getCurrentTime(),
+			forceSeek: true,
+		});
+	}
 
-		if (requestId !== this.playbackRequestId) return;
-		if (!this.editor.playback.getIsPlaying()) return;
-		if (!this.timelineBuffer) return;
-		if (this.timelineDuration <= 0) return;
+	async primeCurrentTimelineAudio(): Promise<void> {
+		await this.ensureClipsReady();
+		await this.preloadClipMediaElements();
+	}
 
-		const clampedTime = Math.max(0, Math.min(this.timelineDuration, time));
-		if (clampedTime >= this.timelineDuration) return;
+	private async preloadClipMediaElements(): Promise<void> {
+		if (typeof window === "undefined") return;
+		await Promise.all(this.clips.map((clip) => this.waitForMediaReady({ media: clip.media })));
+	}
 
-		const source = audioContext.createBufferSource();
-		source.buffer = this.timelineBuffer;
-		source.connect(this.masterGain ?? audioContext.destination);
-		source.start(audioContext.currentTime, clampedTime);
+	private async waitForMediaReady({
+		media,
+	}: {
+		media: HTMLMediaElement;
+	}): Promise<void> {
+		if (media.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return;
 
-		this.playbackSource = source;
-		this.playbackStartContextTime = audioContext.currentTime;
-		this.playbackStartTimelineTime = clampedTime;
-
-		source.addEventListener("ended", () => {
-			if (this.playbackSource === source) {
-				this.playbackSource = null;
+		await new Promise<void>((resolve) => {
+			let settled = false;
+			const finish = () => {
+				if (settled) return;
+				settled = true;
+				media.removeEventListener("loadeddata", handleReady);
+				media.removeEventListener("canplay", handleReady);
+				media.removeEventListener("error", handleReady);
+				window.clearTimeout(timeoutId);
+				resolve();
+			};
+			const handleReady = () => finish();
+			const timeoutId = window.setTimeout(() => finish(), 2500);
+			media.addEventListener("loadeddata", handleReady, { once: true });
+			media.addEventListener("canplay", handleReady, { once: true });
+			media.addEventListener("error", handleReady, { once: true });
+			try {
+				media.load();
+			} catch {
+				finish();
 			}
 		});
 	}

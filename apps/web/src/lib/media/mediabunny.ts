@@ -162,10 +162,15 @@ async function decodeAndMixAudioSource({
 				const outputIdx = outputStartSample + i;
 				if (outputIdx < 0 || outputIdx >= totalSamples) continue;
 
-				const sourceIdx = Math.floor(i / resampleRatio);
-				if (sourceIdx < channelData.length) {
-					outputChannel[outputIdx] += channelData[sourceIdx];
-				}
+				const sourcePos = i / resampleRatio;
+				const leftIndex = Math.floor(sourcePos);
+				const rightIndex = Math.min(leftIndex + 1, channelData.length - 1);
+				if (leftIndex >= channelData.length) break;
+				const alpha = sourcePos - leftIndex;
+				const leftSample = channelData[leftIndex] ?? 0;
+				const rightSample = channelData[rightIndex] ?? leftSample;
+				outputChannel[outputIdx] +=
+					leftSample * (1 - alpha) + rightSample * alpha;
 			}
 		}
 	}

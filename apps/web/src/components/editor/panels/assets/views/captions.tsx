@@ -12,6 +12,10 @@ import { extractTimelineAudio } from "@/lib/media/mediabunny";
 import { useEditor } from "@/hooks/use-editor";
 import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
 import {
+	BLUE_HIGHLIGHT_CAPTION_STYLE,
+	BLUE_HIGHLIGHT_CAPTION_TEXT_PROPS,
+} from "@/constants/caption-presets";
+import {
 	DEFAULT_TRANSCRIPTION_MODEL,
 	DEFAULT_WORDS_PER_CAPTION,
 	TRANSCRIPT_CACHE_VERSION,
@@ -207,27 +211,11 @@ export function Captions() {
 					duration: caption.duration,
 					startTime: caption.startTime,
 					captionWordTimings: caption.wordTimings,
-					fontSize: 65,
-					fontWeight: "bold",
+					...BLUE_HIGHLIGHT_CAPTION_TEXT_PROPS,
 					captionStyle: {
+						...BLUE_HIGHLIGHT_CAPTION_STYLE,
 						fitInCanvas: fitCaptionsInCanvas,
 						karaokeWordHighlight: highlightSpokenWord,
-						karaokeHighlightMode: "block",
-						karaokeHighlightEaseInOnly: false,
-						karaokeScaleHighlightedWord: false,
-						karaokeUnderlineThickness: 3,
-						karaokeHighlightColor: "#3B82F6",
-						karaokeHighlightTextColor: "#FFFFFF",
-						karaokeHighlightOpacity: 1,
-						karaokeHighlightRoundness: 24,
-						backgroundFitMode: "block",
-						neverShrinkFont: false,
-						wordsOnScreen: 3,
-						maxLinesOnScreen: 2,
-						wordDisplayPreset: "balanced",
-						linkedToCaptionGroup: true,
-						anchorToSafeAreaBottom: true,
-						safeAreaBottomOffset: 0,
 					},
 				},
 			});

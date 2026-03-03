@@ -26,6 +26,7 @@ import { processMediaAssets } from "@/lib/media/processing";
 import {
 	buildClipTranscriptEntryFromLinkedExternalTranscript,
 } from "@/lib/clips/transcript";
+import { normalizeGeneratedCaptionsInProject } from "@/lib/captions/generated-caption-normalizer";
 
 interface EditorProviderProps {
 	projectId: string;
@@ -284,6 +285,17 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 				await editor.project.loadProject({ id: projectId });
 
 				if (cancelled) return;
+
+				const loadedProject = editor.project.getActiveOrNull();
+				if (loadedProject) {
+					const normalized = normalizeGeneratedCaptionsInProject({
+						project: loadedProject,
+					});
+					if (normalized.changed) {
+						editor.project.setActiveProject({ project: normalized.project });
+						editor.save.markDirty();
+					}
+				}
 
 				setIsLoading(false);
 				prefetchFontAtlas();

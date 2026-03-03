@@ -83,32 +83,10 @@ export class InsertElementCommand extends Command {
 
 		if (isFirstElement && isVisualMedia) {
 			const mediaAssets = editor.media.getAssets();
-			const activeProject = editor.project.getActive();
 			const asset = mediaAssets.find(
 				(item: MediaAsset) => item.id === newElement.mediaId,
 			);
-
-			if (asset?.width && asset?.height) {
-				const nextCanvasSize = { width: asset.width, height: asset.height };
-				const shouldSetOriginalCanvasSize =
-					!activeProject?.settings.originalCanvasSize;
-				editor.project.updateSettings({
-					settings: {
-						canvasSize: nextCanvasSize,
-						...(shouldSetOriginalCanvasSize
-							? { originalCanvasSize: nextCanvasSize }
-							: {}),
-					},
-					pushHistory: false,
-				});
-			}
-
-			if (asset?.type === "video" && asset?.fps) {
-				editor.project.updateSettings({
-					settings: { fps: asset.fps },
-					pushHistory: false,
-				});
-			}
+			void asset;
 		}
 
 		editor.timeline.updateTracks(updatedTracks);

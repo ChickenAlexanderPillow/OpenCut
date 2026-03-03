@@ -40,16 +40,25 @@ export function remapCaptionTransformsForPreviewVariant({
 		if (track.type !== "text") return track;
 		return {
 			...track,
-			elements: track.elements.map((element) => ({
-				...element,
-				transform: {
-					...element.transform,
-					position: {
-						x: element.transform.position.x * scaleX,
-						y: element.transform.position.y * scaleY,
+			elements: track.elements.map((element) => {
+				const isCaptionElement =
+					(element.captionWordTimings?.length ?? 0) > 0 ||
+					element.name.startsWith("Caption ") ||
+					element.captionStyle?.linkedToCaptionGroup === true;
+				if (isCaptionElement) {
+					return element;
+				}
+				return {
+					...element,
+					transform: {
+						...element.transform,
+						position: {
+							x: element.transform.position.x * scaleX,
+							y: element.transform.position.y * scaleY,
+						},
 					},
-				},
-			})),
+				};
+			}),
 		};
 	});
 }

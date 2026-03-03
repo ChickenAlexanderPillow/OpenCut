@@ -123,6 +123,21 @@ function easeInQuad(t: number): number {
 	return t * t;
 }
 
+function resolveLatestStartedWordIndex({
+	captionWordTimings,
+	time,
+}: {
+	captionWordTimings: Array<{ startTime: number }>;
+	time: number;
+}): number {
+	for (let i = captionWordTimings.length - 1; i >= 0; i--) {
+		if (time >= captionWordTimings[i].startTime) {
+			return i;
+		}
+	}
+	return -1;
+}
+
 function buildLinesFromWords({
 	words,
 	maxLines,
@@ -200,23 +215,10 @@ export class TextNode extends BaseNode<TextNodeParams> {
 				return;
 			}
 		}
-		const activeWordIndexFromTimings = (() => {
-			for (let i = captionWordTimings.length - 1; i >= 0; i--) {
-				const wordTiming = captionWordTimings[i];
-				if (time >= wordTiming.startTime && time < wordTiming.endTime) {
-					return i;
-				}
-			}
-			return -1;
-		})();
-		const latestStartedWordIndex = (() => {
-			for (let i = captionWordTimings.length - 1; i >= 0; i--) {
-				if (time >= captionWordTimings[i].startTime) {
-					return i;
-				}
-			}
-			return -1;
-		})();
+		const latestStartedWordIndex = resolveLatestStartedWordIndex({
+			captionWordTimings,
+			time,
+		});
 		const totalWords = this.params.content.match(/\S+/g)?.length ?? 0;
 		const clampedProgress = Math.max(
 			0,
@@ -226,7 +228,9 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			totalWords > 0 ? Math.floor(clampedProgress * totalWords) : -1;
 		const hasWordTimings = captionWordTimings.length > 0;
 		const activeWordIndex = hasWordTimings
-			? activeWordIndexFromTimings
+			? latestStartedWordIndex >= 0
+				? latestStartedWordIndex
+				: -1
 			: fallbackWordIndex;
 		const captionTimingWords = captionWordTimings.map((timing) => timing.word);
 		const contentTokens = this.params.content.match(/\S+/g) ?? [];
@@ -557,26 +561,11 @@ export class TextNode extends BaseNode<TextNodeParams> {
 					let motionFactor = 1;
 					if (hasWordTimings && activeWordIndex >= 0 && activeWordIndex < captionWordTimings.length) {
 						const activeTiming = captionWordTimings[activeWordIndex];
-						const wordDuration = Math.max(
-							0.001,
-							activeTiming.endTime - activeTiming.startTime,
-						);
-						const fadeDuration = Math.max(
-							0.02,
-							Math.min(0.09, wordDuration * 0.3),
-						);
 						const fadeInProgress = Math.max(
 							0,
-							Math.min(1, (time - activeTiming.startTime) / fadeDuration),
+							Math.min(1, (time - activeTiming.startTime) / 0.08),
 						);
-						const fadeOutProgress = Math.max(
-							0,
-							Math.min(1, (activeTiming.endTime - time) / fadeDuration),
-						);
-						motionFactor = Math.min(
-							easeInQuad(fadeInProgress),
-							easeInQuad(fadeOutProgress),
-						);
+						motionFactor = easeInQuad(fadeInProgress);
 					}
 					if (
 						this.params.captionStyle?.karaokeHighlightEaseInOnly === true &&

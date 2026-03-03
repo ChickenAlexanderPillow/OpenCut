@@ -99,6 +99,10 @@ export function useSelectionBox({
 		null,
 	);
 	const justFinishedSelectingRef = useRef(false);
+	const rafRef = useRef<number | null>(null);
+	const latestPointerRef = useRef<{ clientX: number; clientY: number } | null>(
+		null,
+	);
 
 	const handleMouseDown = useCallback(
 		({ clientX, clientY }: React.MouseEvent) => {
@@ -174,7 +178,11 @@ export function useSelectionBox({
 	useEffect(() => {
 		if (!selectionBox) return;
 
-		const handleMouseMove = ({ clientX, clientY }: MouseEvent) => {
+		const processSelectionPointer = () => {
+			rafRef.current = null;
+			const pointer = latestPointerRef.current;
+			if (!pointer) return;
+			const { clientX, clientY } = pointer;
 			const deltaX = Math.abs(clientX - selectionBox.startPos.x);
 			const deltaY = Math.abs(clientY - selectionBox.startPos.y);
 			const shouldActivate = deltaX > 5 || deltaY > 5;
@@ -195,6 +203,13 @@ export function useSelectionBox({
 			}
 		};
 
+		const handleMouseMove = ({ clientX, clientY }: MouseEvent) => {
+			latestPointerRef.current = { clientX, clientY };
+			if (rafRef.current == null) {
+				rafRef.current = window.requestAnimationFrame(processSelectionPointer);
+			}
+		};
+
 		const handleMouseUp = () => {
 			if (selectionBox?.isActive) {
 				justFinishedSelectingRef.current = true;
@@ -209,6 +224,10 @@ export function useSelectionBox({
 		window.addEventListener("mouseup", handleMouseUp);
 
 		return () => {
+			if (rafRef.current != null) {
+				window.cancelAnimationFrame(rafRef.current);
+				rafRef.current = null;
+			}
 			window.removeEventListener("mousemove", handleMouseMove);
 			window.removeEventListener("mouseup", handleMouseUp);
 		};

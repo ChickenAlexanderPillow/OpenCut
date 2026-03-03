@@ -157,10 +157,24 @@ function overlapRatio({
 	return intersection / union;
 }
 
+function hasTemporalOverlap({
+	a,
+	b,
+	epsilon = 1e-6,
+}: {
+	a: ClipCandidate;
+	b: ClipCandidate;
+	epsilon?: number;
+}): boolean {
+	const intersection =
+		Math.min(a.endTime, b.endTime) - Math.max(a.startTime, b.startTime);
+	return intersection > epsilon;
+}
+
 export function selectTopCandidatesWithQualityGate({
 	candidates,
 	minScore = 60,
-	maxOverlapRatio = 0.55,
+	maxOverlapRatio = 0,
 	maxCount = 5,
 }: {
 	candidates: ClipCandidate[];
@@ -171,9 +185,10 @@ export function selectTopCandidatesWithQualityGate({
 	const selected: ClipCandidate[] = [];
 	for (const candidate of candidates) {
 		if (candidate.scoreOverall < minScore) continue;
-		const overlaps = selected.some(
-			(existing) => overlapRatio({ a: candidate, b: existing }) > maxOverlapRatio,
-		);
+		const overlaps = selected.some((existing) => {
+			if (!hasTemporalOverlap({ a: candidate, b: existing })) return false;
+			return overlapRatio({ a: candidate, b: existing }) > maxOverlapRatio;
+		});
 		if (!overlaps) {
 			selected.push(candidate);
 		}

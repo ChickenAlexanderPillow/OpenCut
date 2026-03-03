@@ -56,6 +56,21 @@ function buildLinesFromWords({
 	return lines;
 }
 
+function resolveLatestStartedWordIndex({
+	captionWordTimings,
+	currentTime,
+}: {
+	captionWordTimings: Array<{ startTime: number }>;
+	currentTime: number;
+}): number {
+	for (let i = captionWordTimings.length - 1; i >= 0; i--) {
+		if (currentTime >= captionWordTimings[i].startTime) {
+			return i;
+		}
+	}
+	return -1;
+}
+
 function getVisualElementBounds({
 	canvasWidth,
 	canvasHeight,
@@ -170,32 +185,17 @@ export function getElementBounds({
 				typeof maxLinesOnScreenRaw === "number"
 					? clampLineCount(maxLinesOnScreenRaw)
 					: 2;
-			const activeWordIndexFromTimings = (() => {
-				for (let i = captionWordTimings.length - 1; i >= 0; i--) {
-					const timing = captionWordTimings[i];
-					if (currentTime >= timing.startTime && currentTime < timing.endTime) {
-						return i;
-					}
-				}
-				return -1;
-			})();
-			const latestStartedWordIndex = (() => {
-				for (let i = captionWordTimings.length - 1; i >= 0; i--) {
-					if (currentTime >= captionWordTimings[i].startTime) {
-						return i;
-					}
-				}
-				return -1;
-			})();
+			const latestStartedWordIndex = resolveLatestStartedWordIndex({
+				captionWordTimings,
+				currentTime,
+			});
 			const shouldLimitWordsOnScreen =
 				captionWords.length > 0 && wordsOnScreen !== null && wordsOnScreen > 0;
 			const cappedWordsOnScreen = wordsOnScreen ?? captionWords.length;
 			const activeWordForWindow =
 				latestStartedWordIndex >= 0
 					? latestStartedWordIndex
-					: activeWordIndexFromTimings >= 0
-						? activeWordIndexFromTimings
-						: 0;
+					: 0;
 			const backgroundMode = element.captionStyle?.backgroundFitMode ?? "block";
 
 			const getFitPageSize = ({

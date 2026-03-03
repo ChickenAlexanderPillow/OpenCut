@@ -12,6 +12,7 @@ import { Input, ALL_FORMATS, BlobSource, AudioBufferSink } from "mediabunny";
 
 const MAX_AUDIO_CHANNELS = 2;
 const EXPORT_SAMPLE_RATE = 44100;
+const SILENCE_FLOOR = 1e-4;
 
 export type CollectedAudioElement = Omit<
 	AudioElement,
@@ -30,6 +31,31 @@ export function createAudioContext({ sampleRate }: { sampleRate?: number } = {})
 export interface DecodedAudio {
 	samples: Float32Array;
 	sampleRate: number;
+}
+
+export function computePeakFromChannels({
+	channels,
+}: {
+	channels: Float32Array[];
+}): number {
+	let peak = 0;
+	for (const channel of channels) {
+		for (let i = 0; i < channel.length; i++) {
+			const value = Math.abs(channel[i] ?? 0);
+			if (value > peak) peak = value;
+		}
+	}
+	return peak;
+}
+
+export function isPeakSilent({
+	peak,
+	floor = SILENCE_FLOOR,
+}: {
+	peak: number;
+	floor?: number;
+}): boolean {
+	return !Number.isFinite(peak) || peak < floor;
 }
 
 async function readBlobArrayBufferWithFallback({
@@ -111,11 +137,44 @@ export async function collectAudioElements({
 
 			if (element.type === "audio") {
 				pendingElements.push(
-					resolveAudioBufferForElement({
-						element,
-						mediaMap,
-						audioContext,
-					}).then((audioBuffer) => {
+					(async () => {
+						if (element.buffer) {
+							return {
+								buffer: element.buffer,
+								startTime: element.startTime,
+								duration: element.duration,
+								trimStart: element.trimStart,
+								trimEnd: element.trimEnd,
+								muted: element.muted || isTrackMuted,
+							};
+						}
+						if (element.sourceType === "upload") {
+							const mediaAsset = mediaMap.get(element.mediaId);
+							if (mediaAsset?.type === "video") {
+								const resolvedAudio = await resolveAudioBufferForVideoElement({
+									mediaAsset,
+									audioContext,
+									trimStart: element.trimStart,
+									trimDuration: element.duration,
+								});
+								if (!resolvedAudio) return null;
+								return {
+									buffer: resolvedAudio.buffer,
+									startTime: element.startTime,
+									duration: element.duration,
+									// Video-backed upload audio is decoded to the element window already.
+									trimStart: 0,
+									trimEnd: element.trimEnd,
+									muted: element.muted || isTrackMuted,
+								};
+							}
+						}
+
+						const audioBuffer = await resolveAudioBufferForElement({
+							element,
+							mediaMap,
+							audioContext,
+						});
 						if (!audioBuffer) return null;
 						return {
 							buffer: audioBuffer,
@@ -125,7 +184,7 @@ export async function collectAudioElements({
 							trimEnd: element.trimEnd,
 							muted: element.muted || isTrackMuted,
 						};
-					}),
+					})(),
 				);
 				continue;
 			}
@@ -138,14 +197,18 @@ export async function collectAudioElements({
 					resolveAudioBufferForVideoElement({
 						mediaAsset,
 						audioContext,
-					}).then((audioBuffer) => {
-						if (!audioBuffer) return null;
+						trimStart: element.trimStart,
+						trimDuration: element.duration,
+					}).then((resolvedAudio) => {
+						if (!resolvedAudio) return null;
 						const elementMuted = element.muted ?? false;
+						// If decode is windowed, trimStart is already baked into the buffer.
+						// For full-file fallback decode, preserve element trimStart.
 						return {
-							buffer: audioBuffer,
+							buffer: resolvedAudio.buffer,
 							startTime: element.startTime,
 							duration: element.duration,
-							trimStart: element.trimStart,
+							trimStart: resolvedAudio.windowed ? 0 : element.trimStart,
 							trimEnd: element.trimEnd,
 							muted: elementMuted || isTrackMuted,
 						};
@@ -173,9 +236,21 @@ async function resolveAudioBufferForElement({
 	audioContext: AudioContext;
 }): Promise<AudioBuffer | null> {
 	try {
+		if (element.buffer) return element.buffer;
+
 		if (element.sourceType === "upload") {
 			const asset = mediaMap.get(element.mediaId);
-			if (!asset || asset.type !== "audio") return null;
+			if (!asset || (asset.type !== "audio" && asset.type !== "video")) return null;
+
+			if (asset.type === "video") {
+				const resolved = await resolveAudioBufferForVideoElement({
+					mediaAsset: asset,
+					audioContext,
+					trimStart: element.trimStart,
+					trimDuration: element.duration,
+				});
+				return resolved?.buffer ?? null;
+			}
 
 			const arrayBuffer = await readBlobArrayBufferWithFallback({
 				audioBlob: asset.file,
@@ -183,8 +258,6 @@ async function resolveAudioBufferForElement({
 			});
 			return await audioContext.decodeAudioData(arrayBuffer.slice(0));
 		}
-
-		if (element.buffer) return element.buffer;
 
 		const response = await fetch(element.sourceUrl);
 		if (!response.ok) {
@@ -202,10 +275,14 @@ async function resolveAudioBufferForElement({
 async function resolveAudioBufferForVideoElement({
 	mediaAsset,
 	audioContext,
+	trimStart = 0,
+	trimDuration,
 }: {
 	mediaAsset: MediaAsset;
 	audioContext: AudioContext;
-}): Promise<AudioBuffer | null> {
+	trimStart?: number;
+	trimDuration?: number;
+}): Promise<{ buffer: AudioBuffer; windowed: boolean } | null> {
 	const input = new Input({
 		source: new BlobSource(mediaAsset.file),
 		formats: ALL_FORMATS,
@@ -221,7 +298,17 @@ async function resolveAudioBufferForVideoElement({
 		const chunks: AudioBuffer[] = [];
 		let totalSamples = 0;
 
-		for await (const { buffer } of sink.buffers(0)) {
+		const safeTrimStart = Math.max(0, trimStart);
+		const safeTrimDuration =
+			typeof trimDuration === "number" && Number.isFinite(trimDuration)
+				? Math.max(0, trimDuration)
+				: undefined;
+		const trimEnd =
+			typeof safeTrimDuration === "number"
+				? safeTrimStart + safeTrimDuration
+				: undefined;
+
+		for await (const { buffer } of sink.buffers(safeTrimStart, trimEnd)) {
 			chunks.push(buffer);
 			totalSamples += buffer.length;
 		}
@@ -258,7 +345,10 @@ async function resolveAudioBufferForVideoElement({
 		sourceNode.connect(offlineContext.destination);
 		sourceNode.start(0);
 
-		return await offlineContext.startRendering();
+		return {
+			buffer: await offlineContext.startRendering(),
+			windowed: true,
+		};
 	} catch (error) {
 		console.warn("Failed to decode video audio with mediabunny, trying fallback:", error);
 		try {
@@ -266,7 +356,10 @@ async function resolveAudioBufferForVideoElement({
 				audioBlob: mediaAsset.file,
 				fallbackUrl: mediaAsset.url,
 			});
-			return await audioContext.decodeAudioData(arrayBuffer.slice(0));
+			return {
+				buffer: await audioContext.decodeAudioData(arrayBuffer.slice(0)),
+				windowed: false,
+			};
 		} catch (fallbackError) {
 			console.warn("Video audio fallback decode failed:", fallbackError);
 			return null;
@@ -413,6 +506,9 @@ export async function collectAudioMixSources({
 
 		for (const element of track.elements) {
 			if (!canElementHaveAudio(element)) continue;
+			const isElementMuted =
+				"muted" in element ? (element.muted ?? false) : false;
+			if (isElementMuted) continue;
 
 			if (element.type === "audio") {
 				if (element.sourceType === "upload") {

@@ -21,31 +21,50 @@ import {
 	TRANSCRIPT_CACHE_VERSION,
 } from "@/constants/transcription-constants";
 import { extractTimelineAudio } from "@/lib/media/mediabunny";
-import { decodeAudioToFloat32 } from "@/lib/media/audio";
+import { createAudioContext, decodeAudioToFloat32 } from "@/lib/media/audio";
 import { transcriptionService } from "@/services/transcription/service";
 import type { TimelineTrack, TextElement } from "@/types/timeline";
+import type { TranscriptionSegment } from "@/types/transcription";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 import { useClipGenerationStore } from "@/stores/clip-generation-store";
 import { buildClipCandidatesFromTranscript } from "@/lib/clips/candidate-builder";
 import { selectTopCandidatesWithQualityGate } from "@/lib/clips/scoring";
 import {
-	clipTranscriptSegmentsForWindow,
 	getOrCreateClipTranscriptForAsset,
 } from "@/lib/clips/transcript";
-import { buildCaptionChunks } from "@/lib/transcription/caption";
 import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
+import {
+	resolveBlueHighlightCaptionPreset,
+} from "@/constants/caption-presets";
+import { normalizeGeneratedCaptionsInProject } from "@/lib/captions/generated-caption-normalizer";
 import { getMainTrack } from "@/lib/timeline/track-utils";
 import type { MediaAsset } from "@/types/assets";
 import type { TProject } from "@/types/project";
 import { DEFAULT_BLEND_MODE, DEFAULT_OPACITY, DEFAULT_TRANSFORM } from "@/constants/timeline-constants";
-import { DEFAULT_CANVAS_SIZE, DEFAULT_FPS } from "@/constants/project-constants";
 import { getVideoInfo } from "@/lib/media/mediabunny";
+import { ALL_FORMATS, AudioBufferSink, BlobSource, Input } from "mediabunny";
 
 const MIN_VIRAL_CLIP_SCORE = 60;
 const MAX_VIRAL_CLIP_COUNT = 5;
 const CLIP_SCORING_TRANSCRIPT_MAX_CHARS = 20000;
 const CLIP_SCORING_TIMEOUT_MS = 60000;
+const CLIP_IMPORT_TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
+const CLIP_TRANSCRIPTION_TIMEOUT_MS = 60000;
+const CLIP_TRANSCRIPTION_MIN_DURATION_SECONDS = 0.35;
+const CLIP_TRANSCRIPTION_MAX_DURATION_SECONDS = 240;
+const CLIP_TRANSCRIPTION_MAX_FILE_BYTES = 20 * 1024 * 1024;
+const CLIP_WORD_TRANSCRIPTION_CACHE_VERSION = 5;
+const MIN_RENDERABLE_WORD_SECONDS = 1 / 30;
+const CAPTION_TAIL_PAD_SECONDS = 1 / 30;
+const MIN_PREFERRED_WORD_SECONDS = 3 / 30;
+const MIN_BORROW_REMAINING_WORD_SECONDS = 1.5 / 30;
+const MAX_BORROW_FRACTION = 0.35;
+const CAPTION_PAGE_WORD_COUNT = 3;
+const clipTranscriptionInFlight = new Map<
+	string,
+	Promise<TranscriptionSegment[] | null>
+>();
 
 function withProjectClipGenerationCache({
 	project,
@@ -107,6 +126,26 @@ function truncateTranscriptForScoring({
 	return `${transcript.slice(0, CLIP_SCORING_TRANSCRIPT_MAX_CHARS)}\n[Transcript truncated for scoring request]`;
 }
 
+function buildClipWordTranscriptionCacheKey({
+	mediaId,
+	startTime,
+	endTime,
+	modelId,
+}: {
+	mediaId: string;
+	startTime: number;
+	endTime: number;
+	modelId: string;
+}): string {
+	return [
+		mediaId,
+		modelId,
+		`v${CLIP_WORD_TRANSCRIPTION_CACHE_VERSION}`,
+		startTime.toFixed(3),
+		endTime.toFixed(3),
+	].join(":");
+}
+
 function resolveClipScoringApiCandidates(): string[] {
 	const fallbackBase = process.env.NEXT_PUBLIC_SITE_URL?.trim();
 	const candidates: string[] = [];
@@ -126,6 +165,31 @@ function resolveClipScoringApiCandidates(): string[] {
 		candidates.push("/api/clips/score");
 		if (fallbackBase) {
 			candidates.push(`${fallbackBase.replace(/\/$/, "")}/api/clips/score`);
+		}
+	}
+
+	return Array.from(new Set(candidates));
+}
+
+function resolveClipTranscriptionApiCandidates(): string[] {
+	const fallbackBase = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+	const candidates: string[] = [];
+
+	if (typeof window !== "undefined") {
+		const origin = window.location.origin;
+		if (origin.startsWith("http://") || origin.startsWith("https://")) {
+			candidates.push(`${origin}/api/clips/transcribe`);
+			candidates.push("/api/clips/transcribe");
+		} else {
+			candidates.push("/api/clips/transcribe");
+			if (fallbackBase) {
+				candidates.push(`${fallbackBase.replace(/\/$/, "")}/api/clips/transcribe`);
+			}
+		}
+	} else {
+		candidates.push("/api/clips/transcribe");
+		if (fallbackBase) {
+			candidates.push(`${fallbackBase.replace(/\/$/, "")}/api/clips/transcribe`);
 		}
 	}
 
@@ -221,7 +285,7 @@ function buildClipElement({
 			startTime: 0,
 			trimStart: startTime,
 			trimEnd,
-			muted: false,
+			muted: true,
 			hidden: false,
 			transform: {
 				...DEFAULT_TRANSFORM,
@@ -248,52 +312,597 @@ function buildClipElement({
 	};
 }
 
-function normalizeCaptionChunksForTimeline({
-	captionChunks,
+function buildContinuousCaptionForClip({
+	segments,
+	redistributeTiming = true,
 }: {
-	captionChunks: ReturnType<typeof buildCaptionChunks>;
-}): ReturnType<typeof buildCaptionChunks> {
-	const sorted = [...captionChunks].sort((a, b) => a.startTime - b.startTime);
-	const normalized: ReturnType<typeof buildCaptionChunks> = [];
-	let previousEnd = 0;
+	segments: Array<{ text: string; start: number; end: number }>;
+	redistributeTiming?: boolean;
+}): {
+	content: string;
+	startTime: number;
+	duration: number;
+	wordTimings: Array<{ word: string; startTime: number; endTime: number }>;
+} | null {
+	const sourceWordCount = segments
+		.flatMap((segment) => segment.text.match(/\S+/g) ?? [])
+		.length;
+	const rawWordTimings = segments
+		.slice()
+		.flatMap((segment) => {
+			const words = segment.text.match(/\S+/g) ?? [];
+			if (words.length === 0) return [];
+			const segmentStart = Math.max(0, segment.start);
+			const segmentEnd = Math.max(segmentStart + 0.01, segment.end);
 
-	for (const chunk of sorted) {
-		const rawStart = Math.max(0, chunk.startTime);
-		const rawEnd = Math.max(rawStart + 0.04, rawStart + chunk.duration);
-		const adjustedStart = Math.max(rawStart, previousEnd);
-		const adjustedEnd = Math.max(adjustedStart + 0.04, rawEnd);
-		const shiftBy = adjustedStart - rawStart;
-
-		const nextWordTimings = (chunk.wordTimings ?? [])
-			.map((timing) => ({
-				word: timing.word,
-				startTime: Math.max(adjustedStart, timing.startTime + shiftBy),
-				endTime: Math.max(adjustedStart + 0.01, timing.endTime + shiftBy),
-			}))
-			.sort((a, b) => a.startTime - b.startTime);
-
-		for (let wordIndex = 1; wordIndex < nextWordTimings.length; wordIndex++) {
-			const previousTiming = nextWordTimings[wordIndex - 1];
-			const currentTiming = nextWordTimings[wordIndex];
-			if (currentTiming.startTime < previousTiming.endTime) {
-				currentTiming.startTime = previousTiming.endTime;
-				currentTiming.endTime = Math.max(
-					currentTiming.endTime,
-					currentTiming.startTime + 0.01,
-				);
+			// Preserve exact timings when transcription already returned one word per span.
+			if (words.length === 1) {
+				return [
+					{
+						word: words[0] ?? "",
+						startTime: segmentStart,
+						endTime: segmentEnd,
+					},
+				];
 			}
-		}
 
-		normalized.push({
-			...chunk,
-			startTime: adjustedStart,
-			duration: adjustedEnd - adjustedStart,
-			wordTimings: nextWordTimings,
-		});
-		previousEnd = adjustedEnd;
+			const segmentDuration = Math.max(0.01, segmentEnd - segmentStart);
+			const weights = words.map((word) => {
+				const normalized = word.replace(/[^\p{L}\p{N}']+/gu, "");
+				return Math.max(1, normalized.length || word.length || 1);
+			});
+			const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+
+			let consumedWeight = 0;
+			return words.map((word, index) => {
+				const startWeight = consumedWeight;
+				consumedWeight += weights[index];
+				const endWeight = consumedWeight;
+				const startTime =
+					segmentStart + (segmentDuration * startWeight) / totalWeight;
+				const endTime = Math.max(
+					startTime + 0.01,
+					segmentStart + (segmentDuration * endWeight) / totalWeight,
+				);
+				return {
+					word: word.trim(),
+					startTime,
+					endTime,
+				};
+			});
+		})
+		.filter(
+			(timing) =>
+				Number.isFinite(timing.startTime) &&
+				Number.isFinite(timing.endTime) &&
+				timing.word.trim().length > 0,
+		);
+
+	if (rawWordTimings.length === 0) return null;
+
+	const normalizedWordTimings: Array<{
+		word: string;
+		startTime: number;
+		endTime: number;
+	}> = [];
+	for (let i = 0; i < rawWordTimings.length; i++) {
+		const previous = normalizedWordTimings[normalizedWordTimings.length - 1];
+		const nextStart = Math.max(0, rawWordTimings[i].startTime);
+		const stableStart = previous
+			? Math.max(nextStart, previous.startTime + MIN_RENDERABLE_WORD_SECONDS)
+			: nextStart;
+		const nextEnd = Math.max(
+			nextStart + MIN_RENDERABLE_WORD_SECONDS,
+			rawWordTimings[i].endTime,
+		);
+		const normalized = {
+			word: rawWordTimings[i].word.trim(),
+			startTime: stableStart,
+			endTime: Math.max(stableStart + MIN_RENDERABLE_WORD_SECONDS, nextEnd),
+		};
+		if (!normalized.word) continue;
+		normalizedWordTimings.push(normalized);
 	}
 
-	return normalized;
+	if (normalizedWordTimings.length === 0) return null;
+	if (sourceWordCount > 0 && normalizedWordTimings.length !== sourceWordCount) {
+		console.warn("Clip caption word-count mismatch detected", {
+			sourceWordCount,
+			normalizedWordCount: normalizedWordTimings.length,
+		});
+	}
+
+	// Redistribute timing so very short words get readable highlight time.
+	// Exception: when next word starts a new on-screen page, keep page transition timing.
+	if (redistributeTiming && normalizedWordTimings.length >= 2) {
+		for (let index = 0; index < normalizedWordTimings.length - 1; index++) {
+			const current = normalizedWordTimings[index];
+			const next = normalizedWordTimings[index + 1];
+			const nextStartsNewPage = (index + 1) % CAPTION_PAGE_WORD_COUNT === 0;
+			if (nextStartsNewPage) {
+				continue;
+			}
+
+			const currentVisibleSeconds = Math.max(
+				0,
+				next.startTime - current.startTime,
+			);
+			if (currentVisibleSeconds >= MIN_PREFERRED_WORD_SECONDS) {
+				continue;
+			}
+
+			const neededSeconds = MIN_PREFERRED_WORD_SECONDS - currentVisibleSeconds;
+			const nextRemainingSeconds = Math.max(0, next.endTime - next.startTime);
+			let transferableSeconds = Math.max(
+				0,
+				nextRemainingSeconds - MIN_BORROW_REMAINING_WORD_SECONDS,
+			);
+			transferableSeconds = Math.min(
+				transferableSeconds,
+				nextRemainingSeconds * MAX_BORROW_FRACTION,
+			);
+
+			if (index + 2 < normalizedWordTimings.length) {
+				const following = normalizedWordTimings[index + 2];
+				const latestNextStart = Math.max(
+					next.startTime,
+					following.startTime - MIN_RENDERABLE_WORD_SECONDS,
+				);
+				transferableSeconds = Math.min(
+					transferableSeconds,
+					latestNextStart - next.startTime,
+				);
+			}
+
+			const shiftSeconds = Math.max(
+				0,
+				Math.min(neededSeconds, transferableSeconds),
+			);
+			if (shiftSeconds <= 0) {
+				continue;
+			}
+
+			next.startTime += shiftSeconds;
+			current.endTime = Math.max(current.endTime, next.startTime);
+			next.endTime = Math.max(
+				next.endTime,
+				next.startTime + MIN_BORROW_REMAINING_WORD_SECONDS,
+			);
+		}
+
+		// Backward pass: allow last word on a page to borrow from previous word.
+		for (let index = 1; index < normalizedWordTimings.length; index++) {
+			const isLastWordOnPage = (index + 1) % CAPTION_PAGE_WORD_COUNT === 0;
+			if (!isLastWordOnPage) continue;
+
+			const current = normalizedWordTimings[index];
+			const previous = normalizedWordTimings[index - 1];
+			const next = normalizedWordTimings[index + 1] ?? null;
+			const currentVisibleSeconds = next
+				? Math.max(0, next.startTime - current.startTime)
+				: Math.max(0, current.endTime - current.startTime);
+
+			if (currentVisibleSeconds >= MIN_PREFERRED_WORD_SECONDS) continue;
+
+			const neededSeconds = MIN_PREFERRED_WORD_SECONDS - currentVisibleSeconds;
+			const previousVisibleSeconds = Math.max(
+				0,
+				current.startTime - previous.startTime,
+			);
+			const transferableSeconds = Math.max(
+				0,
+				previousVisibleSeconds - MIN_BORROW_REMAINING_WORD_SECONDS,
+			);
+			const boundedTransferableSeconds = Math.min(
+				transferableSeconds,
+				previousVisibleSeconds * MAX_BORROW_FRACTION,
+			);
+			const shiftSeconds = Math.max(
+				0,
+				Math.min(neededSeconds, boundedTransferableSeconds),
+			);
+			if (shiftSeconds <= 0) continue;
+
+			current.startTime = Math.max(
+				previous.startTime + MIN_BORROW_REMAINING_WORD_SECONDS,
+				current.startTime - shiftSeconds,
+			);
+			previous.endTime = Math.max(
+				previous.endTime,
+				previous.startTime + MIN_BORROW_REMAINING_WORD_SECONDS,
+			);
+			current.endTime = Math.max(
+				current.endTime,
+				current.startTime + MIN_RENDERABLE_WORD_SECONDS,
+			);
+		}
+	}
+
+	const content = normalizedWordTimings.map((timing) => timing.word).join(" ").trim();
+	if (!content) return null;
+
+	const startTime = normalizedWordTimings[0].startTime;
+	const endTime = normalizedWordTimings[normalizedWordTimings.length - 1].endTime;
+	return {
+		content,
+		startTime,
+		duration: Math.max(0.04, endTime - startTime + CAPTION_TAIL_PAD_SECONDS),
+		wordTimings: normalizedWordTimings,
+	};
+}
+
+function normalizeTranscriptToken({ token }: { token: string }): string {
+	return token.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, "");
+}
+
+function extractNormalizedWordSequenceFromSegments({
+	segments,
+}: {
+	segments: Array<{ text: string }>;
+}): string[] {
+	return segments
+		.flatMap((segment) => segment.text.match(/\S+/g) ?? [])
+		.map((word) => normalizeTranscriptToken({ token: word }))
+		.filter((word) => word.length > 0);
+}
+
+function extractNormalizedWordSequenceFromCaption({
+	caption,
+}: {
+	caption: NonNullable<ReturnType<typeof buildContinuousCaptionForClip>>;
+}): string[] {
+	return caption.wordTimings
+		.map((timing) => normalizeTranscriptToken({ token: timing.word }))
+		.filter((word) => word.length > 0);
+}
+
+function hasExactWordSequenceMatch({
+	segments,
+	caption,
+}: {
+	segments: Array<{ text: string }>;
+	caption: NonNullable<ReturnType<typeof buildContinuousCaptionForClip>>;
+}): boolean {
+	const source = extractNormalizedWordSequenceFromSegments({ segments });
+	const generated = extractNormalizedWordSequenceFromCaption({ caption });
+	if (source.length !== generated.length) return false;
+	for (let index = 0; index < source.length; index++) {
+		if (source[index] !== generated[index]) return false;
+	}
+	return true;
+}
+
+async function decodeAssetWindowToMono({
+	asset,
+	startTime,
+	endTime,
+}: {
+	asset: MediaAsset;
+	startTime: number;
+	endTime: number;
+}): Promise<{ samples: Float32Array; sampleRate: number } | null> {
+	const clipBuffer = await decodeAssetWindowToAudioBuffer({
+		asset,
+		startTime,
+		endTime,
+	});
+	if (!clipBuffer) return null;
+	const samples = extractMonoSamplesFromAudioBuffer({
+		audioBuffer: clipBuffer,
+	});
+	return {
+		samples,
+		sampleRate: clipBuffer.sampleRate,
+	};
+}
+
+async function transcribeClipWindowWordLevel({
+	asset,
+	startTime,
+	endTime,
+	cacheKey,
+}: {
+	asset: MediaAsset;
+	startTime: number;
+	endTime: number;
+	cacheKey: string;
+}): Promise<TranscriptionSegment[] | null> {
+	try {
+		const decoded = await decodeAssetWindowToMono({
+			asset,
+			startTime,
+			endTime,
+		});
+		if (!decoded || decoded.samples.length === 0) {
+			return null;
+		}
+		return await transcribeDecodedClipAudioWordLevel({
+			samples: decoded.samples,
+			sampleRate: decoded.sampleRate,
+			cacheKey,
+		});
+	} catch (error) {
+		console.warn("Failed clip-window word-level transcription for captions:", error);
+		return null;
+	}
+}
+
+function encodeMonoPcm16WavBlob({
+	samples,
+	sampleRate,
+}: {
+	samples: Float32Array;
+	sampleRate: number;
+}): Blob {
+	const numChannels = 1;
+	const bitsPerSample = 16;
+	const bytesPerSample = bitsPerSample / 8;
+	const dataSize = samples.length * bytesPerSample;
+	const buffer = new ArrayBuffer(44 + dataSize);
+	const view = new DataView(buffer);
+
+	const writeString = (offset: number, value: string) => {
+		for (let i = 0; i < value.length; i++) {
+			view.setUint8(offset + i, value.charCodeAt(i));
+		}
+	};
+
+	writeString(0, "RIFF");
+	view.setUint32(4, 36 + dataSize, true);
+	writeString(8, "WAVE");
+	writeString(12, "fmt ");
+	view.setUint32(16, 16, true);
+	view.setUint16(20, 1, true);
+	view.setUint16(22, numChannels, true);
+	view.setUint32(24, sampleRate, true);
+	view.setUint32(28, sampleRate * numChannels * bytesPerSample, true);
+	view.setUint16(32, numChannels * bytesPerSample, true);
+	view.setUint16(34, bitsPerSample, true);
+	writeString(36, "data");
+	view.setUint32(40, dataSize, true);
+
+	let offset = 44;
+	for (let i = 0; i < samples.length; i++) {
+		const value = Math.max(-1, Math.min(1, samples[i]));
+		const int16 = value < 0 ? value * 0x8000 : value * 0x7fff;
+		view.setInt16(offset, int16, true);
+		offset += 2;
+	}
+
+	return new Blob([buffer], { type: "audio/wav" });
+}
+
+async function transcribeClipAudioWithOpenAI({
+	wavBlob,
+	cacheKey,
+}: {
+	wavBlob: Blob;
+	cacheKey: string;
+}): Promise<TranscriptionSegment[] | null> {
+	const endpoints = resolveClipTranscriptionApiCandidates();
+	let lastNetworkError: Error | null = null;
+
+	for (const endpoint of endpoints) {
+		const controller = new AbortController();
+		const timeoutId = window.setTimeout(() => {
+			controller.abort("Clip transcription request timed out");
+		}, CLIP_TRANSCRIPTION_TIMEOUT_MS);
+
+		try {
+			const form = new FormData();
+			form.append("file", wavBlob, "clip.wav");
+			form.append("model", CLIP_IMPORT_TRANSCRIPTION_MODEL);
+			form.append("cacheKey", cacheKey);
+
+			const response = await fetch(endpoint, {
+				method: "POST",
+				body: form,
+				signal: controller.signal,
+			});
+			window.clearTimeout(timeoutId);
+			if (!response.ok) {
+				const body = await response.text();
+				throw new Error(`Clip transcription failed (${response.status}): ${body}`);
+			}
+			const json = (await response.json()) as {
+				segments?: Array<{ text: string; start: number; end: number }>;
+				granularity?: "word" | "segment" | "none";
+			};
+			if (json.granularity && json.granularity !== "word") {
+				throw new Error(
+					`Clip transcription returned ${json.granularity}-level timing; word-level timing is required`,
+				);
+			}
+			const segments = (json.segments ?? [])
+				.filter(
+					(segment) =>
+						Number.isFinite(segment.start) &&
+						Number.isFinite(segment.end) &&
+						segment.text.trim().length > 0,
+				)
+				.map((segment) => ({
+					text: segment.text.trim(),
+					start: Math.max(0, segment.start),
+					end: Math.max(segment.start + 0.01, segment.end),
+				}));
+			return segments.length > 0 ? segments : null;
+		} catch (error) {
+			window.clearTimeout(timeoutId);
+			lastNetworkError =
+				error instanceof Error ? error : new Error("Failed to reach transcription API");
+		}
+	}
+
+	throw lastNetworkError ?? new Error("Failed to reach transcription API");
+}
+
+async function transcribeDecodedClipAudioWordLevel({
+	samples,
+	sampleRate,
+	cacheKey,
+}: {
+	samples: Float32Array;
+	sampleRate: number;
+	cacheKey: string;
+}): Promise<TranscriptionSegment[] | null> {
+	const existing = clipTranscriptionInFlight.get(cacheKey);
+	if (existing) return await existing;
+
+	const task = (async () => {
+		const durationSeconds = samples.length / Math.max(1, sampleRate);
+		if (
+			!Number.isFinite(durationSeconds) ||
+			durationSeconds < CLIP_TRANSCRIPTION_MIN_DURATION_SECONDS ||
+			durationSeconds > CLIP_TRANSCRIPTION_MAX_DURATION_SECONDS
+		) {
+			return null;
+		}
+		const wavBlob = encodeMonoPcm16WavBlob({
+			samples,
+			sampleRate,
+		});
+		if (wavBlob.size <= 0 || wavBlob.size > CLIP_TRANSCRIPTION_MAX_FILE_BYTES) {
+			return null;
+		}
+		return await transcribeClipAudioWithOpenAI({
+			wavBlob,
+			cacheKey,
+		});
+	})();
+	clipTranscriptionInFlight.set(cacheKey, task);
+	try {
+		return await task;
+	} finally {
+		clipTranscriptionInFlight.delete(cacheKey);
+	}
+}
+
+function extractMonoSamplesFromAudioBuffer({
+	audioBuffer,
+}: {
+	audioBuffer: AudioBuffer;
+}): Float32Array {
+	const channelCount = Math.max(1, audioBuffer.numberOfChannels);
+	const sampleLength = audioBuffer.length;
+	if (sampleLength <= 0) return new Float32Array(0);
+
+	if (channelCount === 1) {
+		return audioBuffer.getChannelData(0).slice();
+	}
+
+	const mono = new Float32Array(sampleLength);
+	for (let channelIndex = 0; channelIndex < channelCount; channelIndex++) {
+		const channelData = audioBuffer.getChannelData(channelIndex);
+		for (let sampleIndex = 0; sampleIndex < sampleLength; sampleIndex++) {
+			mono[sampleIndex] += channelData[sampleIndex] ?? 0;
+		}
+	}
+	const scale = 1 / channelCount;
+	for (let sampleIndex = 0; sampleIndex < sampleLength; sampleIndex++) {
+		mono[sampleIndex] *= scale;
+	}
+	return mono;
+}
+
+async function sliceClipBufferFromFullDecode({
+	asset,
+	startTime,
+	endTime,
+}: {
+	asset: MediaAsset;
+	startTime: number;
+	endTime: number;
+}): Promise<AudioBuffer | null> {
+	try {
+		const context = createAudioContext();
+		const arrayBuffer = await asset.file.arrayBuffer();
+		const decoded = await context.decodeAudioData(arrayBuffer.slice(0));
+		const safeStart = Math.max(0, startTime);
+		const safeEnd = Math.max(safeStart, endTime);
+		const startSample = Math.floor(safeStart * decoded.sampleRate);
+		const endSample = Math.min(
+			decoded.length,
+			Math.ceil(safeEnd * decoded.sampleRate),
+		);
+		if (endSample <= startSample) {
+			void context.close().catch(() => undefined);
+			return null;
+		}
+		const length = endSample - startSample;
+		const channels = Math.max(1, decoded.numberOfChannels);
+		const clipped = context.createBuffer(channels, length, decoded.sampleRate);
+		for (let channelIndex = 0; channelIndex < channels; channelIndex++) {
+			const source = decoded.getChannelData(channelIndex).subarray(
+				startSample,
+				endSample,
+			);
+			clipped.copyToChannel(source, channelIndex);
+		}
+		void context.close().catch(() => undefined);
+		return clipped;
+	} catch (error) {
+		console.warn("Failed full decode clip buffer fallback:", error);
+		return null;
+	}
+}
+
+async function decodeAssetWindowToAudioBuffer({
+	asset,
+	startTime,
+	endTime,
+}: {
+	asset: MediaAsset;
+	startTime: number;
+	endTime: number;
+}): Promise<AudioBuffer | null> {
+	const input = new Input({
+		source: new BlobSource(asset.file),
+		formats: ALL_FORMATS,
+	});
+
+	try {
+		const audioTrack = await input.getPrimaryAudioTrack();
+		if (!audioTrack) {
+			return await sliceClipBufferFromFullDecode({
+				asset,
+				startTime,
+				endTime,
+			});
+		}
+		const sink = new AudioBufferSink(audioTrack);
+		const chunks: AudioBuffer[] = [];
+		let totalSamples = 0;
+		for await (const { buffer } of sink.buffers(startTime, endTime)) {
+			chunks.push(buffer);
+			totalSamples += buffer.length;
+		}
+		if (chunks.length === 0 || totalSamples <= 0) {
+			return await sliceClipBufferFromFullDecode({
+				asset,
+				startTime,
+				endTime,
+			});
+		}
+
+		const sampleRate = chunks[0].sampleRate;
+		const channels = Math.max(1, chunks[0].numberOfChannels);
+		const context = createAudioContext({ sampleRate });
+		const merged = context.createBuffer(channels, totalSamples, sampleRate);
+		for (let channelIndex = 0; channelIndex < channels; channelIndex++) {
+			const channelData = new Float32Array(totalSamples);
+			let writeOffset = 0;
+			for (const chunk of chunks) {
+				const sourceChannel = Math.min(channelIndex, chunk.numberOfChannels - 1);
+				channelData.set(chunk.getChannelData(sourceChannel), writeOffset);
+				writeOffset += chunk.length;
+			}
+			merged.copyToChannel(channelData, channelIndex);
+		}
+		void context.close().catch(() => undefined);
+		return merged;
+	} finally {
+		input.dispose();
+	}
 }
 
 function mergeTimeRanges(
@@ -688,6 +1297,7 @@ export function useEditorActions() {
 				if (!transcriptionCache) {
 					let transcriptionOperationId: string | undefined;
 					let projectProcessId: string | undefined;
+					const blueHighlightPreset = resolveBlueHighlightCaptionPreset();
 					try {
 						toast.info("No transcript cache found. Generating transcript...");
 						transcriptionOperationId = transcriptionStatus.start(
@@ -1083,11 +1693,33 @@ export function useEditorActions() {
 						}>;
 					};
 					const scoredCandidates = scoringJson.candidates ?? [];
-					const selectedCandidates = selectTopCandidatesWithQualityGate({
+					let selectedCandidates = selectTopCandidatesWithQualityGate({
 						candidates: scoredCandidates,
 						minScore: MIN_VIRAL_CLIP_SCORE,
+						maxOverlapRatio: 0,
 						maxCount: MAX_VIRAL_CLIP_COUNT,
 					});
+
+					let relaxedQualityGateUsed = false;
+					if (selectedCandidates.length === 0 && scoredCandidates.length > 0) {
+						const topScore = Math.max(
+							0,
+							Math.min(
+								100,
+								Math.round(
+									Math.max(...scoredCandidates.map((candidate) => candidate.scoreOverall)),
+								),
+							),
+						);
+						const relaxedMinScore = Math.max(35, Math.min(59, topScore - 8));
+						selectedCandidates = selectTopCandidatesWithQualityGate({
+							candidates: scoredCandidates,
+							minScore: relaxedMinScore,
+							maxOverlapRatio: 0,
+							maxCount: MAX_VIRAL_CLIP_COUNT,
+						});
+						relaxedQualityGateUsed = selectedCandidates.length > 0;
+					}
 
 					if (selectedCandidates.length === 0) {
 						setError({
@@ -1124,7 +1756,13 @@ export function useEditorActions() {
 					editor.project.setActiveProject({ project: projectWithCache });
 					editor.save.markDirty();
 					await editor.save.flush();
-					toast.success(`Generated ${selectedCandidates.length} clip candidate(s)`);
+					if (relaxedQualityGateUsed) {
+						toast.warning(
+							`Generated ${selectedCandidates.length} clip candidate(s) with relaxed quality gate`,
+						);
+					} else {
+						toast.success(`Generated ${selectedCandidates.length} clip candidate(s)`);
+					}
 				} catch (error) {
 					const message =
 						error instanceof Error ? error.message : "Clip generation failed";
@@ -1148,169 +1786,308 @@ export function useEditorActions() {
 		"import-selected-viral-clips",
 		(args) => {
 			void (async () => {
-				const clipStoreState = useClipGenerationStore.getState();
-				const sourceMediaId = clipStoreState.sourceMediaId;
-				if (!sourceMediaId) {
-					toast.error("Generate clips first");
-					return;
-				}
+				try {
+					const clipStoreState = useClipGenerationStore.getState();
+					const sourceMediaId = clipStoreState.sourceMediaId;
+					if (!sourceMediaId) {
+						toast.error("Generate clips first");
+						return;
+					}
 
-				const mediaAsset = editor
-					.media
-					.getAssets()
-					.find((asset) => asset.id === sourceMediaId);
-				if (!mediaAsset || (mediaAsset.type !== "video" && mediaAsset.type !== "audio")) {
-					toast.error("Source media for clips was not found");
-					return;
-				}
+					const mediaAsset = editor
+						.media
+						.getAssets()
+						.find((asset) => asset.id === sourceMediaId);
+					if (!mediaAsset || (mediaAsset.type !== "video" && mediaAsset.type !== "audio")) {
+						toast.error("Source media for clips was not found");
+						return;
+					}
 
-				const candidateIds =
-					args?.candidateIds?.length
-						? args.candidateIds
-						: clipStoreState.selectedCandidateIds;
-				if (candidateIds.length === 0) {
-					toast.error("Select one or more clip candidates to import");
-					return;
-				}
+					const candidateIds =
+						args?.candidateIds?.length
+							? args.candidateIds
+							: clipStoreState.selectedCandidateIds;
+					if (candidateIds.length === 0) {
+						toast.error("Select one or more clip candidates to import");
+						return;
+					}
 
-				const candidates = candidateIds
-					.map((id) => clipStoreState.candidates.find((candidate) => candidate.id === id))
-					.filter(
-						(candidate): candidate is NonNullable<typeof candidate> =>
-							candidate != null,
-					);
-
-				if (candidates.length === 0) {
-					toast.error("No valid selected clip candidates found");
-					return;
-				}
-
-				const project = editor.project.getActive();
-				if (
-					project.settings.canvasSize.width !== DEFAULT_CANVAS_SIZE.width ||
-					project.settings.canvasSize.height !== DEFAULT_CANVAS_SIZE.height ||
-					project.settings.fps !== DEFAULT_FPS
-				) {
-					await editor.project.updateSettings({
-						settings: {
-							canvasSize: {
-								width: DEFAULT_CANVAS_SIZE.width,
-								height: DEFAULT_CANVAS_SIZE.height,
-							},
-							fps: DEFAULT_FPS,
-							originalCanvasSize:
-								project.settings.originalCanvasSize ??
-								project.settings.canvasSize,
-						},
-					});
-				}
-				const refreshedProject = editor.project.getActive();
-				const projectCanvas = refreshedProject.settings.canvasSize;
-				const transcriptKey = clipStoreState.transcriptRef?.cacheKey ?? null;
-				const transcriptEntry =
-					(transcriptKey &&
-						refreshedProject.clipTranscriptCache?.[transcriptKey]) ||
-					null;
-				const createdSceneIds: string[] = [];
-				const resolvedVideoScale =
-					mediaAsset.type === "video"
-						? await resolveVideoCoverScale({
-								asset: mediaAsset,
-								canvasSize: projectCanvas,
-							})
-						: 1;
-
-				for (let i = 0; i < candidates.length; i++) {
-					const candidate = candidates[i];
-					const sceneName = `Clip ${i + 1} (${Math.round(candidate.duration)}s)`;
-					const sceneId = await editor.scenes.createScene({
-						name: sceneName,
-						isMain: false,
-					});
-					createdSceneIds.push(sceneId);
-					await editor.scenes.switchToScene({ sceneId });
-
-					const tracks = editor.timeline.getTracks();
-					const generatedCaptionElements = tracks
-						.filter((track) => track.type === "text")
-						.flatMap((track) =>
-							track.elements
-								.filter(
-									(element) =>
-										element.type === "text" &&
-										(element.captionWordTimings?.length ?? 0) > 0,
-								)
-								.map((element) => ({
-									trackId: track.id,
-									elementId: element.id,
-								})),
+					const candidates = candidateIds
+						.map((id) => clipStoreState.candidates.find((candidate) => candidate.id === id))
+						.filter(
+							(candidate): candidate is NonNullable<typeof candidate> =>
+								candidate != null,
 						);
-					if (generatedCaptionElements.length > 0) {
-						editor.timeline.deleteElements({
-							elements: generatedCaptionElements,
-						});
-					}
-					if (mediaAsset.type === "video") {
-						const mainTrack = getMainTrack({ tracks });
-						if (!mainTrack) {
-							toast.error("No main video track found in the new scene");
-							continue;
-						}
-						editor.timeline.insertElement({
-							placement: {
-								mode: "explicit",
-								trackId: mainTrack.id,
-							},
-							element: buildClipElement({
-								asset: mediaAsset,
-								startTime: candidate.startTime,
-								endTime: candidate.endTime,
-								canvasSize: projectCanvas,
-								scaleOverride: resolvedVideoScale,
-							}),
-						});
-					} else {
-						const audioTrackId = editor.timeline.addTrack({
-							type: "audio",
-						});
-						editor.timeline.insertElement({
-							placement: {
-								mode: "explicit",
-								trackId: audioTrackId,
-							},
-							element: buildClipElement({
-								asset: mediaAsset,
-								startTime: candidate.startTime,
-								endTime: candidate.endTime,
-								canvasSize: projectCanvas,
-								scaleOverride: resolvedVideoScale,
-							}),
-						});
+
+					if (candidates.length === 0) {
+						toast.error("No valid selected clip candidates found");
+						return;
 					}
 
-					if (transcriptEntry) {
-						const clippedSegments = clipTranscriptSegmentsForWindow({
-							segments: transcriptEntry.segments,
-							startTime: candidate.startTime,
-							endTime: candidate.endTime,
+					const refreshedProject = editor.project.getActive();
+					const projectCanvas = refreshedProject.settings.canvasSize;
+					const clipWordTranscriptionCache =
+						refreshedProject.clipWordTranscriptionCache ?? {};
+					const createdSceneIds: string[] = [];
+					let localWordCaptionCount = 0;
+					let preparedClipAudioCount = 0;
+					let nearSilentClipAudioCount = 0;
+					let projectProcessId: string | undefined;
+					type PreparedClipImport = {
+						candidate: (typeof candidates)[number];
+						clipAudioBuffer: AudioBuffer | null;
+						continuousCaption: ReturnType<typeof buildContinuousCaptionForClip>;
+						captionSource: "local-word" | "transcript-cache" | null;
+					};
+					const preparedImports: PreparedClipImport[] = [];
+					const updatedWordTranscriptionCacheEntries: Record<
+						string,
+						{
+							modelId: string;
+							mediaId: string;
+							startTime: number;
+							endTime: number;
+							segments: TranscriptionSegment[];
+							updatedAt: string;
+						}
+					> = {};
+					const resolvedVideoScale =
+						mediaAsset.type === "video"
+							? await resolveVideoCoverScale({
+									asset: mediaAsset,
+									canvasSize: projectCanvas,
+								})
+							: 1;
+					const blueHighlightPreset = resolveBlueHighlightCaptionPreset();
+
+					try {
+						projectProcessId = registerProcess({
+							projectId: refreshedProject.metadata.id,
+							kind: "clip-generation",
+							label: `Preparing clip imports (0/${candidates.length})...`,
 						});
-						if (clippedSegments.length > 0) {
-							const captionTrackId = editor.timeline.addTrack({
-								type: "text",
-								index: 0,
+
+						for (let i = 0; i < candidates.length; i++) {
+							const candidate = candidates[i];
+							updateProcessLabel({
+								id: projectProcessId,
+								label: `Preparing clip imports (${i + 1}/${candidates.length}): audio + transcription...`,
 							});
-							const captionChunks = normalizeCaptionChunksForTimeline({
-								captionChunks: buildCaptionChunks({
-									segments: clippedSegments,
-									mode: "segment",
-								}),
+							const clipWordTranscriptionCacheKey =
+								buildClipWordTranscriptionCacheKey({
+									mediaId: mediaAsset.id,
+									startTime: candidate.startTime,
+									endTime: candidate.endTime,
+									modelId: CLIP_IMPORT_TRANSCRIPTION_MODEL,
+								});
+							const clipAudioBuffer = await decodeAssetWindowToAudioBuffer({
+								asset: mediaAsset,
+								startTime: candidate.startTime,
+								endTime: candidate.endTime,
 							});
-							for (
-								let captionIndex = 0;
-								captionIndex < captionChunks.length;
-								captionIndex++
-							) {
-								const caption = captionChunks[captionIndex];
+							if (clipAudioBuffer) {
+								preparedClipAudioCount += 1;
+								const rms = (() => {
+									const channelData = clipAudioBuffer.getChannelData(0);
+									if (channelData.length === 0) return 0;
+									let sumSquares = 0;
+									for (let index = 0; index < channelData.length; index++) {
+										const value = channelData[index];
+										sumSquares += value * value;
+									}
+									return Math.sqrt(sumSquares / channelData.length);
+								})();
+								if (!Number.isFinite(rms) || rms < 1e-4) {
+									nearSilentClipAudioCount += 1;
+								}
+							}
+							let wordLevelSegments: TranscriptionSegment[] | null =
+								clipWordTranscriptionCache[clipWordTranscriptionCacheKey]
+									?.segments ??
+								null;
+							if (!wordLevelSegments) {
+								wordLevelSegments =
+									clipAudioBuffer && clipAudioBuffer.length > 0
+										? await transcribeDecodedClipAudioWordLevel({
+												samples: extractMonoSamplesFromAudioBuffer({
+													audioBuffer: clipAudioBuffer,
+												}),
+												sampleRate: clipAudioBuffer.sampleRate,
+												cacheKey: clipWordTranscriptionCacheKey,
+											})
+										: await transcribeClipWindowWordLevel({
+												asset: mediaAsset,
+												startTime: candidate.startTime,
+												endTime: candidate.endTime,
+												cacheKey: clipWordTranscriptionCacheKey,
+											});
+								if (wordLevelSegments && wordLevelSegments.length > 0) {
+									updatedWordTranscriptionCacheEntries[
+										clipWordTranscriptionCacheKey
+									] = {
+										modelId: CLIP_IMPORT_TRANSCRIPTION_MODEL,
+										mediaId: mediaAsset.id,
+										startTime: candidate.startTime,
+										endTime: candidate.endTime,
+										segments: wordLevelSegments,
+										updatedAt: new Date().toISOString(),
+									};
+								}
+							}
+							const usedLocalWordTranscription = Boolean(
+								wordLevelSegments && wordLevelSegments.length > 0,
+							);
+							if (!usedLocalWordTranscription) {
+								throw new Error(
+									`Word-level transcription unavailable for clip "${candidate.title || candidate.id}". Aborting import to avoid inaccurate caption timing.`,
+								);
+							}
+							const clippedSegments: TranscriptionSegment[] = wordLevelSegments ?? [];
+							const captionSource: PreparedClipImport["captionSource"] = "local-word";
+							preparedImports.push({
+								candidate,
+								clipAudioBuffer,
+								continuousCaption: (() => {
+									if (clippedSegments.length === 0) return null;
+									let caption = buildContinuousCaptionForClip({
+										segments: clippedSegments,
+										redistributeTiming: true,
+									});
+									if (!caption) return null;
+									if (
+										!hasExactWordSequenceMatch({
+											segments: clippedSegments,
+											caption,
+										})
+									) {
+										caption = buildContinuousCaptionForClip({
+											segments: clippedSegments,
+											redistributeTiming: false,
+										});
+									}
+									if (
+										!caption ||
+										!hasExactWordSequenceMatch({
+											segments: clippedSegments,
+											caption,
+										})
+									) {
+										throw new Error(
+											`Transcript integrity check failed for clip "${candidate.title || candidate.id}" (word sequence mismatch).`,
+										);
+									}
+									return caption;
+								})(),
+								captionSource,
+							});
+						}
+						if (Object.keys(updatedWordTranscriptionCacheEntries).length > 0) {
+							editor.project.setActiveProject({
+								project: {
+									...editor.project.getActive(),
+									clipWordTranscriptionCache: {
+										...clipWordTranscriptionCache,
+										...updatedWordTranscriptionCacheEntries,
+									},
+								},
+							});
+							editor.save.markDirty();
+						}
+
+						for (let i = 0; i < preparedImports.length; i++) {
+							const prepared = preparedImports[i];
+							const { candidate, clipAudioBuffer, continuousCaption, captionSource } = prepared;
+							updateProcessLabel({
+								id: projectProcessId,
+								label: `Importing clips (${i + 1}/${preparedImports.length}): creating scene...`,
+							});
+							const sceneName =
+								candidate.title.trim().length > 0
+									? candidate.title.trim()
+									: `Clip ${i + 1} (${Math.round(candidate.duration)}s)`;
+							const sceneId = await editor.scenes.createScene({
+								name: sceneName,
+								isMain: false,
+							});
+							createdSceneIds.push(sceneId);
+							await editor.scenes.switchToScene({ sceneId });
+
+							const tracks = editor.timeline.getTracks();
+							const generatedCaptionElements = tracks
+								.filter((track) => track.type === "text")
+								.flatMap((track) =>
+									track.elements
+										.filter(
+											(element) =>
+												element.type === "text" &&
+												(element.captionWordTimings?.length ?? 0) > 0,
+										)
+										.map((element) => ({
+											trackId: track.id,
+											elementId: element.id,
+										})),
+								);
+							if (generatedCaptionElements.length > 0) {
+								editor.timeline.deleteElements({
+									elements: generatedCaptionElements,
+								});
+							}
+
+							if (mediaAsset.type === "video") {
+								const mainTrack = getMainTrack({ tracks });
+								if (!mainTrack) {
+									toast.error("No main video track found in the new scene");
+									continue;
+								}
+								editor.timeline.insertElement({
+									placement: {
+										mode: "explicit",
+										trackId: mainTrack.id,
+									},
+									element: buildClipElement({
+										asset: mediaAsset,
+										startTime: candidate.startTime,
+										endTime: candidate.endTime,
+										canvasSize: projectCanvas,
+										scaleOverride: resolvedVideoScale,
+									}),
+								});
+							}
+
+							const audioTrackId = editor.timeline.addTrack({
+								type: "audio",
+							});
+							const sourceDuration = Math.max(
+								candidate.endTime,
+								mediaAsset.duration ?? candidate.endTime,
+							);
+							const trimEnd = Math.max(0, sourceDuration - candidate.endTime);
+							editor.timeline.insertElement({
+								placement: {
+									mode: "explicit",
+									trackId: audioTrackId,
+								},
+								element: {
+									type: "audio",
+									sourceType: "upload",
+									mediaId: mediaAsset.id,
+									name: `${mediaAsset.name} audio`,
+									duration: candidate.duration,
+									startTime: 0,
+									trimStart: candidate.startTime,
+									trimEnd,
+									volume: 1,
+									muted: false,
+								},
+							});
+
+							if (continuousCaption) {
+								if (captionSource === "local-word") localWordCaptionCount += 1;
+
+								const captionTrackId = editor.timeline.addTrack({
+									type: "text",
+									index: 0,
+								});
 								editor.timeline.insertElement({
 									placement: {
 										mode: "explicit",
@@ -1318,47 +2095,78 @@ export function useEditorActions() {
 									},
 									element: {
 										...DEFAULT_TEXT_ELEMENT,
-										name: `Caption ${captionIndex + 1}`,
-										content: caption.text,
-										duration: caption.duration,
-										startTime: caption.startTime,
-										captionWordTimings: caption.wordTimings,
-										fontSize: 65,
-										fontWeight: "bold",
-										captionStyle: {
-											fitInCanvas: true,
-											karaokeWordHighlight: true,
-											karaokeHighlightMode: "block",
-											karaokeHighlightEaseInOnly: false,
-											karaokeScaleHighlightedWord: false,
-											karaokeUnderlineThickness: 3,
-											karaokeHighlightColor: "#3B82F6",
-											karaokeHighlightTextColor: "#FFFFFF",
-											karaokeHighlightOpacity: 1,
-											karaokeHighlightRoundness: 24,
-											backgroundFitMode: "block",
-											neverShrinkFont: false,
-											wordsOnScreen: 3,
-											maxLinesOnScreen: 2,
-											wordDisplayPreset: "balanced",
-											linkedToCaptionGroup: true,
-											anchorToSafeAreaBottom: true,
-											safeAreaBottomOffset: 0,
-										},
+										name:
+											captionSource === "local-word"
+												? "Caption 1 [local-word]"
+												: "Caption 1 [transcript-cache]",
+										content: continuousCaption.content,
+										duration: continuousCaption.duration,
+										startTime: continuousCaption.startTime,
+										captionWordTimings: continuousCaption.wordTimings,
+										...blueHighlightPreset.textProps,
+										captionStyle: blueHighlightPreset.captionStyle,
 									},
 								});
+
+								const insertedCaptions = editor
+									.timeline
+									.getTrackById({ trackId: captionTrackId })
+									?.elements
+									.filter(
+										(element) =>
+											element.type === "text" &&
+											element.name.startsWith("Caption "),
+									) ?? [];
+								if (insertedCaptions.length > 0) {
+									editor.timeline.updateElements({
+										updates: insertedCaptions.map((element) => ({
+											trackId: captionTrackId,
+											elementId: element.id,
+											updates: {
+												...blueHighlightPreset.textProps,
+												captionStyle: blueHighlightPreset.captionStyle,
+											},
+										})),
+										pushHistory: false,
+									});
+								}
 							}
+
+							// Preload scene audio before moving on so first playback is not silent.
+							await editor.audio.primeCurrentTimelineAudio();
+						}
+					} finally {
+						if (projectProcessId) {
+							removeProcess({ id: projectProcessId });
 						}
 					}
-				}
 
-				if (createdSceneIds[0]) {
-					await editor.scenes.switchToScene({ sceneId: createdSceneIds[0] });
+					if (createdSceneIds[0]) {
+						await editor.scenes.switchToScene({ sceneId: createdSceneIds[0] });
+						await editor.audio.primeCurrentTimelineAudio();
+					}
+					const normalizedProject = normalizeGeneratedCaptionsInProject({
+						project: editor.project.getActive(),
+					});
+					if (normalizedProject.changed) {
+						editor.project.setActiveProject({ project: normalizedProject.project });
+						editor.save.markDirty();
+					}
+					if (editor.playback.getVolume() <= 0) {
+						editor.playback.setVolume({ volume: 1 });
+					}
+					useClipGenerationStore.getState().setSelectedCandidateIds({
+						candidateIds: [],
+					});
+					toast.success(`Imported ${createdSceneIds.length} clip scene(s)`, {
+						description: `Audio prepared ${preparedClipAudioCount}/${createdSceneIds.length} (near-silent ${nearSilentClipAudioCount}). Captions local-word ${localWordCaptionCount}`,
+					});
+				} catch (error) {
+					console.error("Failed to import selected viral clips:", error);
+					toast.error(
+						error instanceof Error ? error.message : "Clip import failed",
+					);
 				}
-				useClipGenerationStore.getState().setSelectedCandidateIds({
-					candidateIds: [],
-				});
-				toast.success(`Imported ${createdSceneIds.length} clip scene(s)`);
 			})();
 		},
 		undefined,

@@ -3,7 +3,7 @@ import type { ClipCandidateDraft } from "@/types/clip-generation";
 import type { TranscriptionSegment } from "@/types/transcription";
 
 const DEFAULT_MIN_CLIP_SECONDS = 30;
-const DEFAULT_MAX_CLIP_SECONDS = 60;
+const DEFAULT_MAX_CLIP_SECONDS = 90;
 const DEFAULT_TARGET_CLIP_SECONDS = 45;
 const DEFAULT_MAX_OUTPUT = 12;
 const CLUSTER_GAP_SECONDS = 6;
@@ -35,7 +35,18 @@ function overlapRatio({
 
 function truncateText({ text, maxLength }: { text: string; maxLength: number }): string {
 	if (text.length <= maxLength) return text;
-	return `${text.slice(0, maxLength - 1).trim()}…`;
+	return `${text.slice(0, maxLength - 3).trim()}...`;
+}
+
+function endsSentence(text: string): boolean {
+	return /[.!?]["')\]]*\s*$/.test(text.trim());
+}
+
+function startsLikelyContinuation(text: string): boolean {
+	const trimmed = text.trim();
+	if (!trimmed) return false;
+	const firstChar = trimmed[0] ?? "";
+	return /[a-z]/.test(firstChar);
 }
 
 function buildSnippet({
@@ -87,26 +98,125 @@ function buildClusters({
 	return clusters;
 }
 
+function getOverlapBounds({
+	segments,
+	startTime,
+	endTime,
+}: {
+	segments: TranscriptionSegment[];
+	startTime: number;
+	endTime: number;
+}): { first: number; last: number } | null {
+	let first = -1;
+	let last = -1;
+	for (let i = 0; i < segments.length; i++) {
+		const segment = segments[i];
+		if (segment.end > startTime && segment.start < endTime) {
+			if (first === -1) first = i;
+			last = i;
+		}
+	}
+	if (first === -1 || last === -1) return null;
+	return { first, last };
+}
+
+function snapWindowToSentenceBoundaries({
+	segments,
+	startTime,
+	endTime,
+	minClipSeconds,
+	maxClipSeconds,
+	mediaDuration,
+}: {
+	segments: TranscriptionSegment[];
+	startTime: number;
+	endTime: number;
+	minClipSeconds: number;
+	maxClipSeconds: number;
+	mediaDuration: number;
+}): { startTime: number; endTime: number } {
+	const overlap = getOverlapBounds({ segments, startTime, endTime });
+	if (!overlap) return { startTime, endTime };
+
+	let adjustedStart = startTime;
+	let adjustedEnd = endTime;
+
+	const firstSegment = segments[overlap.first];
+	if (firstSegment && startsLikelyContinuation(firstSegment.text)) {
+		for (let i = overlap.first - 1; i >= 0; i--) {
+			const current = segments[i];
+			const next = segments[i + 1];
+			if (!current || !next) break;
+			if (next.start - current.end > CLUSTER_GAP_SECONDS) break;
+			const candidateStart = current.start;
+			if (adjustedEnd - candidateStart > maxClipSeconds) continue;
+			adjustedStart = candidateStart;
+			const previous = segments[i - 1];
+			if (!previous || endsSentence(previous.text)) break;
+		}
+	}
+
+	const lastSegment = segments[overlap.last];
+	if (lastSegment && !endsSentence(lastSegment.text)) {
+		for (let i = overlap.last + 1; i < segments.length; i++) {
+			const previous = segments[i - 1];
+			const current = segments[i];
+			if (!previous || !current) break;
+			if (current.start - previous.end > CLUSTER_GAP_SECONDS) break;
+			if (current.end - adjustedStart > maxClipSeconds) break;
+			adjustedEnd = current.end;
+			if (endsSentence(current.text)) break;
+		}
+	}
+
+	if (adjustedEnd - adjustedStart < minClipSeconds) {
+		adjustedEnd = Math.min(mediaDuration, adjustedStart + minClipSeconds);
+	}
+	if (adjustedEnd - adjustedStart > maxClipSeconds) {
+		adjustedEnd = adjustedStart + maxClipSeconds;
+	}
+
+	return {
+		startTime: clamp(adjustedStart, 0, mediaDuration),
+		endTime: clamp(adjustedEnd, 0, mediaDuration),
+	};
+}
+
 function buildClipDraft({
 	startTime,
 	endTime,
 	segments,
+	minClipSeconds,
+	maxClipSeconds,
+	mediaDuration,
 }: {
 	startTime: number;
 	endTime: number;
 	segments: TranscriptionSegment[];
+	minClipSeconds: number;
+	maxClipSeconds: number;
+	mediaDuration: number;
 }): ClipCandidateDraft | null {
-	const duration = endTime - startTime;
+	const snappedWindow = snapWindowToSentenceBoundaries({
+		segments,
+		startTime,
+		endTime,
+		minClipSeconds,
+		maxClipSeconds,
+		mediaDuration,
+	});
+	const duration = snappedWindow.endTime - snappedWindow.startTime;
 	if (duration <= 0) return null;
 
 	const overlappingSegments = segments.filter(
-		(segment) => segment.end > startTime && segment.start < endTime,
+		(segment) =>
+			segment.end > snappedWindow.startTime && segment.start < snappedWindow.endTime,
 	);
 	if (overlappingSegments.length === 0) return null;
 
 	const spokenDuration = overlappingSegments.reduce((sum, segment) => {
-		const clippedStart = Math.max(startTime, segment.start);
-		const clippedEnd = Math.min(endTime, segment.end);
+		const clippedStart = Math.max(snappedWindow.startTime, segment.start);
+		const clippedEnd = Math.min(snappedWindow.endTime, segment.end);
 		return sum + Math.max(0, clippedEnd - clippedStart);
 	}, 0);
 	const density = spokenDuration / duration;
@@ -117,10 +227,14 @@ function buildClipDraft({
 
 	return {
 		id: generateUUID(),
-		startTime: roundToHundredth(startTime),
-		endTime: roundToHundredth(endTime),
+		startTime: roundToHundredth(snappedWindow.startTime),
+		endTime: roundToHundredth(snappedWindow.endTime),
 		duration: roundToHundredth(duration),
-		transcriptSnippet: buildSnippet({ segments, startTime, endTime }),
+		transcriptSnippet: buildSnippet({
+			segments,
+			startTime: snappedWindow.startTime,
+			endTime: snappedWindow.endTime,
+		}),
 		localScore,
 	};
 }
@@ -184,6 +298,9 @@ export function buildClipCandidatesFromTranscript({
 			startTime,
 			endTime,
 			segments: normalizedSegments,
+			minClipSeconds,
+			maxClipSeconds,
+			mediaDuration,
 		});
 		if (draft) {
 			candidates.push(draft);
@@ -192,17 +309,16 @@ export function buildClipCandidatesFromTranscript({
 		const clusterDuration = cluster.end - cluster.start;
 		if (clusterDuration > maxClipSeconds) {
 			const step = Math.max(10, Math.floor(targetClipSeconds / 3));
-			for (
-				let offset = cluster.start;
-				offset < cluster.end;
-				offset += step
-			) {
+			for (let offset = cluster.start; offset < cluster.end; offset += step) {
 				const windowStart = clamp(offset, 0, Math.max(0, mediaDuration - minClipSeconds));
 				const windowEnd = clamp(windowStart + targetClipSeconds, 0, mediaDuration);
 				const splitDraft = buildClipDraft({
 					startTime: windowStart,
 					endTime: windowEnd,
 					segments: normalizedSegments,
+					minClipSeconds,
+					maxClipSeconds,
+					mediaDuration,
 				});
 				if (splitDraft) {
 					candidates.push(splitDraft);

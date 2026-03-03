@@ -28,6 +28,9 @@ import {
 } from "@/lib/commands/timeline";
 import { BatchCommand, PreviewTracker } from "@/lib/commands";
 import type { InsertElementParams } from "@/lib/commands/timeline/element/insert-element";
+import {
+	applyBlueHighlightCaptionPreset,
+} from "@/constants/caption-presets";
 
 export class TimelineManager {
 	private listeners = new Set<() => void>();
@@ -47,7 +50,29 @@ export class TimelineManager {
 	}
 
 	insertElement({ element, placement }: InsertElementParams): void {
-		const command = new InsertElementCommand({ element, placement });
+		const normalizedElement =
+			element.type === "text" && (element.captionWordTimings?.length ?? 0) > 0
+				? (() => {
+						const textElement = element as TextElement;
+						const presetElement = applyBlueHighlightCaptionPreset({
+							element: textElement,
+						});
+						return {
+							...presetElement,
+							...textElement,
+							transform: textElement.transform ?? presetElement.transform,
+							background: textElement.background ?? presetElement.background,
+							captionStyle: {
+								...(presetElement.captionStyle ?? {}),
+								...(textElement.captionStyle ?? {}),
+							},
+						};
+					})()
+				: element;
+		const command = new InsertElementCommand({
+			element: normalizedElement,
+			placement,
+		});
 		this.editor.command.execute({ command });
 	}
 

@@ -100,6 +100,7 @@ function remapLandscapeVideoScalesForSquarePreview({
 	projectCanvas: { width: number; height: number };
 	previewCanvas: { width: number; height: number };
 }): TimelineTrack[] {
+	const projectIsPortrait = projectCanvas.height > projectCanvas.width;
 	return tracks.map((track) => {
 		if (track.type !== "video") return track;
 		return {
@@ -109,21 +110,27 @@ function remapLandscapeVideoScalesForSquarePreview({
 				const asset = mediaById.get(element.mediaId);
 				const sourceWidth = asset?.width ?? 0;
 				const sourceHeight = asset?.height ?? 0;
-				if (!(sourceWidth > sourceHeight && sourceHeight > 0)) {
+				const hasKnownDimensions = sourceWidth > 0 && sourceHeight > 0;
+				const hasKnownLandscape = hasKnownDimensions && sourceWidth > sourceHeight;
+				const canApplyUnknownFallback =
+					!hasKnownDimensions && projectIsPortrait && element.transform.scale > 1;
+				if (!hasKnownLandscape && !canApplyUnknownFallback) {
 					return element;
 				}
+				const effectiveSourceWidth = hasKnownDimensions ? sourceWidth : 16;
+				const effectiveSourceHeight = hasKnownDimensions ? sourceHeight : 9;
 
 				const projectCoverRatio = getCoverToContainScaleRatio({
 					canvasWidth: projectCanvas.width,
 					canvasHeight: projectCanvas.height,
-					sourceWidth,
-					sourceHeight,
+					sourceWidth: effectiveSourceWidth,
+					sourceHeight: effectiveSourceHeight,
 				});
 				const previewCoverRatio = getCoverToContainScaleRatio({
 					canvasWidth: previewCanvas.width,
 					canvasHeight: previewCanvas.height,
-					sourceWidth,
-					sourceHeight,
+					sourceWidth: effectiveSourceWidth,
+					sourceHeight: effectiveSourceHeight,
 				});
 				const ratio =
 					projectCoverRatio > 0 ? previewCoverRatio / projectCoverRatio : 1;

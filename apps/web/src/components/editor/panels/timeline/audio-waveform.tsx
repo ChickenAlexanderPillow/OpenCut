@@ -102,7 +102,25 @@ export function AudioWaveform({
 					const peaks = extractPeaks({ buffer: audioBuffer });
 					newWaveSurfer.load("", peaks, audioBuffer.duration);
 				} else if (audioUrl) {
-					await newWaveSurfer.load(audioUrl);
+					try {
+						const loadResult = newWaveSurfer.load(audioUrl);
+						if (
+							loadResult &&
+							typeof (loadResult as Promise<unknown>).catch === "function"
+						) {
+							void (loadResult as Promise<unknown>).catch((err) => {
+								if (!mounted) return;
+								console.error("WaveSurfer load failed:", err);
+								setError(true);
+								setIsLoading(false);
+							});
+						}
+					} catch (err) {
+						if (!mounted) return;
+						console.error("WaveSurfer load threw:", err);
+						setError(true);
+						setIsLoading(false);
+					}
 				}
 			} catch (err) {
 				if (mounted) {

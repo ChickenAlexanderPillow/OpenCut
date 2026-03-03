@@ -249,6 +249,9 @@ function ElementInner({
 		side: "left" | "right";
 	}) => void;
 }) {
+	const showMutedOverlay = element.type === "audio" && hasAudio && isMuted;
+	const showHiddenOverlay = canElementBeHidden(element) && element.hidden;
+
 	return (
 		<div
 			className={`relative h-full cursor-pointer overflow-hidden rounded-[0.5rem] ${getTrackClasses(
@@ -272,11 +275,9 @@ function ElementInner({
 					/>
 				</div>
 
-				{(hasAudio
-					? isMuted
-					: canElementBeHidden(element) && element.hidden) && (
+				{(showMutedOverlay || showHiddenOverlay) && (
 					<div className="bg-opacity-50 pointer-events-none absolute inset-0 flex items-center justify-center bg-black">
-						{hasAudio ? (
+						{showMutedOverlay ? (
 							<HugeiconsIcon
 								icon={VolumeHighIcon}
 								className="size-6 text-white"
@@ -374,8 +375,7 @@ function ElementContent({
 	}
 
 	if (element.type === "audio") {
-		const audioBuffer =
-			element.sourceType === "library" ? element.buffer : undefined;
+		const audioBuffer = element.buffer;
 
 		const audioUrl =
 			element.sourceType === "library"
