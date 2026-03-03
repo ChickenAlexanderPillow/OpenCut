@@ -9,7 +9,6 @@ import { useEditor } from "@/hooks/use-editor";
 import { useClipGenerationStore } from "@/stores/clip-generation-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 import type { ClipCandidate } from "@/types/clip-generation";
-import { clipTranscriptSegmentsForWindow } from "@/lib/clips/transcript";
 import {
 	ArrowDownToLine,
 	ChevronDown,
@@ -44,6 +43,51 @@ function buildClipPreviewUrl({
 	return `${baseUrl}#t=${Math.max(0, startTime)},${Math.max(startTime, endTime)}`;
 }
 
+const CLIP_PREVIEW_PLAY_EVENT = "opencut:clips-preview-play";
+const TIMELINE_PLAYBACK_STATE_EVENT = "opencut:timeline-playback-state";
+
+function buildWindowTranscriptText({
+	segments,
+	startTime,
+	endTime,
+}: {
+	segments: Array<{ text: string; start: number; end: number }>;
+	startTime: number;
+	endTime: number;
+}): string {
+	return segments
+		.filter((segment) => segment.end > startTime && segment.start < endTime)
+		.map((segment) => {
+			const fullText = segment.text.trim();
+			if (!fullText) return "";
+			const overlapStart = Math.max(startTime, segment.start);
+			const overlapEnd = Math.min(endTime, segment.end);
+			const overlapDuration = Math.max(0, overlapEnd - overlapStart);
+			const segmentDuration = Math.max(0.001, segment.end - segment.start);
+			if (overlapDuration <= 0) return "";
+			if (overlapDuration >= segmentDuration * 0.98 || segmentDuration <= 0.2) {
+				return fullText;
+			}
+			const words = fullText.match(/\S+/g) ?? [];
+			if (words.length <= 1) return fullText;
+			const fromRatio = (overlapStart - segment.start) / segmentDuration;
+			const toRatio = (overlapEnd - segment.start) / segmentDuration;
+			const startIndex = Math.max(
+				0,
+				Math.min(words.length - 1, Math.floor(fromRatio * words.length)),
+			);
+			const endIndexExclusive = Math.max(
+				startIndex + 1,
+				Math.min(words.length, Math.ceil(toRatio * words.length)),
+			);
+			return words.slice(startIndex, endIndexExclusive).join(" ").trim();
+		})
+		.filter(Boolean)
+		.join(" ")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
 function CandidateCard({
 	candidate,
 	fullQuoteText,
@@ -61,6 +105,7 @@ function CandidateCard({
 	onImport: () => void;
 	isImporting: boolean;
 }) {
+	const editor = useEditor({ subscribeTo: [] });
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 	const audioRef = useRef<HTMLAudioElement | null>(null);
 	const [isQuoteExpanded, setIsQuoteExpanded] = useState(false);
@@ -106,6 +151,65 @@ function CandidateCard({
 		}
 	};
 
+	useEffect(() => {
+		const onOtherPreviewPlay = (event: Event) => {
+			const customEvent = event as CustomEvent<{ candidateId?: string }>;
+			const playingCandidateId = customEvent.detail?.candidateId;
+			if (!playingCandidateId || playingCandidateId === candidate.id) return;
+			if (mediaType === "video") {
+				const video = videoRef.current;
+				if (!video) return;
+				video.pause();
+				setIsPlaying(false);
+				return;
+			}
+			if (mediaType === "audio") {
+				const audio = audioRef.current;
+				if (!audio) return;
+				audio.pause();
+				setIsPlaying(false);
+			}
+		};
+		window.addEventListener(CLIP_PREVIEW_PLAY_EVENT, onOtherPreviewPlay as EventListener);
+		return () => {
+			window.removeEventListener(
+				CLIP_PREVIEW_PLAY_EVENT,
+				onOtherPreviewPlay as EventListener,
+			);
+		};
+	}, [candidate.id, mediaType]);
+
+	useEffect(() => {
+		const onTimelinePlaybackState = (event: Event) => {
+			const customEvent = event as CustomEvent<{ isPlaying?: boolean }>;
+			if (!customEvent.detail?.isPlaying) return;
+
+			const video = videoRef.current;
+			if (video && !video.paused) {
+				video.pause();
+			}
+
+			const audio = audioRef.current;
+			if (audio && !audio.paused) {
+				audio.pause();
+			}
+
+			setIsPlaying(false);
+		};
+
+		window.addEventListener(
+			TIMELINE_PLAYBACK_STATE_EVENT,
+			onTimelinePlaybackState as EventListener,
+		);
+
+		return () => {
+			window.removeEventListener(
+				TIMELINE_PLAYBACK_STATE_EVENT,
+				onTimelinePlaybackState as EventListener,
+			);
+		};
+	}, []);
+
 	const handleAudioTimeUpdate = () => {
 		const audio = audioRef.current;
 		if (!audio) return;
@@ -133,7 +237,13 @@ function CandidateCard({
 			video.volume = 1;
 			setIsMuted(false);
 			try {
+				editor.playback.pause();
 				await video.play();
+				window.dispatchEvent(
+					new CustomEvent(CLIP_PREVIEW_PLAY_EVENT, {
+						detail: { candidateId: candidate.id },
+					}),
+				);
 				setIsPlaying(true);
 			} catch (error) {
 				console.error("Failed to play clip preview video:", error);
@@ -156,7 +266,13 @@ function CandidateCard({
 			audio.volume = 1;
 			setIsMuted(false);
 			try {
+				editor.playback.pause();
 				await audio.play();
+				window.dispatchEvent(
+					new CustomEvent(CLIP_PREVIEW_PLAY_EVENT, {
+						detail: { candidateId: candidate.id },
+					}),
+				);
 				setIsPlaying(true);
 			} catch (error) {
 				console.error("Failed to play clip preview audio:", error);
@@ -507,10 +623,17 @@ export function Clips() {
 
 			{groups.map((group) => {
 				const sourceMedia = mediaById.get(group.sourceMediaId) ?? null;
-				const transcriptSegments =
-					(group.transcriptRef?.cacheKey &&
-						project.clipTranscriptCache?.[group.transcriptRef.cacheKey]?.segments) ||
-					[];
+				const transcriptSegments = (() => {
+					const clipCache = project.clipTranscriptCache ?? {};
+					if (group.transcriptRef?.cacheKey && clipCache[group.transcriptRef.cacheKey]) {
+						return clipCache[group.transcriptRef.cacheKey]?.segments ?? [];
+					}
+					const fallbackEntries = Object.entries(clipCache)
+						.filter(([key]) => key.startsWith(`${group.sourceMediaId}:`))
+						.map(([, entry]) => entry)
+						.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+					return fallbackEntries[0]?.segments ?? [];
+				})();
 				const previewSource =
 					sourceMedia &&
 					sourceMedia.url &&
@@ -565,14 +688,11 @@ export function Clips() {
 								key={`${group.sourceMediaId}:${candidate.id}`}
 								candidate={candidate}
 								fullQuoteText={
-									clipTranscriptSegmentsForWindow({
+									buildWindowTranscriptText({
 										segments: transcriptSegments,
 										startTime: candidate.startTime,
 										endTime: candidate.endTime,
 									})
-										.map((segment) => segment.text)
-										.join(" ")
-										.replace(/\s+/g, " ")
 										.trim() || candidate.transcriptSnippet
 								}
 								mediaUrl={previewSource?.url ?? null}

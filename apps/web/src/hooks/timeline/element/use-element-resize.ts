@@ -31,7 +31,7 @@ interface UseTimelineElementResizeProps {
 
 export function useTimelineElementResize({
 	element,
-	track,
+	track: _track,
 	zoomLevel,
 	onSnapPointChange,
 	onResizeStateChange,
@@ -40,6 +40,9 @@ export function useTimelineElementResize({
 	const activeProject = editor.project.getActive();
 	const isShiftHeldRef = useShiftKey();
 	const snappingEnabled = useTimelineStore((state) => state.snappingEnabled);
+	const rippleEditingEnabled = useTimelineStore(
+		(state) => state.rippleEditingEnabled,
+	);
 
 
 	const [resizing, setResizing] = useState<ResizeState | null>(null);
@@ -294,21 +297,9 @@ export function useTimelineElementResize({
 				elementId: element.id,
 				trimStart: finalTrimStart,
 				trimEnd: finalTrimEnd,
-			});
-		}
-
-		if (startTimeChanged) {
-			editor.timeline.updateElementStartTime({
-				elements: [{ trackId: track.id, elementId: element.id }],
-				startTime: finalStartTime,
-			});
-		}
-
-		if (durationChanged) {
-			editor.timeline.updateElementDuration({
-				trackId: track.id,
-				elementId: element.id,
-				duration: finalDuration,
+				startTime: startTimeChanged ? finalStartTime : undefined,
+				duration: durationChanged ? finalDuration : undefined,
+				rippleEnabled: rippleEditingEnabled,
 			});
 		}
 
@@ -319,9 +310,9 @@ export function useTimelineElementResize({
 		resizing,
 		editor.timeline,
 		element.id,
-		track.id,
 		onResizeStateChange,
 		onSnapPointChange,
+		rippleEditingEnabled,
 	]);
 
 	useEffect(() => {

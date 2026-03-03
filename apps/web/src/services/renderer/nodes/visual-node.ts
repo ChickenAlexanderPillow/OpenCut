@@ -2,6 +2,8 @@ import type { CanvasRenderer } from "../canvas-renderer";
 import { BaseNode } from "./base-node";
 import type { BlendMode } from "@/types/rendering";
 import type { Transform } from "@/types/timeline";
+import type { ElementAnimations } from "@/types/animation";
+import { resolveOpacityAtTime, resolveTransformAtTime } from "@/lib/animation";
 
 const VISUAL_EPSILON = 1 / 1000;
 
@@ -13,6 +15,7 @@ export interface VisualNodeParams {
 	transform: Transform;
 	opacity: number;
 	blendMode?: BlendMode;
+	animations?: ElementAnimations;
 }
 
 export interface VisualPlacement {
@@ -42,15 +45,27 @@ export abstract class VisualNode<
 		source,
 		sourceWidth,
 		sourceHeight,
+		time,
 	}: {
 		renderer: CanvasRenderer;
 		source: CanvasImageSource;
 		sourceWidth: number;
 		sourceHeight: number;
+		time: number;
 	}): void {
 		renderer.context.save();
 
-		const { transform, opacity } = this.params;
+		const localTime = this.getLocalTime(time);
+		const transform = resolveTransformAtTime({
+			baseTransform: this.params.transform,
+			animations: this.params.animations,
+			localTime,
+		});
+		const opacity = resolveOpacityAtTime({
+			baseOpacity: this.params.opacity,
+			animations: this.params.animations,
+			localTime,
+		});
 		const placement = this.getVisualPlacement({
 			rendererWidth: renderer.width,
 			rendererHeight: renderer.height,
@@ -81,6 +96,26 @@ export abstract class VisualNode<
 			placement.height,
 		);
 		renderer.context.restore();
+	}
+
+	protected getResolvedVisualState({
+		time,
+	}: {
+		time: number;
+	}): { transform: Transform; opacity: number } {
+		const localTime = this.getLocalTime(time);
+		return {
+			transform: resolveTransformAtTime({
+				baseTransform: this.params.transform,
+				animations: this.params.animations,
+				localTime,
+			}),
+			opacity: resolveOpacityAtTime({
+				baseOpacity: this.params.opacity,
+				animations: this.params.animations,
+				localTime,
+			}),
+		};
 	}
 
 	protected getVisualPlacement({

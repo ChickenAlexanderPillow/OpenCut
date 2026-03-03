@@ -118,4 +118,37 @@ describe("buildClipCandidatesFromTranscript", () => {
 			"black market",
 		);
 	});
+
+	test("prefers extending to sentence end over hard-cutting mid sentence near max duration", () => {
+		const candidates = buildClipCandidatesFromTranscript({
+			mediaDuration: 200,
+			minClipSeconds: 20,
+			targetClipSeconds: 35,
+			maxClipSeconds: 40,
+			segments: [
+				{
+					text: "What changed in your go-to-market over the last year?",
+					start: 5,
+					end: 10,
+				},
+				{
+					text: "We shifted from broad awareness to a tighter enterprise motion with clearer qualification and stronger handoffs across teams",
+					start: 10,
+					end: 48,
+				},
+				{
+					text: "That gave us better conversion and a shorter cycle.",
+					start: 48,
+					end: 54,
+				},
+			],
+		});
+
+		expect(candidates.length).toBeGreaterThan(0);
+		const longAnswerCandidate = candidates.find((candidate) =>
+			candidate.transcriptSnippet.toLowerCase().includes("handoffs"),
+		);
+		expect(longAnswerCandidate).toBeDefined();
+		expect(longAnswerCandidate?.endTime).toBeGreaterThanOrEqual(54);
+	});
 });

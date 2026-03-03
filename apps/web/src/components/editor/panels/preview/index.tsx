@@ -19,6 +19,7 @@ import { PreviewContextMenu } from "./context-menu";
 import { PreviewToolbar } from "./toolbar";
 import { videoCache } from "@/services/video-cache/service";
 import { WebGPUPreviewRenderer } from "@/services/renderer/webgpu-preview-renderer";
+import { resolvePreviewRenderBackend } from "@/services/renderer/preview-render-mode";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/ui";
 import type { TBackground } from "@/types/project";
@@ -279,7 +280,8 @@ function RenderTreeController() {
 	} =
 		usePreviewStore();
 	const previewProfile = PREVIEW_PROFILES[playbackQuality];
-	const previewVideoFrameRateCap = activeProject.settings.fps;
+	const projectFps = Math.max(1, activeProject.settings.fps);
+	const previewVideoFrameRateCap = projectFps;
 	const previewVideoProxyScale = previewProfile.videoProxyScale;
 	const hasLandscapeVideoSource = useMemo(() => {
 		const mediaById = new Map(mediaAssets.map((asset) => [asset.id, asset]));
@@ -432,7 +434,8 @@ function PreviewCanvas({
 	const activeProject = editor.project.getActive();
 	const { overlays, previewFormatVariant, previewRendererMode } =
 		usePreviewStore();
-	const renderFrameRateCap = activeProject.settings.fps;
+	const projectFps = Math.max(1, activeProject.settings.fps);
+	const renderFrameRateCap = projectFps;
 	const previewBackgroundColor =
 		previewFormatVariant === "square"
 			? "transparent"
@@ -540,8 +543,11 @@ function PreviewCanvas({
 			lastFrameRef.current = frameNumber;
 			const renderStart = performance.now();
 			const renderPromise = (() => {
-				const forceCanvas2D = runtimeFallbackRef.current !== null;
-				if (forceCanvas2D) {
+				const backend = resolvePreviewRenderBackend({
+					mode: previewRendererMode,
+					runtimeFallbackReason: runtimeFallbackRef.current,
+				});
+				if (backend === "canvas2d") {
 					const overlayCtx = overlayCanvasRef.current?.getContext("2d");
 					if (overlayCtx && overlayCanvasRef.current) {
 						overlayCtx.clearRect(
@@ -569,7 +575,10 @@ function PreviewCanvas({
 					.then((result) => {
 						if (!result.usedWebGPU) {
 							setSurface({ active: "canvas2d" });
-							if (result.shouldDisableWebGPU) {
+							if (
+								previewRendererMode === "auto" &&
+								result.shouldDisableWebGPU
+							) {
 								runtimeFallbackRef.current =
 									result.reasonIfFallback ?? "WebGPU fallback";
 							}
@@ -592,7 +601,7 @@ function PreviewCanvas({
 							lower.includes("adapter") ||
 							lower.includes("webgpu") ||
 							lower.includes("context");
-						if (fatal) {
+						if (fatal && previewRendererMode === "auto") {
 							runtimeFallbackRef.current = message;
 						}
 						setSurface({ active: "canvas2d" });
@@ -641,7 +650,7 @@ function PreviewCanvas({
 		editor.playback,
 		renderFrameRateCap,
 		webgpuRenderer,
-		activeProject.settings.fps,
+		previewRendererMode,
 	]);
 
 	useRafLoop(render);

@@ -21,6 +21,7 @@ import {
 	snapElementEdge,
 	type SnapPoint,
 } from "@/lib/timeline/snap-utils";
+import { useTimelineStore } from "@/stores/timeline-store";
 import type {
 	DropTarget,
 	ElementDragState,
@@ -162,6 +163,7 @@ export function useElementInteraction({
 	onSnapPointChange,
 }: UseElementInteractionProps) {
 	const editor = useEditor();
+	const rippleEditingEnabled = useTimelineStore((state) => state.rippleEditingEnabled);
 	const isShiftHeldRef = useShiftKey();
 	const tracks = editor.timeline.getTracks();
 	const {
@@ -457,6 +459,7 @@ export function useElementInteraction({
 					elementId: dragState.elementId,
 					newStartTime: snappedTime,
 					createTrack: { type: sourceTrack.type, index: dropTarget.trackIndex },
+					rippleEnabled: rippleEditingEnabled,
 				});
 			} else {
 				const targetTrack = tracks[dropTarget.trackIndex];
@@ -466,6 +469,7 @@ export function useElementInteraction({
 						targetTrackId: targetTrack.id,
 						elementId: dragState.elementId,
 						newStartTime: snappedTime,
+						rippleEnabled: rippleEditingEnabled,
 					});
 				}
 			}
@@ -490,6 +494,7 @@ export function useElementInteraction({
 		tracksContainerRef,
 		tracksScrollRef,
 		headerRef,
+		rippleEditingEnabled,
 	]);
 
 	useEffect(() => {

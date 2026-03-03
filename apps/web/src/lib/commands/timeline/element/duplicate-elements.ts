@@ -6,6 +6,7 @@ import {
 	buildEmptyTrack,
 	getHighestInsertIndexForTrack,
 } from "@/lib/timeline/track-utils";
+import { cloneAnimations } from "@/lib/animation";
 
 interface DuplicateElementsParams {
 	elements: { trackId: string; elementId: string }[];
@@ -114,5 +115,14 @@ function buildDuplicateElement({
 	id: string;
 	startTime: number;
 }): TimelineElement {
-	return { ...element, id, name: `${element.name} (copy)`, startTime };
+	return {
+		...element,
+		id,
+		name: `${element.name} (copy)`,
+		startTime,
+		animations: cloneAnimations({
+			animations: element.animations,
+			shouldRegenerateKeyframeIds: true,
+		}),
+	};
 }

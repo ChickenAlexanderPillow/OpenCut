@@ -87,6 +87,7 @@ export function buildScene(params: BuildSceneParams) {
 							transform: element.transform,
 							opacity: element.opacity,
 							blendMode: element.blendMode,
+							animations: element.animations,
 							frameRateCap: params.previewFrameRateCap,
 							...(params.isPreview && {
 								previewProxyScale: params.previewProxyScale,
@@ -105,6 +106,7 @@ export function buildScene(params: BuildSceneParams) {
 							transform: element.transform,
 							opacity: element.opacity,
 							blendMode: element.blendMode,
+							animations: element.animations,
 							...(params.isPreview && {
 								maxSourceSize: PREVIEW_MAX_IMAGE_SIZE,
 							}),
@@ -136,6 +138,7 @@ export function buildScene(params: BuildSceneParams) {
 						transform: element.transform,
 						opacity: element.opacity,
 						blendMode: element.blendMode,
+						animations: element.animations,
 					}),
 				);
 			}

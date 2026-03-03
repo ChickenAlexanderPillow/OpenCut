@@ -174,6 +174,32 @@ function getOverlapBounds({
 	return { first, last };
 }
 
+function findLastSentenceEndAtOrBefore({
+	segments,
+	startIndex,
+	endIndex,
+	limitEndTime,
+	minEndTime,
+}: {
+	segments: TranscriptionSegment[];
+	startIndex: number;
+	endIndex: number;
+	limitEndTime: number;
+	minEndTime: number;
+}): number | null {
+	let best: number | null = null;
+	for (let i = startIndex; i <= endIndex; i++) {
+		const segment = segments[i];
+		if (!segment) continue;
+		if (segment.end > limitEndTime) break;
+		if (segment.end < minEndTime) continue;
+		if (endsSentence(segment.text)) {
+			best = segment.end;
+		}
+	}
+	return best;
+}
+
 function snapWindowToSentenceBoundaries({
 	segments,
 	startTime,
@@ -217,7 +243,6 @@ function snapWindowToSentenceBoundaries({
 			const current = segments[i];
 			if (!previous || !current) break;
 			if (current.start - previous.end > CLUSTER_GAP_SECONDS) break;
-			if (current.end - adjustedStart > maxClipSeconds) break;
 			adjustedEnd = current.end;
 			if (endsSentence(current.text)) break;
 		}
@@ -281,12 +306,27 @@ function snapWindowToSentenceBoundaries({
 		if (cutForFollowUpQuestion) {
 			adjustedStart = Math.max(0, adjustedEnd - minClipSeconds);
 		} else {
-			adjustedEnd = Math.min(mediaDuration, adjustedStart + minClipSeconds);
+			const minEndTarget = Math.min(mediaDuration, adjustedStart + minClipSeconds);
+			const overlapForMin = getOverlapBounds({
+				segments,
+				startTime: adjustedStart,
+				endTime: minEndTarget + CLUSTER_GAP_SECONDS,
+			});
+			if (overlapForMin) {
+				const sentenceEnd = findLastSentenceEndAtOrBefore({
+					segments,
+					startIndex: overlapForMin.first,
+					endIndex: overlapForMin.last,
+					limitEndTime: minEndTarget + CLUSTER_GAP_SECONDS,
+					minEndTime: minEndTarget,
+				});
+				adjustedEnd = sentenceEnd ?? minEndTarget;
+			} else {
+				adjustedEnd = minEndTarget;
+			}
 		}
 	}
-	if (adjustedEnd - adjustedStart > maxClipSeconds) {
-		adjustedEnd = adjustedStart + maxClipSeconds;
-	}
+	// Intentionally allow exceeding maxClipSeconds when needed to finish a sentence.
 
 	return {
 		startTime: clamp(adjustedStart, 0, mediaDuration),

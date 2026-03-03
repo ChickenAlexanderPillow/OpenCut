@@ -16,6 +16,8 @@ export const FONT_SIZE_SCALE_REFERENCE = 90;
 
 export const DEFAULT_LETTER_SPACING = 0;
 export const DEFAULT_LINE_HEIGHT = 1.2;
+export const CORNER_RADIUS_MIN = 0;
+export const CORNER_RADIUS_MAX = 200;
 
 export const DEFAULT_TEXT_BACKGROUND = {
 	color: "#000000",

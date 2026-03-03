@@ -1,6 +1,6 @@
 import type { CanvasRenderer } from "../canvas-renderer";
 import { VisualNode, type VisualNodeParams } from "./visual-node";
-import { VideoCache, videoCache } from "@/services/video-cache/service";
+import { type VideoCache, videoCache } from "@/services/video-cache/service";
 import type { WebGPUVisualDrawData } from "../webgpu-types";
 
 export interface VideoNodeParams extends VisualNodeParams {
@@ -54,6 +54,7 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 				source: frame.canvas,
 				sourceWidth: frame.canvas.width,
 				sourceHeight: frame.canvas.height,
+				time,
 			});
 		}
 	}
@@ -97,25 +98,26 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 
 			const sourceWidth = frame.canvas.width;
 			const sourceHeight = frame.canvas.height;
-			const placement = this.getVisualPlacement({
-				rendererWidth,
-				rendererHeight,
-				sourceWidth,
-				sourceHeight,
-			});
+		const placement = this.getVisualPlacement({
+			rendererWidth,
+			rendererHeight,
+			sourceWidth,
+			sourceHeight,
+		});
+		const resolved = this.getResolvedVisualState({ time });
 
-			return {
-				source: frame.canvas,
-				sourceWidth,
-				sourceHeight,
-				x: placement.x,
-				y: placement.y,
-				width: placement.width,
-				height: placement.height,
-				rotation: this.params.transform.rotate,
-				opacity: this.params.opacity,
-				blendMode: this.params.blendMode,
-			};
+		return {
+			source: frame.canvas,
+			sourceWidth,
+			sourceHeight,
+			x: placement.x,
+			y: placement.y,
+			width: placement.width,
+			height: placement.height,
+			rotation: resolved.transform.rotate,
+			opacity: resolved.opacity,
+			blendMode: this.params.blendMode,
+		};
 		}
 
 		const sourceWidth = gpuFrame.width;
@@ -126,6 +128,7 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 			sourceWidth,
 			sourceHeight,
 		});
+		const resolved = this.getResolvedVisualState({ time });
 
 		return {
 			source: gpuFrame.frame,
@@ -135,8 +138,8 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 			y: placement.y,
 			width: placement.width,
 			height: placement.height,
-			rotation: this.params.transform.rotate,
-			opacity: this.params.opacity,
+			rotation: resolved.transform.rotate,
+			opacity: resolved.opacity,
 			blendMode: this.params.blendMode,
 		};
 	}

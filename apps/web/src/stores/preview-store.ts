@@ -70,7 +70,7 @@ export const usePreviewStore = create<PreviewState>()(
 			layoutGuide: { platform: null },
 			overlays: DEFAULT_PREVIEW_OVERLAYS,
 			playbackQuality: "performance",
-			previewRendererMode: "webgpu",
+			previewRendererMode: "auto",
 			previewFormatVariant: "project",
 			squareFormatSettings: {
 				blurIntensity: 18,
@@ -127,8 +127,8 @@ export const usePreviewStore = create<PreviewState>()(
 		}),
 		{
 			name: "preview-settings",
-			version: 6,
-			migrate: (persistedState) => {
+			version: 7,
+			migrate: (persistedState, version) => {
 				const state = persistedState as
 					| {
 							layoutGuide?: LayoutGuideSettings;
@@ -139,6 +139,11 @@ export const usePreviewStore = create<PreviewState>()(
 							squareFormatSettings?: Partial<SquareFormatSettings>;
 					  }
 					| undefined;
+				const migratedRendererMode =
+					version < 7 && state?.previewRendererMode === "webgpu"
+						? "auto"
+						: (state?.previewRendererMode ?? "auto");
+
 				return {
 					layoutGuide: state?.layoutGuide ?? { platform: null },
 					overlays: {
@@ -146,7 +151,7 @@ export const usePreviewStore = create<PreviewState>()(
 						...(state?.overlays ?? {}),
 					},
 					playbackQuality: state?.playbackQuality ?? "performance",
-					previewRendererMode: state?.previewRendererMode ?? "webgpu",
+					previewRendererMode: migratedRendererMode,
 					previewFormatVariant: state?.previewFormatVariant ?? "project",
 					squareFormatSettings: {
 						blurIntensity: state?.squareFormatSettings?.blurIntensity ?? 18,

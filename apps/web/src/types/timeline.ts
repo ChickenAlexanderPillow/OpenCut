@@ -1,3 +1,4 @@
+import type { ElementAnimations } from "./animation";
 import type { BlendMode, Transform } from "./rendering";
 
 export interface Bookmark {
@@ -80,6 +81,7 @@ interface BaseTimelineElement {
 	startTime: number;
 	trimStart: number;
 	trimEnd: number;
+	animations?: ElementAnimations;
 }
 
 export interface VideoElement extends BaseTimelineElement {
@@ -160,6 +162,12 @@ export interface StickerElement extends BaseTimelineElement {
 	opacity: number;
 	blendMode?: BlendMode;
 }
+
+export type VisualElement =
+	| VideoElement
+	| ImageElement
+	| TextElement
+	| StickerElement;
 
 export type TimelineElement =
 	| AudioElement

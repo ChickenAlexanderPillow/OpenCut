@@ -259,6 +259,7 @@ function ElementInner({
 					type: track.type,
 				},
 			)} ${canElementBeHidden(element) && element.hidden ? "opacity-50" : ""}`}
+			style={{ marginInline: 1 }}
 		>
 			<button
 				type="button"

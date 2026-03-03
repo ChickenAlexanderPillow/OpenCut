@@ -2,18 +2,34 @@ import { Command } from "@/lib/commands/base-command";
 import type { TimelineTrack } from "@/types/timeline";
 import { generateUUID } from "@/utils/id";
 import { EditorCore } from "@/core";
+import { rippleShiftElements } from "@/lib/timeline";
+import { splitAnimationsAtTime } from "@/lib/animation";
 
 export class SplitElementsCommand extends Command {
 	private savedState: TimelineTrack[] | null = null;
 	private rightSideElements: { trackId: string; elementId: string }[] = [];
 	private previousSelection: { trackId: string; elementId: string }[] = [];
+	private readonly elements: { trackId: string; elementId: string }[];
+	private readonly splitTime: number;
+	private readonly retainSide: "both" | "left" | "right";
+	private readonly rippleEnabled: boolean;
 
-	constructor(
-		private elements: { trackId: string; elementId: string }[],
-		private splitTime: number,
-		private retainSide: "both" | "left" | "right" = "both",
-	) {
+	constructor({
+		elements,
+		splitTime,
+		retainSide = "both",
+		rippleEnabled = false,
+	}: {
+		elements: { trackId: string; elementId: string }[];
+		splitTime: number;
+		retainSide?: "both" | "left" | "right";
+		rippleEnabled?: boolean;
+	}) {
 		super();
+		this.elements = elements;
+		this.splitTime = splitTime;
+		this.retainSide = retainSide;
+		this.rippleEnabled = rippleEnabled;
 	}
 
 	getRightSideElements(): { trackId: string; elementId: string }[] {
@@ -28,92 +44,113 @@ export class SplitElementsCommand extends Command {
 
 		const updatedTracks = this.savedState.map((track) => {
 			const elementsToSplit = this.elements.filter(
-				(el) => el.trackId === track.id,
+				(target) => target.trackId === track.id,
 			);
 
 			if (elementsToSplit.length === 0) {
 				return track;
 			}
 
-			return {
-				...track,
-				elements: track.elements.flatMap((element) => {
-					const shouldSplit = elementsToSplit.some(
-						(el) => el.elementId === element.id,
-					);
+			let leftVisibleDurationForRipple: number | null = null;
 
-					if (!shouldSplit) {
-						return [element];
-					}
+			let elements = track.elements.flatMap((element) => {
+				const shouldSplit = elementsToSplit.some(
+					(target) => target.elementId === element.id,
+				);
 
-					const effectiveStart = element.startTime;
-					const effectiveEnd = element.startTime + element.duration;
+				if (!shouldSplit) {
+					return [element];
+				}
 
-					if (
-						this.splitTime <= effectiveStart ||
-						this.splitTime >= effectiveEnd
-					) {
-						return [element];
-					}
+				const effectiveStart = element.startTime;
+				const effectiveEnd = element.startTime + element.duration;
 
-					const relativeTime = this.splitTime - element.startTime;
-					const leftVisibleDuration = relativeTime;
-					const rightVisibleDuration = element.duration - relativeTime;
+				if (
+					this.splitTime <= effectiveStart ||
+					this.splitTime >= effectiveEnd
+				) {
+					return [element];
+				}
 
-					if (this.retainSide === "left") {
-						return [
-							{
-								...element,
-								duration: leftVisibleDuration,
-								trimEnd: element.trimEnd + rightVisibleDuration,
-								name: `${element.name} (left)`,
-							},
-						];
-					}
+				const relativeTime = this.splitTime - element.startTime;
+				const leftVisibleDuration = relativeTime;
+				const rightVisibleDuration = element.duration - relativeTime;
+				const { leftAnimations, rightAnimations } = splitAnimationsAtTime({
+					animations: element.animations,
+					splitTime: relativeTime,
+					shouldIncludeSplitBoundary: true,
+				});
 
-					if (this.retainSide === "right") {
-						const newId = generateUUID();
-						this.rightSideElements.push({
-							trackId: track.id,
-							elementId: newId,
-						});
-						return [
-							{
-								...element,
-								id: newId,
-								startTime: this.splitTime,
-								duration: rightVisibleDuration,
-								trimStart: element.trimStart + leftVisibleDuration,
-								name: `${element.name} (right)`,
-							},
-						];
-					}
-
-					// "both" - split into two pieces
-					const secondElementId = generateUUID();
-					this.rightSideElements.push({
-						trackId: track.id,
-						elementId: secondElementId,
-					});
-
+				if (this.retainSide === "left") {
 					return [
 						{
 							...element,
 							duration: leftVisibleDuration,
 							trimEnd: element.trimEnd + rightVisibleDuration,
 							name: `${element.name} (left)`,
+							animations: leftAnimations,
 						},
+					];
+				}
+
+				if (this.retainSide === "right") {
+					if (this.rippleEnabled && elementsToSplit.length === 1) {
+						leftVisibleDurationForRipple = leftVisibleDuration;
+					}
+					const newId = generateUUID();
+					this.rightSideElements.push({
+						trackId: track.id,
+						elementId: newId,
+					});
+					return [
 						{
 							...element,
-							id: secondElementId,
+							id: newId,
 							startTime: this.splitTime,
 							duration: rightVisibleDuration,
 							trimStart: element.trimStart + leftVisibleDuration,
 							name: `${element.name} (right)`,
+							animations: rightAnimations,
 						},
 					];
-				}),
-			} as typeof track;
+				}
+
+				// "both" - split into two pieces
+				const secondElementId = generateUUID();
+				this.rightSideElements.push({
+					trackId: track.id,
+					elementId: secondElementId,
+				});
+
+				return [
+					{
+						...element,
+						duration: leftVisibleDuration,
+						trimEnd: element.trimEnd + rightVisibleDuration,
+						name: `${element.name} (left)`,
+						animations: leftAnimations,
+					},
+					{
+						...element,
+						id: secondElementId,
+						startTime: this.splitTime,
+						duration: rightVisibleDuration,
+						trimStart: element.trimStart + leftVisibleDuration,
+						name: `${element.name} (right)`,
+						animations: rightAnimations,
+					},
+				];
+			});
+
+			if (this.rippleEnabled && leftVisibleDurationForRipple !== null) {
+				elements = rippleShiftElements({
+					elements,
+					afterTime: this.splitTime,
+					shiftAmount: leftVisibleDurationForRipple,
+				});
+			}
+
+			return { ...track, elements } as typeof track;
 		});
 
 		editor.timeline.updateTracks(updatedTracks);

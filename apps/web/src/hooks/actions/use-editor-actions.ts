@@ -50,6 +50,7 @@ import { getVideoInfo } from "@/lib/media/mediabunny";
 import { ALL_FORMATS, AudioBufferSink, BlobSource, Input } from "mediabunny";
 
 const MIN_VIRAL_CLIP_SCORE = 60;
+const MIN_VIRAL_CLIP_COUNT = 3;
 const MAX_VIRAL_CLIP_COUNT = 5;
 const CLIP_SCORING_TRANSCRIPT_MAX_CHARS = 20000;
 const CLIP_SCORING_TIMEOUT_MS = 120000;
@@ -1263,6 +1264,7 @@ export function useEditorActions() {
 			editor.timeline.splitElements({
 				elements: elementsToSplit,
 				splitTime: currentTime,
+				rippleEnabled: rippleEditingEnabled,
 			});
 		},
 		undefined,
@@ -1286,6 +1288,7 @@ export function useEditorActions() {
 				elements: elementsToSplit,
 				splitTime: currentTime,
 				retainSide: "right",
+				rippleEnabled: rippleEditingEnabled,
 			});
 		},
 		undefined,
@@ -1309,6 +1312,7 @@ export function useEditorActions() {
 				elements: elementsToSplit,
 				splitTime: currentTime,
 				retainSide: "left",
+				rippleEnabled: rippleEditingEnabled,
 			});
 		},
 		undefined,
@@ -1868,6 +1872,7 @@ export function useEditorActions() {
 					});
 
 					let relaxedQualityGateUsed = false;
+					let minimumBackfillUsed = false;
 					if (selectedCandidates.length === 0 && scoredCandidates.length > 0) {
 						const topScore = Math.max(
 							0,
@@ -1900,6 +1905,30 @@ export function useEditorActions() {
 						}
 						if (finalMerged.length > 0) {
 							selectedCandidates = finalMerged;
+						}
+					}
+
+					if (
+						selectedCandidates.length < MIN_VIRAL_CLIP_COUNT &&
+						scoredCandidates.length > selectedCandidates.length
+					) {
+						const minimumBackfill = selectTopCandidatesWithQualityGate({
+							candidates: scoredCandidates,
+							minScore: 0,
+							maxOverlapRatio: 0,
+							maxCount: MIN_VIRAL_CLIP_COUNT,
+						});
+						if (minimumBackfill.length > selectedCandidates.length) {
+							const selectedIds = new Set(
+								selectedCandidates.map((candidate) => candidate.id),
+							);
+							for (const candidate of minimumBackfill) {
+								if (selectedIds.has(candidate.id)) continue;
+								selectedCandidates.push(candidate);
+								selectedIds.add(candidate.id);
+								minimumBackfillUsed = true;
+								if (selectedCandidates.length >= MIN_VIRAL_CLIP_COUNT) break;
+							}
 						}
 					}
 
@@ -1939,9 +1968,9 @@ export function useEditorActions() {
 					editor.project.setActiveProject({ project: projectWithCache });
 					editor.save.markDirty();
 					await editor.save.flush();
-					if (relaxedQualityGateUsed) {
+					if (relaxedQualityGateUsed || minimumBackfillUsed) {
 						toast.warning(
-							`Generated ${selectedCandidates.length} clip candidate(s) with relaxed quality gate`,
+							`Generated ${selectedCandidates.length} clip candidate(s) with relaxed quality gate/minimum-count backfill`,
 						);
 					} else {
 						toast.success(`Generated ${selectedCandidates.length} clip candidate(s)`);
@@ -2370,6 +2399,7 @@ export function useEditorActions() {
 			}
 			editor.timeline.deleteElements({
 				elements: selectedElements,
+				rippleEnabled: rippleEditingEnabled,
 			});
 			editor.selection.clearSelection();
 		},

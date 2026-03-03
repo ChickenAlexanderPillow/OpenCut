@@ -10,6 +10,7 @@ import {
 import { TabBar } from "./tabbar";
 import { Captions } from "./views/captions";
 import { Clips } from "./views/clips";
+import { EffectsView } from "./views/effects";
 import { MediaView } from "./views/assets";
 import { SettingsView } from "./views/settings";
 import { StickersView } from "./views/stickers";
@@ -32,11 +33,7 @@ export function AssetsPanel() {
 		clips: <Clips />,
 		text: <TextView />,
 		stickers: <StickersView />,
-		effects: (
-			<div className="text-muted-foreground p-4">
-				Effects view coming soon...
-			</div>
-		),
+		effects: <EffectsView />,
 		captions: <Captions />,
 		overlay: <OverlayView />,
 		settings: <SettingsView />,

@@ -25,3 +25,15 @@ export function evaluateMathExpression({
 		return null;
 	}
 }
+
+export function isNearlyEqual({
+	leftValue,
+	rightValue,
+	epsilon = 1e-4,
+}: {
+	leftValue: number;
+	rightValue: number;
+	epsilon?: number;
+}): boolean {
+	return Math.abs(leftValue - rightValue) <= epsilon;
+}

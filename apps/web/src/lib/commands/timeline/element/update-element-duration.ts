@@ -1,6 +1,7 @@
 import { Command } from "@/lib/commands/base-command";
 import type { TimelineTrack } from "@/types/timeline";
 import { EditorCore } from "@/core";
+import { clampAnimationsToDuration } from "@/lib/animation";
 
 export class UpdateElementDurationCommand extends Command {
 	private savedState: TimelineTrack[] | null = null;
@@ -20,7 +21,16 @@ export class UpdateElementDurationCommand extends Command {
 		const updatedTracks = this.savedState.map((t) => {
 			if (t.id !== this.trackId) return t;
 			const newElements = t.elements.map((el) =>
-				el.id === this.elementId ? { ...el, duration: this.duration } : el,
+				el.id === this.elementId
+					? {
+							...el,
+							duration: this.duration,
+							animations: clampAnimationsToDuration({
+								animations: el.animations,
+								duration: this.duration,
+							}),
+						}
+					: el,
 			);
 			return { ...t, elements: newElements } as typeof t;
 		});

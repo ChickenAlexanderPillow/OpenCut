@@ -1,13 +1,23 @@
 import { Command } from "@/lib/commands/base-command";
 import type { TimelineTrack } from "@/types/timeline";
 import { EditorCore } from "@/core";
-import { isMainTrack } from "@/lib/timeline";
+import { isMainTrack, rippleShiftElements } from "@/lib/timeline";
 
 export class DeleteElementsCommand extends Command {
 	private savedState: TimelineTrack[] | null = null;
+	private readonly elements: { trackId: string; elementId: string }[];
+	private readonly rippleEnabled: boolean;
 
-	constructor(private elements: { trackId: string; elementId: string }[]) {
+	constructor({
+		elements,
+		rippleEnabled = false,
+	}: {
+		elements: { trackId: string; elementId: string }[];
+		rippleEnabled?: boolean;
+	}) {
 		super();
+		this.elements = elements;
+		this.rippleEnabled = rippleEnabled;
 	}
 
 	execute(): void {
@@ -16,23 +26,44 @@ export class DeleteElementsCommand extends Command {
 
 		const updatedTracks = this.savedState
 			.map((track) => {
-				const hasElementsToDelete = this.elements.some(
-					(el) => el.trackId === track.id,
+				const elementsToDeleteOnTrack = this.elements.filter(
+					(target) => target.trackId === track.id,
 				);
+				const hasElementsToDelete = elementsToDeleteOnTrack.length > 0;
 
 				if (!hasElementsToDelete) {
 					return track;
 				}
 
-				return {
-					...track,
-					elements: track.elements.filter(
-						(element) =>
-							!this.elements.some(
-								(el) => el.trackId === track.id && el.elementId === element.id,
-							),
-					),
-				} as typeof track;
+				const deletedElementInfos = elementsToDeleteOnTrack
+					.map((target) =>
+						track.elements.find((element) => element.id === target.elementId),
+					)
+					.filter((element): element is NonNullable<typeof element> => element !== undefined)
+					.map((element) => ({ startTime: element.startTime, duration: element.duration }));
+
+				let elements = track.elements.filter(
+					(element) =>
+						!this.elements.some(
+							(target) =>
+								target.trackId === track.id && target.elementId === element.id,
+						),
+				);
+
+				if (this.rippleEnabled && deletedElementInfos.length > 0) {
+					const sortedByStartDesc = [...deletedElementInfos].sort(
+						(a, b) => b.startTime - a.startTime,
+					);
+					for (const { startTime, duration } of sortedByStartDesc) {
+						elements = rippleShiftElements({
+							elements,
+							afterTime: startTime,
+							shiftAmount: duration,
+						});
+					}
+				}
+
+				return { ...track, elements } as typeof track;
 			})
 			.filter((track) => track.elements.length > 0 || isMainTrack(track));
 

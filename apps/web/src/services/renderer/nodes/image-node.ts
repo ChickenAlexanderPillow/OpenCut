@@ -85,6 +85,7 @@ export class ImageNode extends VisualNode<ImageNodeParams> {
 			source,
 			sourceWidth: width || renderer.width,
 			sourceHeight: height || renderer.height,
+			time,
 		});
 	}
 
@@ -108,6 +109,7 @@ export class ImageNode extends VisualNode<ImageNodeParams> {
 			sourceWidth,
 			sourceHeight,
 		});
+		const resolved = this.getResolvedVisualState({ time });
 
 		return {
 			source,
@@ -117,8 +119,8 @@ export class ImageNode extends VisualNode<ImageNodeParams> {
 			y: placement.y,
 			width: placement.width,
 			height: placement.height,
-			rotation: this.params.transform.rotate,
-			opacity: this.params.opacity,
+			rotation: resolved.transform.rotate,
+			opacity: resolved.opacity,
 			blendMode: this.params.blendMode,
 		};
 	}

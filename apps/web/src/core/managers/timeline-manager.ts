@@ -1,5 +1,10 @@
 import type { EditorCore } from "@/core";
 import type {
+	AnimationInterpolation,
+	AnimationPropertyPath,
+	AnimationValue,
+} from "@/types/animation";
+import type {
 	TrackType,
 	TimelineTrack,
 	TimelineElement,
@@ -25,6 +30,9 @@ import {
 	UpdateElementStartTimeCommand,
 	MoveElementCommand,
 	TracksSnapshotCommand,
+	UpsertKeyframeCommand,
+	RemoveKeyframeCommand,
+	RetimeKeyframeCommand,
 } from "@/lib/commands/timeline";
 import { BatchCommand, PreviewTracker } from "@/lib/commands";
 import type { InsertElementParams } from "@/lib/commands/timeline/element/insert-element";
@@ -80,14 +88,27 @@ export class TimelineManager {
 		elementId,
 		trimStart,
 		trimEnd,
+		startTime,
+		duration,
 		pushHistory = true,
+		rippleEnabled = false,
 	}: {
 		elementId: string;
 		trimStart: number;
 		trimEnd: number;
+		startTime?: number;
+		duration?: number;
 		pushHistory?: boolean;
+		rippleEnabled?: boolean;
 	}): void {
-		const command = new UpdateElementTrimCommand(elementId, trimStart, trimEnd);
+		const command = new UpdateElementTrimCommand({
+			elementId,
+			trimStart,
+			trimEnd,
+			startTime,
+			duration,
+			rippleEnabled,
+		});
 		if (pushHistory) {
 			this.editor.command.execute({ command });
 		} else {
@@ -135,20 +156,23 @@ export class TimelineManager {
 		elementId,
 		newStartTime,
 		createTrack,
+		rippleEnabled = false,
 	}: {
 		sourceTrackId: string;
 		targetTrackId: string;
 		elementId: string;
 		newStartTime: number;
 		createTrack?: { type: TrackType; index: number };
+		rippleEnabled?: boolean;
 	}): void {
-		const command = new MoveElementCommand(
+		const command = new MoveElementCommand({
 			sourceTrackId,
 			targetTrackId,
 			elementId,
 			newStartTime,
 			createTrack,
-		);
+			rippleEnabled,
+		});
 		this.editor.command.execute({ command });
 	}
 
@@ -166,12 +190,19 @@ export class TimelineManager {
 		elements,
 		splitTime,
 		retainSide = "both",
+		rippleEnabled = false,
 	}: {
 		elements: { trackId: string; elementId: string }[];
 		splitTime: number;
 		retainSide?: "both" | "left" | "right";
+		rippleEnabled?: boolean;
 	}): { trackId: string; elementId: string }[] {
-		const command = new SplitElementsCommand(elements, splitTime, retainSide);
+		const command = new SplitElementsCommand({
+			elements,
+			splitTime,
+			retainSide,
+			rippleEnabled,
+		});
 		this.editor.command.execute({ command });
 		return command.getRightSideElements();
 	}
@@ -220,10 +251,12 @@ export class TimelineManager {
 
 	deleteElements({
 		elements,
+		rippleEnabled = false,
 	}: {
 		elements: { trackId: string; elementId: string }[];
+		rippleEnabled?: boolean;
 	}): void {
-		const command = new DeleteElementsCommand(elements);
+		const command = new DeleteElementsCommand({ elements, rippleEnabled });
 		this.editor.command.execute({ command });
 	}
 
@@ -253,6 +286,93 @@ export class TimelineManager {
 		} else {
 			command.execute();
 		}
+	}
+
+	upsertKeyframes({
+		keyframes,
+	}: {
+		keyframes: Array<{
+			trackId: string;
+			elementId: string;
+			propertyPath: AnimationPropertyPath;
+			time: number;
+			value: AnimationValue;
+			interpolation?: AnimationInterpolation;
+			keyframeId?: string;
+		}>;
+	}): void {
+		if (keyframes.length === 0) return;
+		const commands = keyframes.map(
+			({
+				trackId,
+				elementId,
+				propertyPath,
+				time,
+				value,
+				interpolation,
+				keyframeId,
+			}) =>
+				new UpsertKeyframeCommand({
+					trackId,
+					elementId,
+					propertyPath,
+					time,
+					value,
+					interpolation,
+					keyframeId,
+				}),
+		);
+		const command =
+			commands.length === 1 ? commands[0] : new BatchCommand(commands);
+		this.editor.command.execute({ command });
+	}
+
+	removeKeyframes({
+		keyframes,
+	}: {
+		keyframes: Array<{
+			trackId: string;
+			elementId: string;
+			propertyPath: AnimationPropertyPath;
+			keyframeId: string;
+		}>;
+	}): void {
+		if (keyframes.length === 0) return;
+		const commands = keyframes.map(
+			({ trackId, elementId, propertyPath, keyframeId }) =>
+				new RemoveKeyframeCommand({
+					trackId,
+					elementId,
+					propertyPath,
+					keyframeId,
+				}),
+		);
+		const command =
+			commands.length === 1 ? commands[0] : new BatchCommand(commands);
+		this.editor.command.execute({ command });
+	}
+
+	retimeKeyframe({
+		trackId,
+		elementId,
+		propertyPath,
+		keyframeId,
+		time,
+	}: {
+		trackId: string;
+		elementId: string;
+		propertyPath: AnimationPropertyPath;
+		keyframeId: string;
+		time: number;
+	}): void {
+		const command = new RetimeKeyframeCommand({
+			trackId,
+			elementId,
+			propertyPath,
+			keyframeId,
+			nextTime: time,
+		});
+		this.editor.command.execute({ command });
 	}
 
 	isPreviewActive(): boolean {
@@ -344,7 +464,9 @@ export class TimelineManager {
 	}
 
 	private notify(): void {
-		this.listeners.forEach((fn) => fn());
+		this.listeners.forEach((fn) => {
+			fn();
+		});
 	}
 
 	updateTracks(newTracks: TimelineTrack[]): void {

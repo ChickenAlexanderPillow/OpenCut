@@ -26,12 +26,14 @@ export class PlaybackManager {
 		this.isPlaying = true;
 		this.startTimer();
 		this.notify();
+		this.emitPlaybackStateEvent({ isPlaying: true });
 	}
 
 	pause(): void {
 		this.isPlaying = false;
 		this.stopTimer();
 		this.notify();
+		this.emitPlaybackStateEvent({ isPlaying: false });
 	}
 
 	toggle(): void {
@@ -179,4 +181,17 @@ export class PlaybackManager {
 
 		this.playbackTimer = requestAnimationFrame(this.updateTime);
 	};
+
+	private emitPlaybackStateEvent({
+		isPlaying,
+	}: {
+		isPlaying: boolean;
+	}): void {
+		if (typeof window === "undefined") return;
+		window.dispatchEvent(
+			new CustomEvent("opencut:timeline-playback-state", {
+				detail: { isPlaying },
+			}),
+		);
+	}
 }
