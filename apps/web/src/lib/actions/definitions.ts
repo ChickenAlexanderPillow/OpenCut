@@ -99,6 +99,26 @@ export const ACTIONS = {
 		category: "editing",
 		args: { candidateIds: "string[]" },
 	},
+	"transcript-toggle-word": {
+		description: "Toggle transcript word removal state",
+		category: "editing",
+		args: { trackId: "string", elementId: "string", wordId: "string" },
+	},
+	"transcript-remove-fillers": {
+		description: "Remove filler words from transcript",
+		category: "editing",
+		args: { trackId: "string", elementId: "string" },
+	},
+	"transcript-restore-all": {
+		description: "Restore all removed transcript words",
+		category: "editing",
+		args: { trackId: "string", elementId: "string" },
+	},
+	"transcript-split-segment-ui": {
+		description: "Split transcript segment in UI",
+		category: "editing",
+		args: { trackId: "string", elementId: "string", wordId: "string" },
+	},
 	"clear-viral-clips-session": {
 		description: "Clear generated viral clips session",
 		category: "editing",

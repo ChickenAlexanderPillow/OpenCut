@@ -16,6 +16,7 @@ import { SettingsView } from "./views/settings";
 import { StickersView } from "./views/stickers";
 import { TextView } from "./views/text";
 import { OverlayView } from "./views/overlay";
+import { TranscriptView } from "./views/transcript";
 import { cn } from "@/utils/ui";
 
 export function AssetsPanel() {
@@ -31,6 +32,7 @@ export function AssetsPanel() {
 	const viewMap: Record<Tab, React.ReactNode> = {
 		media: <MediaView />,
 		clips: <Clips />,
+		transcript: <TranscriptView />,
 		text: <TextView />,
 		stickers: <StickersView />,
 		effects: <EffectsView />,

@@ -1,5 +1,6 @@
 import type { ElementAnimations } from "./animation";
 import type { BlendMode, Transform } from "./rendering";
+import type { TranscriptEditCutRange, TranscriptEditWord } from "./transcription";
 
 export interface Bookmark {
 	time: number;
@@ -61,6 +62,19 @@ interface BaseAudioElement extends BaseTimelineElement {
 	volume: number;
 	muted?: boolean;
 	buffer?: AudioBuffer;
+	transcriptEdit?: {
+		version: 1;
+		source: "word-level";
+		words: TranscriptEditWord[];
+		cuts: TranscriptEditCutRange[];
+		segmentsUi?: Array<{
+			id: string;
+			wordStartIndex: number;
+			wordEndIndex: number;
+			label?: string;
+		}>;
+		updatedAt: string;
+	};
 }
 
 export interface UploadAudioElement extends BaseAudioElement {
@@ -90,6 +104,19 @@ export interface VideoElement extends BaseTimelineElement {
 	mediaId: string;
 	muted?: boolean;
 	hidden?: boolean;
+	transcriptEdit?: {
+		version: 1;
+		source: "word-level";
+		words: TranscriptEditWord[];
+		cuts: TranscriptEditCutRange[];
+		segmentsUi?: Array<{
+			id: string;
+			wordStartIndex: number;
+			wordEndIndex: number;
+			label?: string;
+		}>;
+		updatedAt: string;
+	};
 	transform: Transform;
 	opacity: number;
 	blendMode?: BlendMode;
@@ -158,6 +185,10 @@ export interface TextElement extends BaseTimelineElement {
 		startTime: number;
 		endTime: number;
 	}>;
+	captionSourceRef?: {
+		mediaElementId: string;
+		transcriptVersion: number;
+	};
 }
 
 export interface StickerElement extends BaseTimelineElement {

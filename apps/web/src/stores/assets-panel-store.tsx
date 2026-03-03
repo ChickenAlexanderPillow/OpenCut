@@ -16,6 +16,7 @@ import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
 export const TAB_KEYS = [
 	"media",
 	"clips",
+	"transcript",
 	"text",
 	"stickers",
 	"effects",
@@ -40,6 +41,10 @@ export const tabs = {
 	clips: {
 		icon: createHugeiconsIcon({ icon: Video01Icon }),
 		label: "Clips",
+	},
+	transcript: {
+		icon: createHugeiconsIcon({ icon: ClosedCaptionIcon }),
+		label: "Transcript",
 	},
 	text: {
 		icon: createHugeiconsIcon({ icon: TextIcon }),

@@ -27,6 +27,7 @@ import {
 	buildClipTranscriptEntryFromLinkedExternalTranscript,
 } from "@/lib/clips/transcript";
 import { normalizeGeneratedCaptionsInProject } from "@/lib/captions/generated-caption-normalizer";
+import { syncAllCaptionsFromTranscriptEditsInTracks } from "@/lib/transcript-editor/sync-captions";
 
 interface EditorProviderProps {
 	projectId: string;
@@ -291,8 +292,22 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 					const normalized = normalizeGeneratedCaptionsInProject({
 						project: loadedProject,
 					});
-					if (normalized.changed) {
-						editor.project.setActiveProject({ project: normalized.project });
+					const syncedScenes = normalized.project.scenes.map((scene) => {
+						const synced = syncAllCaptionsFromTranscriptEditsInTracks({
+							tracks: scene.tracks,
+						});
+						return synced.changed ? { ...scene, tracks: synced.tracks } : scene;
+					});
+					const hasSyncedChanges = syncedScenes.some(
+						(scene, index) => scene !== normalized.project.scenes[index],
+					);
+					if (normalized.changed || hasSyncedChanges) {
+						editor.project.setActiveProject({
+							project: {
+								...normalized.project,
+								scenes: syncedScenes,
+							},
+						});
 						editor.save.markDirty();
 					}
 				}

@@ -1,5 +1,9 @@
 import { Input, ALL_FORMATS, BlobSource, AudioBufferSink } from "mediabunny";
 import { collectAudioMixSources } from "@/lib/media/audio";
+import {
+	mapCompressedTimeToSourceTime,
+	mapSourceTimeToCompressedTime,
+} from "@/lib/transcript-editor/core";
 import type { TimelineTrack } from "@/types/timeline";
 import type { MediaAsset } from "@/types/assets";
 
@@ -126,6 +130,7 @@ async function decodeAndMixAudioSource({
 		duration: number;
 		trimStart: number;
 		gain: number;
+		transcriptCuts?: Array<{ start: number; end: number; reason: "manual" | "filler" }>;
 	};
 	mixBuffers: Float32Array[];
 	totalSamples: number;
@@ -139,16 +144,26 @@ async function decodeAndMixAudioSource({
 	if (!audioTrack) return;
 
 	const sink = new AudioBufferSink(audioTrack);
-	const trimEnd = source.trimStart + source.duration;
+	const sourceWindowDuration = source.transcriptCuts?.length
+		? mapCompressedTimeToSourceTime({
+				compressedTime: source.duration,
+				cuts: source.transcriptCuts,
+			})
+		: source.duration;
+	const trimEnd = source.trimStart + sourceWindowDuration;
 
 	for await (const { buffer, timestamp } of sink.buffers(
 		source.trimStart,
 		trimEnd,
 	)) {
 		const relativeTime = timestamp - source.trimStart;
-		const outputStartSample = Math.floor(
-			(source.startTime + relativeTime) * SAMPLE_RATE,
-		);
+		const mappedStart = source.transcriptCuts?.length
+			? mapSourceTimeToCompressedTime({
+					sourceTime: Math.max(0, relativeTime),
+					cuts: source.transcriptCuts,
+				})
+			: relativeTime;
+		const outputStartSample = Math.floor((source.startTime + mappedStart) * SAMPLE_RATE);
 
 		// resample if needed
 		const resampleRatio = SAMPLE_RATE / buffer.sampleRate;

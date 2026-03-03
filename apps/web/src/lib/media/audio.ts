@@ -3,12 +3,15 @@ import type {
 	LibraryAudioElement,
 	TimelineElement,
 	TimelineTrack,
+	VideoElement,
 } from "@/types/timeline";
 import type { MediaAsset } from "@/types/assets";
+import type { TranscriptEditCutRange } from "@/types/transcription";
 import { canElementHaveAudio } from "@/lib/timeline/element-utils";
 import { canTracktHaveAudio } from "@/lib/timeline";
 import { mediaSupportsAudio } from "@/lib/media/media-utils";
 import { Input, ALL_FORMATS, BlobSource, AudioBufferSink } from "mediabunny";
+import { mapCompressedTimeToSourceTime } from "@/lib/transcript-editor/core";
 
 const MAX_AUDIO_CHANNELS = 2;
 const EXPORT_SAMPLE_RATE = 44100;
@@ -17,7 +20,7 @@ const SILENCE_FLOOR = 1e-4;
 export type CollectedAudioElement = Omit<
 	AudioElement,
 	"type" | "mediaId" | "volume" | "id" | "name" | "sourceType" | "sourceUrl"
-> & { buffer: AudioBuffer; gain: number };
+> & { buffer: AudioBuffer; gain: number; transcriptCuts?: TranscriptEditCutRange[] };
 
 export function createAudioContext({ sampleRate }: { sampleRate?: number } = {}): AudioContext {
 	const AudioContextConstructor =
@@ -56,6 +59,20 @@ export function isPeakSilent({
 	floor?: number;
 }): boolean {
 	return !Number.isFinite(peak) || peak < floor;
+}
+
+function resolveSourceWindowDuration({
+	duration,
+	cuts,
+}: {
+	duration: number;
+	cuts?: TranscriptEditCutRange[];
+}): number {
+	if (!cuts || cuts.length === 0) return duration;
+	return mapCompressedTimeToSourceTime({
+		compressedTime: duration,
+		cuts,
+	});
 }
 
 async function readBlobArrayBufferWithFallback({
@@ -148,6 +165,7 @@ export async function collectAudioElements({
 								duration: element.duration,
 								trimStart: element.trimStart,
 								trimEnd: element.trimEnd,
+								transcriptCuts: element.transcriptEdit?.cuts,
 								muted: element.muted || isTrackMuted,
 								gain: elementGain,
 							};
@@ -159,7 +177,10 @@ export async function collectAudioElements({
 									mediaAsset,
 									audioContext,
 									trimStart: element.trimStart,
-									trimDuration: element.duration,
+									trimDuration: resolveSourceWindowDuration({
+										duration: element.duration,
+										cuts: element.transcriptEdit?.cuts,
+									}),
 								});
 								if (!resolvedAudio) return null;
 								return {
@@ -169,6 +190,7 @@ export async function collectAudioElements({
 									// Video-backed upload audio is decoded to the element window already.
 									trimStart: 0,
 									trimEnd: element.trimEnd,
+									transcriptCuts: element.transcriptEdit?.cuts,
 									muted: element.muted || isTrackMuted,
 									gain: elementGain,
 								};
@@ -187,6 +209,7 @@ export async function collectAudioElements({
 							duration: element.duration,
 							trimStart: element.trimStart,
 							trimEnd: element.trimEnd,
+							transcriptCuts: element.transcriptEdit?.cuts,
 							muted: element.muted || isTrackMuted,
 							gain: elementGain,
 						};
@@ -204,7 +227,10 @@ export async function collectAudioElements({
 						mediaAsset,
 						audioContext,
 						trimStart: element.trimStart,
-						trimDuration: element.duration,
+						trimDuration: resolveSourceWindowDuration({
+							duration: element.duration,
+							cuts: element.transcriptEdit?.cuts,
+						}),
 					}).then((resolvedAudio) => {
 						if (!resolvedAudio) return null;
 						const elementMuted = element.muted ?? false;
@@ -216,6 +242,7 @@ export async function collectAudioElements({
 							duration: element.duration,
 							trimStart: resolvedAudio.windowed ? 0 : element.trimStart,
 							trimEnd: element.trimEnd,
+							transcriptCuts: element.transcriptEdit?.cuts,
 							muted: elementMuted || isTrackMuted,
 							gain: trackGain,
 						};
@@ -254,7 +281,10 @@ async function resolveAudioBufferForElement({
 					mediaAsset: asset,
 					audioContext,
 					trimStart: element.trimStart,
-					trimDuration: element.duration,
+					trimDuration: resolveSourceWindowDuration({
+						duration: element.duration,
+						cuts: element.transcriptEdit?.cuts,
+					}),
 				});
 				return resolved?.buffer ?? null;
 			}
@@ -383,6 +413,7 @@ interface AudioMixSource {
 	trimStart: number;
 	trimEnd: number;
 	gain: number;
+	transcriptCuts?: TranscriptEditCutRange[];
 }
 
 export interface AudioClipSource {
@@ -538,7 +569,7 @@ function collectMediaAudioSource({
 	mediaAsset,
 	gain,
 }: {
-	element: TimelineElement;
+	element: AudioElement | VideoElement;
 	mediaAsset: MediaAsset;
 	gain: number;
 }): AudioMixSource {
@@ -549,6 +580,7 @@ function collectMediaAudioSource({
 		trimStart: element.trimStart,
 		trimEnd: element.trimEnd,
 		gain,
+		transcriptCuts: element.transcriptEdit?.cuts,
 	};
 }
 
@@ -769,13 +801,11 @@ function mixAudioChannels({
 }): void {
 	const { buffer, startTime, trimStart, duration: elementDuration } = element;
 	const gain = clampGain(element.gain);
+	const transcriptCuts = element.transcriptCuts ?? [];
 
 	const sourceStartSample = Math.floor(trimStart * buffer.sampleRate);
-	const sourceLengthSamples = Math.floor(elementDuration * buffer.sampleRate);
 	const outputStartSample = Math.floor(startTime * sampleRate);
-
-	const resampleRatio = sampleRate / buffer.sampleRate;
-	const resampledLength = Math.floor(sourceLengthSamples * resampleRatio);
+	const resampledLength = Math.floor(elementDuration * sampleRate);
 
 	const outputChannels = 2;
 	for (let channel = 0; channel < outputChannels; channel++) {
@@ -787,7 +817,16 @@ function mixAudioChannels({
 			const outputIndex = outputStartSample + i;
 			if (outputIndex >= outputLength) break;
 
-			const sourceIndex = sourceStartSample + Math.floor(i / resampleRatio);
+			const elapsedInTimelineSeconds = i / sampleRate;
+			const sourceElapsedSeconds =
+				transcriptCuts.length > 0
+					? mapCompressedTimeToSourceTime({
+							compressedTime: elapsedInTimelineSeconds,
+							cuts: transcriptCuts,
+						})
+					: elapsedInTimelineSeconds;
+			const sourceIndex =
+				sourceStartSample + Math.floor(sourceElapsedSeconds * buffer.sampleRate);
 			if (sourceIndex >= sourceData.length) break;
 
 			outputData[outputIndex] += sourceData[sourceIndex] * gain;

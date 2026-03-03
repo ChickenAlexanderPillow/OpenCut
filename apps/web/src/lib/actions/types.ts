@@ -10,6 +10,14 @@ export type TActionArgsMap = {
 	"jump-backward": { seconds: number } | undefined;
 	"generate-viral-clips": { sourceMediaId: string } | undefined;
 	"import-selected-viral-clips": { candidateIds: string[] } | undefined;
+	"transcript-toggle-word":
+		| { trackId: string; elementId: string; wordId: string }
+		| undefined;
+	"transcript-remove-fillers": { trackId: string; elementId: string } | undefined;
+	"transcript-restore-all": { trackId: string; elementId: string } | undefined;
+	"transcript-split-segment-ui":
+		| { trackId: string; elementId: string; wordId: string }
+		| undefined;
 	"clear-viral-clips-session": undefined;
 };
 

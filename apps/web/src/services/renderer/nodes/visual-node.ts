@@ -4,6 +4,8 @@ import type { BlendMode } from "@/types/rendering";
 import type { Transform } from "@/types/timeline";
 import type { ElementAnimations } from "@/types/animation";
 import { resolveOpacityAtTime, resolveTransformAtTime } from "@/lib/animation";
+import { mapCompressedTimeToSourceTime } from "@/lib/transcript-editor/core";
+import type { TranscriptEditCutRange } from "@/types/transcription";
 
 const VISUAL_EPSILON = 1 / 1000;
 
@@ -12,6 +14,7 @@ export interface VisualNodeParams {
 	timeOffset: number;
 	trimStart: number;
 	trimEnd: number;
+	transcriptCuts?: TranscriptEditCutRange[];
 	transform: Transform;
 	opacity: number;
 	blendMode?: BlendMode;
@@ -29,15 +32,20 @@ export abstract class VisualNode<
 	Params extends VisualNodeParams = VisualNodeParams,
 > extends BaseNode<Params> {
 	protected getLocalTime(time: number): number {
-		return time - this.params.timeOffset + this.params.trimStart;
+		const elapsed = Math.max(0, time - this.params.timeOffset);
+		const mappedElapsed =
+			(this.params.transcriptCuts?.length ?? 0) > 0
+				? mapCompressedTimeToSourceTime({
+						compressedTime: elapsed,
+						cuts: this.params.transcriptCuts ?? [],
+					})
+				: elapsed;
+		return mappedElapsed + this.params.trimStart;
 	}
 
 	protected isInRange(time: number): boolean {
-		const localTime = this.getLocalTime(time);
-		return (
-			localTime >= this.params.trimStart - VISUAL_EPSILON &&
-			localTime < this.params.trimStart + this.params.duration
-		);
+		const elapsed = time - this.params.timeOffset;
+		return elapsed >= -VISUAL_EPSILON && elapsed < this.params.duration;
 	}
 
 	protected renderVisual({

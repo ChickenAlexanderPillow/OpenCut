@@ -8,6 +8,21 @@ export interface TranscriptionSegment {
 	end: number;
 }
 
+export interface TranscriptEditWord {
+	id: string;
+	text: string;
+	startTime: number;
+	endTime: number;
+	removed?: boolean;
+	segmentId?: string;
+}
+
+export interface TranscriptEditCutRange {
+	start: number;
+	end: number;
+	reason: "manual" | "filler";
+}
+
 export interface TranscriptionResult {
 	text: string;
 	segments: TranscriptionSegment[];
