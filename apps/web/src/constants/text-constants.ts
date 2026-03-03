@@ -35,6 +35,8 @@ export const DEFAULT_TEXT_ELEMENT: Omit<TextElement, "id"> = {
 	fontSize: 15,
 	fontFamily: "Arial",
 	color: "#ffffff",
+	strokeColor: "#000000",
+	strokeWidth: 0,
 	background: DEFAULT_TEXT_BACKGROUND,
 	textAlign: "center",
 	fontWeight: "normal",

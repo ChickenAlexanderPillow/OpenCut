@@ -81,6 +81,8 @@ export function resolveSafeAreaAnchoredPositionY({
 	visualRect,
 	anchorToSafeAreaBottom,
 	safeAreaBottomOffset = 0,
+	anchorToSafeAreaTop,
+	safeAreaTopOffset = 0,
 }: {
 	canvasWidth: number;
 	canvasHeight: number;
@@ -89,12 +91,19 @@ export function resolveSafeAreaAnchoredPositionY({
 	visualRect: RectLike;
 	anchorToSafeAreaBottom?: boolean;
 	safeAreaBottomOffset?: number;
+	anchorToSafeAreaTop?: boolean;
+	safeAreaTopOffset?: number;
 }): number {
 	const defaultPositionY = canvasHeight / 2 + transformPositionY;
-	if (!anchorToSafeAreaBottom) return defaultPositionY;
+	if (!anchorToSafeAreaBottom && !anchorToSafeAreaTop) return defaultPositionY;
 
 	const safeArea = resolveSafeAreaPreset({ width: canvasWidth, height: canvasHeight });
 	if (!safeArea) return defaultPositionY;
+
+	if (anchorToSafeAreaTop) {
+		const safeTopY = canvasHeight * safeArea.inset.top;
+		return safeTopY - visualRect.top * scale + safeAreaTopOffset;
+	}
 
 	const visualBottom = visualRect.top + visualRect.height;
 	const safeBottomY = canvasHeight * (1 - safeArea.inset.bottom);

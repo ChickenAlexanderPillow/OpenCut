@@ -180,7 +180,11 @@ export function useTimelineDragDrop({
 			dragData,
 		}: {
 			target: DropTarget;
-			dragData: { name?: string; content?: string };
+			dragData: {
+				name?: string;
+				content?: string;
+				raw?: Record<string, unknown>;
+			};
 		}) => {
 			let trackId: string;
 
@@ -197,6 +201,7 @@ export function useTimelineDragDrop({
 
 			const element = buildTextElement({
 				raw: {
+					...(dragData.raw ?? {}),
 					name: dragData.name ?? "",
 					content: dragData.content ?? "",
 				},

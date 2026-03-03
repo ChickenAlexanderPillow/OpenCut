@@ -255,6 +255,10 @@ export function getElementBounds({
 								element.captionStyle?.anchorToSafeAreaBottom ?? true,
 							safeAreaBottomOffset:
 								element.captionStyle?.safeAreaBottomOffset ?? 0,
+							anchorToSafeAreaTop:
+								element.captionStyle?.anchorToSafeAreaTop ?? false,
+							safeAreaTopOffset:
+								element.captionStyle?.safeAreaTopOffset ?? 0,
 						}),
 						scale: element.transform.scale,
 						visualRect: candidateVisualRect,
@@ -359,6 +363,9 @@ export function getElementBounds({
 					anchorToSafeAreaBottom:
 						element.captionStyle?.anchorToSafeAreaBottom ?? true,
 					safeAreaBottomOffset: element.captionStyle?.safeAreaBottomOffset ?? 0,
+					anchorToSafeAreaTop:
+						element.captionStyle?.anchorToSafeAreaTop ?? false,
+					safeAreaTopOffset: element.captionStyle?.safeAreaTopOffset ?? 0,
 				}),
 				scale: element.transform.scale,
 				visualRect,

@@ -87,6 +87,13 @@ export class ScenesManager {
 		if (!targetScene) {
 			throw new Error("Scene not found");
 		}
+		if (this.active?.id === sceneId) {
+			return;
+		}
+
+		// Scene switches must be immediate and never leak previous-scene playback.
+		this.editor.playback.pause();
+		this.editor.playback.seek({ time: 0 });
 
 		const activeProject = this.editor.project.getActive();
 

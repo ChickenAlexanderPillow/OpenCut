@@ -215,6 +215,14 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		renderer.context.font = `${fontStyle} ${fontWeight} ${scaledFontSize}px ${fontFamily}, sans-serif`;
 		renderer.context.textAlign = this.params.textAlign;
 		renderer.context.fillStyle = this.params.color;
+		const strokeWidth = Math.max(0, this.params.strokeWidth ?? 0);
+		const hasStroke = strokeWidth > 0;
+		if (hasStroke) {
+			renderer.context.strokeStyle = this.params.strokeColor ?? "#000000";
+			renderer.context.lineWidth = strokeWidth;
+			renderer.context.lineJoin = "round";
+			renderer.context.miterLimit = 2;
+		}
 
 		const letterSpacing = this.params.letterSpacing ?? 0;
 		const lineHeight = this.params.lineHeight ?? DEFAULT_LINE_HEIGHT;
@@ -342,10 +350,14 @@ export class TextNode extends BaseNode<TextNodeParams> {
 							transformPositionY: this.params.transform.position.y,
 							scale: this.params.transform.scale,
 							visualRect: candidateVisualRect,
-							anchorToSafeAreaBottom:
+						anchorToSafeAreaBottom:
 								this.params.captionStyle?.anchorToSafeAreaBottom ?? true,
 							safeAreaBottomOffset:
 								this.params.captionStyle?.safeAreaBottomOffset ?? 0,
+							anchorToSafeAreaTop:
+								this.params.captionStyle?.anchorToSafeAreaTop ?? false,
+							safeAreaTopOffset:
+								this.params.captionStyle?.safeAreaTopOffset ?? 0,
 						}),
 						scale: this.params.transform.scale,
 						visualRect: candidateVisualRect,
@@ -465,6 +477,9 @@ export class TextNode extends BaseNode<TextNodeParams> {
 				anchorToSafeAreaBottom:
 					this.params.captionStyle?.anchorToSafeAreaBottom ?? true,
 				safeAreaBottomOffset: this.params.captionStyle?.safeAreaBottomOffset ?? 0,
+				anchorToSafeAreaTop:
+					this.params.captionStyle?.anchorToSafeAreaTop ?? false,
+				safeAreaTopOffset: this.params.captionStyle?.safeAreaTopOffset ?? 0,
 			}),
 			scale: this.params.transform.scale,
 			visualRect,
@@ -567,6 +582,9 @@ export class TextNode extends BaseNode<TextNodeParams> {
 				: this.params.textAlign;
 			renderer.context.textAlign = lineTextAlign;
 			renderer.context.fillStyle = this.params.color;
+			if (hasStroke) {
+				renderer.context.strokeText(line, lineX, lineY);
+			}
 			renderer.context.fillText(line, lineX, lineY);
 
 			if (

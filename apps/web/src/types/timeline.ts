@@ -110,6 +110,8 @@ export interface TextElement extends BaseTimelineElement {
 	fontSize: number;
 	fontFamily: string;
 	color: string;
+	strokeColor?: string;
+	strokeWidth?: number;
 	background: {
 		color: string;
 		cornerRadius?: number;
@@ -145,8 +147,11 @@ export interface TextElement extends BaseTimelineElement {
 		maxLinesOnScreen?: number;
 		wordDisplayPreset?: "compact" | "balanced" | "extended" | "custom";
 		linkedToCaptionGroup?: boolean;
+		isSceneTitle?: boolean;
 		anchorToSafeAreaBottom?: boolean;
 		safeAreaBottomOffset?: number;
+		anchorToSafeAreaTop?: boolean;
+		safeAreaTopOffset?: number;
 	};
 	captionWordTimings?: Array<{
 		word: string;

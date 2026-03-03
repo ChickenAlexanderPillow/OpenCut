@@ -885,42 +885,86 @@ async function decodeAssetWindowToAudioBuffer({
 	});
 
 	try {
+		const windowStart = Math.max(0, startTime);
+		const windowEnd = Math.max(windowStart, endTime);
+		const windowDuration = windowEnd - windowStart;
+		if (windowDuration <= 0) {
+			return null;
+		}
+
 		const audioTrack = await input.getPrimaryAudioTrack();
 		if (!audioTrack) {
 			return await sliceClipBufferFromFullDecode({
 				asset,
-				startTime,
-				endTime,
+				startTime: windowStart,
+				endTime: windowEnd,
 			});
 		}
 		const sink = new AudioBufferSink(audioTrack);
-		const chunks: AudioBuffer[] = [];
-		let totalSamples = 0;
-		for await (const { buffer } of sink.buffers(startTime, endTime)) {
-			chunks.push(buffer);
-			totalSamples += buffer.length;
+		const chunks: Array<{ buffer: AudioBuffer; timestamp: number }> = [];
+		for await (const { buffer, timestamp } of sink.buffers(windowStart, windowEnd)) {
+			chunks.push({ buffer, timestamp });
 		}
-		if (chunks.length === 0 || totalSamples <= 0) {
+		if (chunks.length === 0) {
 			return await sliceClipBufferFromFullDecode({
 				asset,
-				startTime,
-				endTime,
+				startTime: windowStart,
+				endTime: windowEnd,
 			});
 		}
 
-		const sampleRate = chunks[0].sampleRate;
-		const channels = Math.max(1, chunks[0].numberOfChannels);
-		const context = createAudioContext({ sampleRate });
-		const merged = context.createBuffer(channels, totalSamples, sampleRate);
-		for (let channelIndex = 0; channelIndex < channels; channelIndex++) {
-			const channelData = new Float32Array(totalSamples);
-			let writeOffset = 0;
-			for (const chunk of chunks) {
-				const sourceChannel = Math.min(channelIndex, chunk.numberOfChannels - 1);
-				channelData.set(chunk.getChannelData(sourceChannel), writeOffset);
-				writeOffset += chunk.length;
+		const sampleRate = chunks[0].buffer.sampleRate;
+		const channels = Math.max(1, chunks[0].buffer.numberOfChannels);
+		const totalSamples = Math.max(1, Math.ceil(windowDuration * sampleRate));
+		const mergedByChannel = Array.from(
+			{ length: channels },
+			() => new Float32Array(totalSamples),
+		);
+
+		for (const { buffer, timestamp } of chunks) {
+			const chunkSampleRate = buffer.sampleRate;
+			if (!Number.isFinite(timestamp) || chunkSampleRate <= 0) continue;
+			const chunkStart = timestamp;
+			const chunkEnd = chunkStart + buffer.length / chunkSampleRate;
+			const overlapStart = Math.max(windowStart, chunkStart);
+			const overlapEnd = Math.min(windowEnd, chunkEnd);
+			if (overlapEnd <= overlapStart) continue;
+
+			const chunkOffset = Math.max(
+				0,
+				Math.floor((overlapStart - chunkStart) * chunkSampleRate),
+			);
+			const outputOffset = Math.max(
+				0,
+				Math.floor((overlapStart - windowStart) * sampleRate),
+			);
+			const overlapSamples = Math.max(
+				0,
+				Math.min(
+					buffer.length - chunkOffset,
+					totalSamples - outputOffset,
+					Math.ceil((overlapEnd - overlapStart) * sampleRate),
+				),
+			);
+			if (overlapSamples <= 0) continue;
+
+			for (let channelIndex = 0; channelIndex < channels; channelIndex++) {
+				const sourceChannel = Math.min(channelIndex, buffer.numberOfChannels - 1);
+				const sourceData = buffer
+					.getChannelData(sourceChannel)
+					.subarray(chunkOffset, chunkOffset + overlapSamples);
+				mergedByChannel[channelIndex].set(sourceData, outputOffset);
 			}
-			merged.copyToChannel(channelData, channelIndex);
+		}
+
+		const context = createAudioContext({ sampleRate });
+		const merged = context.createBuffer(
+			channels,
+			mergedByChannel[0]?.length ?? totalSamples,
+			sampleRate,
+		);
+		for (let channelIndex = 0; channelIndex < channels; channelIndex++) {
+			merged.copyToChannel(mergedByChannel[channelIndex], channelIndex);
 		}
 		void context.close().catch(() => undefined);
 		return merged;

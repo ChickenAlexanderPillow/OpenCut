@@ -154,6 +154,11 @@ export function buildTextElement({
 				: DEFAULT_TEXT_ELEMENT.fontSize,
 		fontFamily: t.fontFamily ?? DEFAULT_TEXT_ELEMENT.fontFamily,
 		color: t.color ?? DEFAULT_TEXT_ELEMENT.color,
+		strokeColor: t.strokeColor ?? DEFAULT_TEXT_ELEMENT.strokeColor,
+		strokeWidth:
+			typeof t.strokeWidth === "number"
+				? t.strokeWidth
+				: DEFAULT_TEXT_ELEMENT.strokeWidth,
 		background: {
 		color: t.background?.color ?? DEFAULT_TEXT_ELEMENT.background.color,
 		cornerRadius: t.background?.cornerRadius,
