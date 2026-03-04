@@ -1,5 +1,8 @@
 import { CAPTION_TAIL_PAD_SECONDS } from "@/lib/transcript-editor/constants";
-import type { TranscriptEditCutRange, TranscriptEditWord } from "@/types/transcription";
+import type {
+	TranscriptEditCutRange,
+	TranscriptEditWord,
+} from "@/types/transcription";
 
 export const DEFAULT_FILLER_TOKENS = new Set([
 	"um",
@@ -26,7 +29,24 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function normalizeToken(token: string): string {
-	return token.toLowerCase().replace(/[^\p{L}\p{N}'\s]+/gu, "").trim();
+	return token
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}'\s]+/gu, "")
+		.trim();
+}
+
+function rangesOverlap({
+	aStart,
+	aEnd,
+	bStart,
+	bEnd,
+}: {
+	aStart: number;
+	aEnd: number;
+	bStart: number;
+	bEnd: number;
+}): boolean {
+	return aEnd > bStart && aStart < bEnd;
 }
 
 export function isFillerWordOrPhrase({ text }: { text: string }): boolean {
@@ -70,8 +90,17 @@ export function mergeCutRanges({
 	cuts: TranscriptEditCutRange[];
 }): TranscriptEditCutRange[] {
 	const sorted = [...cuts]
-		.filter((cut) => Number.isFinite(cut.start) && Number.isFinite(cut.end) && cut.end > cut.start)
-		.map((cut) => ({ ...cut, start: Math.max(0, cut.start), end: Math.max(cut.start + 0.01, cut.end) }))
+		.filter(
+			(cut) =>
+				Number.isFinite(cut.start) &&
+				Number.isFinite(cut.end) &&
+				cut.end > cut.start,
+		)
+		.map((cut) => ({
+			...cut,
+			start: Math.max(0, cut.start),
+			end: Math.max(cut.start + 0.01, cut.end),
+		}))
 		.sort((a, b) => a.start - b.start);
 	if (sorted.length === 0) return [];
 
@@ -81,12 +110,47 @@ export function mergeCutRanges({
 		const previous = merged[merged.length - 1];
 		if (current.start <= previous.end + 0.01) {
 			previous.end = Math.max(previous.end, current.end);
-			previous.reason = previous.reason === "manual" || current.reason === "manual" ? "manual" : "filler";
+			previous.reason =
+				previous.reason === "manual" || current.reason === "manual"
+					? "manual"
+					: "filler";
 			continue;
 		}
 		merged.push({ ...current });
 	}
 	return merged;
+}
+
+export function applyCutRangesToWords({
+	words,
+	cuts,
+}: {
+	words: TranscriptEditWord[];
+	cuts: TranscriptEditCutRange[];
+}): TranscriptEditWord[] {
+	const normalizedWords = normalizeTranscriptWords({ words });
+	const mergedCuts = mergeCutRanges({ cuts });
+	if (mergedCuts.length === 0) {
+		return normalizedWords.map((word) => ({
+			...word,
+			removed: Boolean(word.removed),
+		}));
+	}
+
+	return normalizedWords.map((word) => {
+		const removedByCuts = mergedCuts.some((cut) =>
+			rangesOverlap({
+				aStart: word.startTime,
+				aEnd: word.endTime,
+				bStart: cut.start,
+				bEnd: cut.end,
+			}),
+		);
+		return {
+			...word,
+			removed: Boolean(word.removed) || removedByCuts,
+		};
+	});
 }
 
 export function buildTranscriptCutsFromWords({
@@ -205,7 +269,10 @@ export function buildCaptionPayloadFromTranscriptWords({
 
 	if (timings.length === 0) return null;
 
-	const content = timings.map((timing) => timing.word).join(" ").trim();
+	const content = timings
+		.map((timing) => timing.word)
+		.join(" ")
+		.trim();
 	const startTime = timings[0].startTime;
 	const endTime = timings[timings.length - 1].endTime;
 	return {
@@ -222,6 +289,8 @@ export function withFillerWordsRemoved({
 	words: TranscriptEditWord[];
 }): TranscriptEditWord[] {
 	return words.map((word) =>
-		isFillerWordOrPhrase({ text: word.text }) ? { ...word, removed: true } : word,
+		isFillerWordOrPhrase({ text: word.text })
+			? { ...word, removed: true }
+			: word,
 	);
 }

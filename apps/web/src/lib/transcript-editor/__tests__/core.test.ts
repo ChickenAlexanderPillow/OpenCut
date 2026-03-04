@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	applyCutRangesToWords,
 	buildCaptionPayloadFromTranscriptWords,
 	buildTranscriptCutsFromWords,
 	computeKeepDuration,
@@ -55,5 +56,19 @@ describe("transcript editor core", () => {
 		const cuts = buildTranscriptCutsFromWords({ words: filtered });
 		const keepDuration = computeKeepDuration({ originalDuration: 1, cuts });
 		expect(keepDuration).toBeLessThan(1);
+	});
+
+	test("applies cut ranges to word removal state for UI/playback consistency", () => {
+		const words = [
+			{ id: "w1", text: "hello", startTime: 0, endTime: 0.4, removed: false },
+			{ id: "w2", text: "there", startTime: 0.4, endTime: 0.8, removed: false },
+			{ id: "w3", text: "world", startTime: 0.8, endTime: 1.2, removed: false },
+		];
+		const cuts = [{ start: 0.45, end: 0.75, reason: "manual" as const }];
+		const applied = applyCutRangesToWords({ words, cuts });
+
+		expect(applied[0]?.removed).toBe(false);
+		expect(applied[1]?.removed).toBe(true);
+		expect(applied[2]?.removed).toBe(false);
 	});
 });

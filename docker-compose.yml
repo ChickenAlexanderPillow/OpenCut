@@ -47,6 +47,52 @@ services:
       retries: 5
       start_period: 10s
 
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-opencut}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-opencutsecret}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${S3_ACCESS_KEY_ID:-opencut} ${S3_SECRET_ACCESS_KEY:-opencutsecret};
+      mc mb -p local/${S3_BUCKET:-opencut-media} || true;
+      mc anonymous set none local/${S3_BUCKET:-opencut-media} || true;
+      "
+    restart: "no"
+
+  minio-cleanup:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    entrypoint: >
+      /bin/sh -c "
+      while true; do
+        mc alias set local http://minio:9000 ${S3_ACCESS_KEY_ID:-opencut} ${S3_SECRET_ACCESS_KEY:-opencutsecret};
+        mc rm --incomplete --recursive --force local/${S3_BUCKET:-opencut-media} || true;
+        sleep 3600;
+      done
+      "
+    restart: unless-stopped
+
   local-transcribe:
     build:
       context: .
@@ -105,6 +151,14 @@ services:
       - EXTERNAL_PROJECTS_ENABLED=${EXTERNAL_PROJECTS_ENABLED:-true}
       - TRANSCRIPT_INGEST_SECRET=${TRANSCRIPT_INGEST_SECRET:-change_me_ingest_secret}
       - THUMBNAIL_API_BASE=${THUMBNAIL_API_BASE:-http://host.docker.internal:9000}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-server}
+      - NEXT_PUBLIC_STORAGE_BACKEND=${NEXT_PUBLIC_STORAGE_BACKEND:-server}
+      - S3_ENDPOINT=${S3_ENDPOINT:-http://minio:9000}
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-opencut}
+      - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-opencutsecret}
+      - S3_BUCKET=${S3_BUCKET:-opencut-media}
+      - S3_FORCE_PATH_STYLE=${S3_FORCE_PATH_STYLE:-true}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -112,6 +166,12 @@ services:
         condition: service_healthy
       serverless-redis-http:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      minio-cleanup:
+        condition: service_started
       local-transcribe:
         condition: service_healthy
     healthcheck:
@@ -123,6 +183,7 @@ services:
 
 volumes:
   postgres_data:
+  minio_data:
 
 networks:
   default:

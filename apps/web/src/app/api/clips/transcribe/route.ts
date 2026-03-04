@@ -2,7 +2,8 @@ import { webEnv } from "@opencut/env/web";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 
-const OPENAI_TRANSCRIPTIONS_URL = "https://api.openai.com/v1/audio/transcriptions";
+const OPENAI_TRANSCRIPTIONS_URL =
+	"https://api.openai.com/v1/audio/transcriptions";
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 const MAX_WORDS = 20000;
 let rateLimitUnavailableLogged = false;
@@ -113,13 +114,26 @@ async function callLocalWhisperX({
 
 	const form = new FormData();
 	form.append("file", file, file.name || "clip.wav");
-	form.append("model", requestedModel || webEnv.LOCAL_TRANSCRIBE_MODEL || "large-v3");
+	form.append(
+		"model",
+		requestedModel || webEnv.LOCAL_TRANSCRIBE_MODEL || "large-v3",
+	);
 	form.append("device", webEnv.LOCAL_TRANSCRIBE_DEVICE || "cuda");
-	form.append("compute_type", webEnv.LOCAL_TRANSCRIBE_COMPUTE_TYPE || "float16");
+	form.append(
+		"compute_type",
+		webEnv.LOCAL_TRANSCRIBE_COMPUTE_TYPE || "float16",
+	);
+	form.append(
+		"vad_filter",
+		(process.env.LOCAL_TRANSCRIBE_VAD_FILTER ?? "false").trim() || "false",
+	);
 
 	const controller = new AbortController();
 	const timeout = webEnv.LOCAL_TRANSCRIBE_TIMEOUT_MS ?? 120000;
-	const timeoutId = setTimeout(() => controller.abort("Local transcription timed out"), timeout);
+	const timeoutId = setTimeout(
+		() => controller.abort("Local transcription timed out"),
+		timeout,
+	);
 
 	try {
 		let response: Response;
@@ -137,14 +151,18 @@ async function callLocalWhisperX({
 			);
 		} catch (error) {
 			throw new LocalTranscriptionUnavailableError(
-				error instanceof Error ? error.message : "Local transcription service unavailable",
+				error instanceof Error
+					? error.message
+					: "Local transcription service unavailable",
 			);
 		}
 
 		if (!response.ok) {
 			const body = await response.text();
 			if (response.status === 422) {
-				throw new LocalTranscriptionValidationError(body || "Local whisperX returned invalid word-level output");
+				throw new LocalTranscriptionValidationError(
+					body || "Local whisperX returned invalid word-level output",
+				);
 			}
 			throw new LocalTranscriptionUnavailableError(
 				`Local transcription service failed (${response.status}): ${body}`,
@@ -218,7 +236,9 @@ function normalizeOpenAIWordPayload({
 	if (!payload || typeof payload !== "object") return [];
 	const parsed = payload as {
 		words?: Array<{ word?: string; start?: number; end?: number }>;
-		segments?: Array<{ words?: Array<{ word?: string; start?: number; end?: number }> }>;
+		segments?: Array<{
+			words?: Array<{ word?: string; start?: number; end?: number }>;
+		}>;
 	};
 	const rawWords = [
 		...(parsed.words ?? []),
@@ -350,7 +370,8 @@ export async function POST(request: NextRequest) {
 		console.error("Clip transcription failed:", error);
 		return NextResponse.json(
 			{
-				error: error instanceof Error ? error.message : "Clip transcription failed",
+				error:
+					error instanceof Error ? error.message : "Clip transcription failed",
 			},
 			{ status: 500 },
 		);

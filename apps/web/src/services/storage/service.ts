@@ -1,159 +1,42 @@
-import type { TProject, TProjectMetadata } from "@/types/project";
-import { getProjectDurationFromScenes } from "@/lib/scenes";
 import type { MediaAsset } from "@/types/assets";
-import { IndexedDBAdapter } from "./indexeddb-adapter";
-import { OPFSAdapter } from "./opfs-adapter";
-import type {
-	MediaAssetData,
-	StorageConfig,
-	SerializedProject,
-	SerializedScene,
-} from "./types";
-import type { SavedSoundsData, SavedSound, SoundEffect } from "@/types/sounds";
+import type { TProject, TProjectMetadata } from "@/types/project";
+import type { SavedSoundsData, SoundEffect } from "@/types/sounds";
 import {
-	migrations,
-	runStorageMigrations,
-} from "@/services/storage/migrations";
-import type { Bookmark, TimelineTrack, TScene } from "@/types/timeline";
-import { DEFAULT_BRAND_OVERLAYS } from "@/constants/brand-overlay-constants";
+	LOCAL_STORAGE_RECLAIM_MARKER,
+	LOCAL_TO_SERVER_MIGRATION_MARKER,
+} from "@/lib/server-storage/constants";
+import type {
+	StorageBackend,
+	StorageBackendService,
+} from "./backend-types";
+import { deleteDatabase, IndexedDBAdapter } from "./indexeddb-adapter";
+import {
+	legacyLocalStorageService,
+	type LegacyLocalStorageService,
+} from "./legacy-local-storage-service";
+import { ServerStorageService } from "./server-storage-service";
 
-function normalizeBookmarks({ raw }: { raw: unknown }): Bookmark[] {
-	if (!Array.isArray(raw)) return [];
-	return raw
-		.map((item): Bookmark | null => {
-			if (typeof item === "number") return { time: item };
-			const obj = item as Record<string, unknown>;
-			if (
-				typeof obj !== "object" ||
-				obj === null ||
-				typeof obj.time !== "number"
-			) {
-				return null;
-			}
-			return {
-				time: obj.time,
-				...(typeof obj.note === "string" && { note: obj.note }),
-				...(typeof obj.color === "string" && { color: obj.color }),
-				...(typeof obj.duration === "number" && { duration: obj.duration }),
-			};
-		})
-		.filter((b): b is Bookmark => b !== null);
+function resolveStorageBackend(): StorageBackend {
+	const configured = process.env.NEXT_PUBLIC_STORAGE_BACKEND;
+	return configured === "local" ? "local" : "server";
 }
 
-class StorageService {
-	private projectsAdapter: IndexedDBAdapter<SerializedProject>;
-	private savedSoundsAdapter: IndexedDBAdapter<SavedSoundsData>;
-	private config: StorageConfig;
-	private migrationsPromise: Promise<void> | null = null;
+class StorageService implements StorageBackendService {
+	private readonly backend: StorageBackend = resolveStorageBackend();
+	private readonly localService: LegacyLocalStorageService = legacyLocalStorageService;
+	private readonly serverService = new ServerStorageService(this.localService);
+	private localToServerMigrationPromise: Promise<void> | null = null;
+	private hasRunMigrationInSession = false;
+	private static readonly MIGRATION_GUARD_TIMEOUT_MS = 12_000;
+	private static readonly LEGACY_READ_TIMEOUT_MS = 4_000;
 
-	constructor() {
-		this.config = {
-			projectsDb: "video-editor-projects",
-			mediaDb: "video-editor-media",
-			savedSoundsDb: "video-editor-saved-sounds",
-			version: 1,
-		};
-
-		this.projectsAdapter = new IndexedDBAdapter<SerializedProject>(
-			this.config.projectsDb,
-			"projects",
-			this.config.version,
-		);
-
-		this.savedSoundsAdapter = new IndexedDBAdapter<SavedSoundsData>(
-			this.config.savedSoundsDb,
-			"saved-sounds",
-			this.config.version,
-		);
-	}
-
-	private async ensureMigrations(): Promise<void> {
-		if (this.migrationsPromise) {
-			await this.migrationsPromise;
-			return;
-		}
-
-		this.migrationsPromise = runStorageMigrations({ migrations }).then(
-			() => undefined,
-		);
-		await this.migrationsPromise;
-	}
-
-	private getProjectMediaAdapters({ projectId }: { projectId: string }) {
-		const mediaMetadataAdapter = new IndexedDBAdapter<MediaAssetData>(
-			`${this.config.mediaDb}-${projectId}`,
-			"media-metadata",
-			this.config.version,
-		);
-
-		const mediaAssetsAdapter = new OPFSAdapter(`media-files-${projectId}`);
-
-		return { mediaMetadataAdapter, mediaAssetsAdapter };
-	}
-
-	private getPreviewProxyKey({ mediaId }: { mediaId: string }): string {
-		return `${mediaId}__preview_proxy`;
-	}
-
-	private stripAudioBuffers({
-		tracks,
-	}: {
-		tracks: TimelineTrack[];
-	}): TimelineTrack[] {
-		return tracks.map((track) => {
-			if (track.type !== "audio") return track;
-			return {
-				...track,
-				elements: track.elements.map((element) => {
-					const { buffer: _buffer, ...rest } = element;
-					return rest;
-				}),
-			};
-		});
+	getBackend(): StorageBackend {
+		return this.backend;
 	}
 
 	async saveProject({ project }: { project: TProject }): Promise<void> {
-		const duration =
-			project.metadata.duration ??
-			getProjectDurationFromScenes({ scenes: project.scenes });
-		const serializedScenes: SerializedScene[] = project.scenes.map((scene) => ({
-			id: scene.id,
-			name: scene.name,
-			isMain: scene.isMain,
-			tracks: this.stripAudioBuffers({ tracks: scene.tracks }),
-			bookmarks: scene.bookmarks,
-			createdAt: scene.createdAt.toISOString(),
-			updatedAt: scene.updatedAt.toISOString(),
-		}));
-
-		const serializedProject: SerializedProject = {
-			metadata: {
-				id: project.metadata.id,
-				name: project.metadata.name,
-				thumbnail: project.metadata.thumbnail,
-				duration,
-				createdAt: project.metadata.createdAt.toISOString(),
-				updatedAt: project.metadata.updatedAt.toISOString(),
-			},
-			scenes: serializedScenes,
-			currentSceneId: project.currentSceneId,
-			settings: project.settings,
-			brandOverlays: project.brandOverlays ?? {
-				selectedBrandId: DEFAULT_BRAND_OVERLAYS.selectedBrandId,
-				logo: { ...DEFAULT_BRAND_OVERLAYS.logo },
-			},
-			version: project.version,
-			timelineViewState: project.timelineViewState,
-			transcriptionCache: project.transcriptionCache,
-			clipTranscriptCache: project.clipTranscriptCache,
-			clipWordTranscriptionCache: project.clipWordTranscriptionCache,
-			clipGenerationCache: project.clipGenerationCache,
-			externalProjectLink: project.externalProjectLink,
-			externalMediaLinks: project.externalMediaLinks,
-			externalTranscriptCache: project.externalTranscriptCache,
-		};
-
-		await this.projectsAdapter.set(project.metadata.id, serializedProject);
+		const backend = await this.getProjectBackend();
+		await backend.saveProject({ project });
 	}
 
 	async loadProject({
@@ -161,103 +44,23 @@ class StorageService {
 	}: {
 		id: string;
 	}): Promise<{ project: TProject } | null> {
-		await this.ensureMigrations();
-		const serializedProject = await this.projectsAdapter.get(id);
-
-		if (!serializedProject) return null;
-
-		const scenes =
-			serializedProject.scenes?.map((scene) => ({
-				id: scene.id,
-				name: scene.name,
-				isMain: scene.isMain,
-				tracks: (scene.tracks ?? []).map((track) =>
-					track.type === "video"
-						? { ...track, isMain: track.isMain ?? false } // legacy: isMain was optional
-						: track,
-				),
-				bookmarks: normalizeBookmarks({ raw: scene.bookmarks }),
-				createdAt: new Date(scene.createdAt),
-				updatedAt: new Date(scene.updatedAt),
-			})) ?? [];
-
-		const project: TProject = {
-			metadata: {
-				id: serializedProject.metadata.id,
-				name: serializedProject.metadata.name,
-				thumbnail: serializedProject.metadata.thumbnail,
-				duration:
-					serializedProject.metadata.duration ??
-					getProjectDurationFromScenes({ scenes }),
-				createdAt: new Date(serializedProject.metadata.createdAt),
-				updatedAt: new Date(serializedProject.metadata.updatedAt),
-			},
-			scenes,
-			currentSceneId: serializedProject.currentSceneId || "",
-			settings: serializedProject.settings,
-			brandOverlays: {
-				selectedBrandId:
-					serializedProject.brandOverlays?.selectedBrandId ??
-					DEFAULT_BRAND_OVERLAYS.selectedBrandId,
-				logo: {
-					...DEFAULT_BRAND_OVERLAYS.logo,
-					...(serializedProject.brandOverlays?.logo ?? {}),
-				},
-			},
-			version: serializedProject.version,
-			timelineViewState: serializedProject.timelineViewState,
-			transcriptionCache: serializedProject.transcriptionCache,
-			clipTranscriptCache: serializedProject.clipTranscriptCache,
-			clipWordTranscriptionCache: serializedProject.clipWordTranscriptionCache,
-			clipGenerationCache: serializedProject.clipGenerationCache,
-			externalProjectLink: serializedProject.externalProjectLink,
-			externalMediaLinks: serializedProject.externalMediaLinks,
-			externalTranscriptCache: serializedProject.externalTranscriptCache,
-		};
-
-		return { project };
+		const backend = await this.getProjectBackend();
+		return await backend.loadProject({ id });
 	}
 
 	async loadAllProjects(): Promise<TProject[]> {
-		const projectIds = await this.projectsAdapter.list();
-		const projects: TProject[] = [];
-
-		for (const id of projectIds) {
-			const result = await this.loadProject({ id });
-			if (result?.project) {
-				projects.push(result.project);
-			}
-		}
-
-		return projects.sort(
-			(a, b) => b.metadata.updatedAt.getTime() - a.metadata.updatedAt.getTime(),
-		);
+		const backend = await this.getProjectBackend();
+		return await backend.loadAllProjects();
 	}
 
 	async loadAllProjectsMetadata(): Promise<TProjectMetadata[]> {
-		await this.ensureMigrations();
-		const serializedProjects = await this.projectsAdapter.getAll();
-
-		const metadata = serializedProjects.map((serializedProject) => ({
-			id: serializedProject.metadata.id,
-			name: serializedProject.metadata.name,
-			thumbnail: serializedProject.metadata.thumbnail,
-			duration:
-				serializedProject.metadata.duration ??
-				getProjectDurationFromScenes({
-					scenes: (serializedProject.scenes ?? []) as unknown as TScene[],
-				}),
-			createdAt: new Date(serializedProject.metadata.createdAt),
-			updatedAt: new Date(serializedProject.metadata.updatedAt),
-		}));
-
-		return metadata.sort(
-			(a, b) => b.updatedAt.getTime() - a.updatedAt.getTime(),
-		);
+		const backend = await this.getProjectBackend();
+		return await backend.loadAllProjectsMetadata();
 	}
 
 	async deleteProject({ id }: { id: string }): Promise<void> {
-		await this.projectsAdapter.remove(id);
+		const backend = await this.getProjectBackend();
+		await backend.deleteProject({ id });
 	}
 
 	async saveMediaAsset({
@@ -267,37 +70,8 @@ class StorageService {
 		projectId: string;
 		mediaAsset: MediaAsset;
 	}): Promise<void> {
-		const { mediaMetadataAdapter, mediaAssetsAdapter } =
-			this.getProjectMediaAdapters({ projectId });
-
-		await mediaAssetsAdapter.set(mediaAsset.id, mediaAsset.file);
-		const previewProxyKey = this.getPreviewProxyKey({ mediaId: mediaAsset.id });
-		if (mediaAsset.previewFile) {
-			await mediaAssetsAdapter.set(previewProxyKey, mediaAsset.previewFile);
-		} else {
-			await mediaAssetsAdapter.remove(previewProxyKey);
-		}
-
-		const metadata: MediaAssetData = {
-			id: mediaAsset.id,
-			name: mediaAsset.name,
-			type: mediaAsset.type,
-			size: mediaAsset.file.size,
-			lastModified: mediaAsset.file.lastModified,
-			width: mediaAsset.width,
-			height: mediaAsset.height,
-			duration: mediaAsset.duration,
-			fps: mediaAsset.fps,
-			thumbnailUrl: mediaAsset.thumbnailUrl,
-			ephemeral: mediaAsset.ephemeral,
-			previewProxyAvailable: Boolean(mediaAsset.previewFile),
-			previewProxyWidth: mediaAsset.previewProxyWidth,
-			previewProxyHeight: mediaAsset.previewProxyHeight,
-			previewProxyFps: mediaAsset.previewProxyFps,
-			previewProxyQualityRatio: mediaAsset.previewProxyQualityRatio,
-		};
-
-		await mediaMetadataAdapter.set(mediaAsset.id, metadata);
+		const backend = await this.getProjectBackend();
+		await backend.saveMediaAsset({ projectId, mediaAsset });
 	}
 
 	async loadMediaAsset({
@@ -307,63 +81,8 @@ class StorageService {
 		projectId: string;
 		id: string;
 	}): Promise<MediaAsset | null> {
-		const { mediaMetadataAdapter, mediaAssetsAdapter } =
-			this.getProjectMediaAdapters({ projectId });
-
-		const metadata = await mediaMetadataAdapter.get(id);
-		if (!metadata) return null;
-
-		const previewProxyKey = this.getPreviewProxyKey({ mediaId: id });
-		const [file, previewFile] = await Promise.all([
-			mediaAssetsAdapter.get(id),
-			metadata.previewProxyAvailable
-				? mediaAssetsAdapter.get(previewProxyKey)
-				: Promise.resolve(null),
-		]);
-
-		if (!file) return null;
-
-		let url: string;
-		if (metadata.type === "image" && (!file.type || file.type === "")) {
-			try {
-				const text = await file.text();
-				if (text.trim().startsWith("<svg")) {
-					const svgBlob = new Blob([text], { type: "image/svg+xml" });
-					url = URL.createObjectURL(svgBlob);
-				} else {
-					url = URL.createObjectURL(file);
-				}
-			} catch {
-				url = URL.createObjectURL(file);
-			}
-		} else {
-			url = URL.createObjectURL(file);
-		}
-
-		let previewUrl: string | undefined;
-		if (previewFile) {
-			previewUrl = URL.createObjectURL(previewFile);
-		}
-
-		return {
-			id: metadata.id,
-			name: metadata.name,
-			type: metadata.type,
-			file,
-			url,
-			previewFile: previewFile ?? undefined,
-			previewUrl,
-			width: metadata.width,
-			height: metadata.height,
-			duration: metadata.duration,
-			fps: metadata.fps,
-			thumbnailUrl: metadata.thumbnailUrl,
-			ephemeral: metadata.ephemeral,
-			previewProxyWidth: metadata.previewProxyWidth,
-			previewProxyHeight: metadata.previewProxyHeight,
-			previewProxyFps: metadata.previewProxyFps,
-			previewProxyQualityRatio: metadata.previewProxyQualityRatio,
-		};
+		const backend = await this.getProjectBackend();
+		return await backend.loadMediaAsset({ projectId, id });
 	}
 
 	async loadAllMediaAssets({
@@ -371,21 +90,8 @@ class StorageService {
 	}: {
 		projectId: string;
 	}): Promise<MediaAsset[]> {
-		const { mediaMetadataAdapter } = this.getProjectMediaAdapters({
-			projectId,
-		});
-
-		const mediaIds = await mediaMetadataAdapter.list();
-		const mediaItems: MediaAsset[] = [];
-
-		for (const id of mediaIds) {
-			const item = await this.loadMediaAsset({ projectId, id });
-			if (item) {
-				mediaItems.push(item);
-			}
-		}
-
-		return mediaItems;
+		const backend = await this.getProjectBackend();
+		return await backend.loadAllMediaAssets({ projectId });
 	}
 
 	async deleteMediaAsset({
@@ -395,34 +101,18 @@ class StorageService {
 		projectId: string;
 		id: string;
 	}): Promise<void> {
-		const { mediaMetadataAdapter, mediaAssetsAdapter } =
-			this.getProjectMediaAdapters({ projectId });
-		const previewProxyKey = this.getPreviewProxyKey({ mediaId: id });
-
-		await Promise.all([
-			mediaAssetsAdapter.remove(id),
-			mediaAssetsAdapter.remove(previewProxyKey),
-			mediaMetadataAdapter.remove(id),
-		]);
+		const backend = await this.getProjectBackend();
+		await backend.deleteMediaAsset({ projectId, id });
 	}
 
-	async deleteProjectMedia({
-		projectId,
-	}: {
-		projectId: string;
-	}): Promise<void> {
-		const { mediaMetadataAdapter, mediaAssetsAdapter } =
-			this.getProjectMediaAdapters({ projectId });
-
-		await Promise.all([
-			mediaMetadataAdapter.clear(),
-			mediaAssetsAdapter.clear(),
-		]);
+	async deleteProjectMedia({ projectId }: { projectId: string }): Promise<void> {
+		const backend = await this.getProjectBackend();
+		await backend.deleteProjectMedia({ projectId });
 	}
 
 	async clearAllData(): Promise<void> {
-		await this.projectsAdapter.clear();
-		// project-specific media and timelines cleaned up when projects are deleted
+		const backend = await this.getProjectBackend();
+		await backend.clearAllData();
 	}
 
 	async getStorageInfo(): Promise<{
@@ -430,42 +120,19 @@ class StorageService {
 		isOPFSSupported: boolean;
 		isIndexedDBSupported: boolean;
 	}> {
-		const projectIds = await this.projectsAdapter.list();
-
-		return {
-			projects: projectIds.length,
-			isOPFSSupported: this.isOPFSSupported(),
-			isIndexedDBSupported: this.isIndexedDBSupported(),
-		};
+		const backend = await this.getProjectBackend();
+		return await backend.getStorageInfo();
 	}
 
 	async getProjectStorageInfo({ projectId }: { projectId: string }): Promise<{
 		mediaItems: number;
 	}> {
-		const { mediaMetadataAdapter } = this.getProjectMediaAdapters({
-			projectId,
-		});
-
-		const mediaIds = await mediaMetadataAdapter.list();
-
-		return {
-			mediaItems: mediaIds.length,
-		};
+		const backend = await this.getProjectBackend();
+		return await backend.getProjectStorageInfo({ projectId });
 	}
 
 	async loadSavedSounds(): Promise<SavedSoundsData> {
-		try {
-			const savedSoundsData = await this.savedSoundsAdapter.get("user-sounds");
-			return (
-				savedSoundsData || {
-					sounds: [],
-					lastModified: new Date().toISOString(),
-				}
-			);
-		} catch (error) {
-			console.error("Failed to load saved sounds:", error);
-			return { sounds: [], lastModified: new Date().toISOString() };
-		}
+		return await this.localService.loadSavedSounds();
 	}
 
 	async saveSoundEffect({
@@ -473,82 +140,290 @@ class StorageService {
 	}: {
 		soundEffect: SoundEffect;
 	}): Promise<void> {
-		try {
-			const currentData = await this.loadSavedSounds();
-
-			if (currentData.sounds.some((sound) => sound.id === soundEffect.id)) {
-				return; // Already saved
-			}
-
-			const savedSound: SavedSound = {
-				id: soundEffect.id,
-				name: soundEffect.name,
-				username: soundEffect.username,
-				previewUrl: soundEffect.previewUrl,
-				downloadUrl: soundEffect.downloadUrl,
-				duration: soundEffect.duration,
-				tags: soundEffect.tags,
-				license: soundEffect.license,
-				savedAt: new Date().toISOString(),
-			};
-
-			const updatedData: SavedSoundsData = {
-				sounds: [...currentData.sounds, savedSound],
-				lastModified: new Date().toISOString(),
-			};
-
-			await this.savedSoundsAdapter.set("user-sounds", updatedData);
-		} catch (error) {
-			console.error("Failed to save sound effect:", error);
-			throw error;
-		}
+		await this.localService.saveSoundEffect({ soundEffect });
 	}
 
 	async removeSavedSound({ soundId }: { soundId: number }): Promise<void> {
-		try {
-			const currentData = await this.loadSavedSounds();
-
-			const updatedData: SavedSoundsData = {
-				sounds: currentData.sounds.filter((sound) => sound.id !== soundId),
-				lastModified: new Date().toISOString(),
-			};
-
-			await this.savedSoundsAdapter.set("user-sounds", updatedData);
-		} catch (error) {
-			console.error("Failed to remove saved sound:", error);
-			throw error;
-		}
+		await this.localService.removeSavedSound({ soundId });
 	}
 
 	async isSoundSaved({ soundId }: { soundId: number }): Promise<boolean> {
-		try {
-			const currentData = await this.loadSavedSounds();
-			return currentData.sounds.some((sound) => sound.id === soundId);
-		} catch (error) {
-			console.error("Failed to check if sound is saved:", error);
-			return false;
-		}
+		return await this.localService.isSoundSaved({ soundId });
 	}
 
 	async clearSavedSounds(): Promise<void> {
-		try {
-			await this.savedSoundsAdapter.remove("user-sounds");
-		} catch (error) {
-			console.error("Failed to clear saved sounds:", error);
-			throw error;
-		}
+		await this.localService.clearSavedSounds();
 	}
 
 	isOPFSSupported(): boolean {
-		return OPFSAdapter.isSupported();
+		if (this.backend === "server") return false;
+		return this.localService.isOPFSSupported();
 	}
 
 	isIndexedDBSupported(): boolean {
+		if (typeof window === "undefined") return true;
 		return "indexedDB" in window;
 	}
 
 	isFullySupported(): boolean {
-		return this.isIndexedDBSupported() && this.isOPFSSupported();
+		if (this.backend === "server") return true;
+		return this.localService.isFullySupported();
+	}
+
+	private async getProjectBackend(): Promise<StorageBackendService> {
+		if (this.backend === "server") {
+			await this.ensureLocalToServerMigration();
+			return this.serverService;
+		}
+		return this.localService;
+	}
+
+	private async ensureLocalToServerMigration(): Promise<void> {
+		if (this.hasRunMigrationInSession) return;
+		if (typeof window === "undefined") {
+			this.hasRunMigrationInSession = true;
+			return;
+		}
+		const marker = window.localStorage.getItem(LOCAL_TO_SERVER_MIGRATION_MARKER);
+		const reclaimMarker = window.localStorage.getItem(LOCAL_STORAGE_RECLAIM_MARKER);
+		if (marker === "done") {
+			if (reclaimMarker !== "done") {
+				await this.reclaimLegacyLocalStorage();
+				window.localStorage.setItem(LOCAL_STORAGE_RECLAIM_MARKER, "done");
+			}
+			this.hasRunMigrationInSession = true;
+			return;
+		}
+
+		// If server already has projects, avoid blocking startup on legacy storage scan.
+		try {
+			const serverProjects = await this.withTimeout({
+				promise: this.serverService.loadAllProjectsMetadata(),
+				timeoutMs: StorageService.LEGACY_READ_TIMEOUT_MS,
+				label: "server project list preflight",
+			});
+			if (serverProjects.length > 0) {
+				window.localStorage.setItem(LOCAL_TO_SERVER_MIGRATION_MARKER, "done");
+				window.localStorage.setItem(LOCAL_STORAGE_RECLAIM_MARKER, "done");
+				this.hasRunMigrationInSession = true;
+				return;
+			}
+		} catch {
+			// Continue with migration attempt below.
+		}
+		if (this.localToServerMigrationPromise) {
+			await this.localToServerMigrationPromise;
+			return;
+		}
+
+		this.localToServerMigrationPromise = this.withTimeout({
+			promise: this.runLocalToServerMigration(),
+			timeoutMs: StorageService.MIGRATION_GUARD_TIMEOUT_MS,
+			label: "local-to-server migration",
+		}).catch((error) => {
+			console.warn("Migration guard triggered; continuing with server storage.", error);
+			window.localStorage.setItem(LOCAL_TO_SERVER_MIGRATION_MARKER, "done");
+			this.hasRunMigrationInSession = true;
+		});
+		await this.localToServerMigrationPromise;
+	}
+
+	private async runLocalToServerMigration(): Promise<void> {
+		try {
+			let localProjects: TProjectMetadata[] = [];
+			try {
+				localProjects = await this.withTimeout({
+					promise: this.localService.loadAllProjectsMetadata(),
+					timeoutMs: StorageService.LEGACY_READ_TIMEOUT_MS,
+					label: "legacy local project metadata read",
+				});
+			} catch (error) {
+				console.warn(
+					"Local project migration skipped: unable to read legacy local storage.",
+					error,
+				);
+				window.localStorage.setItem(LOCAL_TO_SERVER_MIGRATION_MARKER, "done");
+				this.hasRunMigrationInSession = true;
+				return;
+			}
+			if (localProjects.length === 0) {
+				window.localStorage.setItem(LOCAL_TO_SERVER_MIGRATION_MARKER, "done");
+				this.hasRunMigrationInSession = true;
+				return;
+			}
+
+			const migratedProjectsPayload: Array<{
+				projectId: string;
+				projectName: string;
+				project: Record<string, unknown>;
+			}> = [];
+			let hasFailures = false;
+
+			for (const metadata of localProjects) {
+				try {
+					const loaded = await this.localService.loadProject({ id: metadata.id });
+					if (!loaded?.project) {
+						continue;
+					}
+					await this.serverService.saveProject({ project: loaded.project });
+					migratedProjectsPayload.push({
+						projectId: loaded.project.metadata.id,
+						projectName: loaded.project.metadata.name,
+						project: loaded.project as unknown as Record<string, unknown>,
+					});
+
+					const mediaIds = await this.listLegacyMediaIds({
+						projectId: metadata.id,
+					});
+					for (const mediaId of mediaIds) {
+						const mediaAsset = await this.localService.loadMediaAsset({
+							projectId: metadata.id,
+							id: mediaId,
+						});
+						if (!mediaAsset) continue;
+
+						await this.serverService.saveMediaAsset({
+							projectId: metadata.id,
+							mediaAsset,
+						});
+
+						// Migration-only object URLs should be revoked immediately.
+						if (mediaAsset.url) {
+							URL.revokeObjectURL(mediaAsset.url);
+						}
+						if (mediaAsset.previewUrl) {
+							URL.revokeObjectURL(mediaAsset.previewUrl);
+						}
+					}
+				} catch (error) {
+					hasFailures = true;
+					console.warn(
+						`Local-to-server migration failed for project ${metadata.id}.`,
+						error,
+					);
+				}
+			}
+
+			if (migratedProjectsPayload.length > 0) {
+				await fetch("/api/projects/migrate/local", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					cache: "no-store",
+					body: JSON.stringify({ projects: migratedProjectsPayload }),
+				}).catch(() => undefined);
+			}
+
+			if (!hasFailures) {
+				window.localStorage.setItem(LOCAL_TO_SERVER_MIGRATION_MARKER, "done");
+				await this.reclaimLegacyLocalStorage();
+				window.localStorage.setItem(LOCAL_STORAGE_RECLAIM_MARKER, "done");
+			}
+			this.hasRunMigrationInSession = true;
+		} finally {
+			this.localToServerMigrationPromise = null;
+		}
+	}
+
+	private async reclaimLegacyLocalStorage(): Promise<void> {
+		try {
+			const localProjects = await this.localService.loadAllProjectsMetadata();
+			for (const metadata of localProjects) {
+				await Promise.allSettled([
+					this.localService.deleteProjectMedia({ projectId: metadata.id }),
+					this.localService.deleteProject({ id: metadata.id }),
+				]);
+			}
+		} catch (error) {
+			console.warn("Failed to reclaim project/media via local service.", error);
+		}
+
+		// Best-effort cleanup of orphaned legacy IndexedDB databases.
+		try {
+			await deleteDatabase({ dbName: "video-editor-projects" });
+		} catch {}
+		try {
+			await deleteDatabase({ dbName: "video-editor-meta" });
+		} catch {}
+
+		try {
+			const dbFactory = indexedDB as IDBFactory & {
+				databases?: () => Promise<Array<{ name?: string; version?: number }>>;
+			};
+			if (typeof dbFactory.databases === "function") {
+				const databases = await dbFactory.databases();
+				for (const db of databases) {
+					const name = db.name ?? "";
+					if (name.startsWith("video-editor-media-")) {
+						await deleteDatabase({ dbName: name }).catch(() => undefined);
+					}
+				}
+			}
+		} catch {}
+
+		// Best-effort cleanup of orphaned OPFS project media directories.
+		try {
+			if ("storage" in navigator && "getDirectory" in navigator.storage) {
+				const root = await navigator.storage.getDirectory();
+				for await (const [entryName, handle] of root.entries()) {
+					if (
+						handle.kind === "directory" &&
+						entryName.startsWith("media-files-")
+					) {
+						await root.removeEntry(entryName, { recursive: true });
+					}
+				}
+			}
+		} catch {}
+	}
+
+	private async listLegacyMediaIds({
+		projectId,
+	}: {
+		projectId: string;
+	}): Promise<string[]> {
+		const metadataAdapter = new IndexedDBAdapter<unknown>(
+			`video-editor-media-${projectId}`,
+			"media-metadata",
+			1,
+		);
+		try {
+			return await this.withTimeout({
+				promise: metadataAdapter.list(),
+				timeoutMs: StorageService.LEGACY_READ_TIMEOUT_MS,
+				label: `legacy media id read (${projectId})`,
+			});
+		} catch {
+			return [];
+		}
+	}
+
+	private async withTimeout<T>({
+		promise,
+		timeoutMs,
+		label,
+	}: {
+		promise: Promise<T>;
+		timeoutMs: number;
+		label: string;
+	}): Promise<T> {
+		return await new Promise<T>((resolve, reject) => {
+			const timeoutHandle = window.setTimeout(() => {
+				reject(
+					new Error(
+						`Timed out after ${timeoutMs}ms while running ${label}.`,
+					),
+				);
+			}, timeoutMs);
+			promise
+				.then((value) => {
+					window.clearTimeout(timeoutHandle);
+					resolve(value);
+				})
+				.catch((error) => {
+					window.clearTimeout(timeoutHandle);
+					reject(error);
+				});
+		});
 	}
 }
 

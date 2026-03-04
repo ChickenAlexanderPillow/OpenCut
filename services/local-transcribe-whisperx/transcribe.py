@@ -16,6 +16,7 @@ class TranscribeConfig:
 	device: str = "cuda"
 	compute_type: str = "float16"
 	batch_size: int = 16
+	vad_filter: bool = False
 
 
 class LocalWhisperXEngine:
@@ -62,6 +63,7 @@ class LocalWhisperXEngine:
 		model: str,
 		device: str,
 		compute_type: str,
+		vad_filter: bool,
 	) -> dict[str, Any]:
 		asr_model = self._get_asr_model(
 			model=model,
@@ -72,7 +74,7 @@ class LocalWhisperXEngine:
 			audio,
 			beam_size=5,
 			word_timestamps=True,
-			vad_filter=True,
+			vad_filter=vad_filter,
 		)
 		segments: list[dict[str, Any]] = []
 		for segment in segments_iter:
@@ -108,6 +110,7 @@ class LocalWhisperXEngine:
 					model=config.model,
 					device=used_device,
 					compute_type=config.compute_type,
+					vad_filter=config.vad_filter,
 				)
 				used_model = config.model
 				used_compute = config.compute_type
@@ -122,6 +125,7 @@ class LocalWhisperXEngine:
 					model=fallback_model,
 					device=used_device,
 					compute_type=fallback_compute,
+					vad_filter=config.vad_filter,
 				)
 				used_model = fallback_model
 				used_compute = fallback_compute
@@ -135,6 +139,7 @@ class LocalWhisperXEngine:
 					model=fallback_model,
 					device=used_device,
 					compute_type=fallback_compute,
+					vad_filter=config.vad_filter,
 				)
 				used_model = fallback_model
 				used_compute = fallback_compute

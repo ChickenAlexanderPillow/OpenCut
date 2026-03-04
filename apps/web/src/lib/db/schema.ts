@@ -1,8 +1,12 @@
 import {
+	bigint,
 	boolean,
+	index,
 	integer,
 	jsonb,
 	pgTable,
+	primaryKey,
+	real,
 	text,
 	timestamp,
 	uniqueIndex,
@@ -117,3 +121,64 @@ export const externalProjectTranscripts = pgTable("external_project_transcripts"
 		.$defaultFn(() => /* @__PURE__ */ new Date())
 		.notNull(),
 });
+
+export const editorProjects = pgTable("editor_projects", {
+	id: text("id").primaryKey(),
+	name: text("name").notNull(),
+	documentJson: jsonb("document_json").$type<Record<string, unknown>>().notNull(),
+	documentVersion: integer("document_version").notNull().default(1),
+	createdAt: timestamp("created_at")
+		.$defaultFn(() => /* @__PURE__ */ new Date())
+		.notNull(),
+	updatedAt: timestamp("updated_at")
+		.$defaultFn(() => /* @__PURE__ */ new Date())
+		.notNull(),
+});
+
+export const editorMediaAssets = pgTable(
+	"editor_media_assets",
+	{
+		id: text("id").notNull(),
+		projectId: text("project_id")
+			.notNull()
+			.references(() => editorProjects.id, { onDelete: "cascade" }),
+		name: text("name"),
+		type: text("type"),
+		mimeType: text("mime_type"),
+		sizeBytes: bigint("size_bytes", { mode: "number" }),
+		lastModified: bigint("last_modified", { mode: "number" }),
+		width: integer("width"),
+		height: integer("height"),
+		durationSeconds: real("duration_seconds"),
+		fps: real("fps"),
+		thumbnailUrl: text("thumbnail_url"),
+		previewProxyWidth: integer("preview_proxy_width"),
+		previewProxyHeight: integer("preview_proxy_height"),
+		previewProxyFps: integer("preview_proxy_fps"),
+		previewProxyQualityRatio: real("preview_proxy_quality_ratio"),
+		objectKey: text("object_key").notNull(),
+		previewObjectKey: text("preview_object_key"),
+		sha256: text("sha256"),
+		createdAt: timestamp("created_at")
+			.$defaultFn(() => /* @__PURE__ */ new Date())
+			.notNull(),
+		updatedAt: timestamp("updated_at")
+			.$defaultFn(() => /* @__PURE__ */ new Date())
+			.notNull(),
+	},
+	(table) => [
+		primaryKey({
+			columns: [table.projectId, table.id],
+			name: "editor_media_assets_pk",
+		}),
+		index("editor_media_assets_project_idx").on(table.projectId),
+		uniqueIndex("editor_media_assets_project_sha256_uidx").on(
+			table.projectId,
+			table.sha256,
+		),
+		uniqueIndex("editor_media_assets_project_object_key_uidx").on(
+			table.projectId,
+			table.objectKey,
+		),
+	],
+);

@@ -81,8 +81,11 @@ export default function ProjectsPage() {
 	const editor = useEditor();
 
 	useEffect(() => {
-		if (!editor.project.getIsInitialized()) {
-			editor.project.loadAllProjects();
+		if (
+			!editor.project.getIsInitialized() ||
+			editor.project.getSavedProjects().length === 0
+		) {
+			void editor.project.loadAllProjects();
 		}
 	}, [editor.project]);
 
@@ -499,10 +502,17 @@ function NewProjectButton() {
 	const router = useRouter();
 
 	const handleCreateProject = async () => {
-		const projectId = await editor.project.createNewProject({
-			name: "New project",
-		});
-		router.push(`/editor/${projectId}`);
+		try {
+			const projectId = await editor.project.createNewProject({
+				name: "New project",
+			});
+			router.push(`/editor/${projectId}`);
+		} catch (error) {
+			toast.error("Failed to create project", {
+				description:
+					error instanceof Error ? error.message : "Please try again.",
+			});
+		}
 	};
 
 	return (

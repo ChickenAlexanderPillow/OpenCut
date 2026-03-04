@@ -56,6 +56,7 @@ class HealthResponse(BaseModel):
 	device: str
 	default_model: str
 	default_compute_type: str
+	default_vad_filter: bool
 
 
 def _require_auth(authorization: Optional[str]) -> None:
@@ -69,6 +70,17 @@ def _require_auth(authorization: Optional[str]) -> None:
 		raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _parse_bool(value: Optional[str], default: bool) -> bool:
+	if value is None:
+		return default
+	normalized = value.strip().lower()
+	if normalized in {"1", "true", "yes", "on"}:
+		return True
+	if normalized in {"0", "false", "no", "off"}:
+		return False
+	return default
+
+
 @app.get("/healthz", response_model=HealthResponse)
 def healthz() -> HealthResponse:
 	return HealthResponse(
@@ -77,6 +89,10 @@ def healthz() -> HealthResponse:
 		device=os.getenv("LOCAL_TRANSCRIBE_DEVICE", "cuda"),
 		default_model=os.getenv("LOCAL_TRANSCRIBE_MODEL", "large-v3"),
 		default_compute_type=os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "float16"),
+		default_vad_filter=_parse_bool(
+			os.getenv("LOCAL_TRANSCRIBE_VAD_FILTER"),
+			False,
+		),
 	)
 
 
@@ -86,6 +102,7 @@ async def transcribe_word_timestamps(
 	model: Optional[str] = Form(default=None),
 	device: Optional[str] = Form(default=None),
 	compute_type: Optional[str] = Form(default=None),
+	vad_filter: Optional[str] = Form(default=None),
 	authorization: Optional[str] = Header(default=None),
 ) -> JSONResponse:
 	_require_auth(authorization)
@@ -103,6 +120,10 @@ async def transcribe_word_timestamps(
 		compute_type=(
 			compute_type or os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "float16")
 		).strip(),
+		vad_filter=_parse_bool(
+			vad_filter,
+			_parse_bool(os.getenv("LOCAL_TRANSCRIBE_VAD_FILTER"), False),
+		),
 	)
 
 	try:

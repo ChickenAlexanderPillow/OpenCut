@@ -6,11 +6,17 @@ import { useEditor } from "@/hooks/use-editor";
 import { useElementSelection } from "@/hooks/timeline/element/use-element-selection";
 import { invokeAction } from "@/lib/actions";
 import {
+	applyCutRangesToWords,
 	buildTranscriptCutsFromWords,
 	mapCompressedTimeToSourceTime,
 	normalizeTranscriptWords,
 } from "@/lib/transcript-editor/core";
-import type { AudioElement, TextElement, TimelineElement, VideoElement } from "@/types/timeline";
+import type {
+	AudioElement,
+	TextElement,
+	TimelineElement,
+	VideoElement,
+} from "@/types/timeline";
 import type { TranscriptEditWord } from "@/types/transcription";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -30,7 +36,9 @@ function formatTime(time: number): string {
 	return `${mins}:${secs}`;
 }
 
-function isMediaElement(element: TimelineElement): element is VideoElement | AudioElement {
+function isMediaElement(
+	element: TimelineElement,
+): element is VideoElement | AudioElement {
 	return element.type === "video" || element.type === "audio";
 }
 
@@ -72,7 +80,9 @@ function getActiveMediaRef({
 }): MediaRef | null {
 	for (const selected of selectedElements) {
 		const track = tracks.find((item) => item.id === selected.trackId);
-		const element = track?.elements.find((item) => item.id === selected.elementId);
+		const element = track?.elements.find(
+			(item) => item.id === selected.elementId,
+		);
 		if (element && isMediaElement(element)) {
 			return { trackId: selected.trackId, element };
 		}
@@ -121,7 +131,8 @@ export function TranscriptView() {
 	const words = useMemo(() => {
 		if (!activeMedia) return [];
 		const fromElement = activeMedia.element.transcriptEdit?.words ?? [];
-		if (fromElement.length > 0) return normalizeTranscriptWords({ words: fromElement });
+		if (fromElement.length > 0)
+			return normalizeTranscriptWords({ words: fromElement });
 		return getFallbackWordsFromCaptions({
 			tracks,
 			mediaElementId: activeMedia.element.id,
@@ -130,22 +141,37 @@ export function TranscriptView() {
 
 	const cuts = useMemo(
 		() =>
-			activeMedia?.element.transcriptEdit?.cuts ?? buildTranscriptCutsFromWords({ words }),
+			activeMedia?.element.transcriptEdit?.cuts ??
+			buildTranscriptCutsFromWords({ words }),
 		[activeMedia, words],
+	);
+	const wordsWithCutState = useMemo(
+		() =>
+			applyCutRangesToWords({
+				words,
+				cuts,
+			}),
+		[words, cuts],
 	);
 
 	const currentWordId = useMemo(() => {
-		if (!activeMedia || words.length === 0) return null;
-		const localCompressed = Math.max(0, currentTime - activeMedia.element.startTime);
+		if (!activeMedia || wordsWithCutState.length === 0) return null;
+		const localCompressed = Math.max(
+			0,
+			currentTime - activeMedia.element.startTime,
+		);
 		const sourceTime = mapCompressedTimeToSourceTime({
 			compressedTime: localCompressed,
 			cuts,
 		});
-		const current = words.find(
-			(word) => !word.removed && sourceTime >= word.startTime && sourceTime < word.endTime,
+		const current = wordsWithCutState.find(
+			(word) =>
+				!word.removed &&
+				sourceTime >= word.startTime &&
+				sourceTime < word.endTime,
 		);
 		return current?.id ?? null;
-	}, [activeMedia, words, cuts, currentTime]);
+	}, [activeMedia, wordsWithCutState, cuts, currentTime]);
 
 	const segmentsUi = activeMedia?.element.transcriptEdit?.segmentsUi;
 	const groups =
@@ -153,10 +179,13 @@ export function TranscriptView() {
 			? segmentsUi
 					.map((segment) => ({
 						id: segment.id,
-						words: words.slice(segment.wordStartIndex, segment.wordEndIndex + 1),
+						words: wordsWithCutState.slice(
+							segment.wordStartIndex,
+							segment.wordEndIndex + 1,
+						),
 					}))
 					.filter((group) => group.words.length > 0)
-			: [{ id: "default", words }];
+			: [{ id: "default", words: wordsWithCutState }];
 
 	const captionLinks = useMemo(
 		() =>
@@ -179,7 +208,7 @@ export function TranscriptView() {
 		);
 	}
 
-	if (words.length === 0) {
+	if (wordsWithCutState.length === 0) {
 		return (
 			<PanelView title="Transcript" contentClassName="space-y-2">
 				<div className="text-sm text-muted-foreground p-3 border rounded-md">
@@ -223,7 +252,9 @@ export function TranscriptView() {
 			}
 		>
 			<div className="rounded-md border p-2 text-xs text-muted-foreground flex items-center gap-2">
-				<Badge variant="secondary">{activeMedia.element.type.toUpperCase()}</Badge>
+				<Badge variant="secondary">
+					{activeMedia.element.type.toUpperCase()}
+				</Badge>
 				<span>{activeMedia.element.name}</span>
 				<span className="ml-auto">Captions linked: {captionLinks}</span>
 			</div>
@@ -243,7 +274,8 @@ export function TranscriptView() {
 									size="icon"
 									className="size-6"
 									onClick={() => {
-										const splitWord = group.words[Math.floor(group.words.length / 2)];
+										const splitWord =
+											group.words[Math.floor(group.words.length / 2)];
 										if (!splitWord) return;
 										invokeAction("transcript-split-segment-ui", {
 											trackId: activeMedia.trackId,
@@ -287,7 +319,8 @@ export function TranscriptView() {
 
 			<div className="text-[11px] text-muted-foreground px-1 flex items-center gap-1">
 				<AlignJustify className="size-3.5" />
-				Transcript edits update captions, playback, and export non-destructively.
+				Transcript edits update captions, playback, and export
+				non-destructively.
 			</div>
 		</PanelView>
 	);

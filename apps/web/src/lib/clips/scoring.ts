@@ -93,6 +93,7 @@ export function buildScoringPrompt({
 		"Hard penalties (apply aggressively):",
 		"- Mid-thought starts/ends or abrupt cutoff ending",
 		"- Heavy dependence on missing context",
+		"- Openings that start with unresolved references (e.g. it/this/that/they without clear antecedent)",
 		"- Redundant/repetitive phrasing with weak payoff",
 		"- Low information density or long filler stretches",
 		"Scoring anchors:",
@@ -170,7 +171,8 @@ function overlapRatio({
 		0,
 		Math.min(a.endTime, b.endTime) - Math.max(a.startTime, b.startTime),
 	);
-	const union = Math.max(a.endTime, b.endTime) - Math.min(a.startTime, b.startTime);
+	const union =
+		Math.max(a.endTime, b.endTime) - Math.min(a.startTime, b.startTime);
 	if (union <= 0) return 0;
 	return intersection / union;
 }

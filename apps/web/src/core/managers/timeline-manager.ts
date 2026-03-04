@@ -474,7 +474,12 @@ export class TimelineManager {
 	}
 
 	getTracks(): TimelineTrack[] {
-		return this.editor.scenes.getActiveScene()?.tracks ?? [];
+		try {
+			return this.editor.scenes.getActiveScene().tracks ?? [];
+		} catch {
+			// During initial boot (including SSR/prerender), no active scene may exist yet.
+			return [];
+		}
 	}
 
 	subscribe(listener: () => void): () => void {

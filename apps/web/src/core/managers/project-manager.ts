@@ -60,6 +60,16 @@ export class ProjectManager {
 	}
 
 	private async ensureStorageMigrations(): Promise<void> {
+		if (storageService.getBackend() === "server") {
+			this.migrationState = {
+				isMigrating: false,
+				fromVersion: null,
+				toVersion: null,
+				projectName: null,
+			};
+			return;
+		}
+
 		if (this.storageMigrationPromise) {
 			await this.storageMigrationPromise;
 			return;
@@ -206,6 +216,8 @@ export class ProjectManager {
 	}
 
 	async loadAllProjects(): Promise<void> {
+		const wasInitialized = this.isInitialized;
+		let didSucceed = false;
 		if (!this.isInitialized) {
 			this.isLoading = true;
 			this.notify();
@@ -215,12 +227,13 @@ export class ProjectManager {
 		try {
 			const metadata = await storageService.loadAllProjectsMetadata();
 			this.savedProjects = metadata;
+			didSucceed = true;
 			this.notify();
 		} catch (error) {
 			console.error("Failed to load projects:", error);
 		} finally {
 			this.isLoading = false;
-			this.isInitialized = true;
+			this.isInitialized = wasInitialized || didSucceed;
 			this.notify();
 		}
 	}

@@ -3,10 +3,28 @@ import type { ClipCandidateDraft } from "@/types/clip-generation";
 import type { TranscriptionSegment } from "@/types/transcription";
 
 const DEFAULT_MIN_CLIP_SECONDS = 20;
-const DEFAULT_MAX_CLIP_SECONDS = 60;
-const DEFAULT_TARGET_CLIP_SECONDS = 35;
+const DEFAULT_MAX_CLIP_SECONDS = 90;
+const DEFAULT_TARGET_CLIP_SECONDS = 45;
 const DEFAULT_MAX_OUTPUT = 12;
 const CLUSTER_GAP_SECONDS = 6;
+const CONTEXT_DEPENDENT_OPENING_WORDS = new Set([
+	"it",
+	"this",
+	"that",
+	"these",
+	"those",
+	"they",
+	"them",
+	"he",
+	"she",
+	"there",
+	"here",
+	"and",
+	"but",
+	"so",
+	"then",
+	"also",
+]);
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
@@ -27,13 +45,22 @@ function overlapRatio({
 	bStart: number;
 	bEnd: number;
 }): number {
-	const intersection = Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
+	const intersection = Math.max(
+		0,
+		Math.min(aEnd, bEnd) - Math.max(aStart, bStart),
+	);
 	const union = Math.max(aEnd, bEnd) - Math.min(aStart, bStart);
 	if (union <= 0) return 0;
 	return intersection / union;
 }
 
-function truncateText({ text, maxLength }: { text: string; maxLength: number }): string {
+function truncateText({
+	text,
+	maxLength,
+}: {
+	text: string;
+	maxLength: number;
+}): string {
 	if (text.length <= maxLength) return text;
 	return `${text.slice(0, maxLength - 3).trim()}...`;
 }
@@ -47,6 +74,17 @@ function startsLikelyContinuation(text: string): boolean {
 	if (!trimmed) return false;
 	const firstChar = trimmed[0] ?? "";
 	return /[a-z]/.test(firstChar);
+}
+
+function getOpeningWord(text: string): string | null {
+	const match = text.trim().match(/^[("'[\]]*([A-Za-z]+)/);
+	return match?.[1]?.toLowerCase() ?? null;
+}
+
+function startsWithContextDependentReference(text: string): boolean {
+	const openingWord = getOpeningWord(text);
+	if (!openingWord) return false;
+	return CONTEXT_DEPENDENT_OPENING_WORDS.has(openingWord);
 }
 
 function isQuestionSegment(text: string): boolean {
@@ -94,10 +132,7 @@ function buildSnippet({
 			const overlapDuration = Math.max(0, overlapEnd - overlapStart);
 			const segmentDuration = Math.max(0.001, segment.end - segment.start);
 			if (overlapDuration <= 0) return "";
-			if (
-				overlapDuration >= segmentDuration * 0.95 ||
-				segmentDuration <= 0.2
-			) {
+			if (overlapDuration >= segmentDuration * 0.95 || segmentDuration <= 0.2) {
 				return fullText;
 			}
 
@@ -126,7 +161,11 @@ function buildClusters({
 	segments: TranscriptionSegment[];
 }): Array<{ start: number; end: number; segments: TranscriptionSegment[] }> {
 	if (segments.length === 0) return [];
-	const clusters: Array<{ start: number; end: number; segments: TranscriptionSegment[] }> = [];
+	const clusters: Array<{
+		start: number;
+		end: number;
+		segments: TranscriptionSegment[];
+	}> = [];
 	let current = {
 		start: segments[0].start,
 		end: segments[0].end,
@@ -222,7 +261,11 @@ function snapWindowToSentenceBoundaries({
 	let adjustedEnd = endTime;
 
 	const firstSegment = segments[overlap.first];
-	if (firstSegment && startsLikelyContinuation(firstSegment.text)) {
+	const shouldBacktrackForContextStart =
+		firstSegment &&
+		(startsLikelyContinuation(firstSegment.text) ||
+			startsWithContextDependentReference(firstSegment.text));
+	if (firstSegment && shouldBacktrackForContextStart) {
 		for (let i = overlap.first - 1; i >= 0; i--) {
 			const current = segments[i];
 			const next = segments[i + 1];
@@ -263,15 +306,17 @@ function snapWindowToSentenceBoundaries({
 			}
 		}
 		if (questionIndices.length >= 2) {
-			const secondQuestionIndex = questionIndices[1]!;
-			const secondQuestion = segments[secondQuestionIndex];
-			const prior = segments[secondQuestionIndex - 1];
-			const cutoffAt = prior
-				? Math.max(prior.end, secondQuestion.start)
-				: secondQuestion.start;
-			if (Number.isFinite(cutoffAt) && cutoffAt > adjustedStart + 0.5) {
-				adjustedEnd = Math.min(adjustedEnd, cutoffAt);
-				cutForFollowUpQuestion = true;
+			const secondQuestionIndex = questionIndices.at(1);
+			if (secondQuestionIndex != null) {
+				const secondQuestion = segments[secondQuestionIndex];
+				const prior = segments[secondQuestionIndex - 1];
+				const cutoffAt = prior
+					? Math.max(prior.end, secondQuestion.start)
+					: secondQuestion.start;
+				if (Number.isFinite(cutoffAt) && cutoffAt > adjustedStart + 0.5) {
+					adjustedEnd = Math.min(adjustedEnd, cutoffAt);
+					cutForFollowUpQuestion = true;
+				}
 			}
 		}
 
@@ -292,7 +337,9 @@ function snapWindowToSentenceBoundaries({
 				});
 				if (hasAnswer) break;
 				const prior = segments[i - 1];
-				const cutoffAt = prior ? Math.max(prior.end, segment.start) : segment.start;
+				const cutoffAt = prior
+					? Math.max(prior.end, segment.start)
+					: segment.start;
 				if (Number.isFinite(cutoffAt) && cutoffAt > adjustedStart + 0.5) {
 					adjustedEnd = Math.min(adjustedEnd, cutoffAt);
 					cutForFollowUpQuestion = true;
@@ -306,7 +353,10 @@ function snapWindowToSentenceBoundaries({
 		if (cutForFollowUpQuestion) {
 			adjustedStart = Math.max(0, adjustedEnd - minClipSeconds);
 		} else {
-			const minEndTarget = Math.min(mediaDuration, adjustedStart + minClipSeconds);
+			const minEndTarget = Math.min(
+				mediaDuration,
+				adjustedStart + minClipSeconds,
+			);
 			const overlapForMin = getOverlapBounds({
 				segments,
 				startTime: adjustedStart,
@@ -332,6 +382,32 @@ function snapWindowToSentenceBoundaries({
 		startTime: clamp(adjustedStart, 0, mediaDuration),
 		endTime: clamp(adjustedEnd, 0, mediaDuration),
 	};
+}
+
+function hasUnresolvedContextAtStart({
+	segments,
+	startTime,
+	endTime,
+}: {
+	segments: TranscriptionSegment[];
+	startTime: number;
+	endTime: number;
+}): boolean {
+	const overlap = getOverlapBounds({ segments, startTime, endTime });
+	if (!overlap) return false;
+
+	const firstSegment = segments[overlap.first];
+	if (!firstSegment) return false;
+	const openingText =
+		buildSnippet({
+			segments,
+			startTime,
+			endTime: Math.min(endTime, startTime + 4),
+		}).trim() || firstSegment.text.trim();
+	if (!startsWithContextDependentReference(openingText)) return false;
+
+	const isNearMediaStart = overlap.first === 0 && startTime <= 1.5;
+	return !isNearMediaStart;
 }
 
 function buildClipDraft({
@@ -362,9 +438,19 @@ function buildClipDraft({
 
 	const overlappingSegments = segments.filter(
 		(segment) =>
-			segment.end > snappedWindow.startTime && segment.start < snappedWindow.endTime,
+			segment.end > snappedWindow.startTime &&
+			segment.start < snappedWindow.endTime,
 	);
 	if (overlappingSegments.length === 0) return null;
+	if (
+		hasUnresolvedContextAtStart({
+			segments,
+			startTime: snappedWindow.startTime,
+			endTime: snappedWindow.endTime,
+		})
+	) {
+		return null;
+	}
 
 	const spokenDuration = overlappingSegments.reduce((sum, segment) => {
 		const clippedStart = Math.max(snappedWindow.startTime, segment.start);
@@ -372,9 +458,9 @@ function buildClipDraft({
 		return sum + Math.max(0, clippedEnd - clippedStart);
 	}, 0);
 	const density = spokenDuration / duration;
-	const wordCount = overlappingSegments
-		.flatMap((segment) => segment.text.match(/\S+/g) ?? [])
-		.length;
+	const wordCount = overlappingSegments.flatMap(
+		(segment) => segment.text.match(/\S+/g) ?? [],
+	).length;
 	const localScore = density * 80 + Math.min(20, wordCount / 2);
 
 	return {
@@ -462,8 +548,16 @@ export function buildClipCandidatesFromTranscript({
 		if (clusterDuration > maxClipSeconds) {
 			const step = Math.max(10, Math.floor(targetClipSeconds / 3));
 			for (let offset = cluster.start; offset < cluster.end; offset += step) {
-				const windowStart = clamp(offset, 0, Math.max(0, mediaDuration - minClipSeconds));
-				const windowEnd = clamp(windowStart + targetClipSeconds, 0, mediaDuration);
+				const windowStart = clamp(
+					offset,
+					0,
+					Math.max(0, mediaDuration - minClipSeconds),
+				);
+				const windowEnd = clamp(
+					windowStart + targetClipSeconds,
+					0,
+					mediaDuration,
+				);
 				const splitDraft = buildClipDraft({
 					startTime: windowStart,
 					endTime: windowEnd,
@@ -480,7 +574,9 @@ export function buildClipCandidatesFromTranscript({
 	}
 
 	const deduped: ClipCandidateDraft[] = [];
-	for (const candidate of candidates.sort((a, b) => b.localScore - a.localScore)) {
+	for (const candidate of candidates.sort(
+		(a, b) => b.localScore - a.localScore,
+	)) {
 		const duplicate = deduped.some(
 			(existing) =>
 				overlapRatio({

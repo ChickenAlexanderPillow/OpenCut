@@ -61,6 +61,7 @@ import { DEFAULT_BLEND_MODE, DEFAULT_OPACITY, DEFAULT_TRANSFORM } from "@/consta
 import { getVideoInfo } from "@/lib/media/mediabunny";
 import { ALL_FORMATS, AudioBufferSink, BlobSource, Input } from "mediabunny";
 import {
+	applyCutRangesToWords,
 	buildTranscriptCutsFromWords,
 	computeKeepDuration,
 	isFillerWordOrPhrase,
@@ -80,7 +81,7 @@ const CLIP_TRANSCRIPTION_TIMEOUT_MS = 60000;
 const CLIP_TRANSCRIPTION_MIN_DURATION_SECONDS = 0.35;
 const CLIP_TRANSCRIPTION_MAX_DURATION_SECONDS = 240;
 const CLIP_TRANSCRIPTION_MAX_FILE_BYTES = 20 * 1024 * 1024;
-const CLIP_WORD_TRANSCRIPTION_CACHE_VERSION = 6;
+const CLIP_WORD_TRANSCRIPTION_CACHE_VERSION = 7;
 const CAPTION_TAIL_PAD_SECONDS = 1 / 30;
 const clipTranscriptionInFlight = new Map<
 	string,
@@ -473,9 +474,13 @@ function applyTranscriptEditMutation({
 		return { changed: false, error: "No word-level transcript available for selected element" };
 	}
 
-	let nextWords = transcriptEdit.words;
+	const baseWords = applyCutRangesToWords({
+		words: transcriptEdit.words,
+		cuts: transcriptEdit.cuts,
+	});
+	let nextWords = baseWords;
 	if (mutateWords) {
-		nextWords = normalizeTranscriptWords({ words: mutateWords(transcriptEdit.words) });
+		nextWords = normalizeTranscriptWords({ words: mutateWords(baseWords) });
 	}
 	const activeWords = nextWords.filter((word) => !word.removed);
 	if (activeWords.length === 0) {

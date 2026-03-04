@@ -703,7 +703,8 @@ export function Clips() {
 						<div className="space-y-1">
 							<div className="flex items-center justify-between gap-2">
 								<div className="text-sm font-semibold">
-									{sourceMedia?.name ?? group.sourceMediaId}
+									{sourceMedia?.name ??
+										`Missing media (${group.sourceMediaId.slice(0, 8)}...)`}
 								</div>
 								<Button
 									type="button"
