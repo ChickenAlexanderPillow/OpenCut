@@ -38,18 +38,19 @@ describe("clip scoring", () => {
 		});
 
 		expect(merged).toHaveLength(1);
-		expect(merged[0]?.scoreOverall).toBe(89);
+		expect(merged[0]?.scoreOverall).toBe(85);
 		expect(merged[0]?.scoreBreakdown.hook).toBe(95);
 		expect(merged[0]?.title).toBe("Strong opening");
 	});
 
-	test("rejects malformed responses", () => {
-		expect(() =>
-			mergeScoredCandidates({
-				drafts: [draft],
-				scoredText: '{"bad":"shape"}',
-			}),
-		).toThrow();
+	test("falls back to deterministic merge on malformed responses", () => {
+		const merged = mergeScoredCandidates({
+			drafts: [draft],
+			scoredText: '{"bad":"shape"}',
+		});
+		expect(merged).toHaveLength(1);
+		expect(merged[0]?.id).toBe("cand-1");
+		expect(merged[0]?.rationale).toContain("deterministic local ranking fallback");
 	});
 
 	test("applies quality gate threshold", () => {
@@ -158,5 +159,52 @@ describe("clip scoring", () => {
 		});
 
 		expect(results.map((item) => item.id)).toEqual(["a", "c"]);
+	});
+
+	test("filters cutoff boundary failures by default", () => {
+		const results = selectTopCandidatesWithQualityGate({
+			candidates: [
+				{
+					id: "a",
+					startTime: 0,
+					endTime: 40,
+					duration: 40,
+					title: "A",
+					rationale: "A",
+					transcriptSnippet: "A",
+					scoreOverall: 95,
+					scoreBreakdown: {
+						hook: 95,
+						emotion: 95,
+						shareability: 95,
+						clarity: 95,
+						momentum: 95,
+					},
+					failureFlags: ["cutoff_end"],
+				},
+				{
+					id: "b",
+					startTime: 45,
+					endTime: 82,
+					duration: 37,
+					title: "B",
+					rationale: "B",
+					transcriptSnippet: "B",
+					scoreOverall: 90,
+					scoreBreakdown: {
+						hook: 90,
+						emotion: 90,
+						shareability: 90,
+						clarity: 90,
+						momentum: 90,
+					},
+					failureFlags: [],
+				},
+			],
+			minScore: 60,
+			maxCount: 5,
+		});
+
+		expect(results.map((item) => item.id)).toEqual(["b"]);
 	});
 });

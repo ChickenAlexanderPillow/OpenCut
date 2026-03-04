@@ -38,6 +38,7 @@ import { useTranscriptionStatusStore } from "@/stores/transcription-status-store
 import { useProjectProcessStore } from "@/stores/project-process-store";
 import { useClipGenerationStore } from "@/stores/clip-generation-store";
 import { buildClipCandidatesFromTranscript } from "@/lib/clips/candidate-builder";
+import { buildClipCandidatesFromTranscriptV2 } from "@/lib/clips/v2/candidate-builder";
 import { selectTopCandidatesWithQualityGate } from "@/lib/clips/scoring";
 import {
 	buildClipRatingFeedbackModel,
@@ -69,7 +70,7 @@ import {
 } from "@/lib/transcript-editor/core";
 import { syncCaptionsFromTranscriptEdits } from "@/lib/transcript-editor/sync-captions";
 
-const MIN_VIRAL_CLIP_SCORE = 60;
+const MIN_VIRAL_CLIP_SCORE = 56;
 const MIN_VIRAL_CLIP_COUNT = 3;
 const MAX_VIRAL_CLIP_COUNT = 5;
 const VIRAL_CLIP_MIN_SECONDS = 18;
@@ -78,7 +79,7 @@ const VIRAL_CLIP_MAX_SECONDS = 65;
 const CLIP_SCORING_TRANSCRIPT_MAX_CHARS = 20000;
 const CLIP_SCORING_TIMEOUT_MS = 120000;
 const CLIP_SCORING_BATCH_SIZE = 4;
-const CLIP_SCORING_MAX_CANDIDATES = 8;
+const CLIP_SCORING_MAX_CANDIDATES = 10;
 const CLIP_IMPORT_TRANSCRIPTION_MODEL = "large-v3";
 const CLIP_TRANSCRIPTION_TIMEOUT_MS = 60000;
 const CLIP_TRANSCRIPTION_MIN_DURATION_SECONDS = 0.35;
@@ -309,13 +310,41 @@ function takeTopLocalCandidatesForScoring({
 	}>;
 	maxCount?: number;
 }) {
-	return candidateDrafts
+	const ranked = candidateDrafts
 		.slice()
 		.sort((a, b) => {
 			if (b.localScore !== a.localScore) return b.localScore - a.localScore;
 			return a.startTime - b.startTime;
-		})
-		.slice(0, maxCount);
+		});
+
+	const selected: typeof candidateDrafts = [];
+	for (const candidate of ranked) {
+		const overlaps = selected.some((existing) => {
+			const intersection = Math.max(
+				0,
+				Math.min(candidate.endTime, existing.endTime) -
+					Math.max(candidate.startTime, existing.startTime),
+			);
+			const union =
+				Math.max(candidate.endTime, existing.endTime) -
+				Math.min(candidate.startTime, existing.startTime);
+			return union > 0 && intersection / union > 0.82;
+		});
+		if (overlaps) continue;
+		selected.push(candidate);
+		if (selected.length >= maxCount) break;
+	}
+
+	if (selected.length >= maxCount) {
+		return selected;
+	}
+
+	for (const candidate of ranked) {
+		if (selected.some((existing) => existing.id === candidate.id)) continue;
+		selected.push(candidate);
+		if (selected.length >= maxCount) break;
+	}
+	return selected;
 }
 
 async function scoreCandidatesProgressively({
@@ -2149,7 +2178,7 @@ export function useEditorActions() {
 						}
 					}
 
-					const candidateDrafts = buildClipCandidatesFromTranscript({
+					const candidateDraftsV2 = buildClipCandidatesFromTranscriptV2({
 						segments: transcriptResult.transcript.segments,
 						mediaDuration:
 							mediaAsset.duration ??
@@ -2161,6 +2190,21 @@ export function useEditorActions() {
 						targetClipSeconds: VIRAL_CLIP_TARGET_SECONDS,
 						maxClipSeconds: VIRAL_CLIP_MAX_SECONDS,
 					});
+					const candidateDrafts =
+						candidateDraftsV2.length > 0
+							? candidateDraftsV2
+							: buildClipCandidatesFromTranscript({
+									segments: transcriptResult.transcript.segments,
+									mediaDuration:
+										mediaAsset.duration ??
+										transcriptResult.transcript.segments[
+											transcriptResult.transcript.segments.length - 1
+										]?.end ??
+										0,
+									minClipSeconds: VIRAL_CLIP_MIN_SECONDS,
+									targetClipSeconds: VIRAL_CLIP_TARGET_SECONDS,
+									maxClipSeconds: VIRAL_CLIP_MAX_SECONDS,
+							  });
 
 					if (candidateDrafts.length === 0) {
 						setError({ error: "No candidate windows found for this transcript" });
@@ -2227,6 +2271,7 @@ export function useEditorActions() {
 								minScore: MIN_VIRAL_CLIP_SCORE,
 								maxOverlapRatio: 0,
 								maxCount: MAX_VIRAL_CLIP_COUNT,
+								excludeFailureFlags: ["cutoff_start"],
 							});
 							if (batchSelected.length === 0 && adjustedLatestBatch.length > 0) {
 								const topScore = Math.max(
@@ -2248,6 +2293,7 @@ export function useEditorActions() {
 									minScore: relaxedMinScore,
 									maxOverlapRatio: 0,
 									maxCount: MAX_VIRAL_CLIP_COUNT,
+									excludeFailureFlags: ["cutoff_start"],
 								});
 							}
 							for (const candidate of batchSelected) {
@@ -2285,6 +2331,7 @@ export function useEditorActions() {
 						minScore: MIN_VIRAL_CLIP_SCORE,
 						maxOverlapRatio: 0,
 						maxCount: MAX_VIRAL_CLIP_COUNT,
+						excludeFailureFlags: ["cutoff_start"],
 					});
 
 					let relaxedQualityGateUsed = false;
@@ -2305,6 +2352,7 @@ export function useEditorActions() {
 							minScore: relaxedMinScore,
 							maxOverlapRatio: 0,
 							maxCount: MAX_VIRAL_CLIP_COUNT,
+							excludeFailureFlags: ["cutoff_start"],
 						});
 						relaxedQualityGateUsed = selectedCandidates.length > 0;
 					}

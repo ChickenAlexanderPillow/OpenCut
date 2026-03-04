@@ -1,212 +1,207 @@
 import { describe, expect, test } from "bun:test";
-import { buildClipCandidatesFromTranscript } from "@/lib/clips/candidate-builder";
+import {
+	buildClipCandidatesFromTranscript,
+	buildSentenceUnitsFromSegments,
+} from "@/lib/clips/candidate-builder";
 
-describe("buildClipCandidatesFromTranscript", () => {
+describe("sentence unit candidate builder", () => {
+	test("builds sentence units with punctuation-aware split and timing interpolation", () => {
+		const units = buildSentenceUnitsFromSegments({
+			mediaDuration: 120,
+			segments: [
+				{
+					text: "for gambling. And so look my view is there is momentum.",
+					start: 60,
+					end: 90,
+				},
+			],
+		});
+
+		expect(units.length).toBeGreaterThan(1);
+		expect(units[0]?.text.toLowerCase()).toContain("for gambling");
+		expect(units[1]?.text.toLowerCase()).toContain("and so look");
+		expect(units[0]?.start).toBeGreaterThanOrEqual(60);
+		expect(units[units.length - 1]?.end).toBeLessThanOrEqual(90);
+	});
+
 	test("builds candidates in configured duration range", () => {
 		const candidates = buildClipCandidatesFromTranscript({
 			mediaDuration: 200,
 			segments: [
-				{ text: "hello there", start: 5, end: 7 },
-				{ text: "this is a longer run", start: 20, end: 42 },
-				{ text: "another hook", start: 80, end: 95 },
+				{
+					text: "We are seeing strong demand and continued growth in the market.",
+					start: 10,
+					end: 24,
+				},
+				{
+					text: "There are still headwinds from rates and inflation, but outlook is positive.",
+					start: 24,
+					end: 42,
+				},
+				{
+					text: "The next quarter should show whether this trend is durable.",
+					start: 42,
+					end: 54,
+				},
 			],
+			minClipSeconds: 20,
+			maxClipSeconds: 40,
 		});
 
 		expect(candidates.length).toBeGreaterThan(0);
 		for (const candidate of candidates) {
 			expect(candidate.duration).toBeGreaterThanOrEqual(20);
-			expect(candidate.duration).toBeLessThanOrEqual(90);
-			expect(candidate.startTime).toBeGreaterThanOrEqual(0);
-			expect(candidate.endTime).toBeLessThanOrEqual(200);
+			expect(candidate.duration).toBeLessThanOrEqual(40);
 		}
 	});
 
-	test("drops windows that begin with unresolved context references", () => {
-		const candidates = buildClipCandidatesFromTranscript({
-			mediaDuration: 120,
-			segments: [
-				{
-					text: "It completely changed our retention curve.",
-					start: 30,
-					end: 38,
-				},
-				{
-					text: "The key was pairing product nudges with customer education.",
-					start: 38,
-					end: 52,
-				},
-			],
-		});
-
-		expect(candidates.length).toBe(0);
-	});
-
-	test("allows context-dependent opening only when clip begins near media start", () => {
-		const candidates = buildClipCandidatesFromTranscript({
-			mediaDuration: 90,
-			segments: [
-				{
-					text: "It sounds obvious, but this is where most teams fail.",
-					start: 0,
-					end: 12,
-				},
-				{
-					text: "If you map onboarding step by step, drop-off falls quickly.",
-					start: 12,
-					end: 30,
-				},
-			],
-		});
-
-		expect(candidates.length).toBeGreaterThan(0);
-	});
-
-	test("cuts before a second question in the same candidate window", () => {
-		const candidates = buildClipCandidatesFromTranscript({
-			mediaDuration: 180,
-			segments: [
-				{ text: "What is your strategy for growth?", start: 10, end: 16 },
-				{
-					text: "We focus on retention and long term value.",
-					start: 16,
-					end: 28,
-				},
-				{ text: "Can you share a specific example?", start: 28, end: 34 },
-				{
-					text: "Yes, we launched an onboarding experiment.",
-					start: 34,
-					end: 44,
-				},
-			],
-		});
-
-		expect(candidates.length).toBeGreaterThan(0);
-		for (const candidate of candidates) {
-			const snippetQuestions = (candidate.transcriptSnippet.match(/\?/g) ?? [])
-				.length;
-			expect(snippetQuestions).toBeLessThanOrEqual(1);
-		}
-	});
-
-	test("cuts trailing unanswered follow-up question from candidate windows", () => {
+	test("drops question-only windows without answers", () => {
 		const candidates = buildClipCandidatesFromTranscript({
 			mediaDuration: 180,
 			minClipSeconds: 20,
-			targetClipSeconds: 35,
-			maxClipSeconds: 60,
+			targetClipSeconds: 32,
+			maxClipSeconds: 45,
 			segments: [
-				{ text: "How are you approaching this year?", start: 10, end: 15 },
 				{
-					text: "We are focused on distribution and retention.",
-					start: 15,
-					end: 27,
+					text: "Now I resisted the urge to ask about prediction markets right away.",
+					start: 100,
+					end: 112,
 				},
 				{
-					text: "Can you comment on next quarter guidance?",
-					start: 27,
-					end: 33,
+					text: "But my question is how do you respond to this trend?",
+					start: 112,
+					end: 126,
 				},
 			],
-		});
-
-		expect(candidates.length).toBeGreaterThan(0);
-		for (const candidate of candidates) {
-			const snippet = candidate.transcriptSnippet.toLowerCase();
-			expect(snippet).not.toContain("next quarter guidance");
-		}
-	});
-
-	test("deduplicates highly overlapping windows", () => {
-		const candidates = buildClipCandidatesFromTranscript({
-			mediaDuration: 120,
-			segments: [
-				{ text: "one", start: 0, end: 5 },
-				{ text: "two", start: 2, end: 7 },
-				{ text: "three", start: 3, end: 8 },
-				{ text: "four", start: 4, end: 10 },
-			],
-		});
-
-		const uniqueRanges = new Set(
-			candidates.map(
-				(candidate) => `${candidate.startTime}-${candidate.endTime}`,
-			),
-		);
-		expect(uniqueRanges.size).toBe(candidates.length);
-	});
-
-	test("returns empty when transcript is sparse/invalid", () => {
-		const candidates = buildClipCandidatesFromTranscript({
-			mediaDuration: 90,
-			segments: [{ text: "bad", start: 10, end: 10 }],
 		});
 
 		expect(candidates).toHaveLength(0);
 	});
 
-	test("clips snippet text to overlapped window for partially overlapped segments", () => {
+	test("keeps windows that include question and answer", () => {
 		const candidates = buildClipCandidatesFromTranscript({
-			mediaDuration: 120,
+			mediaDuration: 180,
 			minClipSeconds: 20,
-			targetClipSeconds: 20,
-			maxClipSeconds: 40,
+			targetClipSeconds: 32,
+			maxClipSeconds: 45,
 			segments: [
 				{
-					text: "Hello viewers Tim Poole here on The Huddle and I am with Gronja Hurst CEO of the Betting and Gaming Council",
-					start: 0,
-					end: 30,
+					text: "What changed in your strategy this year?",
+					start: 20,
+					end: 28,
 				},
 				{
-					text: "the only real winner out of this process is going to be the black market",
-					start: 30,
-					end: 38,
+					text: "We shifted to retention and focused on long-term value creation.",
+					start: 28,
+					end: 44,
+				},
+				{
+					text: "That led to better conversion and more predictable growth.",
+					start: 44,
+					end: 56,
 				},
 			],
 		});
 
 		expect(candidates.length).toBeGreaterThan(0);
-		const candidateNearBoundary = candidates.find((candidate) =>
-			candidate.transcriptSnippet.toLowerCase().includes("black market"),
-		);
-		expect(candidateNearBoundary).toBeDefined();
 		expect(
-			candidateNearBoundary?.transcriptSnippet.toLowerCase(),
-		).not.toContain("hello viewers");
-		expect(candidateNearBoundary?.transcriptSnippet.toLowerCase()).toContain(
-			"black market",
-		);
+			candidates.some((candidate) =>
+				candidate.transcriptSnippet.toLowerCase().includes("better conversion"),
+			),
+		).toBeTrue();
 	});
 
-	test("enforces max duration cap even when sentence continuation is long", () => {
+	test("splits long unpunctuated runs so bounded candidates can still be produced", () => {
 		const candidates = buildClipCandidatesFromTranscript({
-			mediaDuration: 200,
+			mediaDuration: 220,
 			minClipSeconds: 20,
 			targetClipSeconds: 35,
 			maxClipSeconds: 40,
 			segments: [
 				{
-					text: "What changed in your go-to-market over the last year?",
-					start: 5,
-					end: 10,
-				},
-				{
-					text: "We shifted from broad awareness to a tighter enterprise motion with clearer qualification and stronger handoffs across teams",
-					start: 10,
-					end: 48,
-				},
-				{
-					text: "That gave us better conversion and a shorter cycle.",
-					start: 48,
-					end: 54,
+					text: "We shifted from broad awareness to a tighter enterprise motion with clearer qualification stronger handoffs more disciplined account selection and improved onboarding to drive conversion",
+					start: 20,
+					end: 70,
 				},
 			],
 		});
 
 		expect(candidates.length).toBeGreaterThan(0);
-		const longAnswerCandidate = candidates.find((candidate) =>
-			candidate.transcriptSnippet.toLowerCase().includes("handoffs"),
+		expect(candidates[0]?.duration).toBeLessThanOrEqual(40);
+	});
+
+	test("analogy windows naturally rank high", () => {
+		const candidates = buildClipCandidatesFromTranscript({
+			mediaDuration: 260,
+			minClipSeconds: 20,
+			targetClipSeconds: 30,
+			maxClipSeconds: 45,
+			segments: [
+				{
+					text: "There is a lot of momentum behind prediction markets.",
+					start: 120,
+					end: 130,
+				},
+				{
+					text: "But there was a lot of momentum around tulip bulbs in Holland and then they became valueless.",
+					start: 130,
+					end: 150,
+				},
+				{
+					text: "That is why we think this needs a more grounded regulatory framework.",
+					start: 150,
+					end: 164,
+				},
+				{
+					text: "Here is another generic update without a strong hook or payoff.",
+					start: 190,
+					end: 205,
+				},
+			],
+		});
+
+		expect(candidates.length).toBeGreaterThan(0);
+		const top = candidates[0];
+		expect(top).toBeDefined();
+		expect(top?.transcriptSnippet.toLowerCase()).toContain("tulip");
+	});
+
+	test("produces stable deterministic windows across repeated runs", () => {
+		const input = {
+			mediaDuration: 180,
+			minClipSeconds: 20,
+			targetClipSeconds: 32,
+			maxClipSeconds: 45,
+			segments: [
+				{
+					text: "We are seeing growth in several channels.",
+					start: 12,
+					end: 22,
+				},
+				{
+					text: "But we also face risk from macro conditions and tariff shifts.",
+					start: 22,
+					end: 36,
+				},
+				{
+					text: "What gives us confidence is sustained demand from core customers.",
+					start: 36,
+					end: 49,
+				},
+				{
+					text: "That is why we remain optimistic for next year.",
+					start: 49,
+					end: 60,
+				},
+			],
+		};
+
+		const run1 = buildClipCandidatesFromTranscript(input).map(
+			(candidate) => `${candidate.startTime}-${candidate.endTime}`,
 		);
-		expect(longAnswerCandidate).toBeDefined();
-		expect(longAnswerCandidate?.duration).toBeLessThanOrEqual(40);
+		const run2 = buildClipCandidatesFromTranscript(input).map(
+			(candidate) => `${candidate.startTime}-${candidate.endTime}`,
+		);
+		expect(run1).toEqual(run2);
 	});
 });

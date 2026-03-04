@@ -1,0 +1,1795 @@
+{
+  "generatedAt": "2026-03-04T12:17:23.526Z",
+  "inputPath": "C:\\Coding\\opencut\\docs\\transcript-sample.md",
+  "model": "gpt-5-mini",
+  "mediaDuration": 1652.386,
+  "segmentsCount": 338,
+  "candidateDraftCount": 12,
+  "mergedCandidateCount": 12,
+  "selectedCandidateCount": 5,
+  "segments": [
+    {
+      "start": 0,
+      "end": 28.4,
+      "text": "Hello viewers, Tim Poole here on The Huddle and I'm with Bill Miller, President and CEO"
+    },
+    {
+      "start": 28.48,
+      "end": 30.96,
+      "text": "of the American Gaming Association. Bill, thanks for joining us again."
+    },
+    {
+      "start": 31.52,
+      "end": 32.72,
+      "text": "Thank you so much for having me."
+    },
+    {
+      "start": 33.6,
+      "end": 38.48,
+      "text": "You spoke to us at ICE last year. A lot has happened since. I mean,"
+    },
+    {
+      "start": 38.48,
+      "end": 42.4,
+      "text": "it's guaranteed to, I think, in your role, but if you can manage it,"
+    },
+    {
+      "start": 42.4,
+      "end": 46.8,
+      "text": "if you could try and maybe sum up the biggest things that have been on your agenda this past"
+    },
+    {
+      "start": 46.8,
+      "end": 52.96,
+      "text": "year. Yeah, well, thank you for the question. I think that, you know, in the U.S. we're dealing"
+    },
+    {
+      "start": 52.96,
+      "end": 58.24,
+      "text": "with, you know, a lot of pluses and some minuses. You know, we've got kind of a, you know, an"
+    },
+    {
+      "start": 58.24,
+      "end": 63.76,
+      "text": "economy that is still, you know, structurally sound, but there's just a lot of things that"
+    },
+    {
+      "start": 63.76,
+      "end": 70.8,
+      "text": "are out there in terms of macro issues, you know, inflation, you know, interest rates,"
+    },
+    {
+      "start": 70.8,
+      "end": 76.88,
+      "text": "tariffs, all of those things play into, you know, the U.S. market. We've got almost,"
+    },
+    {
+      "start": 76.88,
+      "end": 80.72,
+      "text": "you know, over a thousand casinos across the country. We've got, you know,"
+    },
+    {
+      "start": 80.72,
+      "end": 87.28,
+      "text": "really important destination resorts like the Las Vegas and others. And some of those kind of get"
+    },
+    {
+      "start": 87.28,
+      "end": 94,
+      "text": "hit when we're in global, when we're having global issues. That said, you know, industry's healthy."
+    },
+    {
+      "start": 94,
+      "end": 100.32,
+      "text": "We survey our CEOs all the time. They've probably been most optimistic that they've been in a couple"
+    },
+    {
+      "start": 100.32,
+      "end": 106.8,
+      "text": "of years. So I think that's a really good sign in terms of, you know, continued growth, growth in"
+    },
+    {
+      "start": 107.76,
+      "end": 113.36,
+      "text": "brick and mortar, growth in commercial, growth in tribal, growth in sports betting, and certainly"
+    },
+    {
+      "start": 113.36,
+      "end": 119.12,
+      "text": "growth in iGaming. So I would say on a whole, you know, industry's doing really well. The U.S."
+    },
+    {
+      "start": 119.12,
+      "end": 127.12,
+      "text": "market's doing well. Like any large, you know, the United States, as you know, is not a national"
+    },
+    {
+      "start": 127.12,
+      "end": 134.08,
+      "text": "gambling market. It's a state by state and tribal nation. And so, you know, in any economy, you have"
+    },
+    {
+      "start": 134.08,
+      "end": 138.48,
+      "text": "regional areas that are stronger than others. But I think on the whole, things are good."
+    },
+    {
+      "start": 139.2,
+      "end": 144.24,
+      "text": "Certainly some interesting talking points that we can get to, perhaps some challenging areas as well."
+    },
+    {
+      "start": 144.24,
+      "end": 149.52,
+      "text": "But you mentioned the optimism of the CEOs, and you already kind of listed a few of the factors"
+    },
+    {
+      "start": 149.52,
+      "end": 154.16,
+      "text": "why, but why particularly are they so optimistic at the moment, given, as you said, there's"
+    },
+    {
+      "start": 154.16,
+      "end": 158.32,
+      "text": "quite a few external factors that are perhaps, you know, as you mentioned, not quite going in"
+    },
+    {
+      "start": 158.32,
+      "end": 164.96,
+      "text": "the right direction? Well, I think it's in part, and I don't know how much you can really attribute"
+    },
+    {
+      "start": 164.96,
+      "end": 170.88,
+      "text": "this to the reintroduction of the industry. But, you know, we went through a pretty tough time"
+    },
+    {
+      "start": 170.88,
+      "end": 177.6,
+      "text": "during COVID, right? We had literally the globe was shut down. In the U.S., same situation,"
+    },
+    {
+      "start": 177.6,
+      "end": 182.88,
+      "text": "different states and different parts of the country took it differently. But what we found is"
+    },
+    {
+      "start": 183.6,
+      "end": 190.88,
+      "text": "it gave the industry an opportunity to reset and think about, on a going forward basis, when we"
+    },
+    {
+      "start": 190.88,
+      "end": 195.28,
+      "text": "come out of this COVID thing, what are people going to want? Are they going to want more stuff,"
+    },
+    {
+      "start": 195.28,
+      "end": 201.04,
+      "text": "or are they going to want more experiences? And what we saw really strongly is they wanted more"
+    },
+    {
+      "start": 201.04,
+      "end": 205.12,
+      "text": "experiences, maybe because for two years, everybody was locked up in their houses. And so,"
+    },
+    {
+      "start": 205.76,
+      "end": 210.88,
+      "text": "we are in the experience business. We're the best at creating those experiences. And so,"
+    },
+    {
+      "start": 210.88,
+      "end": 217.52,
+      "text": "what we looked at it and said, everyone said, well, like, in the casino space, you know,"
+    },
+    {
+      "start": 217.52,
+      "end": 221.04,
+      "text": "when people get older, that's when they start going to casinos. And that traditionally,"
+    },
+    {
+      "start": 221.04,
+      "end": 227.52,
+      "text": "that demographically had been true. But what we saw after was we were one of the first"
+    },
+    {
+      "start": 228.24,
+      "end": 234.08,
+      "text": "kind of entertainment options to open in America. Concerts, we opened before them."
+    },
+    {
+      "start": 234.08,
+      "end": 237.68,
+      "text": "Theaters, we opened before them. Sporting events, we opened before them."
+    },
+    {
+      "start": 238.48,
+      "end": 244.64,
+      "text": "Really, restaurants and other entertainment venues, we opened before them, in part because"
+    },
+    {
+      "start": 244.64,
+      "end": 255.36,
+      "text": "we knew how to do social gatherings safely. We were, from an industry perspective, we were setting"
+    },
+    {
+      "start": 255.36,
+      "end": 261.36,
+      "text": "up vaccine lines. We were doing some really important things in and around testing. But then,"
+    },
+    {
+      "start": 262.08,
+      "end": 266.08,
+      "text": "very importantly, we're one of the largest taxpayers in every one of the states that we're"
+    },
+    {
+      "start": 266.08,
+      "end": 274.56,
+      "text": "in. And so, the states had a real strong incentive to work with us to try and get the casinos open"
+    },
+    {
+      "start": 274.56,
+      "end": 280.96,
+      "text": "maybe earlier than these other entertainment options. And that allowed us to market to a"
+    },
+    {
+      "start": 280.96,
+      "end": 289.28,
+      "text": "younger demographic that has really helped sustain that level of optimism because we've"
+    },
+    {
+      "start": 289.28,
+      "end": 295.2,
+      "text": "created a new vertical, a new demographic that are, you know, they're younger, but they're going"
+    },
+    {
+      "start": 295.2,
+      "end": 300.64,
+      "text": "to be able to play longer. Vegas is a good example of that experience and entertainment"
+    },
+    {
+      "start": 300.64,
+      "end": 307.12,
+      "text": "factor because, you know, once upon a time, it was mostly gaming revenues. Now, it's mostly"
+    },
+    {
+      "start": 308.88,
+      "end": 312.16,
+      "text": "not amenities, but, you know, you've got sports, you've got concerts, you've got other things you"
+    },
+    {
+      "start": 312.16,
+      "end": 317.36,
+      "text": "mentioned. But in terms of a Vegas outlook for 2026, obviously, there was a successful G3 show"
+    },
+    {
+      "start": 317.36,
+      "end": 322.96,
+      "text": "last year, but there was a lot of discussion about tourism levels. You know, depending on who you"
+    },
+    {
+      "start": 322.96,
+      "end": 327.44,
+      "text": "spoke to, some said, don't worry, it's fine. Others said, oh, it's, you know, it's maybe some"
+    },
+    {
+      "start": 327.44,
+      "end": 331.36,
+      "text": "provocative articles saying there was no one on the streets at all. Obviously, that's not true."
+    },
+    {
+      "start": 332,
+      "end": 336.16,
+      "text": "But there's kind of high prices have been discussed as a thing that might put customers off."
+    },
+    {
+      "start": 336.16,
+      "end": 342.24,
+      "text": "What's the outlook, in your opinion, you know, for 2026? Well, I think that the last G2E we had"
+    },
+    {
+      "start": 342.24,
+      "end": 347.36,
+      "text": "back in October, it was, you know, it was on par with the one we had the year before, which"
+    },
+    {
+      "start": 348,
+      "end": 353.44,
+      "text": "was one of the best shows we'd ever had in terms of, you know, and I look at these things from a,"
+    },
+    {
+      "start": 353.44,
+      "end": 358.24,
+      "text": "you know, foot traffic is an important metric, but it's not the most important metric. The most"
+    },
+    {
+      "start": 358.24,
+      "end": 363.84,
+      "text": "important metric is for the people that exhibit or the people that can buy their stuff, do they"
+    },
+    {
+      "start": 363.84,
+      "end": 369.2,
+      "text": "show up and are they the people that with buying authority? That's the only thing ultimately that"
+    },
+    {
+      "start": 369.2,
+      "end": 375.36,
+      "text": "determines whether this show is a success or not. And then ultimately afterwards, when we do the"
+    },
+    {
+      "start": 375.36,
+      "end": 381.76,
+      "text": "postmortem of the show, you, exhibitor, spent millions of dollars in building out your booth,"
+    },
+    {
+      "start": 381.76,
+      "end": 387.44,
+      "text": "in having your staff here. Did you believe that there was good and strong ROI for your"
+    },
+    {
+      "start": 387.44,
+      "end": 393.52,
+      "text": "exhibition? And the, you know, the sentiment both from last year and from this year was"
+    },
+    {
+      "start": 393.52,
+      "end": 399.28,
+      "text": "very strongly positive. So yeah, there were certainly things kind of, you know, and I track"
+    },
+    {
+      "start": 399.28,
+      "end": 404.72,
+      "text": "numbers all the time. I spend a lot of time in the lead up to these shows looking and saying,"
+    },
+    {
+      "start": 404.72,
+      "end": 411.12,
+      "text": "all right, so now it appears the U.S. is having some challenges with Canada. Is Canadian visitation"
+    },
+    {
+      "start": 411.12,
+      "end": 416.48,
+      "text": "going to suffer from that? Are there visa issues in different countries based around"
+    },
+    {
+      "start": 416.48,
+      "end": 423.44,
+      "text": "unrelated immigration issues that might affect the show and people and delegations coming?"
+    },
+    {
+      "start": 424.88,
+      "end": 430.4,
+      "text": "We tracked it the whole time and I would say that there was, you know, along the margins,"
+    },
+    {
+      "start": 430.48,
+      "end": 438,
+      "text": "some negativity there, but at the end of the day, it's all about, you know, did the exhibitors who"
+    },
+    {
+      "start": 438,
+      "end": 443.68,
+      "text": "spent the most money to put the show on believe that they were able to create economic"
+    },
+    {
+      "start": 443.68,
+      "end": 450.96,
+      "text": "opportunities that were real and that were, you know, significant enough that usually"
+    },
+    {
+      "start": 450.96,
+      "end": 456.4,
+      "text": "when the show ends, we say, all right, what about next year? And so from that perspective,"
+    },
+    {
+      "start": 456.8,
+      "end": 461.6,
+      "text": "you know, we've locked everybody down for this coming year based upon the success of last."
+    },
+    {
+      "start": 461.6,
+      "end": 466.16,
+      "text": "And if you're extrapolating that to Vegas throughout the year, you know, a similar answer,"
+    },
+    {
+      "start": 466.16,
+      "end": 471.76,
+      "text": "I expect that the tourism numbers and things like that, no great worries for the future?"
+    },
+    {
+      "start": 472.4,
+      "end": 477.04,
+      "text": "I don't think so. I think, and you referenced it a few moments ago, like Las Vegas is becoming"
+    },
+    {
+      "start": 477.04,
+      "end": 483.68,
+      "text": "much more than just a gambling destination. It has for years, but it's now a global sports hub,"
+    },
+    {
+      "start": 483.68,
+      "end": 488.64,
+      "text": "you know, with F1 and, you know, the Superbowl that was there. I mean, we have,"
+    },
+    {
+      "start": 488.64,
+      "end": 493.92,
+      "text": "you know, in Las Vegas, there's, you know, there's a hockey team, there's professional football team,"
+    },
+    {
+      "start": 493.92,
+      "end": 501.12,
+      "text": "very good hockey team, and soon going to have a baseball team. And what you see in those games is,"
+    },
+    {
+      "start": 501.12,
+      "end": 506.96,
+      "text": "you know, Las Vegas has come to adopt certainly the Golden Knights very strongly. I think the"
+    },
+    {
+      "start": 506.96,
+      "end": 512.64,
+      "text": "Raiders a little bit harder to, for people in Las Vegas, because it's not, you know,"
+    },
+    {
+      "start": 512.64,
+      "end": 518.96,
+      "text": "it's not native. It didn't start there. And I think that the Oakland, Sacramento,"
+    },
+    {
+      "start": 518.96,
+      "end": 525.04,
+      "text": "whatever the A's are today, when they come to Las Vegas, you're going to see people,"
+    },
+    {
+      "start": 526.32,
+      "end": 531.36,
+      "text": "local fans that are supportive, but maybe even more importantly, you're going to see"
+    },
+    {
+      "start": 532,
+      "end": 536.72,
+      "text": "fans from the other teams that say, you know what, this is another reason for us to go to"
+    },
+    {
+      "start": 536.72,
+      "end": 542.48,
+      "text": "Las Vegas, to go see the Oakland A's play the Boston Red Sox. I mean, the Las Vegas A's play"
+    },
+    {
+      "start": 542.48,
+      "end": 548.96,
+      "text": "the Boston Red Sox, or, and you see it all the time with football. You see, you know, like the"
+    },
+    {
+      "start": 548.96,
+      "end": 553.04,
+      "text": "Raiders will play on a Thursday night game and everybody on the"
+    },
+    {
+      "start": 553.143,
+      "end": 560.303,
+      "text": "Strip is super excited about it because they know there's a whole bunch of people that came in from Green Bay or Chicago or Miami that said,"
+    },
+    {
+      "start": 560.703,
+      "end": 569.183,
+      "text": "this is a great opportunity for us to do a Vegas weekend. Well our first hook will be Thursday night football or Sunday football and we'll"
+    },
+    {
+      "start": 569.183,
+      "end": 575.503,
+      "text": "be able to make a long weekend out of it. And I think that what you're just seeing is whether it was food and certainly"
+    },
+    {
+      "start": 576.503,
+      "end": 584.863,
+      "text": "entertainment but now sports layered into that is a really positive synergies synergy that is in Las Vegas."
+    },
+    {
+      "start": 585.623,
+      "end": 594.823,
+      "text": "Now I resisted the urge to go straight into prediction markets and ask you the first question. Obviously objectively speaking for"
+    },
+    {
+      "start": 594.823,
+      "end": 602.383,
+      "text": "our U.S. news recently it's probably been maybe half the coverage you know and not given given the A.J. stance and how you've written"
+    },
+    {
+      "start": 602.383,
+      "end": 608.943,
+      "text": "in the Global Gaming Decider magazine. You know it's probably not what you want to want to hear. And we know your position on"
+    },
+    {
+      "start": 608.943,
+      "end": 617.263,
+      "text": "prediction markets. But my question is more that despite your position and that of state regulators and tribes as well you know"
+    },
+    {
+      "start": 617.263,
+      "end": 625.063,
+      "text": "preaching markets at the moment are very much proliferating in terms of that growth. And given your kind of your stance on it how do"
+    },
+    {
+      "start": 625.063,
+      "end": 631.383,
+      "text": "you sort of manage this situation at the moment. Well it's an important issue. And I think that what you see in this in this industry"
+    },
+    {
+      "start": 631.383,
+      "end": 641.583,
+      "text": "and I've been in this job now I don't know close to seven years. And I think about the first year in my term and my time as CEO was the"
+    },
+    {
+      "start": 641.663,
+      "end": 651.183,
+      "text": "integration of sports betting into America legal sports betting because the Supreme Court ruled in 2018 that you know that there's no"
+    },
+    {
+      "start": 651.223,
+      "end": 662.063,
+      "text": "reason that that it was unconstitutional to have a federal preemption of states rights. And that this court said in a resounding"
+    },
+    {
+      "start": 662.063,
+      "end": 669.903,
+      "text": "opinion that the federal government should not be in the business of dictating gambling policy to the states that the 10th Amendment and"
+    },
+    {
+      "start": 669.903,
+      "end": 678.583,
+      "text": "the Constitution and decades of jurisprudence in America say if the federal government is going to be in this space it needs to be in this"
+    },
+    {
+      "start": 678.583,
+      "end": 686.743,
+      "text": "space in a manner that that respects the rights of the states. And so you know what happened. You know 40 some states legalized sports"
+    },
+    {
+      "start": 686.743,
+      "end": 696.343,
+      "text": "betting. And so my first year was all about the legalization of sports betting to try to dislodge the you know the mafia the you know"
+    },
+    {
+      "start": 696.343,
+      "end": 705.223,
+      "text": "the online offshore Web sites that people had been utilizing for decades because there was no legal option and migrating that group of"
+    },
+    {
+      "start": 705.223,
+      "end": 714.343,
+      "text": "consumers to the to the legal market. And so I experienced that. I went through it. I was you know very integrally involved in working"
+    },
+    {
+      "start": 714.343,
+      "end": 723.663,
+      "text": "with state legislators in trying to make that happen. Yeah. And so now you fast forward to today and the federal government through an"
+    },
+    {
+      "start": 723.663,
+      "end": 737.863,
+      "text": "agency that really doesn't regulate or is ever been designed to regulate gambling is become a de facto national gambling regulator. Like"
+    },
+    {
+      "start": 737.863,
+      "end": 748.903,
+      "text": "it flies in the face of everything that those of us that follow work in either from a legislative perspective a policy making perspective as"
+    },
+    {
+      "start": 749.263,
+      "end": 757.783,
+      "text": "for gambling. And so look my view is you know there's a lot of momentum behind prediction markets. But you know there was a lot of momentum"
+    },
+    {
+      "start": 757.783,
+      "end": 769.583,
+      "text": "around tulip bulbs in Holland back in the 1600s. And then they became valueless. And so I you know I I my my my strong view is the strong"
+    },
+    {
+      "start": 769.583,
+      "end": 777.943,
+      "text": "view that is certainly represent. I'm here to represent the industry but I'm also a lawyer. And I understand you know I've been in public"
+    },
+    {
+      "start": 777.943,
+      "end": 787.903,
+      "text": "policy legal work politics for most of my life. And you look at this as an objective person and I'm a partisan unquestionably. But I"
+    },
+    {
+      "start": 787.903,
+      "end": 799.223,
+      "text": "look at it and I say the federal government does not intrude on states rights by accident. And so the the notion that somehow or"
+    },
+    {
+      "start": 799.223,
+      "end": 809.343,
+      "text": "another couchy polymarketing at all would say well it actually the CFTC allows us to do this. And they actually specifically allowed us"
+    },
+    {
+      "start": 809.343,
+      "end": 819.143,
+      "text": "to do this in 2010. When America was you know when the Congress passed Dodd-Frank. Why was Dodd-Frank passed. It was passed in response"
+    },
+    {
+      "start": 819.143,
+      "end": 830.983,
+      "text": "to excesses by industry banking specifically derivatives. You know credit default swaps. And so the idea that somehow or another in"
+    },
+    {
+      "start": 830.983,
+      "end": 841.283,
+      "text": "that environment where the Congress was reigning in business met trying to make consumers more safe that they also. Tucked in some"
+    },
+    {
+      "start": 841.283,
+      "end": 853.643,
+      "text": "little you know if the element of of the bill that allowed sports prediction markets is laughable. And then I think the most absurd part is"
+    },
+    {
+      "start": 853.963,
+      "end": 864.643,
+      "text": "that if if this is what they claim as their their rationale or their legal standing why did it take 15 years after the passage of this for"
+    },
+    {
+      "start": 864.643,
+      "end": 874.443,
+      "text": "somebody to suddenly discover that they could legally bet on sports. It there's a common sense element that that is necessary. And and again"
+    },
+    {
+      "start": 874.443,
+      "end": 884.683,
+      "text": "we were in the fight. It's it's not going away anytime soon. But at the end of the day I think we went to in terms of how you win putting"
+    },
+    {
+      "start": 884.683,
+      "end": 892.283,
+      "text": "that view forward and the practical approach. Is it simply in the courtroom you know and challenging these companies. No it's it's a all of"
+    },
+    {
+      "start": 892.283,
+      "end": 900.283,
+      "text": "the above strategy. It's making sure that policymakers understand that that you know at the state level there's money at risk. You know"
+    },
+    {
+      "start": 900.283,
+      "end": 908.203,
+      "text": "we're the largest taxpayer in almost every state in which we operate. And in terms of sports betting and I gaming because there's definitely a"
+    },
+    {
+      "start": 908.203,
+      "end": 918.723,
+      "text": "view that that you know betting on a prediction that the that you know a roulette wheel will land on 17 is not far away from you know a"
+    },
+    {
+      "start": 918.763,
+      "end": 927.923,
+      "text": "random number generator. That is not that hard. People said well all that all they're really going to do is you know straight money line"
+    },
+    {
+      "start": 927.923,
+      "end": 937.123,
+      "text": "bets. And they did until they did parlays until they did player props until they did. And I L like who's going to move in the transfer"
+    },
+    {
+      "start": 937.123,
+      "end": 946.523,
+      "text": "window for college sports to then you know his Vladimir Zelinsky going to wear a suit. And and is Maduro going to be captured. And is"
+    },
+    {
+      "start": 946.523,
+      "end": 957.483,
+      "text": "Venezuela going to be freed. Like what they're doing is so brazen and it is so untethered to actual regulation that it needs to be"
+    },
+    {
+      "start": 957.483,
+      "end": 965.003,
+      "text": "stopped. And so you know the courthouse is an important place. We actually we believe that what they're doing flies in the face of"
+    },
+    {
+      "start": 965.403,
+      "end": 976.283,
+      "text": "federal statute. It flies in the face of states rights flies in the face of tribal sovereignty and the actual statute and reg"
+    },
+    {
+      "start": 976.283,
+      "end": 984.683,
+      "text": "that they point to isn't applicable. And so for all of those things it's part of it is making sure that we're in as many courthouses as"
+    },
+    {
+      "start": 984.683,
+      "end": 993.763,
+      "text": "we can be to support state and tribal regulators and the people that are negatively affected by prediction markets. But we're also in"
+    },
+    {
+      "start": 993.763,
+      "end": 1001.403,
+      "text": "Congress and we're working on you know working on fixes at the congressional level. And we're working to ensure that you know state"
+    },
+    {
+      "start": 1001.403,
+      "end": 1009.123,
+      "text": "attorneys general are aware of this because there are no consumer protections and they can say well we have our own protocols that we use"
+    },
+    {
+      "start": 1009.123,
+      "end": 1018.163,
+      "text": "internally. Well that's fine. But no one in the gambling industry the legal regulated gambling industry gets to self-certify that what"
+    },
+    {
+      "start": 1018.163,
+      "end": 1026.923,
+      "text": "they're doing is appropriate. There are regulators that hold the legal industry to account when they fall short of the obligations under"
+    },
+    {
+      "start": 1026.923,
+      "end": 1035.243,
+      "text": "that license. And so the notion that somehow or another these guys are self-certifying their activities and and that they don't really"
+    },
+    {
+      "start": 1035.243,
+      "end": 1047.603,
+      "text": "answer to anyone other than this you know 600 person regulatory organization that was you know chartered to protect farmers and help to"
+    },
+    {
+      "start": 1048.203,
+      "end": 1057.563,
+      "text": "create hedges on agricultural products is just it's laughable. But again there's a lot of money chasing it. There's a lot of money in it."
+    },
+    {
+      "start": 1057.843,
+      "end": 1066.843,
+      "text": "There's valuations for these companies that you know are in the billions. And so we are not we're not blind to know that this is a group of"
+    },
+    {
+      "start": 1066.843,
+      "end": 1073.763,
+      "text": "individuals who now believe that they have a foothold and that they're going to expand that foothold. And our job is to make sure that you"
+    },
+    {
+      "start": 1073.763,
+      "end": 1082.123,
+      "text": "know in places that don't have gambling and they don't want gambling. And that's the important part of the U.S. market is it isn't a"
+    },
+    {
+      "start": 1082.123,
+      "end": 1090.443,
+      "text": "national market. It's a state by state market. The individual stakeholders in those states politicians policymakers religious etc."
+    },
+    {
+      "start": 1090.963,
+      "end": 1098.323,
+      "text": "They get to determine should we have sports betting. Should we have casinos. Do we have tribes here. And what should all of these"
+    },
+    {
+      "start": 1098.563,
+      "end": 1105.403,
+      "text": "things look like. And in places like Utah they don't want gambling at all. And now they're getting gambling courtesy of the federal"
+    },
+    {
+      "start": 1105.403,
+      "end": 1105.723,
+      "text": "government."
+    },
+    {
+      "start": 1106.286,
+      "end": 1108.946,
+      "text": "places like South Carolina, they don't want gambling."
+    },
+    {
+      "start": 1108.946,
+      "end": 1110.946,
+      "text": "They're getting gambling courtesy of the federal government."
+    },
+    {
+      "start": 1110.946,
+      "end": 1115.506,
+      "text": "And so making sure that we are building an army of people"
+    },
+    {
+      "start": 1115.506,
+      "end": 1119.026,
+      "text": "that have a vested interest in the outcome"
+    },
+    {
+      "start": 1119.026,
+      "end": 1121.106,
+      "text": "is more important than what Bill Miller says"
+    },
+    {
+      "start": 1121.106,
+      "end": 1122.486,
+      "text": "as the head of the AGA."
+    },
+    {
+      "start": 1123.546,
+      "end": 1124.986,
+      "text": "Very well put in terms of the case"
+    },
+    {
+      "start": 1124.986,
+      "end": 1127.146,
+      "text": "and the argument going forward."
+    },
+    {
+      "start": 1127.146,
+      "end": 1130.186,
+      "text": "Sports betting came up as almost"
+    },
+    {
+      "start": 1131.186,
+      "end": 1132.906,
+      "text": "as part of the conversation there,"
+    },
+    {
+      "start": 1132.906,
+      "end": 1135.466,
+      "text": "but it's telling that after a few years,"
+    },
+    {
+      "start": 1135.466,
+      "end": 1137.386,
+      "text": "and you mentioned seven years ago, you started in the role."
+    },
+    {
+      "start": 1137.386,
+      "end": 1139.506,
+      "text": "And I remember we sat at ICE in London"
+    },
+    {
+      "start": 1139.506,
+      "end": 1142.346,
+      "text": "and we spoke about New York mobile sports betting"
+    },
+    {
+      "start": 1142.346,
+      "end": 1145.146,
+      "text": "potentially opening up and it did."
+    },
+    {
+      "start": 1145.146,
+      "end": 1147.146,
+      "text": "But sports betting now is quite a foothold"
+    },
+    {
+      "start": 1147.146,
+      "end": 1149.666,
+      "text": "in terms of we're talking less about it"
+    },
+    {
+      "start": 1149.666,
+      "end": 1151.506,
+      "text": "with these kind of early regulatory questions"
+    },
+    {
+      "start": 1151.506,
+      "end": 1154.266,
+      "text": "because it's becoming a somewhat established market."
+    },
+    {
+      "start": 1154.266,
+      "end": 1156.866,
+      "text": "But something that obviously made worldwide headlines"
+    },
+    {
+      "start": 1156.866,
+      "end": 1161.866,
+      "text": "was the FBI investigation into integrity issues"
+    },
+    {
+      "start": 1162.266,
+      "end": 1164.626,
+      "text": "and in the NBA and things like that."
+    },
+    {
+      "start": 1165.306,
+      "end": 1167.506,
+      "text": "A couple of issues off that really."
+    },
+    {
+      "start": 1167.506,
+      "end": 1170.186,
+      "text": "I'm wondering if, I mean, there's a lot of calls"
+    },
+    {
+      "start": 1170.186,
+      "end": 1171.786,
+      "text": "to maybe ban prop bets and things like that,"
+    },
+    {
+      "start": 1171.786,
+      "end": 1174.706,
+      "text": "but within the industry, we would look at that"
+    },
+    {
+      "start": 1174.706,
+      "end": 1177.586,
+      "text": "and think that's probably not the right way to look at it."
+    },
+    {
+      "start": 1177.586,
+      "end": 1179.986,
+      "text": "Are we looking at an issue where actually"
+    },
+    {
+      "start": 1179.986,
+      "end": 1182.866,
+      "text": "because integrity tools have improved so much,"
+    },
+    {
+      "start": 1182.866,
+      "end": 1184.906,
+      "text": "these things, it's not that these things"
+    },
+    {
+      "start": 1184.906,
+      "end": 1186.546,
+      "text": "are more readily available,"
+    },
+    {
+      "start": 1186.546,
+      "end": 1190.706,
+      "text": "it's that actually we're just better able to catch them."
+    },
+    {
+      "start": 1190.706,
+      "end": 1192.946,
+      "text": "I mean, that's kind of a takeaway point I have."
+    },
+    {
+      "start": 1193.106,
+      "end": 1194.786,
+      "text": "I think so."
+    },
+    {
+      "start": 1194.786,
+      "end": 1197.746,
+      "text": "I think it's a tragedy anytime,"
+    },
+    {
+      "start": 1197.746,
+      "end": 1200.306,
+      "text": "particularly in a college dynamic"
+    },
+    {
+      "start": 1200.306,
+      "end": 1202.866,
+      "text": "where you've got some kid who's on a scholarship"
+    },
+    {
+      "start": 1202.866,
+      "end": 1204.866,
+      "text": "and he tells a couple of his friends"
+    },
+    {
+      "start": 1204.866,
+      "end": 1206.986,
+      "text": "that he hurt his ankle and he's not gonna play"
+    },
+    {
+      "start": 1206.986,
+      "end": 1208.546,
+      "text": "in a basketball game tonight."
+    },
+    {
+      "start": 1210.346,
+      "end": 1213.426,
+      "text": "But he's an important part of the team."
+    },
+    {
+      "start": 1213.426,
+      "end": 1217.066,
+      "text": "And so those friends then utilize that inside information"
+    },
+    {
+      "start": 1218.786,
+      "end": 1219.786,
+      "text": "to their benefit."
+    },
+    {
+      "start": 1220.706,
+      "end": 1224.306,
+      "text": "In the old days, nobody would be any the wiser."
+    },
+    {
+      "start": 1224.306,
+      "end": 1226.946,
+      "text": "Today with a legal regulated market,"
+    },
+    {
+      "start": 1226.946,
+      "end": 1229.866,
+      "text": "you have sports books that look at anomalous activity"
+    },
+    {
+      "start": 1229.866,
+      "end": 1232.746,
+      "text": "and they look at it and then they flag it"
+    },
+    {
+      "start": 1232.746,
+      "end": 1234.746,
+      "text": "and then they might deny the bet"
+    },
+    {
+      "start": 1234.746,
+      "end": 1238.826,
+      "text": "and then they might engage with the leagues"
+    },
+    {
+      "start": 1238.826,
+      "end": 1242.746,
+      "text": "or the conferences and then importantly, law enforcement."
+    },
+    {
+      "start": 1242.746,
+      "end": 1247.586,
+      "text": "And so what it does is it creates an ability"
+    },
+    {
+      "start": 1247.586,
+      "end": 1252.586,
+      "text": "for you to actually have visibility into bad actors"
+    },
+    {
+      "start": 1254.226,
+      "end": 1259.226,
+      "text": "and which we didn't have when sports betting was not legal."
+    },
+    {
+      "start": 1259.226,
+      "end": 1262.386,
+      "text": "And so then to your point on prop bets and other things,"
+    },
+    {
+      "start": 1263.466,
+      "end": 1267.666,
+      "text": "we have become, the NCAA in the US"
+    },
+    {
+      "start": 1267.666,
+      "end": 1269.666,
+      "text": "has got a lot of issues on their plate."
+    },
+    {
+      "start": 1269.666,
+      "end": 1273.786,
+      "text": "They've got to figure out what does NIL,"
+    },
+    {
+      "start": 1273.786,
+      "end": 1276.826,
+      "text": "name, image, likeness, payment to college athletes,"
+    },
+    {
+      "start": 1276.866,
+      "end": 1277.706,
+      "text": "what's that look like?"
+    },
+    {
+      "start": 1277.706,
+      "end": 1282.706,
+      "text": "How does it change the dynamic for student athletes?"
+    },
+    {
+      "start": 1282.946,
+      "end": 1286.626,
+      "text": "And then the transfer portal where you see literally"
+    },
+    {
+      "start": 1286.626,
+      "end": 1291.346,
+      "text": "players up and leaving after one season or even mid season"
+    },
+    {
+      "start": 1291.346,
+      "end": 1293.546,
+      "text": "and in part because they're gonna get paid more money"
+    },
+    {
+      "start": 1293.546,
+      "end": 1294.466,
+      "text": "at a different college."
+    },
+    {
+      "start": 1294.466,
+      "end": 1298.506,
+      "text": "And so the question is, are they really student athletes"
+    },
+    {
+      "start": 1298.506,
+      "end": 1301.826,
+      "text": "or are they paid athletes who go to school?"
+    },
+    {
+      "start": 1301.826,
+      "end": 1305.506,
+      "text": "And that's a thing that they're wrestling with."
+    },
+    {
+      "start": 1305.546,
+      "end": 1308.426,
+      "text": "To their credit, they also recognize that"
+    },
+    {
+      "start": 1308.426,
+      "end": 1310.106,
+      "text": "going back to prediction markets,"
+    },
+    {
+      "start": 1310.106,
+      "end": 1312.026,
+      "text": "that in the prediction market space,"
+    },
+    {
+      "start": 1312.026,
+      "end": 1315.186,
+      "text": "they are just like the illegal market"
+    },
+    {
+      "start": 1315.186,
+      "end": 1317.946,
+      "text": "from the perspective of their ability"
+    },
+    {
+      "start": 1317.946,
+      "end": 1321.506,
+      "text": "to flag anomalous behavior."
+    },
+    {
+      "start": 1321.506,
+      "end": 1325.266,
+      "text": "And part of this is, well, it's a part"
+    },
+    {
+      "start": 1325.266,
+      "end": 1327.386,
+      "text": "of the advancement of crypto."
+    },
+    {
+      "start": 1327.386,
+      "end": 1330.546,
+      "text": "And we have spent decades in this industry"
+    },
+    {
+      "start": 1330.546,
+      "end": 1333.306,
+      "text": "moving away from being questioned"
+    },
+    {
+      "start": 1333.306,
+      "end": 1335.506,
+      "text": "about the integrity of our industry"
+    },
+    {
+      "start": 1335.506,
+      "end": 1337.226,
+      "text": "as it relates to money laundering."
+    },
+    {
+      "start": 1338.186,
+      "end": 1340.426,
+      "text": "This is a step in the wrong direction."
+    },
+    {
+      "start": 1340.426,
+      "end": 1343.586,
+      "text": "And I think that it's why we have the NFL"
+    },
+    {
+      "start": 1343.586,
+      "end": 1347.986,
+      "text": "has similar voices, the similar worries that I do"
+    },
+    {
+      "start": 1347.986,
+      "end": 1351.026,
+      "text": "as it relates to prediction markets and the NCAA as well."
+    },
+    {
+      "start": 1352.266,
+      "end": 1355.946,
+      "text": "A final area for me, and this is almost a throwback,"
+    },
+    {
+      "start": 1355.946,
+      "end": 1359.426,
+      "text": "I'd like to end on a question that we might have discussed"
+    },
+    {
+      "start": 1359.426,
+      "end": 1362.026,
+      "text": "similar to what we might have talked about seven years ago."
+    },
+    {
+      "start": 1362.026,
+      "end": 1365.106,
+      "text": "In Illinois, really interesting developments"
+    },
+    {
+      "start": 1365.106,
+      "end": 1368.026,
+      "text": "regulatory-wise last year with an increase of tax rates."
+    },
+    {
+      "start": 1368.026,
+      "end": 1371.706,
+      "text": "And the way I looked at it was the operators"
+    },
+    {
+      "start": 1371.706,
+      "end": 1375.106,
+      "text": "are in such a strong position that they threw back"
+    },
+    {
+      "start": 1375.106,
+      "end": 1376.026,
+      "text": "with some of their own policies."
+    },
+    {
+      "start": 1376.026,
+      "end": 1377.506,
+      "text": "So there was some minimum bet policies,"
+    },
+    {
+      "start": 1377.506,
+      "end": 1380.826,
+      "text": "some transaction fees, whether you'd call them that or not,"
+    },
+    {
+      "start": 1380.826,
+      "end": 1383.146,
+      "text": "there's a debate about the terminology."
+    },
+    {
+      "start": 1383.146,
+      "end": 1384.866,
+      "text": "What's your view on how that market's playing out"
+    },
+    {
+      "start": 1384.866,
+      "end": 1387.266,
+      "text": "and what lessons we might learn from that"
+    },
+    {
+      "start": 1387.266,
+      "end": 1388.786,
+      "text": "when we kind of see the data"
+    },
+    {
+      "start": 1388.786,
+      "end": 1390.906,
+      "text": "on whether players left the market as a result"
+    },
+    {
+      "start": 1390.906,
+      "end": 1393.986,
+      "text": "or that whole state, really?"
+    },
+    {
+      "start": 1393.986,
+      "end": 1397.586,
+      "text": "Well, I think that Illinois is showing"
+    },
+    {
+      "start": 1397.586,
+      "end": 1401.626,
+      "text": "that there is the laws of supply and demand,"
+    },
+    {
+      "start": 1401.626,
+      "end": 1406.026,
+      "text": "the laws of cost, the laws of people have options,"
+    },
+    {
+      "start": 1406.026,
+      "end": 1407.506,
+      "text": "they are all real things."
+    },
+    {
+      "start": 1407.506,
+      "end": 1411.146,
+      "text": "And so I think that what we saw"
+    },
+    {
+      "start": 1411.146,
+      "end": 1413.506,
+      "text": "in the early adoption of sports betting"
+    },
+    {
+      "start": 1413.506,
+      "end": 1417.146,
+      "text": "were lower tax rates, and then as later states"
+    },
+    {
+      "start": 1417.146,
+      "end": 1418.686,
+      "text": "got into the sports betting space,"
+    },
+    {
+      "start": 1418.686,
+      "end": 1421.366,
+      "text": "they said, well, we can tax it at 50%"
+    },
+    {
+      "start": 1421.366,
+      "end": 1422.846,
+      "text": "and people will still do it."
+    },
+    {
+      "start": 1422.846,
+      "end": 1425.086,
+      "text": "And New York has probably been the story"
+    },
+    {
+      "start": 1425.086,
+      "end": 1427.526,
+      "text": "where people say, well, it's a pretty high tax rate,"
+    },
+    {
+      "start": 1427.526,
+      "end": 1429.766,
+      "text": "pretty high license rate, and still,"
+    },
+    {
+      "start": 1429.766,
+      "end": 1432.566,
+      "text": "they're the number one sports betting market in the US."
+    },
+    {
+      "start": 1432.566,
+      "end": 1434.226,
+      "text": "So where's the problem?"
+    },
+    {
+      "start": 1434.226,
+      "end": 1436.446,
+      "text": "Well, the problem is that after a while,"
+    },
+    {
+      "start": 1436.446,
+      "end": 1441.406,
+      "text": "when people become accustomed to betting in a market,"
+    },
+    {
+      "start": 1441.406,
+      "end": 1443.646,
+      "text": "and then they start to see that the odds are different"
+    },
+    {
+      "start": 1443.646,
+      "end": 1445.746,
+      "text": "and the cost structures are different,"
+    },
+    {
+      "start": 1445.746,
+      "end": 1449.266,
+      "text": "and they can go on their phone and look at other options"
+    },
+    {
+      "start": 1449.266,
+      "end": 1454.266,
+      "text": "or other mobile facilitation of bets,"
+    },
+    {
+      "start": 1454.286,
+      "end": 1456.186,
+      "text": "they may well migrate to that space."
+    },
+    {
+      "start": 1456.186,
+      "end": 1459.506,
+      "text": "And I think you have seen that directly in Illinois,"
+    },
+    {
+      "start": 1459.506,
+      "end": 1462.266,
+      "text": "where the handle has gone down,"
+    },
+    {
+      "start": 1462.266,
+      "end": 1465.906,
+      "text": "the handle's gone down because the cost structures around it"
+    },
+    {
+      "start": 1465.906,
+      "end": 1469.826,
+      "text": "are onerous for the players and for the suppliers."
+    },
+    {
+      "start": 1470.986,
+      "end": 1473.546,
+      "text": "In terms of, we always say it's very difficult"
+    },
+    {
+      "start": 1473.546,
+      "end": 1476.346,
+      "text": "for regulators to reverse a policy."
+    },
+    {
+      "start": 1476.346,
+      "end": 1477.626,
+      "text": "In terms of the numbers coming out of that,"
+    },
+    {
+      "start": 1477.626,
+      "end": 1480.426,
+      "text": "do you think there's any chance of maybe some backtracking"
+    },
+    {
+      "start": 1480.426,
+      "end": 1481.866,
+      "text": "or some changes?"
+    },
+    {
+      "start": 1481.866,
+      "end": 1482.706,
+      "text": "I do."
+    },
+    {
+      "start": 1482.706,
+      "end": 1486.426,
+      "text": "I mean, government generally is pretty reluctant"
+    },
+    {
+      "start": 1486.426,
+      "end": 1490.546,
+      "text": "to lower taxes almost, especially in our industry."
+    },
+    {
+      "start": 1490.546,
+      "end": 1495.286,
+      "text": "But I also think that we all have a collective interest"
+    },
+    {
+      "start": 1495.286,
+      "end": 1499.186,
+      "text": "in making sure that we have a sustainable,"
+    },
+    {
+      "start": 1499.186,
+      "end": 1502.546,
+      "text": "solid business foundation for the industry."
+    },
+    {
+      "start": 1502.546,
+      "end": 1505.626,
+      "text": "And like anything else, if you tax it too much,"
+    },
+    {
+      "start": 1505.626,
+      "end": 1506.866,
+      "text": "it's going to go away,"
+    },
+    {
+      "start": 1506.866,
+      "end": 1509.646,
+      "text": "or it's going to move to a different jurisdiction."
+    },
+    {
+      "start": 1509.646,
+      "end": 1513.266,
+      "text": "And so we spend so much time at the AGA"
+    },
+    {
+      "start": 1513.266,
+      "end": 1514.826,
+      "text": "talking about the illegal market,"
+    },
+    {
+      "start": 1514.826,
+      "end": 1519.826,
+      "text": "whether it be skill games that perform exactly the same"
+    },
+    {
+      "start": 1519.826,
+      "end": 1521.066,
+      "text": "as a slot machine,"
+    },
+    {
+      "start": 1521.066,
+      "end": 1523.266,
+      "text": "but they're in a convenience store in Pennsylvania"
+    },
+    {
+      "start": 1523.266,
+      "end": 1526.826,
+      "text": "or Virginia, and they're not taxed and they're not licensed"
+    },
+    {
+      "start": 1526.826,
+      "end": 1528.466,
+      "text": "and they don't have any consumer protections."
+    },
+    {
+      "start": 1528.466,
+      "end": 1532.306,
+      "text": "And so that's a scary thing for an industry"
+    },
+    {
+      "start": 1533.066,
+      "end": 1534.106,
+      "text": "that cares very much about making sure"
+    },
+    {
+      "start": 1534.106,
+      "end": 1536.946,
+      "text": "that we're part of the fun economy"
+    },
+    {
+      "start": 1536.946,
+      "end": 1538.546,
+      "text": "and we're not seen as predatory."
+    },
+    {
+      "start": 1538.546,
+      "end": 1543.546,
+      "text": "But when you have unlicensed, unregulated games"
+    },
+    {
+      "start": 1543.806,
+      "end": 1546.946,
+      "text": "and skill games or slot machines,"
+    },
+    {
+      "start": 1546.946,
+      "end": 1550.266,
+      "text": "we own that because the public doesn't discern"
+    },
+    {
+      "start": 1550.266,
+      "end": 1552.566,
+      "text": "the difference between the legal and the illegal."
+    },
+    {
+      "start": 1552.566,
+      "end": 1555.366,
+      "text": "I could say the same thing about the online space,"
+    },
+    {
+      "start": 1555.366,
+      "end": 1557.626,
+      "text": "because in the online space,"
+    },
+    {
+      "start": 1558.526,
+      "end": 1562.546,
+      "text": "some of the operators that are in the gray slash black"
+    },
+    {
+      "start": 1562.546,
+      "end": 1567.546,
+      "text": "market, they brazenly will align themselves"
+    },
+    {
+      "start": 1567.866,
+      "end": 1571.866,
+      "text": "and associate themselves with legal regulated brands"
+    },
+    {
+      "start": 1571.866,
+      "end": 1574.906,
+      "text": "so that the consumer who may want,"
+    },
+    {
+      "start": 1574.906,
+      "end": 1578.026,
+      "text": "and we've done plenty of survey work with the consumer"
+    },
+    {
+      "start": 1578.026,
+      "end": 1582.746,
+      "text": "that says absolutely want to only bet with and through"
+    },
+    {
+      "start": 1582.746,
+      "end": 1586.066,
+      "text": "a legal regulated operator, because one,"
+    },
+    {
+      "start": 1586.066,
+      "end": 1589.826,
+      "text": "I know they're not financing other illicit activities."
+    },
+    {
+      "start": 1589.826,
+      "end": 1593.466,
+      "text": "Two, if I win, I'm going to get paid."
+    },
+    {
+      "start": 1593.466,
+      "end": 1598.466,
+      "text": "And three, that there are testing to make sure that"
+    },
+    {
+      "start": 1599.306,
+      "end": 1600.906,
+      "text": "the hold is a legitimate hold,"
+    },
+    {
+      "start": 1600.906,
+      "end": 1605.506,
+      "text": "not that you might get paid out once every month."
+    },
+    {
+      "start": 1607.226,
+      "end": 1611.866,
+      "text": "And so I think that the consumer wants to play legally,"
+    },
+    {
+      "start": 1612.866,
+      "end": 1617.866,
+      "text": "and so this is up for each jurisdiction to make decisions,"
+    },
+    {
+      "start": 1619.266,
+      "end": 1622.546,
+      "text": "but I know that there's lots of other jurisdictions"
+    },
+    {
+      "start": 1622.546,
+      "end": 1624.586,
+      "text": "that are looking at the Illinois example and saying,"
+    },
+    {
+      "start": 1624.586,
+      "end": 1627.526,
+      "text": "well, maybe that's not the right way to go."
+    },
+    {
+      "start": 1628.426,
+      "end": 1631.826,
+      "text": "We can't fill every budget hole with gambling taxes,"
+    },
+    {
+      "start": 1631.826,
+      "end": 1635.346,
+      "text": "and eventually that golden goose may go find"
+    },
+    {
+      "start": 1635.346,
+      "end": 1636.946,
+      "text": "somewhere else to be."
+    },
+    {
+      "start": 1636.946,
+      "end": 1639.026,
+      "text": "It's a shame the UK government didn't necessarily"
+    },
+    {
+      "start": 1639.026,
+      "end": 1640.546,
+      "text": "think about that with their autumn budget,"
+    },
+    {
+      "start": 1640.546,
+      "end": 1644.346,
+      "text": "but yeah, thanks very much for your views on that,"
+    },
+    {
+      "start": 1644.346,
+      "end": 1645.506,
+      "text": "and for your time in general."
+    },
+    {
+      "start": 1645.506,
+      "end": 1646.546,
+      "text": "Oh, well, thank you so much,"
+    },
+    {
+      "start": 1646.546,
+      "end": 1647.986,
+      "text": "and I hope we'll do this again next year."
+    },
+    {
+      "start": 1647.986,
+      "end": 1649.626,
+      "text": "Yeah, absolutely, thanks again,"
+    },
+    {
+      "start": 1649.626,
+      "end": 1651.546,
+      "text": "and yeah, we'll speak again, I'm sure."
+    },
+    {
+      "start": 1651.546,
+      "end": 1652.386,
+      "text": "Great."
+    }
+  ],
+  "selectedClipTranscripts": [
+    {
+      "rank": 1,
+      "id": "c3591a64-c0cb-4bfc-b676-7d324b746493",
+      "startTime": 585.62,
+      "endTime": 622.29,
+      "duration": 36.66,
+      "title": "Prediction Markets: The Inevitable Question",
+      "scoreOverall": 100,
+      "scoreBreakdown": {
+        "hook": 40,
+        "emotion": 40,
+        "shareability": 25,
+        "clarity": 30,
+        "momentum": 10
+      },
+      "rationale": "Hook: interviewer teases the hot topic of prediction markets, sparking curiosity. Payoff: clip cuts off before the guest's response, leaving no clear resolution or value.",
+      "transcript": "Now I resisted the urge to go straight into prediction markets and ask you the first question. Obviously objectively speaking for our U.S. news recently it's probably been maybe half the coverage you know and not given given the A.J. stance and how you've written in the Global Gaming Decider magazine. You know it's probably not what you want to want to hear. And we know your position on prediction markets. But my question is more that despite your position and that of state regulators and tribes as well you know preaching markets at the moment are very much proliferating in terms of that growth. And given your kind of your stance on it how do"
+    },
+    {
+      "rank": 2,
+      "id": "ac2f2648-ce6d-4e1a-9a33-a9b3fa61d49e",
+      "startTime": 810.79,
+      "endTime": 830.98,
+      "duration": 20.19,
+      "title": "Dodd-Frank Tie To Betting Authority",
+      "scoreOverall": 100,
+      "scoreBreakdown": {
+        "hook": 70,
+        "emotion": 55,
+        "shareability": 60,
+        "clarity": 65,
+        "momentum": 60
+      },
+      "rationale": "Hook: linking sports betting claims to Dodd-Frank surprises and provokes curiosity. Payoff: frames regulatory absurdity clearly, but the remark trails off and lacks a full finish.",
+      "transcript": "to do this in 2010. When America was you know when the Congress passed Dodd-Frank. Why was Dodd-Frank passed. It was passed in response to excesses by industry banking specifically derivatives. You know credit default swaps. And so the idea that somehow or another in"
+    },
+    {
+      "rank": 3,
+      "id": "46bc8095-5038-46e7-81af-ad8b5b01f6e6",
+      "startTime": 548.96,
+      "endTime": 569.18,
+      "duration": 20.22,
+      "title": "Sports Games Fuel Vegas Weekends",
+      "scoreOverall": 98,
+      "scoreBreakdown": {
+        "hook": 65,
+        "emotion": 60,
+        "shareability": 50,
+        "clarity": 60,
+        "momentum": 45
+      },
+      "rationale": "Hook: relatable travel hook about fans turning games into Vegas weekends. Payoff: good anecdote about tourism and local excitement but ends mid-phrase, limiting closure.",
+      "transcript": "Raiders will play on a Thursday night game and everybody on the Strip is super excited about it because they know there's a whole bunch of people that came in from Green Bay or Chicago or Miami that said, this is a great opportunity for us to do a Vegas weekend. Well our first hook will be Thursday night football or Sunday football and we'll"
+    },
+    {
+      "rank": 4,
+      "id": "15e98c53-dbc4-45c4-b5f1-d4caa604423a",
+      "startTime": 946.52,
+      "endTime": 966.88,
+      "duration": 20.36,
+      "title": "Brazen Prop Bets Must Be Stopped",
+      "scoreOverall": 98,
+      "scoreBreakdown": {
+        "hook": 85,
+        "emotion": 80,
+        "shareability": 75,
+        "clarity": 70,
+        "momentum": 70
+      },
+      "rationale": "Hook: strong emotional language (“brazen,” “untethered”) seizes attention. Payoff: makes a clear enforcement case and court-centred solution, very quotable despite truncation.",
+      "transcript": "window for college sports to then you know his Vladimir Zelinsky going to wear a suit. And and is Maduro going to be captured. And is Venezuela going to be freed. Like what they're doing is so brazen and it is so untethered to actual regulation that it needs to be stopped. And so you know the courthouse is an important place. We actually we believe that what they're doing flies in the face of federal statute. It flies in the face of states rights flies in the face of tribal sovereignty and the actual statute and reg"
+    },
+    {
+      "rank": 5,
+      "id": "d4ef958d-0fe0-405d-8c1c-ad67f36d37fd",
+      "startTime": 94,
+      "endTime": 119.12,
+      "duration": 25.12,
+      "title": "CEO Optimism Signals Industry Growth",
+      "scoreOverall": 97,
+      "scoreBreakdown": {
+        "hook": 68,
+        "emotion": 55,
+        "shareability": 52,
+        "clarity": 58,
+        "momentum": 47
+      },
+      "rationale": "Hook: citing CEO surveys offers immediate credibility and interest. Payoff: asserts sustained growth across sectors, but delivery is generic and trails off slightly.",
+      "transcript": "We survey our CEOs all the time. They've probably been most optimistic that they've been in a couple of years. So I think that's a really good sign in terms of, you know, continued growth, growth in brick and mortar, growth in commercial, growth in tribal, growth in sports betting, and certainly growth in iGaming. So I would say on a whole, you know, industry's doing really well. The U.S."
+    }
+  ],
+  "rawScoredResponseText": "{\"candidates\":[{\"id\":\"de5abb30-d8d8-4ee9-ad4e-a87f6f24adf7\",\"title\":\"Year In Review: Industry Pluses And Minuses\",\"rationale\":\"Hook: direct ask to sum the year's agenda draws attention. Payoff: delivers a broad optimism vs risk overview but contains filler and low info density, limiting punch.\",\"scoreOverall\":58,\"confidence\":60,\"failureFlags\":[\"low_density\",\"repetitive\"],\"scoreBreakdown\":{\"hook\":55,\"emotion\":50,\"shareability\":50,\"clarity\":60,\"momentum\":65}},{\"id\":\"c3591a64-c0cb-4bfc-b676-7d324b746493\",\"title\":\"Prediction Markets: The Inevitable Question\",\"rationale\":\"Hook: interviewer teases the hot topic of prediction markets, sparking curiosity. Payoff: clip cuts off before the guest's response, leaving no clear resolution or value.\",\"scoreOverall\":28,\"confidence\":50,\"failureFlags\":[\"cutoff_end\",\"context_missing\"],\"scoreBreakdown\":{\"hook\":40,\"emotion\":40,\"shareability\":25,\"clarity\":30,\"momentum\":10}},{\"id\":\"0aaf05a1-eeb7-4098-aaa8-4d0dbbe69115\",\"title\":\"Federal Agency Overreach Claim\",\"rationale\":\"Hook: bold claim that a federal agency isn't designed to regulate gambling grabs attention. Payoff: promising regulatory critique but starts abruptly and lacks full context.\",\"scoreOverall\":42,\"confidence\":55,\"failureFlags\":[\"cutoff_start\",\"context_missing\"],\"scoreBreakdown\":{\"hook\":60,\"emotion\":45,\"shareability\":35,\"clarity\":40,\"momentum\":35}},{\"id\":\"b13a4888-c5cb-4e15-9059-3ffaa6be2a43\",\"title\":\"Prediction Markets Are A Tulip Bubble\",\"rationale\":\"Hook: vivid tulip-mania analogy immediately frames prediction markets as a speculative bubble. Payoff: sharp, quotable warning with clear skeptical conclusion and good shareability.\",\"scoreOverall\":80,\"confidence\":82,\"failureFlags\":[],\"scoreBreakdown\":{\"hook\":87,\"emotion\":70,\"shareability\":86,\"clarity\":75,\"momentum\":72}},{\"id\":\"48e259ab-f8c0-434a-8c8e-7f0fbc0eb5c4\",\"title\":\"States' Rights Versus Federal Intrusion\",\"rationale\":\"Hook: confident states-rights claim is attention-grabbing. Payoff: persuasive legal framing but the clip ends mid-word, reducing resolution and impact.\",\"scoreOverall\":40,\"confidence\":55,\"failureFlags\":[\"cutoff_end\"],\"scoreBreakdown\":{\"hook\":60,\"emotion\":50,\"shareability\":35,\"clarity\":35,\"momentum\":30}},{\"id\":\"2b4a37e8-7b3d-4cc3-940f-01d1997da6f1\",\"title\":\"Courthouses And Tribal Defense Strategy\",\"rationale\":\"Hook: decisive line about taking fights to courthouses signals action. Payoff: outlines multi-pronged legal strategy but cuts off before completion, weakening payoff.\",\"scoreOverall\":44,\"confidence\":55,\"failureFlags\":[\"cutoff_end\"],\"scoreBreakdown\":{\"hook\":62,\"emotion\":50,\"shareability\":40,\"clarity\":45,\"momentum\":25}},{\"id\":\"bab3e85d-f8d6-431c-8caf-c8b1f40439f3\",\"title\":\"Vegas Is Now A Global Sports Hub\",\"rationale\":\"Hook: surprising claim reframes Vegas beyond gambling, mentioning F1 and the Super Bowl. Payoff: concrete examples of teams and tourism give strong payoff, though clip truncates.\",\"scoreOverall\":74,\"confidence\":75,\"failureFlags\":[\"cutoff_end\"],\"scoreBreakdown\":{\"hook\":80,\"emotion\":70,\"shareability\":75,\"clarity\":70,\"momentum\":70}},{\"id\":\"ac2f2648-ce6d-4e1a-9a33-a9b3fa61d49e\",\"title\":\"Dodd-Frank Tie To Betting Authority\",\"rationale\":\"Hook: linking sports betting claims to Dodd-Frank surprises and provokes curiosity. Payoff: frames regulatory absurdity clearly, but the remark trails off and lacks a full finish.\",\"scoreOverall\":66,\"confidence\":60,\"failureFlags\":[\"cutoff_end\"],\"scoreBreakdown\":{\"hook\":70,\"emotion\":55,\"shareability\":60,\"clarity\":65,\"momentum\":60}},{\"id\":\"d4e78adb-5ce2-4aa7-8eff-d556ca4e445e\",\"title\":\"Legalising Sports Betting: The First Battle\",\"rationale\":\"Hook: reference to the 2018 Supreme Court decision is timely and clear. Payoff: explains migration from offshore to legal markets with a solid conclusion, though clip ends abruptly.\",\"scoreOverall\":72,\"confidence\":70,\"failureFlags\":[\"cutoff_end\"],\"scoreBreakdown\":{\"hook\":78,\"emotion\":60,\"shareability\":68,\"clarity\":70,\"momentum\":65}},{\"id\":\"15e98c53-dbc4-45c4-b5f1-d4caa604423a\",\"title\":\"Brazen Prop Bets Must Be Stopped\",\"rationale\":\"Hook: strong emotional language (“brazen,” “untethered”) seizes attention. Payoff: makes a clear enforcement case and court-centred solution, very quotable despite truncation.\",\"scoreOverall\":76,\"confidence\":74,\"failureFlags\":[\"cutoff_end\"],\"scoreBreakdown\":{\"hook\":85,\"emotion\":80,\"shareability\":75,\"clarity\":70,\"momentum\":70}},{\"id\":\"46bc8095-5038-46e7-81af-ad8b5b01f6e6\",\"title\":\"Sports Games Fuel Vegas Weekends\",\"rationale\":\"Hook: relatable travel hook about fans turning games into Vegas weekends. Payoff: good anecdote about tourism and local excitement but ends mid-phrase, limiting closure.\",\"scoreOverall\":58,\"confidence\":58,\"failureFlags\":[\"cutoff_end\"],\"scoreBreakdown\":{\"hook\":65,\"emotion\":60,\"shareability\":50,\"clarity\":60,\"momentum\":45}},{\"id\":\"d4ef958d-0fe0-405d-8c1c-ad67f36d37fd\",\"title\":\"CEO Optimism Signals Industry Growth\",\"rationale\":\"Hook: citing CEO surveys offers immediate credibility and interest. Payoff: asserts sustained growth across sectors, but delivery is generic and trails off slightly.\",\"scoreOverall\":60,\"confidence\":60,\"failureFlags\":[\"cutoff_end\"],\"scoreBreakdown\":{\"hook\":68,\"emotion\":55,\"shareability\":52,\"clarity\":58,\"momentum\":47}}]}"
+}

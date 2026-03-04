@@ -1,0 +1,344 @@
+﻿# Transcript Sample (AGA Cached)
+
+Source: project `edd34f64-aaff-4054-8a0e-eeba2b0ececc` external transcript cache
+
+## Timestamped transcript
+
+- [00:00:00.000 --> 00:00:28.400] Hello viewers, Tim Poole here on The Huddle and I'm with Bill Miller, President and CEO
+- [00:00:28.480 --> 00:00:30.960] of the American Gaming Association. Bill, thanks for joining us again.
+- [00:00:31.520 --> 00:00:32.720] Thank you so much for having me.
+- [00:00:33.600 --> 00:00:38.480] You spoke to us at ICE last year. A lot has happened since. I mean,
+- [00:00:38.480 --> 00:00:42.400] it's guaranteed to, I think, in your role, but if you can manage it,
+- [00:00:42.400 --> 00:00:46.800] if you could try and maybe sum up the biggest things that have been on your agenda this past
+- [00:00:46.800 --> 00:00:52.960] year. Yeah, well, thank you for the question. I think that, you know, in the U.S. we're dealing
+- [00:00:52.960 --> 00:00:58.240] with, you know, a lot of pluses and some minuses. You know, we've got kind of a, you know, an
+- [00:00:58.240 --> 00:01:03.760] economy that is still, you know, structurally sound, but there's just a lot of things that
+- [00:01:03.760 --> 00:01:10.800] are out there in terms of macro issues, you know, inflation, you know, interest rates,
+- [00:01:10.800 --> 00:01:16.880] tariffs, all of those things play into, you know, the U.S. market. We've got almost,
+- [00:01:16.880 --> 00:01:20.720] you know, over a thousand casinos across the country. We've got, you know,
+- [00:01:20.720 --> 00:01:27.280] really important destination resorts like the Las Vegas and others. And some of those kind of get
+- [00:01:27.280 --> 00:01:34.000] hit when we're in global, when we're having global issues. That said, you know, industry's healthy.
+- [00:01:34.000 --> 00:01:40.320] We survey our CEOs all the time. They've probably been most optimistic that they've been in a couple
+- [00:01:40.320 --> 00:01:46.800] of years. So I think that's a really good sign in terms of, you know, continued growth, growth in
+- [00:01:47.760 --> 00:01:53.360] brick and mortar, growth in commercial, growth in tribal, growth in sports betting, and certainly
+- [00:01:53.360 --> 00:01:59.120] growth in iGaming. So I would say on a whole, you know, industry's doing really well. The U.S.
+- [00:01:59.120 --> 00:02:07.120] market's doing well. Like any large, you know, the United States, as you know, is not a national
+- [00:02:07.120 --> 00:02:14.080] gambling market. It's a state by state and tribal nation. And so, you know, in any economy, you have
+- [00:02:14.080 --> 00:02:18.480] regional areas that are stronger than others. But I think on the whole, things are good.
+- [00:02:19.200 --> 00:02:24.240] Certainly some interesting talking points that we can get to, perhaps some challenging areas as well.
+- [00:02:24.240 --> 00:02:29.520] But you mentioned the optimism of the CEOs, and you already kind of listed a few of the factors
+- [00:02:29.520 --> 00:02:34.160] why, but why particularly are they so optimistic at the moment, given, as you said, there's
+- [00:02:34.160 --> 00:02:38.320] quite a few external factors that are perhaps, you know, as you mentioned, not quite going in
+- [00:02:38.320 --> 00:02:44.960] the right direction? Well, I think it's in part, and I don't know how much you can really attribute
+- [00:02:44.960 --> 00:02:50.880] this to the reintroduction of the industry. But, you know, we went through a pretty tough time
+- [00:02:50.880 --> 00:02:57.600] during COVID, right? We had literally the globe was shut down. In the U.S., same situation,
+- [00:02:57.600 --> 00:03:02.880] different states and different parts of the country took it differently. But what we found is
+- [00:03:03.600 --> 00:03:10.880] it gave the industry an opportunity to reset and think about, on a going forward basis, when we
+- [00:03:10.880 --> 00:03:15.280] come out of this COVID thing, what are people going to want? Are they going to want more stuff,
+- [00:03:15.280 --> 00:03:21.040] or are they going to want more experiences? And what we saw really strongly is they wanted more
+- [00:03:21.040 --> 00:03:25.120] experiences, maybe because for two years, everybody was locked up in their houses. And so,
+- [00:03:25.760 --> 00:03:30.880] we are in the experience business. We're the best at creating those experiences. And so,
+- [00:03:30.880 --> 00:03:37.520] what we looked at it and said, everyone said, well, like, in the casino space, you know,
+- [00:03:37.520 --> 00:03:41.040] when people get older, that's when they start going to casinos. And that traditionally,
+- [00:03:41.040 --> 00:03:47.520] that demographically had been true. But what we saw after was we were one of the first
+- [00:03:48.240 --> 00:03:54.080] kind of entertainment options to open in America. Concerts, we opened before them.
+- [00:03:54.080 --> 00:03:57.680] Theaters, we opened before them. Sporting events, we opened before them.
+- [00:03:58.480 --> 00:04:04.640] Really, restaurants and other entertainment venues, we opened before them, in part because
+- [00:04:04.640 --> 00:04:15.360] we knew how to do social gatherings safely. We were, from an industry perspective, we were setting
+- [00:04:15.360 --> 00:04:21.360] up vaccine lines. We were doing some really important things in and around testing. But then,
+- [00:04:22.080 --> 00:04:26.080] very importantly, we're one of the largest taxpayers in every one of the states that we're
+- [00:04:26.080 --> 00:04:34.560] in. And so, the states had a real strong incentive to work with us to try and get the casinos open
+- [00:04:34.560 --> 00:04:40.960] maybe earlier than these other entertainment options. And that allowed us to market to a
+- [00:04:40.960 --> 00:04:49.280] younger demographic that has really helped sustain that level of optimism because we've
+- [00:04:49.280 --> 00:04:55.200] created a new vertical, a new demographic that are, you know, they're younger, but they're going
+- [00:04:55.200 --> 00:05:00.640] to be able to play longer. Vegas is a good example of that experience and entertainment
+- [00:05:00.640 --> 00:05:07.120] factor because, you know, once upon a time, it was mostly gaming revenues. Now, it's mostly
+- [00:05:08.880 --> 00:05:12.160] not amenities, but, you know, you've got sports, you've got concerts, you've got other things you
+- [00:05:12.160 --> 00:05:17.360] mentioned. But in terms of a Vegas outlook for 2026, obviously, there was a successful G3 show
+- [00:05:17.360 --> 00:05:22.960] last year, but there was a lot of discussion about tourism levels. You know, depending on who you
+- [00:05:22.960 --> 00:05:27.440] spoke to, some said, don't worry, it's fine. Others said, oh, it's, you know, it's maybe some
+- [00:05:27.440 --> 00:05:31.360] provocative articles saying there was no one on the streets at all. Obviously, that's not true.
+- [00:05:32.000 --> 00:05:36.160] But there's kind of high prices have been discussed as a thing that might put customers off.
+- [00:05:36.160 --> 00:05:42.240] What's the outlook, in your opinion, you know, for 2026? Well, I think that the last G2E we had
+- [00:05:42.240 --> 00:05:47.360] back in October, it was, you know, it was on par with the one we had the year before, which
+- [00:05:48.000 --> 00:05:53.440] was one of the best shows we'd ever had in terms of, you know, and I look at these things from a,
+- [00:05:53.440 --> 00:05:58.240] you know, foot traffic is an important metric, but it's not the most important metric. The most
+- [00:05:58.240 --> 00:06:03.840] important metric is for the people that exhibit or the people that can buy their stuff, do they
+- [00:06:03.840 --> 00:06:09.200] show up and are they the people that with buying authority? That's the only thing ultimately that
+- [00:06:09.200 --> 00:06:15.360] determines whether this show is a success or not. And then ultimately afterwards, when we do the
+- [00:06:15.360 --> 00:06:21.760] postmortem of the show, you, exhibitor, spent millions of dollars in building out your booth,
+- [00:06:21.760 --> 00:06:27.440] in having your staff here. Did you believe that there was good and strong ROI for your
+- [00:06:27.440 --> 00:06:33.520] exhibition? And the, you know, the sentiment both from last year and from this year was
+- [00:06:33.520 --> 00:06:39.280] very strongly positive. So yeah, there were certainly things kind of, you know, and I track
+- [00:06:39.280 --> 00:06:44.720] numbers all the time. I spend a lot of time in the lead up to these shows looking and saying,
+- [00:06:44.720 --> 00:06:51.120] all right, so now it appears the U.S. is having some challenges with Canada. Is Canadian visitation
+- [00:06:51.120 --> 00:06:56.480] going to suffer from that? Are there visa issues in different countries based around
+- [00:06:56.480 --> 00:07:03.440] unrelated immigration issues that might affect the show and people and delegations coming?
+- [00:07:04.880 --> 00:07:10.400] We tracked it the whole time and I would say that there was, you know, along the margins,
+- [00:07:10.480 --> 00:07:18.000] some negativity there, but at the end of the day, it's all about, you know, did the exhibitors who
+- [00:07:18.000 --> 00:07:23.680] spent the most money to put the show on believe that they were able to create economic
+- [00:07:23.680 --> 00:07:30.960] opportunities that were real and that were, you know, significant enough that usually
+- [00:07:30.960 --> 00:07:36.400] when the show ends, we say, all right, what about next year? And so from that perspective,
+- [00:07:36.800 --> 00:07:41.600] you know, we've locked everybody down for this coming year based upon the success of last.
+- [00:07:41.600 --> 00:07:46.160] And if you're extrapolating that to Vegas throughout the year, you know, a similar answer,
+- [00:07:46.160 --> 00:07:51.760] I expect that the tourism numbers and things like that, no great worries for the future?
+- [00:07:52.400 --> 00:07:57.040] I don't think so. I think, and you referenced it a few moments ago, like Las Vegas is becoming
+- [00:07:57.040 --> 00:08:03.680] much more than just a gambling destination. It has for years, but it's now a global sports hub,
+- [00:08:03.680 --> 00:08:08.640] you know, with F1 and, you know, the Superbowl that was there. I mean, we have,
+- [00:08:08.640 --> 00:08:13.920] you know, in Las Vegas, there's, you know, there's a hockey team, there's professional football team,
+- [00:08:13.920 --> 00:08:21.120] very good hockey team, and soon going to have a baseball team. And what you see in those games is,
+- [00:08:21.120 --> 00:08:26.960] you know, Las Vegas has come to adopt certainly the Golden Knights very strongly. I think the
+- [00:08:26.960 --> 00:08:32.640] Raiders a little bit harder to, for people in Las Vegas, because it's not, you know,
+- [00:08:32.640 --> 00:08:38.960] it's not native. It didn't start there. And I think that the Oakland, Sacramento,
+- [00:08:38.960 --> 00:08:45.040] whatever the A's are today, when they come to Las Vegas, you're going to see people,
+- [00:08:46.320 --> 00:08:51.360] local fans that are supportive, but maybe even more importantly, you're going to see
+- [00:08:52.000 --> 00:08:56.720] fans from the other teams that say, you know what, this is another reason for us to go to
+- [00:08:56.720 --> 00:09:02.480] Las Vegas, to go see the Oakland A's play the Boston Red Sox. I mean, the Las Vegas A's play
+- [00:09:02.480 --> 00:09:08.960] the Boston Red Sox, or, and you see it all the time with football. You see, you know, like the
+- [00:09:08.960 --> 00:09:13.040] Raiders will play on a Thursday night game and everybody on the
+- [00:09:13.143 --> 00:09:20.303] Strip is super excited about it because they know there's a whole bunch of people that came in from Green Bay or Chicago or Miami that said,
+- [00:09:20.703 --> 00:09:29.183] this is a great opportunity for us to do a Vegas weekend. Well our first hook will be Thursday night football or Sunday football and we'll
+- [00:09:29.183 --> 00:09:35.503] be able to make a long weekend out of it. And I think that what you're just seeing is whether it was food and certainly
+- [00:09:36.503 --> 00:09:44.863] entertainment but now sports layered into that is a really positive synergies synergy that is in Las Vegas.
+- [00:09:45.623 --> 00:09:54.823] Now I resisted the urge to go straight into prediction markets and ask you the first question. Obviously objectively speaking for
+- [00:09:54.823 --> 00:10:02.383] our U.S. news recently it's probably been maybe half the coverage you know and not given given the A.J. stance and how you've written
+- [00:10:02.383 --> 00:10:08.943] in the Global Gaming Decider magazine. You know it's probably not what you want to want to hear. And we know your position on
+- [00:10:08.943 --> 00:10:17.263] prediction markets. But my question is more that despite your position and that of state regulators and tribes as well you know
+- [00:10:17.263 --> 00:10:25.063] preaching markets at the moment are very much proliferating in terms of that growth. And given your kind of your stance on it how do
+- [00:10:25.063 --> 00:10:31.383] you sort of manage this situation at the moment. Well it's an important issue. And I think that what you see in this in this industry
+- [00:10:31.383 --> 00:10:41.583] and I've been in this job now I don't know close to seven years. And I think about the first year in my term and my time as CEO was the
+- [00:10:41.663 --> 00:10:51.183] integration of sports betting into America legal sports betting because the Supreme Court ruled in 2018 that you know that there's no
+- [00:10:51.223 --> 00:11:02.063] reason that that it was unconstitutional to have a federal preemption of states rights. And that this court said in a resounding
+- [00:11:02.063 --> 00:11:09.903] opinion that the federal government should not be in the business of dictating gambling policy to the states that the 10th Amendment and
+- [00:11:09.903 --> 00:11:18.583] the Constitution and decades of jurisprudence in America say if the federal government is going to be in this space it needs to be in this
+- [00:11:18.583 --> 00:11:26.743] space in a manner that that respects the rights of the states. And so you know what happened. You know 40 some states legalized sports
+- [00:11:26.743 --> 00:11:36.343] betting. And so my first year was all about the legalization of sports betting to try to dislodge the you know the mafia the you know
+- [00:11:36.343 --> 00:11:45.223] the online offshore Web sites that people had been utilizing for decades because there was no legal option and migrating that group of
+- [00:11:45.223 --> 00:11:54.343] consumers to the to the legal market. And so I experienced that. I went through it. I was you know very integrally involved in working
+- [00:11:54.343 --> 00:12:03.663] with state legislators in trying to make that happen. Yeah. And so now you fast forward to today and the federal government through an
+- [00:12:03.663 --> 00:12:17.863] agency that really doesn't regulate or is ever been designed to regulate gambling is become a de facto national gambling regulator. Like
+- [00:12:17.863 --> 00:12:28.903] it flies in the face of everything that those of us that follow work in either from a legislative perspective a policy making perspective as
+- [00:12:29.263 --> 00:12:37.783] for gambling. And so look my view is you know there's a lot of momentum behind prediction markets. But you know there was a lot of momentum
+- [00:12:37.783 --> 00:12:49.583] around tulip bulbs in Holland back in the 1600s. And then they became valueless. And so I you know I I my my my strong view is the strong
+- [00:12:49.583 --> 00:12:57.943] view that is certainly represent. I'm here to represent the industry but I'm also a lawyer. And I understand you know I've been in public
+- [00:12:57.943 --> 00:13:07.903] policy legal work politics for most of my life. And you look at this as an objective person and I'm a partisan unquestionably. But I
+- [00:13:07.903 --> 00:13:19.223] look at it and I say the federal government does not intrude on states rights by accident. And so the the notion that somehow or
+- [00:13:19.223 --> 00:13:29.343] another couchy polymarketing at all would say well it actually the CFTC allows us to do this. And they actually specifically allowed us
+- [00:13:29.343 --> 00:13:39.143] to do this in 2010. When America was you know when the Congress passed Dodd-Frank. Why was Dodd-Frank passed. It was passed in response
+- [00:13:39.143 --> 00:13:50.983] to excesses by industry banking specifically derivatives. You know credit default swaps. And so the idea that somehow or another in
+- [00:13:50.983 --> 00:14:01.283] that environment where the Congress was reigning in business met trying to make consumers more safe that they also. Tucked in some
+- [00:14:01.283 --> 00:14:13.643] little you know if the element of of the bill that allowed sports prediction markets is laughable. And then I think the most absurd part is
+- [00:14:13.963 --> 00:14:24.643] that if if this is what they claim as their their rationale or their legal standing why did it take 15 years after the passage of this for
+- [00:14:24.643 --> 00:14:34.443] somebody to suddenly discover that they could legally bet on sports. It there's a common sense element that that is necessary. And and again
+- [00:14:34.443 --> 00:14:44.683] we were in the fight. It's it's not going away anytime soon. But at the end of the day I think we went to in terms of how you win putting
+- [00:14:44.683 --> 00:14:52.283] that view forward and the practical approach. Is it simply in the courtroom you know and challenging these companies. No it's it's a all of
+- [00:14:52.283 --> 00:15:00.283] the above strategy. It's making sure that policymakers understand that that you know at the state level there's money at risk. You know
+- [00:15:00.283 --> 00:15:08.203] we're the largest taxpayer in almost every state in which we operate. And in terms of sports betting and I gaming because there's definitely a
+- [00:15:08.203 --> 00:15:18.723] view that that you know betting on a prediction that the that you know a roulette wheel will land on 17 is not far away from you know a
+- [00:15:18.763 --> 00:15:27.923] random number generator. That is not that hard. People said well all that all they're really going to do is you know straight money line
+- [00:15:27.923 --> 00:15:37.123] bets. And they did until they did parlays until they did player props until they did. And I L like who's going to move in the transfer
+- [00:15:37.123 --> 00:15:46.523] window for college sports to then you know his Vladimir Zelinsky going to wear a suit. And and is Maduro going to be captured. And is
+- [00:15:46.523 --> 00:15:57.483] Venezuela going to be freed. Like what they're doing is so brazen and it is so untethered to actual regulation that it needs to be
+- [00:15:57.483 --> 00:16:05.003] stopped. And so you know the courthouse is an important place. We actually we believe that what they're doing flies in the face of
+- [00:16:05.403 --> 00:16:16.283] federal statute. It flies in the face of states rights flies in the face of tribal sovereignty and the actual statute and reg
+- [00:16:16.283 --> 00:16:24.683] that they point to isn't applicable. And so for all of those things it's part of it is making sure that we're in as many courthouses as
+- [00:16:24.683 --> 00:16:33.763] we can be to support state and tribal regulators and the people that are negatively affected by prediction markets. But we're also in
+- [00:16:33.763 --> 00:16:41.403] Congress and we're working on you know working on fixes at the congressional level. And we're working to ensure that you know state
+- [00:16:41.403 --> 00:16:49.123] attorneys general are aware of this because there are no consumer protections and they can say well we have our own protocols that we use
+- [00:16:49.123 --> 00:16:58.163] internally. Well that's fine. But no one in the gambling industry the legal regulated gambling industry gets to self-certify that what
+- [00:16:58.163 --> 00:17:06.923] they're doing is appropriate. There are regulators that hold the legal industry to account when they fall short of the obligations under
+- [00:17:06.923 --> 00:17:15.243] that license. And so the notion that somehow or another these guys are self-certifying their activities and and that they don't really
+- [00:17:15.243 --> 00:17:27.603] answer to anyone other than this you know 600 person regulatory organization that was you know chartered to protect farmers and help to
+- [00:17:28.203 --> 00:17:37.563] create hedges on agricultural products is just it's laughable. But again there's a lot of money chasing it. There's a lot of money in it.
+- [00:17:37.843 --> 00:17:46.843] There's valuations for these companies that you know are in the billions. And so we are not we're not blind to know that this is a group of
+- [00:17:46.843 --> 00:17:53.763] individuals who now believe that they have a foothold and that they're going to expand that foothold. And our job is to make sure that you
+- [00:17:53.763 --> 00:18:02.123] know in places that don't have gambling and they don't want gambling. And that's the important part of the U.S. market is it isn't a
+- [00:18:02.123 --> 00:18:10.443] national market. It's a state by state market. The individual stakeholders in those states politicians policymakers religious etc.
+- [00:18:10.963 --> 00:18:18.323] They get to determine should we have sports betting. Should we have casinos. Do we have tribes here. And what should all of these
+- [00:18:18.563 --> 00:18:25.403] things look like. And in places like Utah they don't want gambling at all. And now they're getting gambling courtesy of the federal
+- [00:18:25.403 --> 00:18:25.723] government.
+- [00:18:26.286 --> 00:18:28.946] places like South Carolina, they don't want gambling.
+- [00:18:28.946 --> 00:18:30.946] They're getting gambling courtesy of the federal government.
+- [00:18:30.946 --> 00:18:35.506] And so making sure that we are building an army of people
+- [00:18:35.506 --> 00:18:39.026] that have a vested interest in the outcome
+- [00:18:39.026 --> 00:18:41.106] is more important than what Bill Miller says
+- [00:18:41.106 --> 00:18:42.486] as the head of the AGA.
+- [00:18:43.546 --> 00:18:44.986] Very well put in terms of the case
+- [00:18:44.986 --> 00:18:47.146] and the argument going forward.
+- [00:18:47.146 --> 00:18:50.186] Sports betting came up as almost
+- [00:18:51.186 --> 00:18:52.906] as part of the conversation there,
+- [00:18:52.906 --> 00:18:55.466] but it's telling that after a few years,
+- [00:18:55.466 --> 00:18:57.386] and you mentioned seven years ago, you started in the role.
+- [00:18:57.386 --> 00:18:59.506] And I remember we sat at ICE in London
+- [00:18:59.506 --> 00:19:02.346] and we spoke about New York mobile sports betting
+- [00:19:02.346 --> 00:19:05.146] potentially opening up and it did.
+- [00:19:05.146 --> 00:19:07.146] But sports betting now is quite a foothold
+- [00:19:07.146 --> 00:19:09.666] in terms of we're talking less about it
+- [00:19:09.666 --> 00:19:11.506] with these kind of early regulatory questions
+- [00:19:11.506 --> 00:19:14.266] because it's becoming a somewhat established market.
+- [00:19:14.266 --> 00:19:16.866] But something that obviously made worldwide headlines
+- [00:19:16.866 --> 00:19:21.866] was the FBI investigation into integrity issues
+- [00:19:22.266 --> 00:19:24.626] and in the NBA and things like that.
+- [00:19:25.306 --> 00:19:27.506] A couple of issues off that really.
+- [00:19:27.506 --> 00:19:30.186] I'm wondering if, I mean, there's a lot of calls
+- [00:19:30.186 --> 00:19:31.786] to maybe ban prop bets and things like that,
+- [00:19:31.786 --> 00:19:34.706] but within the industry, we would look at that
+- [00:19:34.706 --> 00:19:37.586] and think that's probably not the right way to look at it.
+- [00:19:37.586 --> 00:19:39.986] Are we looking at an issue where actually
+- [00:19:39.986 --> 00:19:42.866] because integrity tools have improved so much,
+- [00:19:42.866 --> 00:19:44.906] these things, it's not that these things
+- [00:19:44.906 --> 00:19:46.546] are more readily available,
+- [00:19:46.546 --> 00:19:50.706] it's that actually we're just better able to catch them.
+- [00:19:50.706 --> 00:19:52.946] I mean, that's kind of a takeaway point I have.
+- [00:19:53.106 --> 00:19:54.786] I think so.
+- [00:19:54.786 --> 00:19:57.746] I think it's a tragedy anytime,
+- [00:19:57.746 --> 00:20:00.306] particularly in a college dynamic
+- [00:20:00.306 --> 00:20:02.866] where you've got some kid who's on a scholarship
+- [00:20:02.866 --> 00:20:04.866] and he tells a couple of his friends
+- [00:20:04.866 --> 00:20:06.986] that he hurt his ankle and he's not gonna play
+- [00:20:06.986 --> 00:20:08.546] in a basketball game tonight.
+- [00:20:10.346 --> 00:20:13.426] But he's an important part of the team.
+- [00:20:13.426 --> 00:20:17.066] And so those friends then utilize that inside information
+- [00:20:18.786 --> 00:20:19.786] to their benefit.
+- [00:20:20.706 --> 00:20:24.306] In the old days, nobody would be any the wiser.
+- [00:20:24.306 --> 00:20:26.946] Today with a legal regulated market,
+- [00:20:26.946 --> 00:20:29.866] you have sports books that look at anomalous activity
+- [00:20:29.866 --> 00:20:32.746] and they look at it and then they flag it
+- [00:20:32.746 --> 00:20:34.746] and then they might deny the bet
+- [00:20:34.746 --> 00:20:38.826] and then they might engage with the leagues
+- [00:20:38.826 --> 00:20:42.746] or the conferences and then importantly, law enforcement.
+- [00:20:42.746 --> 00:20:47.586] And so what it does is it creates an ability
+- [00:20:47.586 --> 00:20:52.586] for you to actually have visibility into bad actors
+- [00:20:54.226 --> 00:20:59.226] and which we didn't have when sports betting was not legal.
+- [00:20:59.226 --> 00:21:02.386] And so then to your point on prop bets and other things,
+- [00:21:03.466 --> 00:21:07.666] we have become, the NCAA in the US
+- [00:21:07.666 --> 00:21:09.666] has got a lot of issues on their plate.
+- [00:21:09.666 --> 00:21:13.786] They've got to figure out what does NIL,
+- [00:21:13.786 --> 00:21:16.826] name, image, likeness, payment to college athletes,
+- [00:21:16.866 --> 00:21:17.706] what's that look like?
+- [00:21:17.706 --> 00:21:22.706] How does it change the dynamic for student athletes?
+- [00:21:22.946 --> 00:21:26.626] And then the transfer portal where you see literally
+- [00:21:26.626 --> 00:21:31.346] players up and leaving after one season or even mid season
+- [00:21:31.346 --> 00:21:33.546] and in part because they're gonna get paid more money
+- [00:21:33.546 --> 00:21:34.466] at a different college.
+- [00:21:34.466 --> 00:21:38.506] And so the question is, are they really student athletes
+- [00:21:38.506 --> 00:21:41.826] or are they paid athletes who go to school?
+- [00:21:41.826 --> 00:21:45.506] And that's a thing that they're wrestling with.
+- [00:21:45.546 --> 00:21:48.426] To their credit, they also recognize that
+- [00:21:48.426 --> 00:21:50.106] going back to prediction markets,
+- [00:21:50.106 --> 00:21:52.026] that in the prediction market space,
+- [00:21:52.026 --> 00:21:55.186] they are just like the illegal market
+- [00:21:55.186 --> 00:21:57.946] from the perspective of their ability
+- [00:21:57.946 --> 00:22:01.506] to flag anomalous behavior.
+- [00:22:01.506 --> 00:22:05.266] And part of this is, well, it's a part
+- [00:22:05.266 --> 00:22:07.386] of the advancement of crypto.
+- [00:22:07.386 --> 00:22:10.546] And we have spent decades in this industry
+- [00:22:10.546 --> 00:22:13.306] moving away from being questioned
+- [00:22:13.306 --> 00:22:15.506] about the integrity of our industry
+- [00:22:15.506 --> 00:22:17.226] as it relates to money laundering.
+- [00:22:18.186 --> 00:22:20.426] This is a step in the wrong direction.
+- [00:22:20.426 --> 00:22:23.586] And I think that it's why we have the NFL
+- [00:22:23.586 --> 00:22:27.986] has similar voices, the similar worries that I do
+- [00:22:27.986 --> 00:22:31.026] as it relates to prediction markets and the NCAA as well.
+- [00:22:32.266 --> 00:22:35.946] A final area for me, and this is almost a throwback,
+- [00:22:35.946 --> 00:22:39.426] I'd like to end on a question that we might have discussed
+- [00:22:39.426 --> 00:22:42.026] similar to what we might have talked about seven years ago.
+- [00:22:42.026 --> 00:22:45.106] In Illinois, really interesting developments
+- [00:22:45.106 --> 00:22:48.026] regulatory-wise last year with an increase of tax rates.
+- [00:22:48.026 --> 00:22:51.706] And the way I looked at it was the operators
+- [00:22:51.706 --> 00:22:55.106] are in such a strong position that they threw back
+- [00:22:55.106 --> 00:22:56.026] with some of their own policies.
+- [00:22:56.026 --> 00:22:57.506] So there was some minimum bet policies,
+- [00:22:57.506 --> 00:23:00.826] some transaction fees, whether you'd call them that or not,
+- [00:23:00.826 --> 00:23:03.146] there's a debate about the terminology.
+- [00:23:03.146 --> 00:23:04.866] What's your view on how that market's playing out
+- [00:23:04.866 --> 00:23:07.266] and what lessons we might learn from that
+- [00:23:07.266 --> 00:23:08.786] when we kind of see the data
+- [00:23:08.786 --> 00:23:10.906] on whether players left the market as a result
+- [00:23:10.906 --> 00:23:13.986] or that whole state, really?
+- [00:23:13.986 --> 00:23:17.586] Well, I think that Illinois is showing
+- [00:23:17.586 --> 00:23:21.626] that there is the laws of supply and demand,
+- [00:23:21.626 --> 00:23:26.026] the laws of cost, the laws of people have options,
+- [00:23:26.026 --> 00:23:27.506] they are all real things.
+- [00:23:27.506 --> 00:23:31.146] And so I think that what we saw
+- [00:23:31.146 --> 00:23:33.506] in the early adoption of sports betting
+- [00:23:33.506 --> 00:23:37.146] were lower tax rates, and then as later states
+- [00:23:37.146 --> 00:23:38.686] got into the sports betting space,
+- [00:23:38.686 --> 00:23:41.366] they said, well, we can tax it at 50%
+- [00:23:41.366 --> 00:23:42.846] and people will still do it.
+- [00:23:42.846 --> 00:23:45.086] And New York has probably been the story
+- [00:23:45.086 --> 00:23:47.526] where people say, well, it's a pretty high tax rate,
+- [00:23:47.526 --> 00:23:49.766] pretty high license rate, and still,
+- [00:23:49.766 --> 00:23:52.566] they're the number one sports betting market in the US.
+- [00:23:52.566 --> 00:23:54.226] So where's the problem?
+- [00:23:54.226 --> 00:23:56.446] Well, the problem is that after a while,
+- [00:23:56.446 --> 00:24:01.406] when people become accustomed to betting in a market,
+- [00:24:01.406 --> 00:24:03.646] and then they start to see that the odds are different
+- [00:24:03.646 --> 00:24:05.746] and the cost structures are different,
+- [00:24:05.746 --> 00:24:09.266] and they can go on their phone and look at other options
+- [00:24:09.266 --> 00:24:14.266] or other mobile facilitation of bets,
+- [00:24:14.286 --> 00:24:16.186] they may well migrate to that space.
+- [00:24:16.186 --> 00:24:19.506] And I think you have seen that directly in Illinois,
+- [00:24:19.506 --> 00:24:22.266] where the handle has gone down,
+- [00:24:22.266 --> 00:24:25.906] the handle's gone down because the cost structures around it
+- [00:24:25.906 --> 00:24:29.826] are onerous for the players and for the suppliers.
+- [00:24:30.986 --> 00:24:33.546] In terms of, we always say it's very difficult
+- [00:24:33.546 --> 00:24:36.346] for regulators to reverse a policy.
+- [00:24:36.346 --> 00:24:37.626] In terms of the numbers coming out of that,
+- [00:24:37.626 --> 00:24:40.426] do you think there's any chance of maybe some backtracking
+- [00:24:40.426 --> 00:24:41.866] or some changes?
+- [00:24:41.866 --> 00:24:42.706] I do.
+- [00:24:42.706 --> 00:24:46.426] I mean, government generally is pretty reluctant
+- [00:24:46.426 --> 00:24:50.546] to lower taxes almost, especially in our industry.
+- [00:24:50.546 --> 00:24:55.286] But I also think that we all have a collective interest
+- [00:24:55.286 --> 00:24:59.186] in making sure that we have a sustainable,
+- [00:24:59.186 --> 00:25:02.546] solid business foundation for the industry.
+- [00:25:02.546 --> 00:25:05.626] And like anything else, if you tax it too much,
+- [00:25:05.626 --> 00:25:06.866] it's going to go away,
+- [00:25:06.866 --> 00:25:09.646] or it's going to move to a different jurisdiction.
+- [00:25:09.646 --> 00:25:13.266] And so we spend so much time at the AGA
+- [00:25:13.266 --> 00:25:14.826] talking about the illegal market,
+- [00:25:14.826 --> 00:25:19.826] whether it be skill games that perform exactly the same
+- [00:25:19.826 --> 00:25:21.066] as a slot machine,
+- [00:25:21.066 --> 00:25:23.266] but they're in a convenience store in Pennsylvania
+- [00:25:23.266 --> 00:25:26.826] or Virginia, and they're not taxed and they're not licensed
+- [00:25:26.826 --> 00:25:28.466] and they don't have any consumer protections.
+- [00:25:28.466 --> 00:25:32.306] And so that's a scary thing for an industry
+- [00:25:33.066 --> 00:25:34.106] that cares very much about making sure
+- [00:25:34.106 --> 00:25:36.946] that we're part of the fun economy
+- [00:25:36.946 --> 00:25:38.546] and we're not seen as predatory.
+- [00:25:38.546 --> 00:25:43.546] But when you have unlicensed, unregulated games
+- [00:25:43.806 --> 00:25:46.946] and skill games or slot machines,
+- [00:25:46.946 --> 00:25:50.266] we own that because the public doesn't discern
+- [00:25:50.266 --> 00:25:52.566] the difference between the legal and the illegal.
+- [00:25:52.566 --> 00:25:55.366] I could say the same thing about the online space,
+- [00:25:55.366 --> 00:25:57.626] because in the online space,
+- [00:25:58.526 --> 00:26:02.546] some of the operators that are in the gray slash black
+- [00:26:02.546 --> 00:26:07.546] market, they brazenly will align themselves
+- [00:26:07.866 --> 00:26:11.866] and associate themselves with legal regulated brands
+- [00:26:11.866 --> 00:26:14.906] so that the consumer who may want,
+- [00:26:14.906 --> 00:26:18.026] and we've done plenty of survey work with the consumer
+- [00:26:18.026 --> 00:26:22.746] that says absolutely want to only bet with and through
+- [00:26:22.746 --> 00:26:26.066] a legal regulated operator, because one,
+- [00:26:26.066 --> 00:26:29.826] I know they're not financing other illicit activities.
+- [00:26:29.826 --> 00:26:33.466] Two, if I win, I'm going to get paid.
+- [00:26:33.466 --> 00:26:38.466] And three, that there are testing to make sure that
+- [00:26:39.306 --> 00:26:40.906] the hold is a legitimate hold,
+- [00:26:40.906 --> 00:26:45.506] not that you might get paid out once every month.
+- [00:26:47.226 --> 00:26:51.866] And so I think that the consumer wants to play legally,
+- [00:26:52.866 --> 00:26:57.866] and so this is up for each jurisdiction to make decisions,
+- [00:26:59.266 --> 00:27:02.546] but I know that there's lots of other jurisdictions
+- [00:27:02.546 --> 00:27:04.586] that are looking at the Illinois example and saying,
+- [00:27:04.586 --> 00:27:07.526] well, maybe that's not the right way to go.
+- [00:27:08.426 --> 00:27:11.826] We can't fill every budget hole with gambling taxes,
+- [00:27:11.826 --> 00:27:15.346] and eventually that golden goose may go find
+- [00:27:15.346 --> 00:27:16.946] somewhere else to be.
+- [00:27:16.946 --> 00:27:19.026] It's a shame the UK government didn't necessarily
+- [00:27:19.026 --> 00:27:20.546] think about that with their autumn budget,
+- [00:27:20.546 --> 00:27:24.346] but yeah, thanks very much for your views on that,
+- [00:27:24.346 --> 00:27:25.506] and for your time in general.
+- [00:27:25.506 --> 00:27:26.546] Oh, well, thank you so much,
+- [00:27:26.546 --> 00:27:27.986] and I hope we'll do this again next year.
+- [00:27:27.986 --> 00:27:29.626] Yeah, absolutely, thanks again,
+- [00:27:29.626 --> 00:27:31.546] and yeah, we'll speak again, I'm sure.
+- [00:27:31.546 --> 00:27:32.386] Great.
