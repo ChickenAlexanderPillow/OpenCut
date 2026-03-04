@@ -53,7 +53,7 @@ Thanks to [Vercel](https://vercel.com?utm_source=github-opencut&utm_campaign=oss
 - [Bun](https://bun.sh/docs/installation)
 - [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/)
 
-> **Note:** Docker is optional but recommended for running the local database and Redis. If you only want to work on frontend features, you can skip it.
+> **Note:** Docker is optional but recommended for running local Redis and transcription sidecars. If you only want to work on frontend features, you can skip it.
 
 ### Setup
 
@@ -69,10 +69,10 @@ Thanks to [Vercel](https://vercel.com?utm_source=github-opencut&utm_campaign=oss
    Copy-Item apps/web/.env.example apps/web/.env.local
    ```
 
-3. Start the database and Redis:
+3. Start Redis:
 
    ```bash
-   docker compose up -d db redis serverless-redis-http
+   docker compose up -d redis serverless-redis-http
    ```
 
 4. Install dependencies and start the dev server:
@@ -96,7 +96,7 @@ docker compose up -d
 
 The app will be available at [http://localhost:3000](http://localhost:3000).
 
-For this repo, the full stack (web + local transcribe + db + redis) can be started with:
+For this repo, the full stack (web + local transcribe + redis) can be started with:
 
 ```bash
 bun run docker:up

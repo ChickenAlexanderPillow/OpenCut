@@ -13,16 +13,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY services/local-transcribe-whisperx/requirements.txt /app/requirements.txt
+COPY requirements.txt /app/requirements.txt
 
 # whisperx==3.8.1 expects torch~=2.8.0; install CUDA build explicitly.
-RUN python3 -m pip install --upgrade pip && \
+RUN --mount=type=cache,target=/root/.cache/pip \
+	python3 -m pip install --upgrade pip && \
 	python3 -m pip install --index-url https://download.pytorch.org/whl/cu128 \
 		torch==2.8.0+cu128 torchaudio==2.8.0+cu128 && \
 	python3 -m pip install -r /app/requirements.txt
 
-COPY services/local-transcribe-whisperx/app.py /app/app.py
-COPY services/local-transcribe-whisperx/transcribe.py /app/transcribe.py
+COPY app.py /app/app.py
+COPY transcribe.py /app/transcribe.py
 
 EXPOSE 8765
 

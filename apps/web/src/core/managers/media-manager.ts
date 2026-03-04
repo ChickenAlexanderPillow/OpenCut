@@ -19,6 +19,14 @@ export class MediaManager {
 		projectId: string;
 		asset: Omit<MediaAsset, "id">;
 	}): Promise<void> {
+		const existing = this.assets.find((candidate) =>
+			this.isDuplicateAsset({ existing: candidate, incoming: asset }),
+		);
+		if (existing) {
+			this.releaseAssetUrls({ asset });
+			return;
+		}
+
 		const newAsset: MediaAsset = {
 			...asset,
 			id: generateUUID(),
@@ -33,6 +41,37 @@ export class MediaManager {
 			console.error("Failed to save media asset:", error);
 			this.assets = this.assets.filter((asset) => asset.id !== newAsset.id);
 			this.notify();
+		}
+	}
+
+	private isDuplicateAsset({
+		existing,
+		incoming,
+	}: {
+		existing: MediaAsset;
+		incoming: Omit<MediaAsset, "id">;
+	}): boolean {
+		return (
+			existing.type === incoming.type &&
+			existing.file.size === incoming.file.size &&
+			existing.file.lastModified === incoming.file.lastModified &&
+			existing.name === incoming.name
+		);
+	}
+
+	private releaseAssetUrls({
+		asset,
+	}: {
+		asset: Omit<MediaAsset, "id">;
+	}): void {
+		if (asset.url) {
+			URL.revokeObjectURL(asset.url);
+		}
+		if (asset.thumbnailUrl) {
+			URL.revokeObjectURL(asset.thumbnailUrl);
+		}
+		if (asset.previewUrl) {
+			URL.revokeObjectURL(asset.previewUrl);
 		}
 	}
 

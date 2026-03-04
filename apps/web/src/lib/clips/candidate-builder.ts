@@ -3,8 +3,8 @@ import type { ClipCandidateDraft } from "@/types/clip-generation";
 import type { TranscriptionSegment } from "@/types/transcription";
 
 const DEFAULT_MIN_CLIP_SECONDS = 20;
-const DEFAULT_MAX_CLIP_SECONDS = 90;
-const DEFAULT_TARGET_CLIP_SECONDS = 45;
+const DEFAULT_MAX_CLIP_SECONDS = 65;
+const DEFAULT_TARGET_CLIP_SECONDS = 36;
 const DEFAULT_MAX_OUTPUT = 12;
 const CLUSTER_GAP_SECONDS = 6;
 const CONTEXT_DEPENDENT_OPENING_WORDS = new Set([
@@ -376,7 +376,16 @@ function snapWindowToSentenceBoundaries({
 			}
 		}
 	}
-	// Intentionally allow exceeding maxClipSeconds when needed to finish a sentence.
+	if (adjustedEnd - adjustedStart > maxClipSeconds) {
+		adjustedEnd = adjustedStart + maxClipSeconds;
+	}
+	if (adjustedEnd - adjustedStart < minClipSeconds) {
+		const minEndTarget = Math.min(mediaDuration, adjustedStart + minClipSeconds);
+		adjustedEnd = Math.max(adjustedEnd, minEndTarget);
+		if (adjustedEnd - adjustedStart > maxClipSeconds) {
+			adjustedStart = Math.max(0, adjustedEnd - maxClipSeconds);
+		}
+	}
 
 	return {
 		startTime: clamp(adjustedStart, 0, mediaDuration),

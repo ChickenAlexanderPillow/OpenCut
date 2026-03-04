@@ -1,4 +1,16 @@
-import { auth } from "@/lib/auth/server";
-import { toNextJsHandler } from "better-auth/next-js";
+import { NextResponse } from "next/server";
 
-export const { POST, GET } = toNextJsHandler(auth);
+function disabled() {
+	return NextResponse.json(
+		{ error: "Authentication is disabled in local-storage mode" },
+		{ status: 503 },
+	);
+}
+
+export async function GET() {
+	return disabled();
+}
+
+export async function POST() {
+	return disabled();
+}

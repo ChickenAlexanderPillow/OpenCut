@@ -2,7 +2,7 @@ import type { MediaAsset } from "@/types/assets";
 import type { TProject, TProjectMetadata } from "@/types/project";
 import type { SavedSoundsData, SoundEffect } from "@/types/sounds";
 
-export type StorageBackend = "server" | "local";
+export type StorageBackend = "local";
 
 export interface StorageBackendService {
 	saveProject({ project }: { project: TProject }): Promise<void>;

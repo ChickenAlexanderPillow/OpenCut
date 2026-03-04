@@ -72,6 +72,9 @@ import { syncCaptionsFromTranscriptEdits } from "@/lib/transcript-editor/sync-ca
 const MIN_VIRAL_CLIP_SCORE = 60;
 const MIN_VIRAL_CLIP_COUNT = 3;
 const MAX_VIRAL_CLIP_COUNT = 5;
+const VIRAL_CLIP_MIN_SECONDS = 18;
+const VIRAL_CLIP_TARGET_SECONDS = 36;
+const VIRAL_CLIP_MAX_SECONDS = 65;
 const CLIP_SCORING_TRANSCRIPT_MAX_CHARS = 20000;
 const CLIP_SCORING_TIMEOUT_MS = 120000;
 const CLIP_SCORING_BATCH_SIZE = 4;
@@ -1333,7 +1336,7 @@ export function useEditorActions() {
 		rippleEditingEnabled,
 		requestFitView,
 	} = useTimelineStore();
-	const { setStatus, setError, setCandidates, reset } = useClipGenerationStore();
+	const { setStatus, setProgress, setError, setCandidates, reset } = useClipGenerationStore();
 
 	async function resolveVideoCoverScale({
 		asset,
@@ -2003,6 +2006,8 @@ export function useEditorActions() {
 					setStatus({
 						status: "extracting",
 						sourceMediaId: mediaAsset.id,
+						progress: 5,
+						progressMessage: "Preparing transcript...",
 					});
 					transcriptionOperationId = transcriptionStatus.start("Preparing transcript...");
 					projectProcessId = registerProcess({
@@ -2016,6 +2021,11 @@ export function useEditorActions() {
 							operationId: transcriptionOperationId,
 							message: "Preparing transcript...",
 							progress: null,
+						});
+						setProgress({
+							sourceMediaId: mediaAsset.id,
+							progress: 5,
+							progressMessage: "Preparing transcript...",
 						});
 						if (projectProcessId) {
 							updateProcessLabel({
@@ -2074,6 +2084,12 @@ export function useEditorActions() {
 									status: "transcribing",
 									sourceMediaId: mediaAsset.id,
 								});
+								setProgress({
+									sourceMediaId: mediaAsset.id,
+									progress: Math.max(8, Math.min(70, 8 + (progress.progress * 0.62))),
+									progressMessage:
+										progress.message ?? "Transcribing source media...",
+								});
 								transcriptionStatus.update({
 									operationId: transcriptionOperationId,
 									message: progress.message ?? "Transcribing source media...",
@@ -2112,6 +2128,14 @@ export function useEditorActions() {
 
 					if (transcriptResult.fromCache) {
 						hasTranscriptionProgress = true;
+						setProgress({
+							sourceMediaId: mediaAsset.id,
+							progress: 70,
+							progressMessage:
+								transcriptResult.source === "media-linked"
+									? "Using linked transcript"
+									: "Using cached transcript",
+						});
 						transcriptionStatus.update({
 							operationId: transcriptionOperationId,
 							message:
@@ -2125,26 +2149,18 @@ export function useEditorActions() {
 						}
 					}
 
-					const [mediaDuration, candidateDrafts] = await Promise.all([
-						Promise.resolve(
+					const candidateDrafts = buildClipCandidatesFromTranscript({
+						segments: transcriptResult.transcript.segments,
+						mediaDuration:
 							mediaAsset.duration ??
-								transcriptResult.transcript.segments[
-									transcriptResult.transcript.segments.length - 1
-								]?.end ??
-								0,
-						),
-						Promise.resolve(
-							buildClipCandidatesFromTranscript({
-								segments: transcriptResult.transcript.segments,
-								mediaDuration:
-									mediaAsset.duration ??
-									transcriptResult.transcript.segments[
-										transcriptResult.transcript.segments.length - 1
-									]?.end ??
-									0,
-							}),
-						),
-					]);
+							transcriptResult.transcript.segments[
+								transcriptResult.transcript.segments.length - 1
+							]?.end ??
+							0,
+						minClipSeconds: VIRAL_CLIP_MIN_SECONDS,
+						targetClipSeconds: VIRAL_CLIP_TARGET_SECONDS,
+						maxClipSeconds: VIRAL_CLIP_MAX_SECONDS,
+					});
 
 					if (candidateDrafts.length === 0) {
 						setError({ error: "No candidate windows found for this transcript" });
@@ -2164,6 +2180,8 @@ export function useEditorActions() {
 					setStatus({
 						status: "scoring",
 						sourceMediaId: mediaAsset.id,
+						progress: 72,
+						progressMessage: "Scoring clip candidates...",
 					});
 					if (projectProcessId) {
 						updateProcessLabel({
@@ -2186,6 +2204,20 @@ export function useEditorActions() {
 									label: `Scoring clip virality (${scoredCountSoFar}/${scoringPool.length})...`,
 								});
 							}
+							setProgress({
+								sourceMediaId: mediaAsset.id,
+								progress:
+									scoringPool.length > 0
+										? Math.max(
+												72,
+												Math.min(
+													99,
+													72 + Math.round((scoredCountSoFar / scoringPool.length) * 27),
+												),
+											)
+										: 95,
+								progressMessage: `Scoring clip candidates (${scoredCountSoFar}/${scoringPool.length})...`,
+							});
 							const adjustedLatestBatch = rankCandidatesWithRatingFeedback({
 								candidates: latestBatch,
 								feedbackModel,

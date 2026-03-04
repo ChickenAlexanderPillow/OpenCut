@@ -23,9 +23,9 @@ COPY packages/ui/ packages/ui/
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_OPTIONS="--max-old-space-size=1024"
 
 # Build-time env stubs to pass zod validation
-ENV DATABASE_URL="postgresql://opencut:opencut@localhost:5432/opencut"
 ENV BETTER_AUTH_SECRET="build-time-secret"
 ENV UPSTASH_REDIS_REST_URL="http://localhost:8079"
 ENV UPSTASH_REDIS_REST_TOKEN="example_token"
@@ -45,11 +45,12 @@ WORKDIR /app/apps/web
 RUN bun run build
 
 # Production image
-FROM base AS runner
+FROM node:20-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_OPTIONS="--max-old-space-size=1024"
 
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
@@ -67,4 +68,4 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-CMD ["bun", "apps/web/server.js"]
+CMD ["node", "apps/web/server.js"]

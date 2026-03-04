@@ -585,6 +585,8 @@ export function Clips() {
 	const mediaAssets = editor.media.getAssets();
 	const {
 		status,
+		progress,
+		progressMessage,
 		error,
 		sourceMediaId: generatingSourceMediaId,
 		hydrate,
@@ -629,6 +631,17 @@ export function Clips() {
 			(process.label.startsWith("Importing clips") ||
 				process.label.startsWith("Preparing clip imports")),
 	);
+	const activeClipGenerationProcess = processes.find(
+		(process) =>
+			process.projectId === project.metadata.id &&
+			process.kind === "clip-generation" &&
+			!process.label.startsWith("Importing clips") &&
+			!process.label.startsWith("Preparing clip imports"),
+	);
+	const isGeneratingCurrentMedia =
+		isGenerating &&
+		Boolean(generatingSourceMediaId) &&
+		!groups.some((group) => group.sourceMediaId === generatingSourceMediaId);
 
 	useEffect(() => {
 		if (hasClipImportProcess) return;
@@ -653,10 +666,42 @@ export function Clips() {
 			contentClassName="space-y-3 pb-3"
 		>
 			{error && <div className="text-xs text-red-500">{error}</div>}
-			{groups.length === 0 && (
+			{groups.length === 0 && !isGeneratingCurrentMedia && (
 				<div className="text-muted-foreground text-xs">
 					No stored clip groups for this project. Use the clip icon on media in Assets to
 					generate clips.
+				</div>
+			)}
+			{isGeneratingCurrentMedia && generatingSourceMediaId && (
+				<div className="rounded-md border p-3">
+					<div className="mb-2 flex items-center gap-2">
+						<Spinner className="size-4" />
+						<div className="text-sm font-medium">
+							{mediaById.get(generatingSourceMediaId)?.name ??
+								`Generating clips (${generatingSourceMediaId.slice(0, 8)}...)`}
+						</div>
+					</div>
+					<div className="text-muted-foreground text-xs">
+						{progressMessage ??
+							activeClipGenerationProcess?.label ??
+							"Generating clips..."}
+					</div>
+					<div className="bg-muted mt-2 h-1.5 w-full overflow-hidden rounded-full">
+						<div
+							className="bg-foreground h-full transition-all duration-300"
+							style={{
+								width: `${Math.max(
+									4,
+									Math.min(100, typeof progress === "number" ? progress : 12),
+								)}%`,
+							}}
+						/>
+					</div>
+					<div className="text-muted-foreground mt-1 text-[11px]">
+						{typeof progress === "number"
+							? `${Math.round(progress)}%`
+							: "In progress"}
+					</div>
 				</div>
 			)}
 
@@ -674,8 +719,7 @@ export function Clips() {
 					return fallbackEntries[0]?.segments ?? [];
 				})();
 				const previewSource =
-					sourceMedia &&
-					sourceMedia.url &&
+					sourceMedia?.url &&
 					(sourceMedia.type === "video" || sourceMedia.type === "audio")
 						? {
 								url: sourceMedia.url,
@@ -730,6 +774,29 @@ export function Clips() {
 							<div className="border-t" />
 						</div>
 						{group.error && <div className="text-xs text-red-400">{group.error}</div>}
+						{processingThisGroup && (
+							<div className="rounded-md border p-2">
+								<div className="mb-1 flex items-center gap-2 text-xs">
+									<Spinner className="size-3.5" />
+									<span>
+										{progressMessage ??
+											activeClipGenerationProcess?.label ??
+											"Generating clips..."}
+									</span>
+								</div>
+								<div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
+									<div
+										className="bg-foreground h-full transition-all duration-300"
+										style={{
+											width: `${Math.max(
+												4,
+												Math.min(100, typeof progress === "number" ? progress : 12),
+											)}%`,
+										}}
+									/>
+								</div>
+							</div>
+						)}
 						{rankedCandidates.map((candidate) => (
 							<CandidateCard
 								key={`${group.sourceMediaId}:${candidate.id}`}

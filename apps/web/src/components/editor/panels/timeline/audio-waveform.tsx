@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import WaveSurfer from "wavesurfer.js";
 import { decodeMediaFileToAudioBuffer } from "@/lib/media/audio";
 
 interface AudioWaveformProps {
@@ -10,10 +9,34 @@ interface AudioWaveformProps {
 	className?: string;
 }
 
-const decodedBufferCache = new Map<string, Promise<AudioBuffer | null>>();
+const MAX_CACHED_WAVEFORMS = 64;
+const waveformPeaksCache = new Map<string, Promise<number[] | null>>();
 
 function getDecodedBufferCacheKey(file: File): string {
 	return `${file.name}:${file.size}:${file.lastModified}:${file.type}`;
+}
+
+function touchWaveformCacheEntry({ cacheKey }: { cacheKey: string }): void {
+	const existing = waveformPeaksCache.get(cacheKey);
+	if (!existing) return;
+	waveformPeaksCache.delete(cacheKey);
+	waveformPeaksCache.set(cacheKey, existing);
+}
+
+function setWaveformCacheEntry({
+	cacheKey,
+	value,
+}: {
+	cacheKey: string;
+	value: Promise<number[] | null>;
+}): void {
+	if (!waveformPeaksCache.has(cacheKey) && waveformPeaksCache.size >= MAX_CACHED_WAVEFORMS) {
+		const oldestKey = waveformPeaksCache.keys().next().value;
+		if (typeof oldestKey === "string") {
+			waveformPeaksCache.delete(oldestKey);
+		}
+	}
+	waveformPeaksCache.set(cacheKey, value);
 }
 
 function extractPeaks({
@@ -22,29 +45,88 @@ function extractPeaks({
 }: {
 	buffer: AudioBuffer;
 	length?: number;
-}): number[][] {
-	const channels = buffer.numberOfChannels;
-	const peaks: number[][] = [];
+}): number[] {
+	if (buffer.numberOfChannels <= 0 || buffer.length <= 0) return [];
+	const channelData = buffer.getChannelData(0);
+	const step = Math.max(1, Math.floor(channelData.length / length));
+	const peaks: number[] = [];
 
-	for (let c = 0; c < channels; c++) {
-		const data = buffer.getChannelData(c);
-		const step = Math.max(1, Math.floor(data.length / length));
-		const channelPeaks: number[] = [];
-
-		for (let i = 0; i < length; i++) {
-			const start = i * step;
-			const end = Math.min(start + step, data.length);
-			let max = 0;
-			for (let j = start; j < end; j++) {
-				const abs = Math.abs(data[j]);
-				if (abs > max) max = abs;
-			}
-			channelPeaks.push(max);
+	for (let i = 0; i < length; i++) {
+		const start = i * step;
+		const end = Math.min(start + step, channelData.length);
+		let max = 0;
+		for (let j = start; j < end; j++) {
+			const abs = Math.abs(channelData[j] ?? 0);
+			if (abs > max) max = abs;
 		}
-		peaks.push(channelPeaks);
+		peaks.push(max);
 	}
 
 	return peaks;
+}
+
+async function decodeAudioUrlToPeaks({ audioUrl }: { audioUrl: string }): Promise<number[] | null> {
+	const context = new AudioContext();
+	try {
+		const response = await fetch(audioUrl);
+		if (!response.ok) return null;
+		const arrayBuffer = await response.arrayBuffer();
+		const decoded = await context.decodeAudioData(arrayBuffer.slice(0));
+		return extractPeaks({ buffer: decoded, length: 2048 });
+	} catch (error) {
+		console.warn("Waveform URL decode failed:", error);
+		return null;
+	} finally {
+		void context.close().catch(() => undefined);
+	}
+}
+
+function drawPeaksToCanvas({
+	canvas,
+	container,
+	peaks,
+	height,
+}: {
+	canvas: HTMLCanvasElement;
+	container: HTMLDivElement;
+	peaks: number[];
+	height: number;
+}): boolean {
+	const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+	const width = Math.max(256, container.clientWidth || 256);
+	const pixelHeight = Math.max(12, Math.floor(height));
+	canvas.width = width * dpr;
+	canvas.height = pixelHeight * dpr;
+	canvas.style.width = `${width}px`;
+	canvas.style.height = `${pixelHeight}px`;
+
+	const ctx = canvas.getContext("2d");
+	if (!ctx) return false;
+
+	ctx.setTransform(1, 0, 0, 1, 0, 0);
+	ctx.scale(dpr, dpr);
+	ctx.clearRect(0, 0, width, pixelHeight);
+
+	const barWidth = 2;
+	const barGap = 1;
+	const step = barWidth + barGap;
+	const centerY = pixelHeight / 2;
+	const maxBarHeight = Math.max(2, pixelHeight / 2 - 1);
+	const targetBars = Math.max(64, Math.floor(width / step));
+	const sampleStep = Math.max(1, Math.floor(peaks.length / targetBars));
+
+	ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
+	let barIndex = 0;
+	for (let i = 0; i < peaks.length; i += sampleStep) {
+		const x = barIndex * step;
+		if (x > width) break;
+		const amplitude = Math.max(0.02, Math.min(1, peaks[i] ?? 0));
+		const barHeight = Math.max(1, Math.floor(amplitude * maxBarHeight));
+		ctx.fillRect(x, centerY - barHeight, barWidth, barHeight * 2);
+		barIndex += 1;
+	}
+
+	return true;
 }
 
 export function AudioWaveform({
@@ -56,203 +138,89 @@ export function AudioWaveform({
 }: AudioWaveformProps) {
 	const waveformRef = useRef<HTMLDivElement>(null);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
-	const wavesurfer = useRef<WaveSurfer | null>(null);
 	const [isLoading, setIsLoading] = useState(true);
 	const [error, setError] = useState(false);
 
 	useEffect(() => {
 		let mounted = true;
-		const ws = wavesurfer.current;
 
-		const initWaveSurfer = async () => {
-			if (!waveformRef.current || (!audioUrl && !audioBuffer && !audioFile)) return;
+		const renderWaveform = async () => {
+			if (!waveformRef.current || !canvasRef.current) return;
+			if (!audioBuffer && !audioFile && !audioUrl) return;
 
-			const drawBufferToCanvas = (buffer: AudioBuffer): boolean => {
-				if (!canvasRef.current || !waveformRef.current) return false;
-				const canvas = canvasRef.current;
-				const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
-				const width = Math.max(256, waveformRef.current.clientWidth || 256);
-				const pixelHeight = Math.max(12, Math.floor(height));
-				canvas.width = width * dpr;
-				canvas.height = pixelHeight * dpr;
-				canvas.style.width = `${width}px`;
-				canvas.style.height = `${pixelHeight}px`;
-
-				const ctx = canvas.getContext("2d");
-				if (!ctx) {
-					return false;
-				}
-
-				ctx.scale(dpr, dpr);
-				ctx.clearRect(0, 0, width, pixelHeight);
-
-				const peaks = extractPeaks({
-					buffer,
-					length: Math.max(64, Math.floor(width / 2)),
-				});
-				const channelPeaks = peaks[0] ?? [];
-				const barWidth = 2;
-				const barGap = 1;
-				const step = barWidth + barGap;
-				const centerY = pixelHeight / 2;
-				const maxBarHeight = Math.max(2, pixelHeight / 2 - 1);
-
-				ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
-				for (let i = 0; i < channelPeaks.length; i++) {
-					const x = i * step;
-					if (x > width) break;
-					const amplitude = Math.max(0.02, Math.min(1, channelPeaks[i] ?? 0));
-					const barHeight = Math.max(1, Math.floor(amplitude * maxBarHeight));
-					ctx.fillRect(x, centerY - barHeight, barWidth, barHeight * 2);
-				}
-
-				return true;
-			};
+			let peaks: number[] | null = null;
 
 			if (audioBuffer) {
-				const drawn = drawBufferToCanvas(audioBuffer);
-				if (!drawn) {
-					setError(true);
-					setIsLoading(false);
-					return;
+				peaks = extractPeaks({
+					buffer: audioBuffer,
+					length: 2048,
+				});
+			} else if (audioFile) {
+				const cacheKey = getDecodedBufferCacheKey(audioFile);
+				let peaksTask = waveformPeaksCache.get(cacheKey);
+				if (!peaksTask) {
+					peaksTask = (async () => {
+						const decodedBuffer = await decodeMediaFileToAudioBuffer({
+							file: audioFile,
+						});
+						if (!decodedBuffer) return null;
+						return extractPeaks({
+							buffer: decodedBuffer,
+							length: 2048,
+						});
+					})();
+					setWaveformCacheEntry({
+						cacheKey,
+						value: peaksTask,
+					});
+				} else {
+					touchWaveformCacheEntry({ cacheKey });
 				}
+				peaks = await peaksTask;
+				if (!peaks || peaks.length === 0) {
+					waveformPeaksCache.delete(cacheKey);
+				}
+			} else if (audioUrl) {
+				const cacheKey = `url:${audioUrl}`;
+				let peaksTask = waveformPeaksCache.get(cacheKey);
+				if (!peaksTask) {
+					peaksTask = decodeAudioUrlToPeaks({ audioUrl });
+					setWaveformCacheEntry({
+						cacheKey,
+						value: peaksTask,
+					});
+				} else {
+					touchWaveformCacheEntry({ cacheKey });
+				}
+				peaks = await peaksTask;
+				if (!peaks || peaks.length === 0) {
+					waveformPeaksCache.delete(cacheKey);
+				}
+			}
 
+			if (!mounted) return;
+
+			if (!peaks || peaks.length === 0) {
+				setError(true);
 				setIsLoading(false);
-				setError(false);
 				return;
 			}
 
-			if (audioFile) {
-				try {
-					const cacheKey = getDecodedBufferCacheKey(audioFile);
-					let decodeTask = decodedBufferCache.get(cacheKey);
-					if (!decodeTask) {
-						decodeTask = decodeMediaFileToAudioBuffer({ file: audioFile });
-						decodedBufferCache.set(cacheKey, decodeTask);
-					}
-					const decodedBuffer = await decodeTask;
-					if (decodedBuffer) {
-						const drawn = drawBufferToCanvas(decodedBuffer);
-						if (drawn) {
-							setIsLoading(false);
-							setError(false);
-							return;
-						}
-					}
-				} catch (error) {
-					console.warn("Waveform file decode fallback failed:", error);
-				}
-			}
+			const drawn = drawPeaksToCanvas({
+				canvas: canvasRef.current,
+				container: waveformRef.current,
+				peaks,
+				height,
+			});
 
-			try {
-				if (ws) {
-					wavesurfer.current = null;
-				}
-
-				const newWaveSurfer = WaveSurfer.create({
-					container: waveformRef.current,
-					waveColor: "rgba(255, 255, 255, 0.6)",
-					progressColor: "rgba(255, 255, 255, 0.9)",
-					cursorColor: "transparent",
-					barWidth: 2,
-					barGap: 1,
-					height,
-					normalize: true,
-					interact: false,
-				});
-
-				if (mounted) {
-					wavesurfer.current = newWaveSurfer;
-				} else {
-					try {
-						newWaveSurfer.destroy();
-					} catch {}
-					return;
-				}
-
-				newWaveSurfer.on("ready", () => {
-					if (mounted) {
-						setIsLoading(false);
-						setError(false);
-					}
-				});
-
-				newWaveSurfer.on("error", (err) => {
-					if (mounted) {
-						console.error("WaveSurfer error:", err);
-						setError(true);
-						setIsLoading(false);
-					}
-				});
-
-				const readyTimeout = window.setTimeout(() => {
-					if (!mounted) return;
-					setIsLoading(false);
-				}, 2000);
-				newWaveSurfer.on("ready", () => {
-					window.clearTimeout(readyTimeout);
-				});
-
-				if (audioUrl) {
-					try {
-						const loadResult = newWaveSurfer.load(audioUrl);
-						if (
-							loadResult &&
-							typeof (loadResult as Promise<unknown>).catch === "function"
-						) {
-							void (loadResult as Promise<unknown>).catch((err) => {
-								if (!mounted) return;
-								console.error("WaveSurfer load failed:", err);
-								setError(true);
-								setIsLoading(false);
-							});
-						}
-					} catch (err) {
-						if (!mounted) return;
-						console.error("WaveSurfer load threw:", err);
-						setError(true);
-						setIsLoading(false);
-					}
-				}
-			} catch (err) {
-				if (mounted) {
-					console.error("Failed to initialize WaveSurfer:", err);
-					setError(true);
-					setIsLoading(false);
-				}
-			}
+			setError(!drawn);
+			setIsLoading(false);
 		};
 
-		if (ws) {
-			const wsToDestroy = ws;
-			wavesurfer.current = null;
-
-			requestAnimationFrame(() => {
-				try {
-					wsToDestroy.destroy();
-				} catch {}
-				if (mounted) {
-					initWaveSurfer();
-				}
-			});
-		} else {
-			initWaveSurfer();
-		}
+		void renderWaveform();
 
 		return () => {
 			mounted = false;
-
-			const wsToDestroy = wavesurfer.current;
-
-			wavesurfer.current = null;
-
-			if (wsToDestroy) {
-				requestAnimationFrame(() => {
-					try {
-						wsToDestroy.destroy();
-					} catch {}
-				});
-			}
 		};
 	}, [audioUrl, audioBuffer, audioFile, height]);
 
@@ -275,17 +243,10 @@ export function AudioWaveform({
 				</div>
 			)}
 			<div ref={waveformRef} className="w-full" style={{ height }}>
-				{audioBuffer ? (
-					<canvas
-						ref={canvasRef}
-						className={`w-full ${isLoading ? "opacity-0" : "opacity-100"}`}
-					/>
-				) : (
-					<div
-						className={`w-full ${isLoading ? "opacity-0" : "opacity-100"}`}
-						style={{ height }}
-					/>
-				)}
+				<canvas
+					ref={canvasRef}
+					className={`w-full ${isLoading ? "opacity-0" : "opacity-100"}`}
+				/>
 			</div>
 		</div>
 	);

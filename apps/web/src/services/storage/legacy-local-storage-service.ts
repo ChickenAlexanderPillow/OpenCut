@@ -45,6 +45,7 @@ class LegacyLocalStorageService {
 	private savedSoundsAdapter: IndexedDBAdapter<SavedSoundsData>;
 	private config: StorageConfig;
 	private migrationsPromise: Promise<void> | null = null;
+	private static readonly MAX_SAVED_SOUNDS = 200;
 
 	constructor() {
 		this.config = {
@@ -493,7 +494,9 @@ class LegacyLocalStorageService {
 			};
 
 			const updatedData: SavedSoundsData = {
-				sounds: [...currentData.sounds, savedSound],
+				sounds: [...currentData.sounds, savedSound].slice(
+					-LegacyLocalStorageService.MAX_SAVED_SOUNDS,
+				),
 				lastModified: new Date().toISOString(),
 			};
 

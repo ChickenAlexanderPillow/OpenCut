@@ -30,6 +30,72 @@ function clampScore(value: number): number {
 	return Math.max(0, Math.min(100, Math.round(value)));
 }
 
+const FAILURE_FLAG_PENALTY_BY_FLAG: Record<string, number> = {
+	cutoff_start: 12,
+	cutoff_end: 12,
+	context_missing: 14,
+	low_density: 10,
+	repetitive: 8,
+	weak_payoff: 10,
+	duration_mismatch: 10,
+};
+
+function startsWithContextDependentPronoun(text: string): boolean {
+	const cleaned = text.trim().replace(/^[("'[\]]+/, "");
+	const openingWord = cleaned.split(/\s+/)[0]?.toLowerCase() ?? "";
+	return [
+		"it",
+		"this",
+		"that",
+		"these",
+		"those",
+		"they",
+		"them",
+		"he",
+		"she",
+		"there",
+		"here",
+	].includes(openingWord);
+}
+
+function endsAbruptly(text: string): boolean {
+	const trimmed = text.trim();
+	if (!trimmed) return false;
+	if (/[.!?]["')\]]*$/.test(trimmed)) return false;
+	return /(\b(and|but|so|then|because|which|that)\s*)$/i.test(trimmed) || trimmed.endsWith(",");
+}
+
+function computeDeterministicPenalty({
+	draft,
+	failureFlags,
+}: {
+	draft: ClipCandidateDraft;
+	failureFlags?: string[];
+}): number {
+	let penalty = 0;
+
+	for (const flag of failureFlags ?? []) {
+		penalty += FAILURE_FLAG_PENALTY_BY_FLAG[flag] ?? 0;
+	}
+
+	if (draft.duration > 75) {
+		penalty += Math.min(30, Math.round((draft.duration - 75) * 0.6));
+	} else if (draft.duration > 65) {
+		penalty += Math.min(12, Math.round((draft.duration - 65) * 1.2));
+	}
+	if (draft.duration < 15) {
+		penalty += Math.min(10, Math.round((15 - draft.duration) * 1.5));
+	}
+	if (startsWithContextDependentPronoun(draft.transcriptSnippet)) {
+		penalty += 8;
+	}
+	if (endsAbruptly(draft.transcriptSnippet)) {
+		penalty += 8;
+	}
+
+	return Math.max(0, penalty);
+}
+
 function normalizeBreakdown({
 	breakdown,
 }: {
@@ -80,10 +146,14 @@ export function buildScoringPrompt({
 }): string {
 	return [
 		"You are a social video clipping analyst.",
-		"Score each candidate for virality potential from 0 to 100.",
-		"Prioritize clips that are likely to retain viewers, trigger comments/shares, and stand alone without extra context.",
+		"Score each candidate for short-form virality potential from 0 to 100.",
+		"Prioritize clips likely to maximize completion rate, rewatches, comments, and shares while still being understandable as standalone moments.",
 		"Return strict JSON only in this format:",
 		'{"candidates":[{"id":"string","title":"string","rationale":"string","scoreOverall":0,"confidence":0,"failureFlags":["string"],"scoreBreakdown":{"hook":0,"emotion":0,"shareability":0,"clarity":0,"momentum":0}}]}',
+		"Output contract:",
+		"- Return every input candidate exactly once",
+		"- Keep each title <= 8 words, concrete, and curiosity-forward",
+		"- Keep rationale <= 220 chars and mention both hook and payoff quality",
 		"Rubric:",
 		"- hook: first-second attention and curiosity",
 		"- emotion: emotional charge and intensity",
@@ -96,12 +166,13 @@ export function buildScoringPrompt({
 		"- Openings that start with unresolved references (e.g. it/this/that/they without clear antecedent)",
 		"- Redundant/repetitive phrasing with weak payoff",
 		"- Low information density or long filler stretches",
+		"- Duration mismatch for short-form use (ideal 20-60s, penalize >75s)",
 		"Scoring anchors:",
 		"- 85-100: exceptional hook + clear payoff + high quoteability",
 		"- 70-84: strong and useful, minor weaknesses",
 		"- 60-69: usable but average; limited viral upside",
 		"- <60: weak viral potential or quality issues",
-		"Set failureFlags from: ['cutoff_start','cutoff_end','context_missing','low_density','repetitive','weak_payoff']. Use [] when none.",
+		"Set failureFlags from: ['cutoff_start','cutoff_end','context_missing','low_density','repetitive','weak_payoff','duration_mismatch']. Use [] when none.",
 		`Reference examples (style anchors, not exact matches):\n${JSON.stringify(VIRALITY_PROMPT_EXAMPLES)}`,
 		"Generalization rule: do not reward candidates for matching specific domains (e.g. B2B/sales/payroll/SEO). Score only on transferable virality patterns: hook strength, clarity, emotional charge, shareability, and payoff.",
 		"Do not invent timings or IDs. Use the given candidate IDs.",
@@ -144,7 +215,13 @@ export function mergeScoredCandidates({
 			transcriptSnippet: draft.transcriptSnippet,
 			title: scored.title.trim(),
 			rationale: scored.rationale.trim(),
-			scoreOverall: clampScore(scored.scoreOverall),
+			scoreOverall: clampScore(
+				scored.scoreOverall -
+					computeDeterministicPenalty({
+						draft,
+						failureFlags: scored.failureFlags,
+					}),
+			),
 			scoreBreakdown,
 		});
 	}

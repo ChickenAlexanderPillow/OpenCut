@@ -10,6 +10,8 @@ import type {
 const INITIAL_STATE: ClipGenerationSession = {
 	sourceMediaId: null,
 	status: "idle",
+	progress: null,
+	progressMessage: null,
 	error: null,
 	candidates: [],
 	selectedCandidateIds: [],
@@ -20,9 +22,22 @@ interface ClipGenerationStore extends ClipGenerationSession {
 	setStatus: ({
 		status,
 		sourceMediaId,
+		progress,
+		progressMessage,
 	}: {
 		status: ClipGenerationStatus;
 		sourceMediaId?: string | null;
+		progress?: number | null;
+		progressMessage?: string | null;
+	}) => void;
+	setProgress: ({
+		sourceMediaId,
+		progress,
+		progressMessage,
+	}: {
+		sourceMediaId?: string | null;
+		progress?: number | null;
+		progressMessage?: string | null;
 	}) => void;
 	setError: ({ error }: { error: string }) => void;
 	setCandidates: ({
@@ -56,31 +71,76 @@ export const useClipGenerationStore = create<ClipGenerationStore>()(
 	persist(
 		(set) => ({
 			...INITIAL_STATE,
-			setStatus: ({ status, sourceMediaId }) =>
+			setStatus: ({ status, sourceMediaId, progress, progressMessage }) =>
 				set((state) => ({
 					...state,
 					status,
 					error: status === "error" ? state.error : null,
 					sourceMediaId: sourceMediaId ?? state.sourceMediaId,
+					progress:
+						typeof progress === "number"
+							? Math.max(0, Math.min(100, progress))
+							: progress === null
+								? null
+								: status === "ready" || status === "error" || status === "idle"
+									? null
+									: state.progress,
+					progressMessage:
+						typeof progressMessage === "string"
+							? progressMessage
+							: progressMessage === null
+								? null
+								: status === "ready" || status === "error" || status === "idle"
+									? null
+									: state.progressMessage,
 					...(status === "idle"
 						? {
 								sourceMediaId: null,
+								progress: null,
+								progressMessage: null,
 								candidates: [],
 								selectedCandidateIds: [],
 								transcriptRef: null,
 							}
 						: {}),
 				})),
+			setProgress: ({ sourceMediaId, progress, progressMessage }) =>
+				set((state) => ({
+					...state,
+					sourceMediaId: sourceMediaId ?? state.sourceMediaId,
+					progress:
+						typeof progress === "number"
+							? Math.max(0, Math.min(100, progress))
+							: progress === null
+								? null
+								: state.progress,
+					progressMessage:
+						typeof progressMessage === "string"
+							? progressMessage
+							: progressMessage === null
+								? null
+								: state.progressMessage,
+				})),
 			setError: ({ error }) =>
 				set((state) => ({
 					...state,
 					status: "error",
+					progress: null,
+					progressMessage: null,
 					error,
 				})),
 			setCandidates: ({ sourceMediaId, candidates, transcriptRef, status }) =>
-				set(() => ({
+				set((state) => ({
 					sourceMediaId,
 					status: status ?? "ready",
+					progress:
+						status && status !== "ready"
+							? state.progress
+							: null,
+					progressMessage:
+						status && status !== "ready"
+							? state.progressMessage
+							: null,
 					error: null,
 					candidates,
 					selectedCandidateIds: [],
@@ -106,6 +166,8 @@ export const useClipGenerationStore = create<ClipGenerationStore>()(
 					...state,
 					sourceMediaId,
 					status: error ? "error" : "ready",
+					progress: null,
+					progressMessage: null,
 					error,
 					candidates,
 					transcriptRef,

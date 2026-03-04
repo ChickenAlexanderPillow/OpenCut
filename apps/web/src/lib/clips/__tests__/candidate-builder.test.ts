@@ -177,7 +177,7 @@ describe("buildClipCandidatesFromTranscript", () => {
 		);
 	});
 
-	test("prefers extending to sentence end over hard-cutting mid sentence near max duration", () => {
+	test("enforces max duration cap even when sentence continuation is long", () => {
 		const candidates = buildClipCandidatesFromTranscript({
 			mediaDuration: 200,
 			minClipSeconds: 20,
@@ -207,6 +207,6 @@ describe("buildClipCandidatesFromTranscript", () => {
 			candidate.transcriptSnippet.toLowerCase().includes("handoffs"),
 		);
 		expect(longAnswerCandidate).toBeDefined();
-		expect(longAnswerCandidate?.endTime).toBeGreaterThanOrEqual(54);
+		expect(longAnswerCandidate?.duration).toBeLessThanOrEqual(40);
 	});
 });

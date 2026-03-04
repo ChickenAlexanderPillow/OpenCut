@@ -9,17 +9,8 @@ const webEnvSchema = z.object({
 	// Public
 	NEXT_PUBLIC_SITE_URL: z.url().default("http://localhost:3000"),
 	NEXT_PUBLIC_MARBLE_API_URL: z.url(),
-	NEXT_PUBLIC_STORAGE_BACKEND: z
-		.enum(["local", "server"])
-		.optional()
-		.default("server"),
 
 	// Server
-	DATABASE_URL: z
-		.string()
-		.startsWith("postgres://")
-		.or(z.string().startsWith("postgresql://")),
-
 	BETTER_AUTH_SECRET: z.string(),
 	UPSTASH_REDIS_REST_URL: z.url(),
 	UPSTASH_REDIS_REST_TOKEN: z.string(),
@@ -53,16 +44,6 @@ const webEnvSchema = z.object({
 		.string()
 		.optional()
 		.transform((value) => (value ?? "false").toLowerCase() === "true"),
-	STORAGE_BACKEND: z.enum(["local", "server"]).optional().default("server"),
-	S3_ENDPOINT: z.url().optional(),
-	S3_REGION: z.string().optional().default("us-east-1"),
-	S3_ACCESS_KEY_ID: z.string().optional(),
-	S3_SECRET_ACCESS_KEY: z.string().optional(),
-	S3_BUCKET: z.string().optional().default("opencut-media"),
-	S3_FORCE_PATH_STYLE: z
-		.string()
-		.optional()
-		.transform((value) => (value ?? "true").toLowerCase() === "true"),
 	TRANSCRIPT_INGEST_SECRET: z.string().optional(),
 	EXTERNAL_PROJECTS_ENABLED: z
 		.string()

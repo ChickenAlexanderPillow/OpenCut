@@ -55,6 +55,8 @@ export type ClipGenerationStatus =
 export interface ClipGenerationSession {
 	sourceMediaId: string | null;
 	status: ClipGenerationStatus;
+	progress: number | null;
+	progressMessage: string | null;
 	error: string | null;
 	candidates: ClipCandidate[];
 	selectedCandidateIds: string[];

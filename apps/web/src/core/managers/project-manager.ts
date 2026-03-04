@@ -60,16 +60,6 @@ export class ProjectManager {
 	}
 
 	private async ensureStorageMigrations(): Promise<void> {
-		if (storageService.getBackend() === "server") {
-			this.migrationState = {
-				isMigrating: false,
-				fromVersion: null,
-				toVersion: null,
-				projectName: null,
-			};
-			return;
-		}
-
 		if (this.storageMigrationPromise) {
 			await this.storageMigrationPromise;
 			return;
