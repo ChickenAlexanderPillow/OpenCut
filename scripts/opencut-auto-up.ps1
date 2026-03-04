@@ -26,5 +26,4 @@ if (-not (Test-DockerReady)) {
 	exit 1
 }
 
-docker compose up -d db redis serverless-redis-http local-transcribe web
-
+docker compose up -d redis serverless-redis-http local-transcribe web

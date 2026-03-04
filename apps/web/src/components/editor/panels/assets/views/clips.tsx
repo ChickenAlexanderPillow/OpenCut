@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PanelView } from "@/components/editor/panels/assets/views/base-view";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
 import { invokeAction } from "@/lib/actions";
 import { useEditor } from "@/hooks/use-editor";
 import {
@@ -104,6 +105,7 @@ function CandidateCard({
 	mediaType,
 	onImport,
 	onRate,
+	onCommentCommit,
 	isImporting,
 }: {
 	candidate: ClipCandidate;
@@ -114,6 +116,7 @@ function CandidateCard({
 	mediaType: "video" | "audio" | null;
 	onImport: () => void;
 	onRate: (rating: -1 | 1) => void;
+	onCommentCommit: (comment: string) => void;
 	isImporting: boolean;
 }) {
 	const editor = useEditor({ subscribeTo: [] });
@@ -148,8 +151,15 @@ function CandidateCard({
 		candidate,
 		feedbackModel,
 	});
-	const isThumbUpActive = candidate.userRating === 1;
-	const isThumbDownActive = candidate.userRating === -1;
+	const resolvedRating = candidate.userFeedback?.rating ?? candidate.userRating ?? 0;
+	const isThumbUpActive = resolvedRating === 1;
+	const isThumbDownActive = resolvedRating === -1;
+	const resolvedFeedbackComment = (
+		candidate.userComment ??
+		candidate.userFeedback?.comment ??
+		""
+	).trim();
+	const [commentDraft, setCommentDraft] = useState(resolvedFeedbackComment);
 
 	useEffect(() => {
 		setIsPreviewLoading(Boolean(clipPreviewUrl));
@@ -157,6 +167,10 @@ function CandidateCard({
 		setIsPlaying(false);
 		setClipTime(0);
 	}, [clipPreviewUrl, candidate.id]);
+
+	useEffect(() => {
+		setCommentDraft(resolvedFeedbackComment);
+	}, [candidate.id, resolvedFeedbackComment]);
 
 	const handleVideoTimeUpdate = () => {
 		const video = videoRef.current;
@@ -574,6 +588,22 @@ function CandidateCard({
 			<div className="text-muted-foreground text-xs leading-relaxed">
 				{candidate.rationale}
 			</div>
+			<div className="space-y-1">
+				<div className="text-muted-foreground text-[11px]">Feedback</div>
+				<Textarea
+					value={commentDraft}
+					onChange={(event) => {
+						setCommentDraft(event.target.value);
+					}}
+					onBlur={() => {
+						const normalizedDraft = commentDraft.trim();
+						if (normalizedDraft === resolvedFeedbackComment) return;
+						onCommentCommit(normalizedDraft);
+					}}
+					placeholder="What made this clip good or bad?"
+					className="min-h-[56px] resize-y text-xs"
+				/>
+			</div>
 		</div>
 	);
 }
@@ -647,6 +677,56 @@ export function Clips() {
 		if (hasClipImportProcess) return;
 		setImportingCandidateId(null);
 	}, [hasClipImportProcess]);
+
+	const persistClipFeedback = ({
+		sourceMediaId,
+		candidateId,
+		updates,
+	}: {
+		sourceMediaId: string;
+		candidateId: string;
+		updates: { rating?: -1 | 0 | 1; comment?: string };
+	}) => {
+		const activeProject = editor.project.getActive();
+		const cache = activeProject.clipGenerationCache ?? {};
+		const currentGroup = cache[sourceMediaId];
+		if (!currentGroup) return;
+		const now = new Date().toISOString();
+		const nextCandidates = currentGroup.candidates.map((entry) => {
+			if (entry.id !== candidateId) return entry;
+			const existingRating: -1 | 0 | 1 =
+				entry.userFeedback?.rating ?? entry.userRating ?? 0;
+			const nextRating = updates.rating ?? existingRating;
+			const existingComment = entry.userComment ?? entry.userFeedback?.comment ?? "";
+			const nextCommentRaw = updates.comment ?? existingComment;
+			const nextComment = nextCommentRaw.trim();
+			return {
+				...entry,
+				userRating: nextRating,
+				userComment: nextComment.length > 0 ? nextComment : undefined,
+				userFeedback: {
+					rating: nextRating,
+					comment: nextComment.length > 0 ? nextComment : undefined,
+					updatedAt: now,
+				},
+			};
+		});
+		editor.project.setActiveProject({
+			project: {
+				...activeProject,
+				clipGenerationCache: {
+					...cache,
+					[sourceMediaId]: {
+						...currentGroup,
+						candidates: nextCandidates,
+						updatedAt: now,
+					},
+				},
+			},
+		});
+		editor.save.markDirty();
+		void editor.save.flush();
+	};
 
 	return (
 		<PanelView
@@ -826,35 +906,22 @@ export function Clips() {
 									});
 								}}
 								onRate={(rating) => {
-									const activeProject = editor.project.getActive();
-									const cache = activeProject.clipGenerationCache ?? {};
-									const currentGroup = cache[group.sourceMediaId];
-									if (!currentGroup) return;
-									const nextCandidates = currentGroup.candidates.map((entry) => {
-										if (entry.id !== candidate.id) return entry;
-										const existingRating: -1 | 0 | 1 = entry.userRating ?? 0;
-										const nextRating: -1 | 0 | 1 =
-											existingRating === rating ? 0 : rating;
-										return {
-											...entry,
-											userRating: nextRating,
-										};
+									const existingRating: -1 | 0 | 1 =
+										candidate.userFeedback?.rating ?? candidate.userRating ?? 0;
+									const nextRating: -1 | 0 | 1 =
+										existingRating === rating ? 0 : rating;
+									persistClipFeedback({
+										sourceMediaId: group.sourceMediaId,
+										candidateId: candidate.id,
+										updates: { rating: nextRating },
 									});
-									editor.project.setActiveProject({
-										project: {
-											...activeProject,
-											clipGenerationCache: {
-												...cache,
-												[group.sourceMediaId]: {
-													...currentGroup,
-													candidates: nextCandidates,
-													updatedAt: new Date().toISOString(),
-												},
-											},
-										},
+								}}
+								onCommentCommit={(comment) => {
+									persistClipFeedback({
+										sourceMediaId: group.sourceMediaId,
+										candidateId: candidate.id,
+										updates: { comment },
 									});
-									editor.save.markDirty();
-									void editor.save.flush();
 								}}
 								isImporting={importingCandidateId === candidate.id && hasClipImportProcess}
 							/>

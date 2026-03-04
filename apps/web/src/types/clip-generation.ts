@@ -15,6 +15,22 @@ export interface ViralityBreakdown {
 	momentum: number;
 }
 
+export interface ClipQaDiagnostics {
+	startsClean: boolean;
+	endsClean: boolean;
+	hasTailQuestionSetup: boolean;
+	hasConsequenceChain: boolean;
+	hasStrongStance: boolean;
+	repetitionRisk: "low" | "medium" | "high";
+	infoDensity: "low" | "medium" | "high";
+}
+
+export interface ClipUserFeedback {
+	rating: -1 | 0 | 1;
+	comment?: string;
+	updatedAt: string;
+}
+
 export interface ClipCandidateDraft {
 	id: string;
 	startTime: number;
@@ -36,6 +52,9 @@ export interface ClipCandidate {
 	scoreBreakdown: ViralityBreakdown;
 	failureFlags?: string[];
 	userRating?: -1 | 0 | 1;
+	userComment?: string;
+	qaDiagnostics?: ClipQaDiagnostics;
+	userFeedback?: ClipUserFeedback;
 }
 
 export interface ClipTranscriptRef {

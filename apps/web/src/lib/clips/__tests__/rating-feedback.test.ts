@@ -144,4 +144,82 @@ describe("clip rating feedback", () => {
 		});
 		expect(ranked[0]?.id).toBe("rated-up");
 	});
+
+	test("learns lexical preferences from feedback comments", () => {
+		const candidates: ClipCandidate[] = [
+			{
+				...makeCandidate({
+					id: "rated-up",
+					startTime: 0,
+					endTime: 30,
+					scoreOverall: 76,
+					hook: 84,
+					emotion: 74,
+					shareability: 80,
+					clarity: 78,
+					momentum: 76,
+				}),
+				userFeedback: {
+					rating: 1,
+					comment: "Loved the concrete consequences and stakes",
+					updatedAt: "2026-03-04T00:00:00.000Z",
+				},
+			},
+			{
+				...makeCandidate({
+					id: "rated-down",
+					startTime: 60,
+					endTime: 90,
+					scoreOverall: 74,
+					hook: 70,
+					emotion: 66,
+					shareability: 62,
+					clarity: 80,
+					momentum: 69,
+				}),
+				userFeedback: {
+					rating: -1,
+					comment: "Too generic recap and bland summary",
+					updatedAt: "2026-03-04T00:00:00.000Z",
+				},
+			},
+		];
+		const model = buildClipRatingFeedbackModel({ candidates });
+		expect(model).not.toBeNull();
+
+		const consequenceClip = makeCandidate({
+			id: "consequence",
+			startTime: 95,
+			endTime: 125,
+			scoreOverall: 70,
+			hook: 74,
+			emotion: 70,
+			shareability: 71,
+			clarity: 73,
+			momentum: 74,
+		});
+		consequenceClip.title = "Concrete consequences for the market";
+		const genericClip = makeCandidate({
+			id: "generic",
+			startTime: 130,
+			endTime: 160,
+			scoreOverall: 70,
+			hook: 74,
+			emotion: 70,
+			shareability: 71,
+			clarity: 73,
+			momentum: 74,
+		});
+		genericClip.title = "Generic recap of quarterly update";
+
+		const boosted = getCandidateScoreWithRatingFeedback({
+			candidate: consequenceClip,
+			feedbackModel: model,
+		});
+		const reduced = getCandidateScoreWithRatingFeedback({
+			candidate: genericClip,
+			feedbackModel: model,
+		});
+		expect(boosted).toBeGreaterThan(reduced);
+	});
 });

@@ -41,10 +41,6 @@ import { buildClipCandidatesFromTranscript } from "@/lib/clips/candidate-builder
 import { buildClipCandidatesFromTranscriptV2 } from "@/lib/clips/v2/candidate-builder";
 import { selectTopCandidatesWithQualityGate } from "@/lib/clips/scoring";
 import {
-	buildClipRatingFeedbackModel,
-	rankCandidatesWithRatingFeedback,
-} from "@/lib/clips/rating-feedback";
-import {
 	buildClipTranscriptEntryFromLinkedExternalTranscript,
 	getOrCreateClipTranscriptForAsset,
 } from "@/lib/clips/transcript";
@@ -71,15 +67,12 @@ import {
 import { syncCaptionsFromTranscriptEdits } from "@/lib/transcript-editor/sync-captions";
 
 const MIN_VIRAL_CLIP_SCORE = 56;
-const MIN_VIRAL_CLIP_COUNT = 3;
 const MAX_VIRAL_CLIP_COUNT = 5;
 const VIRAL_CLIP_MIN_SECONDS = 18;
 const VIRAL_CLIP_TARGET_SECONDS = 36;
 const VIRAL_CLIP_MAX_SECONDS = 65;
 const CLIP_SCORING_TRANSCRIPT_MAX_CHARS = 20000;
 const CLIP_SCORING_TIMEOUT_MS = 120000;
-const CLIP_SCORING_BATCH_SIZE = 4;
-const CLIP_SCORING_MAX_CANDIDATES = 10;
 const CLIP_IMPORT_TRANSCRIPTION_MODEL = "large-v3";
 const CLIP_TRANSCRIPTION_TIMEOUT_MS = 60000;
 const CLIP_TRANSCRIPTION_MIN_DURATION_SECONDS = 0.35;
@@ -294,96 +287,6 @@ async function fetchScoredCandidates({
 			`Failed to reach clip scoring API (${endpoints.join(", ")})`,
 		)
 	);
-}
-
-function takeTopLocalCandidatesForScoring({
-	candidateDrafts,
-	maxCount = CLIP_SCORING_MAX_CANDIDATES,
-}: {
-	candidateDrafts: Array<{
-		id: string;
-		startTime: number;
-		endTime: number;
-		duration: number;
-		transcriptSnippet: string;
-		localScore: number;
-	}>;
-	maxCount?: number;
-}) {
-	const ranked = candidateDrafts
-		.slice()
-		.sort((a, b) => {
-			if (b.localScore !== a.localScore) return b.localScore - a.localScore;
-			return a.startTime - b.startTime;
-		});
-
-	const selected: typeof candidateDrafts = [];
-	for (const candidate of ranked) {
-		const overlaps = selected.some((existing) => {
-			const intersection = Math.max(
-				0,
-				Math.min(candidate.endTime, existing.endTime) -
-					Math.max(candidate.startTime, existing.startTime),
-			);
-			const union =
-				Math.max(candidate.endTime, existing.endTime) -
-				Math.min(candidate.startTime, existing.startTime);
-			return union > 0 && intersection / union > 0.82;
-		});
-		if (overlaps) continue;
-		selected.push(candidate);
-		if (selected.length >= maxCount) break;
-	}
-
-	if (selected.length >= maxCount) {
-		return selected;
-	}
-
-	for (const candidate of ranked) {
-		if (selected.some((existing) => existing.id === candidate.id)) continue;
-		selected.push(candidate);
-		if (selected.length >= maxCount) break;
-	}
-	return selected;
-}
-
-async function scoreCandidatesProgressively({
-	transcript,
-	candidateDrafts,
-	onBatchScored,
-}: {
-	transcript: string;
-	candidateDrafts: Array<{
-		id: string;
-		startTime: number;
-		endTime: number;
-		duration: number;
-		transcriptSnippet: string;
-		localScore: number;
-	}>;
-	onBatchScored?: (params: {
-		scoredSoFar: NonNullable<ClipScoringResponse["candidates"]>;
-		latestBatch: NonNullable<ClipScoringResponse["candidates"]>;
-	}) => void;
-}) {
-	const batches: typeof candidateDrafts[] = [];
-	for (let i = 0; i < candidateDrafts.length; i += CLIP_SCORING_BATCH_SIZE) {
-		batches.push(candidateDrafts.slice(i, i + CLIP_SCORING_BATCH_SIZE));
-	}
-	const scoredSoFar: NonNullable<ClipScoringResponse["candidates"]> = [];
-	for (const batch of batches) {
-		const response = await fetchScoredCandidates({
-			transcript,
-			candidates: batch,
-		});
-		const batchCandidates = response.candidates ?? [];
-		scoredSoFar.push(...batchCandidates);
-		onBatchScored?.({
-			scoredSoFar: [...scoredSoFar],
-			latestBatch: batchCandidates,
-		});
-	}
-	return scoredSoFar;
 }
 
 async function getOrCreateClipTranscriptWithReuse({
@@ -2212,15 +2115,6 @@ export function useEditorActions() {
 						return;
 					}
 
-					const scoringPool = takeTopLocalCandidatesForScoring({
-						candidateDrafts,
-					});
-					const priorCandidatesForFeedback =
-						editor.project.getActive().clipGenerationCache?.[mediaAsset.id]?.candidates ?? [];
-					const feedbackModel = buildClipRatingFeedbackModel({
-						candidates: priorCandidatesForFeedback,
-					});
-
 					setStatus({
 						status: "scoring",
 						sourceMediaId: mediaAsset.id,
@@ -2230,171 +2124,32 @@ export function useEditorActions() {
 					if (projectProcessId) {
 						updateProcessLabel({
 							id: projectProcessId,
-							label: `Scoring clip virality (0/${scoringPool.length})...`,
+							label: `Scoring clip virality (0/${candidateDrafts.length})...`,
 						});
 					}
-
-					let scoredCountSoFar = 0;
-					const progressiveSelected: NonNullable<ClipScoringResponse["candidates"]> = [];
-					const progressiveSelectedIds = new Set<string>();
-					const scoredCandidatesRaw = await scoreCandidatesProgressively({
+					const scoredResponse = await fetchScoredCandidates({
 						transcript: transcriptResult.transcript.text,
-						candidateDrafts: scoringPool,
-						onBatchScored: ({ scoredSoFar, latestBatch }) => {
-							scoredCountSoFar = scoredSoFar.length;
-							if (projectProcessId) {
-								updateProcessLabel({
-									id: projectProcessId,
-									label: `Scoring clip virality (${scoredCountSoFar}/${scoringPool.length})...`,
-								});
-							}
-							setProgress({
-								sourceMediaId: mediaAsset.id,
-								progress:
-									scoringPool.length > 0
-										? Math.max(
-												72,
-												Math.min(
-													99,
-													72 + Math.round((scoredCountSoFar / scoringPool.length) * 27),
-												),
-											)
-										: 95,
-								progressMessage: `Scoring clip candidates (${scoredCountSoFar}/${scoringPool.length})...`,
-							});
-							const adjustedLatestBatch = rankCandidatesWithRatingFeedback({
-								candidates: latestBatch,
-								feedbackModel,
-							});
-							let batchSelected = selectTopCandidatesWithQualityGate({
-								candidates: adjustedLatestBatch,
-								minScore: MIN_VIRAL_CLIP_SCORE,
-								maxOverlapRatio: 0,
-								maxCount: MAX_VIRAL_CLIP_COUNT,
-								excludeFailureFlags: ["cutoff_start"],
-							});
-							if (batchSelected.length === 0 && adjustedLatestBatch.length > 0) {
-								const topScore = Math.max(
-									0,
-									Math.min(
-										100,
-										Math.round(
-											Math.max(
-												...adjustedLatestBatch.map(
-													(candidate) => candidate.scoreOverall,
-												),
-											),
-										),
-									),
-								);
-								const relaxedMinScore = Math.max(35, Math.min(59, topScore - 8));
-								batchSelected = selectTopCandidatesWithQualityGate({
-									candidates: adjustedLatestBatch,
-									minScore: relaxedMinScore,
-									maxOverlapRatio: 0,
-									maxCount: MAX_VIRAL_CLIP_COUNT,
-									excludeFailureFlags: ["cutoff_start"],
-								});
-							}
-							for (const candidate of batchSelected) {
-								if (progressiveSelectedIds.has(candidate.id)) continue;
-								if (progressiveSelected.length >= MAX_VIRAL_CLIP_COUNT) break;
-								progressiveSelected.push(candidate);
-								progressiveSelectedIds.add(candidate.id);
-							}
-							if (progressiveSelected.length > 0) {
-								setCandidates({
-									sourceMediaId: mediaAsset.id,
-									candidates: [...progressiveSelected],
-									transcriptRef: transcriptResult.transcriptRef,
-									status: "scoring",
-								});
-								editor.project.setActiveProject({
-									project: withProjectClipGenerationCache({
-										project: editor.project.getActive(),
-										sourceMediaId: mediaAsset.id,
-										candidates: [...progressiveSelected],
-										transcriptRef: transcriptResult.transcriptRef,
-										error: null,
-									}),
-								});
-								editor.save.markDirty();
-							}
-						},
+						candidates: candidateDrafts,
 					});
-					const scoredCandidates = rankCandidatesWithRatingFeedback({
-						candidates: scoredCandidatesRaw,
-						feedbackModel,
+					const scoredCandidates = scoredResponse.candidates ?? [];
+					if (projectProcessId) {
+						updateProcessLabel({
+							id: projectProcessId,
+							label: `Scoring clip virality (${scoredCandidates.length}/${candidateDrafts.length})...`,
+						});
+					}
+					setProgress({
+						sourceMediaId: mediaAsset.id,
+						progress: 99,
+						progressMessage: `Scoring clip candidates (${scoredCandidates.length}/${candidateDrafts.length})...`,
 					});
-					let selectedCandidates = selectTopCandidatesWithQualityGate({
+					const selectedCandidates = selectTopCandidatesWithQualityGate({
 						candidates: scoredCandidates,
 						minScore: MIN_VIRAL_CLIP_SCORE,
 						maxOverlapRatio: 0,
 						maxCount: MAX_VIRAL_CLIP_COUNT,
 						excludeFailureFlags: ["cutoff_start"],
 					});
-
-					let relaxedQualityGateUsed = false;
-					let minimumBackfillUsed = false;
-					if (selectedCandidates.length === 0 && scoredCandidates.length > 0) {
-						const topScore = Math.max(
-							0,
-							Math.min(
-								100,
-								Math.round(
-									Math.max(...scoredCandidates.map((candidate) => candidate.scoreOverall)),
-								),
-							),
-						);
-						const relaxedMinScore = Math.max(35, Math.min(59, topScore - 8));
-						selectedCandidates = selectTopCandidatesWithQualityGate({
-							candidates: scoredCandidates,
-							minScore: relaxedMinScore,
-							maxOverlapRatio: 0,
-							maxCount: MAX_VIRAL_CLIP_COUNT,
-							excludeFailureFlags: ["cutoff_start"],
-						});
-						relaxedQualityGateUsed = selectedCandidates.length > 0;
-					}
-
-					// Do not replace clips already drip-fed; only append unseen finalists.
-					if (progressiveSelected.length > 0) {
-						const finalMerged = [...progressiveSelected];
-						const finalIds = new Set(finalMerged.map((candidate) => candidate.id));
-						for (const candidate of selectedCandidates) {
-							if (finalMerged.length >= MAX_VIRAL_CLIP_COUNT) break;
-							if (finalIds.has(candidate.id)) continue;
-							finalMerged.push(candidate);
-							finalIds.add(candidate.id);
-						}
-						if (finalMerged.length > 0) {
-							selectedCandidates = finalMerged;
-						}
-					}
-
-					if (
-						selectedCandidates.length < MIN_VIRAL_CLIP_COUNT &&
-						scoredCandidates.length > selectedCandidates.length
-					) {
-						const minimumBackfill = selectTopCandidatesWithQualityGate({
-							candidates: scoredCandidates,
-							minScore: 0,
-							maxOverlapRatio: 0,
-							maxCount: MIN_VIRAL_CLIP_COUNT,
-						});
-						if (minimumBackfill.length > selectedCandidates.length) {
-							const selectedIds = new Set(
-								selectedCandidates.map((candidate) => candidate.id),
-							);
-							for (const candidate of minimumBackfill) {
-								if (selectedIds.has(candidate.id)) continue;
-								selectedCandidates.push(candidate);
-								selectedIds.add(candidate.id);
-								minimumBackfillUsed = true;
-								if (selectedCandidates.length >= MIN_VIRAL_CLIP_COUNT) break;
-							}
-						}
-					}
 
 					if (selectedCandidates.length === 0) {
 						setError({
@@ -2432,13 +2187,7 @@ export function useEditorActions() {
 					editor.project.setActiveProject({ project: projectWithCache });
 					editor.save.markDirty();
 					await editor.save.flush();
-					if (relaxedQualityGateUsed || minimumBackfillUsed) {
-						toast.warning(
-							`Generated ${selectedCandidates.length} clip candidate(s) with relaxed quality gate/minimum-count backfill`,
-						);
-					} else {
-						toast.success(`Generated ${selectedCandidates.length} clip candidate(s)`);
-					}
+					toast.success(`Generated ${selectedCandidates.length} clip candidate(s)`);
 				} catch (error) {
 					const message =
 						error instanceof Error ? error.message : "Clip generation failed";

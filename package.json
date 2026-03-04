@@ -8,7 +8,7 @@
 	"scripts": {
 		"dev:web": "cd apps/web && bun run dev",
 		"build:web": "cd apps/web && bun run build",
-		"docker:up": "node scripts/docker-preflight.mjs && docker compose up -d --build db redis serverless-redis-http local-transcribe web",
+		"docker:up": "node scripts/docker-preflight.mjs && docker compose up -d --build redis serverless-redis-http local-transcribe web",
 		"docker:up:web": "node scripts/docker-preflight.mjs && docker compose up -d --build local-transcribe web",
 		"docker:down": "docker compose down",
 		"docker:logs": "docker compose logs -f web local-transcribe",

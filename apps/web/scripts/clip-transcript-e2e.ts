@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { buildClipCandidatesFromTranscriptV2 } from "@/lib/clips/v2/candidate-builder";
 import {
 	mergeScoredCandidates,
+	parseScoredCandidatesFromText,
 	selectTopCandidatesWithQualityGate,
 } from "@/lib/clips/scoring";
 import { clipTranscriptSegmentsForWindow } from "@/lib/clips/transcript";
@@ -174,6 +175,19 @@ function buildWindowTranscriptText({
 		.trim();
 }
 
+function countScoredCandidates({
+	scoredText,
+}: {
+	scoredText: string;
+}): number | null {
+	try {
+		const parsed = parseScoredCandidatesFromText({ text: scoredText });
+		return parsed.candidates.length;
+	} catch {
+		return null;
+	}
+}
+
 async function main() {
 	const openAiApiKey = process.env.OPENAI_API_KEY;
 	if (!openAiApiKey) {
@@ -220,10 +234,34 @@ async function main() {
 		apiKey: openAiApiKey,
 		model,
 	});
-	const scoredText = await provider.scoreCandidates({
+	const scoredTextAttempt1 = await provider.scoreCandidates({
 		transcript: transcriptText,
 		candidates: candidateDrafts,
 	});
+	const scoredCountAttempt1 = countScoredCandidates({
+		scoredText: scoredTextAttempt1,
+	});
+	const needsRetry =
+		scoredCountAttempt1 == null || scoredCountAttempt1 !== candidateDrafts.length;
+	const scoredTextAttempt2 = needsRetry
+		? await provider.scoreCandidates({
+				transcript: transcriptText,
+				candidates: candidateDrafts,
+			})
+		: null;
+	const scoredCountAttempt2 =
+		scoredTextAttempt2 == null
+			? null
+			: countScoredCandidates({
+					scoredText: scoredTextAttempt2,
+				});
+	const chooseAttempt2 =
+		scoredTextAttempt2 != null &&
+		(scoredCountAttempt2 ?? -1) > (scoredCountAttempt1 ?? -1);
+	const scoredText = chooseAttempt2 ? scoredTextAttempt2! : scoredTextAttempt1;
+	const finalScoredCount = chooseAttempt2
+		? scoredCountAttempt2
+		: scoredCountAttempt1;
 
 	const mergedCandidates = mergeScoredCandidates({
 		drafts: candidateDrafts,
@@ -242,10 +280,48 @@ async function main() {
 		inputPath,
 		model,
 		mediaDuration,
+		transcriptText,
 		segmentsCount: segments.length,
 		candidateDraftCount: candidateDrafts.length,
 		mergedCandidateCount: mergedCandidates.length,
 		selectedCandidateCount: selectedCandidates.length,
+		diagnostics: {
+			contractViolation: {
+				draftCount: candidateDrafts.length,
+				attempt1ScoredCount: scoredCountAttempt1,
+				retried: needsRetry,
+				attempt2ScoredCount: scoredCountAttempt2,
+				finalScoredCount,
+				hasViolation:
+					finalScoredCount == null || finalScoredCount !== candidateDrafts.length,
+				fallbackFilledCount: Math.max(
+					0,
+					candidateDrafts.length - (finalScoredCount ?? 0),
+				),
+			},
+			selectedStartsCleanCount: selectedCandidates.filter(
+				(candidate) => candidate.qaDiagnostics?.startsClean === true,
+			).length,
+			selectedEndsCleanCount: selectedCandidates.filter(
+				(candidate) => candidate.qaDiagnostics?.endsClean === true,
+			).length,
+			selectedTailQuestionSetupCount: selectedCandidates.filter(
+				(candidate) => candidate.qaDiagnostics?.hasTailQuestionSetup === true,
+			).length,
+			selectedConsequenceChainCount: selectedCandidates.filter(
+				(candidate) => candidate.qaDiagnostics?.hasConsequenceChain === true,
+			).length,
+			selectedStrongStanceCount: selectedCandidates.filter(
+				(candidate) => candidate.qaDiagnostics?.hasStrongStance === true,
+			).length,
+			selectedWithFeedbackCount: selectedCandidates.filter(
+				(candidate) =>
+					(candidate.userFeedback?.rating ?? candidate.userRating ?? 0) !== 0 ||
+					Boolean(
+						(candidate.userComment ?? candidate.userFeedback?.comment ?? "").trim(),
+					),
+			).length,
+		},
 		segments,
 		candidateDrafts,
 		mergedCandidates,
@@ -258,6 +334,11 @@ async function main() {
 			title: candidate.title,
 			scoreOverall: candidate.scoreOverall,
 			scoreBreakdown: candidate.scoreBreakdown,
+			failureFlags: candidate.failureFlags ?? [],
+			qaDiagnostics: candidate.qaDiagnostics,
+			userRating: candidate.userRating ?? 0,
+			userComment: candidate.userComment ?? "",
+			userFeedback: candidate.userFeedback ?? null,
 			rationale: candidate.rationale,
 			transcript: buildWindowTranscriptText({
 				segments,

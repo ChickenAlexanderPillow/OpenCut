@@ -23,6 +23,8 @@ export type ClipRatingFeedbackModel = {
 	confidence: number;
 	factorPreference: Record<ViralityFactor, number>;
 	ratedWindows: RatedWindow[];
+	positiveTerms: string[];
+	negativeTerms: string[];
 };
 
 function clampScore(score: number): number {
@@ -51,19 +53,81 @@ function overlapRatio({
 	return intersection / union;
 }
 
+function tokenizeFeedbackTerms(text: string): string[] {
+	return text
+		.toLowerCase()
+		.replace(/[^a-z0-9\s']/g, " ")
+		.split(/\s+/)
+		.map((token) => token.trim())
+		.filter((token) => token.length >= 4);
+}
+
+function extractTermPreferences({
+	candidates,
+}: {
+	candidates: ClipCandidate[];
+}): { positiveTerms: string[]; negativeTerms: string[] } {
+	const termScore = new Map<string, number>();
+	for (const candidate of candidates) {
+		const rating = candidate.userFeedback?.rating ?? candidate.userRating ?? 0;
+		const comment = (
+			candidate.userComment ??
+			candidate.userFeedback?.comment ??
+			""
+		).trim();
+		if (!comment || rating === 0) continue;
+		const terms = tokenizeFeedbackTerms(comment);
+		for (const term of terms) {
+			termScore.set(term, (termScore.get(term) ?? 0) + rating);
+		}
+	}
+	const ranked = Array.from(termScore.entries()).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+	return {
+		positiveTerms: ranked.filter(([, score]) => score > 0).slice(0, 12).map(([term]) => term),
+		negativeTerms: ranked.filter(([, score]) => score < 0).slice(0, 12).map(([term]) => term),
+	};
+}
+
+function lexicalCommentAdjustment({
+	candidate,
+	feedbackModel,
+}: {
+	candidate: ClipCandidate;
+	feedbackModel: ClipRatingFeedbackModel;
+}): number {
+	const haystack = `${candidate.title} ${candidate.rationale} ${candidate.transcriptSnippet}`.toLowerCase();
+	const upHits = feedbackModel.positiveTerms.filter((term) => haystack.includes(term)).length;
+	const downHits = feedbackModel.negativeTerms.filter((term) => haystack.includes(term)).length;
+	if (upHits === 0 && downHits === 0) return 0;
+	return (upHits - downHits) * 2 * feedbackModel.confidence;
+}
+
 export function buildClipRatingFeedbackModel({
 	candidates,
 }: {
 	candidates: ClipCandidate[];
 }): ClipRatingFeedbackModel | null {
 	const rated = candidates.filter(
-		(candidate): candidate is ClipCandidate & { userRating: -1 | 1 } =>
-			candidate.userRating === 1 || candidate.userRating === -1,
+		(
+			candidate,
+		): candidate is ClipCandidate & {
+			userRating?: -1 | 0 | 1;
+			userFeedback?: { rating: -1 | 1 };
+		} => {
+			const rating = candidate.userFeedback?.rating ?? candidate.userRating ?? 0;
+			return rating === 1 || rating === -1;
+		},
 	);
 	if (rated.length === 0) return null;
 
-	const up = rated.filter((candidate) => candidate.userRating === 1);
-	const down = rated.filter((candidate) => candidate.userRating === -1);
+	const up = rated.filter(
+		(candidate) =>
+			(candidate.userFeedback?.rating ?? candidate.userRating ?? 0) === 1,
+	);
+	const down = rated.filter(
+		(candidate) =>
+			(candidate.userFeedback?.rating ?? candidate.userRating ?? 0) === -1,
+	);
 
 	const factorPreference = Object.fromEntries(
 		FACTOR_KEYS.map((factor) => {
@@ -86,8 +150,14 @@ export function buildClipRatingFeedbackModel({
 		ratedWindows: rated.map((candidate) => ({
 			startTime: candidate.startTime,
 			endTime: candidate.endTime,
-			rating: candidate.userRating,
+			rating:
+				(candidate.userFeedback?.rating ?? candidate.userRating ?? 0) === 1
+					? 1
+					: -1,
 		})),
+		...extractTermPreferences({
+			candidates,
+		}),
 	};
 }
 
@@ -98,7 +168,7 @@ export function getCandidateScoreWithRatingFeedback({
 	candidate: ClipCandidate;
 	feedbackModel: ClipRatingFeedbackModel | null;
 }): number {
-	const explicitRating = candidate.userRating ?? 0;
+	const explicitRating = candidate.userFeedback?.rating ?? candidate.userRating ?? 0;
 	const explicitAdjustment = explicitRating * MAX_EXPLICIT_RATING_BOOST;
 
 	if (!feedbackModel) {
@@ -133,12 +203,17 @@ export function getCandidateScoreWithRatingFeedback({
 		(maxUpOverlap - maxDownOverlap) *
 		MAX_TEMPORAL_MODEL_BOOST *
 		feedbackModel.confidence;
+	const lexicalAdjustment = lexicalCommentAdjustment({
+		candidate,
+		feedbackModel,
+	});
 
 	return clampScore(
 		candidate.scoreOverall +
 			explicitAdjustment +
 			factorAdjustment +
-			temporalAdjustment,
+			temporalAdjustment +
+			lexicalAdjustment,
 	);
 }
 

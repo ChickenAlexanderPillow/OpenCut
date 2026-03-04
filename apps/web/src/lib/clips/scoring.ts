@@ -3,6 +3,7 @@ import { VIRALITY_PROMPT_EXAMPLES } from "@/lib/clips/virality-examples";
 import type {
 	ClipCandidate,
 	ClipCandidateDraft,
+	ClipQaDiagnostics,
 	ViralityBreakdown,
 } from "@/types/clip-generation";
 
@@ -84,6 +85,64 @@ function endsAbruptly(text: string): boolean {
 	if (!trimmed) return false;
 	if (/[.!?]["')\]]*$/.test(trimmed)) return false;
 	return /(\b(and|but|so|then|because|which|that)\s*)$/i.test(trimmed) || trimmed.endsWith(",");
+}
+
+function hasTailQuestionSetup(text: string): boolean {
+	const words = text.trim().split(/\s+/).filter(Boolean);
+	if (words.length === 0) return false;
+	const tail = words.slice(Math.max(0, words.length - 24)).join(" ");
+	if (/\?\s*$/.test(text.trim())) return true;
+	return /\b(what can we expect|how do you|there was a quote|in the lead up to|fair enough|looking ahead)\b/i.test(
+		tail,
+	);
+}
+
+function hasConsequenceChain(text: string): boolean {
+	const normalized = text.toLowerCase();
+	const causalHits =
+		(normalized.match(/\b(as a result|which means|therefore|because|leads to|results in|going to|will)\b/g)
+			?.length ?? 0) + (normalized.match(/\b(bad for|good for|impact|risk|harm)\b/g)?.length ?? 0);
+	return causalHits >= 2;
+}
+
+function hasStrongStance(text: string): boolean {
+	return /\b(i think|i believe|i don't understand|the decision|no longer the case|we need|must)\b/i.test(
+		text,
+	);
+}
+
+function computeInfoDensity(text: string): "low" | "medium" | "high" {
+	const words = text.match(/\S+/g) ?? [];
+	if (words.length < 45) return "low";
+	if (words.length < 95) return "medium";
+	return "high";
+}
+
+function computeRepetitionRisk(text: string): "low" | "medium" | "high" {
+	const normalized = text.toLowerCase();
+	const repeatedPhrases =
+		(normalized.match(/\byou know\b/g)?.length ?? 0) +
+		(normalized.match(/\bi mean\b/g)?.length ?? 0) +
+		(normalized.match(/\blike\b/g)?.length ?? 0);
+	if (repeatedPhrases >= 7) return "high";
+	if (repeatedPhrases >= 3) return "medium";
+	return "low";
+}
+
+export function buildClipQaDiagnostics({
+	text,
+}: {
+	text: string;
+}): ClipQaDiagnostics {
+	return {
+		startsClean: !startsLikelyMidSentence(text) && !startsWithContextDependentPronoun(text),
+		endsClean: !endsAbruptly(text),
+		hasTailQuestionSetup: hasTailQuestionSetup(text),
+		hasConsequenceChain: hasConsequenceChain(text),
+		hasStrongStance: hasStrongStance(text),
+		repetitionRisk: computeRepetitionRisk(text),
+		infoDensity: computeInfoDensity(text),
+	};
 }
 
 function computeDeterministicPenalty({
@@ -238,6 +297,62 @@ export function buildScoringPrompt({
 	].join("\n");
 }
 
+function buildDeterministicFallbackCandidate({
+	draft,
+	reason,
+}: {
+	draft: ClipCandidateDraft;
+	reason: string;
+}): ClipCandidate {
+	const localSignalScore = clampScore(draft.localScore);
+	const localBoundaryPenalty = computeLocalBoundaryPenalty({
+		draft,
+	});
+	const qaDiagnostics = buildClipQaDiagnostics({
+		text: draft.transcriptSnippet,
+	});
+	const qaPenalty =
+		(qaDiagnostics.hasTailQuestionSetup ? 8 : 0) +
+		(!qaDiagnostics.startsClean ? 5 : 0) +
+		(!qaDiagnostics.endsClean ? 5 : 0) +
+		(qaDiagnostics.repetitionRisk === "high"
+			? 6
+			: qaDiagnostics.repetitionRisk === "medium"
+				? 3
+				: 0);
+	const qaBonus =
+		(qaDiagnostics.hasConsequenceChain ? 4 : 0) +
+		(qaDiagnostics.hasStrongStance ? 2 : 0) +
+		(qaDiagnostics.infoDensity === "high" ? 2 : 0);
+
+	return {
+		id: draft.id,
+		startTime: draft.startTime,
+		endTime: draft.endTime,
+		duration: draft.duration,
+		transcriptSnippet: draft.transcriptSnippet,
+		title:
+			draft.transcriptSnippet
+				.split(/\s+/)
+				.slice(0, 6)
+				.join(" ")
+				.trim() || "Clip candidate",
+		rationale: reason,
+		scoreOverall: clampScore(
+			localSignalScore - localBoundaryPenalty - qaPenalty + qaBonus,
+		),
+		scoreBreakdown: {
+			hook: localSignalScore,
+			emotion: clampScore(localSignalScore * 0.8),
+			shareability: clampScore(localSignalScore * 0.85),
+			clarity: clampScore(localSignalScore * 0.9),
+			momentum: clampScore(localSignalScore * 0.85),
+		},
+		failureFlags: [],
+		qaDiagnostics,
+	};
+}
+
 export function mergeScoredCandidates({
 	drafts,
 	scoredText,
@@ -250,24 +365,21 @@ export function mergeScoredCandidates({
 			return parseScoredCandidatesFromText({ text: scoredText });
 		} catch {
 			return {
-				candidates: drafts.map((draft) => ({
-					id: draft.id,
-					title: draft.transcriptSnippet
-						.split(/\s+/)
-						.slice(0, 6)
-						.join(" ")
-						.trim() || "Clip candidate",
-					rationale:
-						"LLM scoring parse failed; used deterministic local ranking fallback.",
-					scoreOverall: clampScore(draft.localScore),
-					scoreBreakdown: {
-						hook: clampScore(draft.localScore),
-						emotion: clampScore(draft.localScore * 0.8),
-						shareability: clampScore(draft.localScore * 0.85),
-						clarity: clampScore(draft.localScore * 0.9),
-						momentum: clampScore(draft.localScore * 0.85),
-					},
-				})),
+				candidates: drafts.map((draft) => {
+					const fallback = buildDeterministicFallbackCandidate({
+						draft,
+						reason:
+							"LLM scoring parse failed; used deterministic local ranking fallback.",
+					});
+					return {
+						id: fallback.id,
+						title: fallback.title,
+						rationale: fallback.rationale,
+						scoreOverall: fallback.scoreOverall,
+						failureFlags: fallback.failureFlags,
+						scoreBreakdown: fallback.scoreBreakdown,
+					};
+				}),
 			};
 		}
 	})();
@@ -294,9 +406,30 @@ export function mergeScoredCandidates({
 		const localBoundaryPenalty = computeLocalBoundaryPenalty({
 			draft,
 		});
+		const qaDiagnostics = buildClipQaDiagnostics({
+			text: draft.transcriptSnippet,
+		});
+		const qaPenalty =
+			(qaDiagnostics.hasTailQuestionSetup ? 8 : 0) +
+			(!qaDiagnostics.startsClean ? 5 : 0) +
+			(!qaDiagnostics.endsClean ? 5 : 0) +
+			(qaDiagnostics.repetitionRisk === "high"
+				? 6
+				: qaDiagnostics.repetitionRisk === "medium"
+					? 3
+					: 0);
+		const qaBonus =
+			(qaDiagnostics.hasConsequenceChain ? 4 : 0) +
+			(qaDiagnostics.hasStrongStance ? 2 : 0) +
+			(qaDiagnostics.infoDensity === "high" ? 2 : 0);
 		// LLM score is the primary ranking signal; heuristics are light priors only.
 		const finalScore = clampScore(
-			llmScore + localPriorAdjustment - llmFailurePenalty - localBoundaryPenalty,
+			llmScore +
+				localPriorAdjustment -
+				llmFailurePenalty -
+				localBoundaryPenalty -
+				qaPenalty +
+				qaBonus,
 		);
 		merged.push({
 			id: draft.id,
@@ -309,7 +442,19 @@ export function mergeScoredCandidates({
 			scoreOverall: finalScore,
 			scoreBreakdown,
 			failureFlags,
+			qaDiagnostics,
 		});
+	}
+
+	for (const draft of drafts) {
+		if (merged.some((candidate) => candidate.id === draft.id)) continue;
+		merged.push(
+			buildDeterministicFallbackCandidate({
+				draft,
+				reason:
+					"LLM omitted this candidate ID; used deterministic local ranking fallback.",
+			}),
+		);
 	}
 
 	return merged.sort((a, b) => {

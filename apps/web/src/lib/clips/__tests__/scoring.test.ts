@@ -10,7 +10,7 @@ const draft: ClipCandidateDraft = {
 	startTime: 10,
 	endTime: 50,
 	duration: 40,
-	transcriptSnippet: "great hook with clear payoff",
+	transcriptSnippet: "Great hook with clear payoff.",
 	localScore: 80,
 };
 
@@ -38,9 +38,11 @@ describe("clip scoring", () => {
 		});
 
 		expect(merged).toHaveLength(1);
-		expect(merged[0]?.scoreOverall).toBe(85);
+		expect(merged[0]?.scoreOverall).toBe(91);
 		expect(merged[0]?.scoreBreakdown.hook).toBe(95);
 		expect(merged[0]?.title).toBe("Strong opening");
+		expect(merged[0]?.qaDiagnostics?.startsClean).toBeTrue();
+		expect(merged[0]?.qaDiagnostics?.endsClean).toBeTrue();
 	});
 
 	test("falls back to deterministic merge on malformed responses", () => {
@@ -51,6 +53,89 @@ describe("clip scoring", () => {
 		expect(merged).toHaveLength(1);
 		expect(merged[0]?.id).toBe("cand-1");
 		expect(merged[0]?.rationale).toContain("deterministic local ranking fallback");
+	});
+
+	test("penalizes unresolved tail question setups in QA diagnostics", () => {
+		const merged = mergeScoredCandidates({
+			drafts: [
+				{
+					id: "cand-tail-question",
+					startTime: 0,
+					endTime: 34,
+					duration: 34,
+					transcriptSnippet:
+						"We have seen pressure on the market all year. Looking ahead, what can we expect?",
+					localScore: 70,
+				},
+			],
+			scoredText: JSON.stringify({
+				candidates: [
+					{
+						id: "cand-tail-question",
+						title: "Tail question setup",
+						rationale: "Ends with unresolved setup question.",
+						scoreOverall: 82,
+						scoreBreakdown: {
+							hook: 80,
+							emotion: 70,
+							shareability: 72,
+							clarity: 84,
+							momentum: 69,
+						},
+					},
+				],
+			}),
+		});
+
+		expect(merged).toHaveLength(1);
+		expect(merged[0]?.qaDiagnostics?.hasTailQuestionSetup).toBeTrue();
+		expect(merged[0]?.scoreOverall).toBeLessThan(82);
+	});
+
+	test("fills missing LLM IDs with deterministic fallback candidates", () => {
+		const draftA: ClipCandidateDraft = {
+			id: "cand-a",
+			startTime: 0,
+			endTime: 30,
+			duration: 30,
+			transcriptSnippet: "Strong complete statement with payoff.",
+			localScore: 78,
+		};
+		const draftB: ClipCandidateDraft = {
+			id: "cand-b",
+			startTime: 35,
+			endTime: 70,
+			duration: 35,
+			transcriptSnippet: "Another complete thought with clear impact.",
+			localScore: 74,
+		};
+
+		const merged = mergeScoredCandidates({
+			drafts: [draftA, draftB],
+			scoredText: JSON.stringify({
+				candidates: [
+					{
+						id: "cand-a",
+						title: "Scored candidate",
+						rationale: "Returned by the model.",
+						scoreOverall: 86,
+						scoreBreakdown: {
+							hook: 86,
+							emotion: 80,
+							shareability: 82,
+							clarity: 88,
+							momentum: 84,
+						},
+					},
+				],
+			}),
+		});
+
+		expect(merged).toHaveLength(2);
+		expect(merged.some((candidate) => candidate.id === "cand-a")).toBeTrue();
+		const fallback = merged.find((candidate) => candidate.id === "cand-b");
+		expect(fallback).toBeDefined();
+		expect(fallback?.rationale).toContain("LLM omitted this candidate ID");
 	});
 
 	test("applies quality gate threshold", () => {

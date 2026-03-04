@@ -166,6 +166,76 @@ describe("sentence unit candidate builder", () => {
 		expect(top?.transcriptSnippet.toLowerCase()).toContain("tulip");
 	});
 
+	test("drops windows that pivot into interviewer setup at the tail", () => {
+		const candidates = buildClipCandidatesFromTranscript({
+			mediaDuration: 260,
+			minClipSeconds: 20,
+			targetClipSeconds: 34,
+			maxClipSeconds: 50,
+			segments: [
+				{
+					text: "Taxes have changed the economics of the regulated sector.",
+					start: 20,
+					end: 30,
+				},
+				{
+					text: "Operators will have to adapt and likely shrink as a result.",
+					start: 30,
+					end: 42,
+				},
+				{
+					text: "The black market will grow and that is bad for customers and sports.",
+					start: 42,
+					end: 58,
+				},
+				{
+					text: "Looking ahead what can we expect over the next year?",
+					start: 58,
+					end: 70,
+				},
+			],
+		});
+
+		expect(
+			candidates.some((candidate) =>
+				candidate.transcriptSnippet.toLowerCase().includes("looking ahead what can we expect"),
+			),
+		).toBeFalse();
+	});
+
+	test("keeps consequence chains with explicit impact language", () => {
+		const candidates = buildClipCandidatesFromTranscript({
+			mediaDuration: 220,
+			minClipSeconds: 20,
+			targetClipSeconds: 34,
+			maxClipSeconds: 55,
+			segments: [
+				{
+					text: "The government raised taxes sharply and the regulated market will shrink.",
+					start: 30,
+					end: 44,
+				},
+				{
+					text: "As a result the black market is going to flourish.",
+					start: 44,
+					end: 55,
+				},
+				{
+					text: "That is bad for customers bad for operators and bad for sports.",
+					start: 55,
+					end: 69,
+				},
+			],
+		});
+
+		expect(candidates.length).toBeGreaterThan(0);
+		expect(
+			candidates.some((candidate) =>
+				candidate.transcriptSnippet.toLowerCase().includes("as a result"),
+			),
+		).toBeTrue();
+	});
+
 	test("produces stable deterministic windows across repeated runs", () => {
 		const input = {
 			mediaDuration: 180,
