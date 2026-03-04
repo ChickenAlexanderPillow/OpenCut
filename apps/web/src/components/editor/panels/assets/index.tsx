@@ -8,7 +8,6 @@ import {
 	useAssetsPanelStore,
 } from "@/stores/assets-panel-store";
 import { TabBar } from "./tabbar";
-import { Captions } from "./views/captions";
 import { Clips } from "./views/clips";
 import { EffectsView } from "./views/effects";
 import { MediaView } from "./views/assets";
@@ -36,7 +35,6 @@ export function AssetsPanel() {
 		text: <TextView />,
 		stickers: <StickersView />,
 		effects: <EffectsView />,
-		captions: <Captions />,
 		overlay: <OverlayView />,
 		settings: <SettingsView />,
 	};

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PanelView } from "@/components/editor/panels/assets/views/base-view";
 import { useEditor } from "@/hooks/use-editor";
 import { useElementSelection } from "@/hooks/timeline/element/use-element-selection";
@@ -20,7 +20,7 @@ import type {
 import type { TranscriptEditWord } from "@/types/transcription";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { AlignJustify, Scissors } from "lucide-react";
+import { AlignJustify, Check, Pencil, Scissors, X } from "lucide-react";
 
 type MediaRef = {
 	trackId: string;
@@ -117,11 +117,63 @@ function getCaptionSourceTrackInfo({
 	);
 }
 
+function buildDefaultSegmentGroups({
+	words,
+}: {
+	words: TranscriptEditWord[];
+}): Array<{ id: string; words: TranscriptEditWord[] }> {
+	if (words.length === 0) return [];
+	const groups: Array<{ id: string; words: TranscriptEditWord[] }> = [];
+	let startIndex = 0;
+	const MAX_WORDS_PER_SEGMENT = 20;
+	const SEGMENT_GAP_SECONDS = 0.65;
+
+	for (let index = 0; index < words.length - 1; index++) {
+		const current = words[index];
+		const next = words[index + 1];
+		const gap = Math.max(0, next.startTime - current.endTime);
+		const endsPhrase = /[.!?,:;]$/.test(current.text.trim());
+		const reachedWordLimit = index - startIndex + 1 >= MAX_WORDS_PER_SEGMENT;
+		if (gap >= SEGMENT_GAP_SECONDS || endsPhrase || reachedWordLimit) {
+			groups.push({
+				id: `auto:${groups.length}`,
+				words: words.slice(startIndex, index + 1),
+			});
+			startIndex = index + 1;
+		}
+	}
+	groups.push({
+		id: `auto:${groups.length}`,
+		words: words.slice(startIndex),
+	});
+	return groups.filter((group) => group.words.length > 0);
+}
+
+function getWordIdFromNode({
+	node,
+}: {
+	node: Node | null;
+}): string | null {
+	if (!node) return null;
+	const element =
+		node instanceof HTMLElement
+			? node
+			: node.parentElement instanceof HTMLElement
+				? node.parentElement
+				: null;
+	if (!element) return null;
+	return element.closest<HTMLElement>("[data-word-id]")?.dataset.wordId ?? null;
+}
+
 export function TranscriptView() {
 	const editor = useEditor();
 	const { selectedElements } = useElementSelection();
 	const tracks = editor.timeline.getTracks();
 	const currentTime = editor.playback.getCurrentTime();
+	const [editingWordId, setEditingWordId] = useState<string | null>(null);
+	const [editingWordText, setEditingWordText] = useState("");
+	const [selectedWordIds, setSelectedWordIds] = useState<string[]>([]);
+	const selectionContainerRef = useRef<HTMLDivElement | null>(null);
 
 	const activeMedia = useMemo(
 		() => getActiveMediaRef({ tracks, selectedElements }),
@@ -185,7 +237,7 @@ export function TranscriptView() {
 						),
 					}))
 					.filter((group) => group.words.length > 0)
-			: [{ id: "default", words: wordsWithCutState }];
+			: buildDefaultSegmentGroups({ words: wordsWithCutState });
 
 	const captionLinks = useMemo(
 		() =>
@@ -197,10 +249,100 @@ export function TranscriptView() {
 				: 0,
 		[activeMedia, tracks],
 	);
+	const orderedWordIds = useMemo(
+		() => groups.flatMap((group) => group.words.map((word) => word.id)),
+		[groups],
+	);
+
+	useEffect(() => {
+		if (!editingWordId) return;
+		if (!wordsWithCutState.some((word) => word.id === editingWordId)) {
+			setEditingWordId(null);
+			setEditingWordText("");
+		}
+	}, [editingWordId, wordsWithCutState]);
+
+	useEffect(() => {
+		if (!activeMedia) return;
+		const captureSelectionWords = () => {
+			const container = selectionContainerRef.current;
+			if (!container) {
+				setSelectedWordIds([]);
+				return;
+			}
+			const selection = window.getSelection();
+			if (
+				!selection ||
+				selection.rangeCount === 0 ||
+				selection.isCollapsed ||
+				!container.contains(selection.anchorNode) ||
+				!container.contains(selection.focusNode)
+			) {
+				setSelectedWordIds([]);
+				return;
+			}
+			const startWordId = getWordIdFromNode({ node: selection.anchorNode });
+			const endWordId = getWordIdFromNode({ node: selection.focusNode });
+			if (!startWordId || !endWordId) {
+				setSelectedWordIds([]);
+				return;
+			}
+			const startIndex = orderedWordIds.indexOf(startWordId);
+			const endIndex = orderedWordIds.indexOf(endWordId);
+			if (startIndex < 0 || endIndex < 0) {
+				setSelectedWordIds([]);
+				return;
+			}
+			const from = Math.min(startIndex, endIndex);
+			const to = Math.max(startIndex, endIndex);
+			setSelectedWordIds(orderedWordIds.slice(from, to + 1));
+		};
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (
+				event.key !== "Backspace" &&
+				event.key !== "Delete"
+			) {
+				return;
+			}
+			if (editingWordId) return;
+			const container = selectionContainerRef.current;
+			if (!container || selectedWordIds.length === 0) return;
+			const selection = window.getSelection();
+			if (
+				!selection ||
+				selection.rangeCount === 0 ||
+				selection.isCollapsed ||
+				!container.contains(selection.anchorNode) ||
+				!container.contains(selection.focusNode)
+			) {
+				return;
+			}
+			event.preventDefault();
+			invokeAction("transcript-set-words-removed", {
+				trackId: activeMedia.trackId,
+				elementId: activeMedia.element.id,
+				wordIds: selectedWordIds,
+				removed: true,
+			});
+			selection.removeAllRanges();
+			setSelectedWordIds([]);
+		};
+		document.addEventListener("selectionchange", captureSelectionWords);
+		window.addEventListener("keydown", onKeyDown);
+		return () => {
+			document.removeEventListener("selectionchange", captureSelectionWords);
+			window.removeEventListener("keydown", onKeyDown);
+		};
+	}, [
+		activeMedia,
+		editingWordId,
+		orderedWordIds,
+		selectedWordIds,
+	]);
 
 	if (!activeMedia) {
 		return (
-			<PanelView title="Transcript" contentClassName="space-y-2">
+			<PanelView title="Captions" contentClassName="space-y-2">
 				<div className="text-sm text-muted-foreground p-3 border rounded-md">
 					Select a clip audio/video element to edit transcript words.
 				</div>
@@ -210,7 +352,7 @@ export function TranscriptView() {
 
 	if (wordsWithCutState.length === 0) {
 		return (
-			<PanelView title="Transcript" contentClassName="space-y-2">
+			<PanelView title="Captions" contentClassName="space-y-2">
 				<div className="text-sm text-muted-foreground p-3 border rounded-md">
 					Word-level transcript unavailable for this element.
 				</div>
@@ -220,7 +362,7 @@ export function TranscriptView() {
 
 	return (
 		<PanelView
-			title="Transcript"
+			title="Captions"
 			contentClassName="space-y-3 pb-3"
 			actions={
 				<div className="flex items-center gap-1">
@@ -259,63 +401,146 @@ export function TranscriptView() {
 				<span className="ml-auto">Captions linked: {captionLinks}</span>
 			</div>
 
-			{groups.map((group, groupIndex) => {
-				if (group.words.length === 0) return null;
-				const start = group.words[0]?.startTime ?? 0;
-				return (
-					<div key={group.id} className="rounded-md border p-2">
-						<div className="flex items-center justify-between mb-2">
-							<div className="text-xs text-muted-foreground">
-								{formatTime(start)} Segment {groupIndex + 1}
+			<div ref={selectionContainerRef} className="space-y-2">
+				{groups.map((group, groupIndex) => {
+					if (group.words.length === 0) return null;
+					const start = group.words[0]?.startTime ?? 0;
+					return (
+						<div key={group.id} className="rounded-md border p-2">
+							<div className="flex items-center justify-between mb-2">
+								<div className="text-xs text-muted-foreground">
+									{formatTime(start)} Segment {groupIndex + 1}
+								</div>
+								<div className="flex items-center gap-1">
+									<Button
+										variant="ghost"
+										size="icon"
+										className="size-6"
+										onClick={() => {
+											const splitWord =
+												group.words[Math.floor(group.words.length / 2)];
+											if (!splitWord) return;
+											invokeAction("transcript-split-segment-ui", {
+												trackId: activeMedia.trackId,
+												elementId: activeMedia.element.id,
+												wordId: splitWord.id,
+											});
+										}}
+									>
+										<Scissors className="size-3.5" />
+									</Button>
+								</div>
 							</div>
-							<div className="flex items-center gap-1">
-								<Button
-									variant="ghost"
-									size="icon"
-									className="size-6"
-									onClick={() => {
-										const splitWord =
-											group.words[Math.floor(group.words.length / 2)];
-										if (!splitWord) return;
-										invokeAction("transcript-split-segment-ui", {
-											trackId: activeMedia.trackId,
-											elementId: activeMedia.element.id,
-											wordId: splitWord.id,
-										});
-									}}
-								>
-									<Scissors className="size-3.5" />
-								</Button>
-							</div>
-						</div>
-						<div className="flex flex-wrap gap-1.5">
-							{group.words.map((word) => (
-								<Button
+							<div className="text-sm leading-7 select-text">
+								{group.words.map((word) => (
+								<span
 									key={word.id}
-									variant="secondary"
-									size="sm"
-									onClick={() =>
-										invokeAction("transcript-toggle-word", {
-											trackId: activeMedia.trackId,
-											elementId: activeMedia.element.id,
-											wordId: word.id,
-										})
-									}
-									className={[
-										"h-7 px-2 rounded-full text-xs",
-										word.removed ? "opacity-35 line-through" : "",
-										currentWordId === word.id ? "ring-2 ring-primary" : "",
-									]
-										.filter(Boolean)
-										.join(" ")}
+									className="relative group/word inline-block mr-1.5"
+									data-word-id={word.id}
 								>
-									{word.text}
-								</Button>
-							))}
+									{editingWordId === word.id ? (
+										<span className="h-7 rounded-full border bg-secondary inline-flex items-center pr-1 pl-2 align-middle">
+											<input
+												value={editingWordText}
+												onChange={(event) =>
+													setEditingWordText(event.target.value)
+												}
+												onKeyDown={(event) => {
+													if (event.key === "Enter") {
+														const text = editingWordText.trim();
+														if (!text) return;
+														invokeAction("transcript-update-word", {
+															trackId: activeMedia.trackId,
+															elementId: activeMedia.element.id,
+															wordId: word.id,
+															text,
+														});
+														setEditingWordId(null);
+														setEditingWordText("");
+													}
+													if (event.key === "Escape") {
+														setEditingWordId(null);
+														setEditingWordText("");
+													}
+												}}
+												className="bg-transparent text-xs outline-none w-24"
+											/>
+											<Button
+												variant="ghost"
+												size="icon"
+												className="size-5"
+												onClick={() => {
+													const text = editingWordText.trim();
+													if (!text) return;
+													invokeAction("transcript-update-word", {
+														trackId: activeMedia.trackId,
+														elementId: activeMedia.element.id,
+														wordId: word.id,
+														text,
+													});
+													setEditingWordId(null);
+													setEditingWordText("");
+												}}
+											>
+												<Check className="size-3.5" />
+											</Button>
+											<Button
+												variant="ghost"
+												size="icon"
+												className="size-5"
+												onClick={() => {
+													setEditingWordId(null);
+													setEditingWordText("");
+												}}
+											>
+												<X className="size-3.5" />
+											</Button>
+										</span>
+									) : (
+										<>
+											<button
+												type="button"
+												onClick={() => {
+													const selection = window.getSelection();
+													if (selection && !selection.isCollapsed) return;
+													invokeAction("transcript-toggle-word", {
+														trackId: activeMedia.trackId,
+														elementId: activeMedia.element.id,
+														wordId: word.id,
+													});
+												}}
+												className={[
+													"border-0 bg-transparent p-0 m-0 font-inherit text-inherit rounded-full px-0.5 py-0.5 transition-colors cursor-pointer",
+													"hover:bg-secondary",
+													word.removed ? "opacity-40 line-through" : "",
+													currentWordId === word.id ? "bg-secondary/70" : "",
+													selectedWordIds.includes(word.id) ? "bg-accent" : "",
+												]
+													.filter(Boolean)
+													.join(" ")}
+											>
+												{word.text}
+											</button>
+											<Button
+												variant="ghost"
+												size="icon"
+												className="absolute -top-1 -right-1 size-4 rounded-full border bg-background opacity-0 group-hover/word:opacity-100 transition-opacity"
+												onClick={() => {
+													setEditingWordId(word.id);
+													setEditingWordText(word.text);
+												}}
+											>
+												<Pencil className="size-2.5" />
+											</Button>
+										</>
+									)}
+								</span>
+								))}
+							</div>
 						</div>
-					</div>
-				);
-			})}
+					);
+				})}
+			</div>
 
 			<div className="text-[11px] text-muted-foreground px-1 flex items-center gap-1">
 				<AlignJustify className="size-3.5" />

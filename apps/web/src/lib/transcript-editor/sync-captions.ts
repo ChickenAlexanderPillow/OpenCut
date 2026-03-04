@@ -1,5 +1,6 @@
 import { resolveBlueHighlightCaptionPreset } from "@/constants/caption-presets";
 import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
+import { findCaptionTrackIdInScene } from "@/lib/captions/caption-track";
 import { buildCaptionPayloadFromTranscriptWords } from "@/lib/transcript-editor/core";
 import type { TimelineTrack, VideoElement, AudioElement, TextElement } from "@/types/timeline";
 
@@ -16,9 +17,9 @@ function ensureCaptionTrack({
 }: {
 	tracks: TimelineTrack[];
 }): { tracks: TimelineTrack[]; trackId: string } {
-	const existing = tracks.find((track) => track.type === "text");
-	if (existing) {
-		return { tracks, trackId: existing.id };
+	const existingCaptionTrackId = findCaptionTrackIdInScene({ tracks });
+	if (existingCaptionTrackId) {
+		return { tracks, trackId: existingCaptionTrackId };
 	}
 	const nextTrack: TimelineTrack = {
 		id: crypto.randomUUID(),
@@ -83,9 +84,29 @@ export function syncCaptionsFromTranscriptEdits({
 						.map((element) => ({ trackId: track.id, element }))
 				: [],
 		);
+	const heuristicCaptions =
+		linkedCaptions.length > 0
+			? []
+			: nextTracks.flatMap((track) =>
+					track.type === "text"
+						? track.elements
+								.filter(
+									(element) =>
+										element.type === "text" &&
+										!element.captionSourceRef &&
+										(element.captionWordTimings?.length ?? 0) > 0 &&
+										element.captionStyle?.linkedToCaptionGroup !== false &&
+										Math.abs(element.startTime - payload.startTime) <= 0.25 &&
+										Math.abs(element.duration - payload.duration) <= 1.5,
+								)
+								.map((element) => ({ trackId: track.id, element }))
+						: [],
+			  );
+	const candidateCaptions =
+		linkedCaptions.length > 0 ? linkedCaptions : heuristicCaptions;
 
 	const updatedCaptionElements: Array<{ trackId: string; element: TextElement }> = [];
-	if (linkedCaptions.length === 0) {
+	if (candidateCaptions.length === 0) {
 		const blue = resolveBlueHighlightCaptionPreset();
 		updatedCaptionElements.push({
 			trackId: targetTrackId,
@@ -107,7 +128,7 @@ export function syncCaptionsFromTranscriptEdits({
 		});
 		changed = true;
 	} else {
-		for (const linked of linkedCaptions) {
+		for (const linked of candidateCaptions) {
 			updatedCaptionElements.push({
 				trackId: linked.trackId,
 				element: {

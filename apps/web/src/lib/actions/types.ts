@@ -13,11 +13,23 @@ export type TActionArgsMap = {
 	"transcript-toggle-word":
 		| { trackId: string; elementId: string; wordId: string }
 		| undefined;
+	"transcript-update-word":
+		| { trackId: string; elementId: string; wordId: string; text: string }
+		| undefined;
+	"transcript-set-words-removed":
+		| {
+				trackId: string;
+				elementId: string;
+				wordIds: string[];
+				removed: boolean;
+		  }
+		| undefined;
 	"transcript-remove-fillers": { trackId: string; elementId: string } | undefined;
 	"transcript-restore-all": { trackId: string; elementId: string } | undefined;
 	"transcript-split-segment-ui":
 		| { trackId: string; elementId: string; wordId: string }
 		| undefined;
+	"select-all-captions": { trackId?: string } | undefined;
 	"clear-viral-clips-session": undefined;
 };
 

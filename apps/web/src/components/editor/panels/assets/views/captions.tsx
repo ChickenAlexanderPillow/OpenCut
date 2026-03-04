@@ -38,6 +38,7 @@ import { Database, Languages, WandSparkles } from "lucide-react";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 import { evaluateTranscriptSuitability } from "@/lib/external-projects/transcript-suitability";
+import { findCaptionTrackIdInScene } from "@/lib/captions/caption-track";
 
 export function Captions() {
 	const editor = useEditor();
@@ -153,10 +154,15 @@ export function Captions() {
 			mode: "segment" satisfies CaptionGenerationMode,
 		});
 
-		const captionTrackId = editor.timeline.addTrack({
-			type: "text",
-			index: 0,
+		const existingCaptionTrackId = findCaptionTrackIdInScene({
+			tracks: editor.timeline.getTracks(),
 		});
+		const captionTrackId =
+			existingCaptionTrackId ??
+			editor.timeline.addTrack({
+				type: "text",
+				index: 0,
+			});
 
 		for (let i = 0; i < captionChunks.length; i++) {
 			const caption = captionChunks[i];

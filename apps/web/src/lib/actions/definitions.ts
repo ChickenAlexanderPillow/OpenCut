@@ -104,6 +104,26 @@ export const ACTIONS = {
 		category: "editing",
 		args: { trackId: "string", elementId: "string", wordId: "string" },
 	},
+	"transcript-update-word": {
+		description: "Update transcript word text",
+		category: "editing",
+		args: {
+			trackId: "string",
+			elementId: "string",
+			wordId: "string",
+			text: "string",
+		},
+	},
+	"transcript-set-words-removed": {
+		description: "Set transcript words removed state",
+		category: "editing",
+		args: {
+			trackId: "string",
+			elementId: "string",
+			wordIds: "string[]",
+			removed: "boolean",
+		},
+	},
 	"transcript-remove-fillers": {
 		description: "Remove filler words from transcript",
 		category: "editing",
@@ -151,6 +171,7 @@ export const ACTIONS = {
 	"select-all-captions": {
 		description: "Select all caption elements",
 		category: "selection",
+		args: { trackId: "string" },
 	},
 	"duplicate-selected": {
 		description: "Duplicate selected element",

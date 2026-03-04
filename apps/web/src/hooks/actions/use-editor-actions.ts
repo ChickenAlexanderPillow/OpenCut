@@ -48,6 +48,7 @@ import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
 import {
 	resolveBlueHighlightCaptionPreset,
 } from "@/constants/caption-presets";
+import { findCaptionTrackIdInScene } from "@/lib/captions/caption-track";
 import { normalizeGeneratedCaptionsInProject } from "@/lib/captions/generated-caption-normalizer";
 import { getMainTrack } from "@/lib/timeline/track-utils";
 import { canElementHaveAudio } from "@/lib/timeline/element-utils";
@@ -374,8 +375,50 @@ function initializeTranscriptEditFromExistingCaption({
 		source: "word-level" as const,
 		words,
 		cuts,
+		segmentsUi: buildDefaultTranscriptSegmentsUi({
+			elementId: mediaElementId,
+			words,
+		}),
 		updatedAt: new Date().toISOString(),
 	};
+}
+
+function buildDefaultTranscriptSegmentsUi({
+	elementId,
+	words,
+}: {
+	elementId: string;
+	words: NonNullable<VideoElement["transcriptEdit"]>["words"];
+}): NonNullable<VideoElement["transcriptEdit"]>["segmentsUi"] {
+	if (words.length === 0) return [];
+	const segments: Array<{ wordStartIndex: number; wordEndIndex: number }> = [];
+	let segmentStart = 0;
+	const MAX_WORDS_PER_SEGMENT = 20;
+	const SEGMENT_GAP_SECONDS = 0.65;
+
+	for (let index = 0; index < words.length - 1; index++) {
+		const current = words[index];
+		const next = words[index + 1];
+		const gap = Math.max(0, next.startTime - current.endTime);
+		const endsPhrase = /[.!?,:;]$/.test(current.text.trim());
+		const reachedWordLimit = index - segmentStart + 1 >= MAX_WORDS_PER_SEGMENT;
+		if (gap >= SEGMENT_GAP_SECONDS || endsPhrase || reachedWordLimit) {
+			segments.push({
+				wordStartIndex: segmentStart,
+				wordEndIndex: index,
+			});
+			segmentStart = index + 1;
+		}
+	}
+	segments.push({
+		wordStartIndex: segmentStart,
+		wordEndIndex: words.length - 1,
+	});
+	return segments.map((segment, index) => ({
+		id: `${elementId}:seg:${index}`,
+		wordStartIndex: segment.wordStartIndex,
+		wordEndIndex: segment.wordEndIndex,
+	}));
 }
 
 function applyTranscriptEditMutation({
@@ -430,18 +473,22 @@ function applyTranscriptEditMutation({
 		originalDuration,
 		cuts,
 	});
+	const initialSegmentsUi =
+		transcriptEdit.segmentsUi && transcriptEdit.segmentsUi.length > 0
+			? transcriptEdit.segmentsUi
+			: buildDefaultTranscriptSegmentsUi({
+					elementId: target.id,
+					words: nextWords,
+				});
 	const nextSegmentsUi =
-		mutateSegmentsUi?.(
-			transcriptEdit.segmentsUi ?? [
-				{
-					id: `${target.id}:seg:0`,
-					wordStartIndex: 0,
-					wordEndIndex: Math.max(0, nextWords.length - 1),
-				},
-			],
-			nextWords,
-		) ??
-		transcriptEdit.segmentsUi;
+		mutateSegmentsUi?.(initialSegmentsUi, nextWords) ?? initialSegmentsUi;
+	const wordsChanged = JSON.stringify(baseWords) !== JSON.stringify(nextWords);
+	const segmentsChanged =
+		JSON.stringify(initialSegmentsUi) !== JSON.stringify(nextSegmentsUi);
+	const durationChanged = Math.abs(nextDuration - target.duration) > 0.0001;
+	if (!wordsChanged && !segmentsChanged && !durationChanged) {
+		return { changed: false };
+	}
 
 	const baseEdit = {
 		version: 1 as const,
@@ -498,7 +545,6 @@ function applyTranscriptEditMutation({
 	});
 
 	let syncedTracks = updatedTracks;
-	let anySyncChanged = false;
 	for (const mediaElementId of relatedElementIds) {
 		const syncResult = syncCaptionsFromTranscriptEdits({
 			tracks: syncedTracks,
@@ -507,11 +553,7 @@ function applyTranscriptEditMutation({
 		if (syncResult.error) continue;
 		if (syncResult.changed) {
 			syncedTracks = syncResult.tracks;
-			anySyncChanged = true;
 		}
-	}
-	if (!anySyncChanged) {
-		return { changed: false };
 	}
 
 	editor.command.execute({
@@ -1720,6 +1762,62 @@ export function useEditorActions() {
 	);
 
 	useActionHandler(
+		"transcript-update-word",
+		(args) => {
+			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
+			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
+			const wordId = typeof args?.wordId === "string" ? args.wordId : "";
+			const text = typeof args?.text === "string" ? args.text.trim() : "";
+			if (!trackId || !elementId || !wordId || !text) {
+				if (!text) {
+					toast.error("Word text cannot be empty");
+				}
+				return;
+			}
+			const result = applyTranscriptEditMutation({
+				editor,
+				trackId,
+				elementId,
+				mutateWords: (words) =>
+					words.map((word) =>
+						word.id === wordId ? { ...word, text } : word,
+					),
+			});
+			if (result.error) {
+				toast.error(result.error);
+			}
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"transcript-set-words-removed",
+		(args) => {
+			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
+			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
+			const wordIds = Array.isArray(args?.wordIds)
+				? args.wordIds.filter((value): value is string => typeof value === "string")
+				: [];
+			const removed = Boolean(args?.removed);
+			if (!trackId || !elementId || wordIds.length === 0) return;
+			const targetWordIds = new Set(wordIds);
+			const result = applyTranscriptEditMutation({
+				editor,
+				trackId,
+				elementId,
+				mutateWords: (words) =>
+					words.map((word) =>
+						targetWordIds.has(word.id) ? { ...word, removed } : word,
+					),
+			});
+			if (result.error) {
+				toast.error(result.error);
+			}
+		},
+		undefined,
+	);
+
+	useActionHandler(
 		"transcript-remove-fillers",
 		(args) => {
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
@@ -2558,10 +2656,15 @@ export function useEditorActions() {
 							if (continuousCaption) {
 								if (captionSource === "local-word") localWordCaptionCount += 1;
 
-								const captionTrackId = editor.timeline.addTrack({
-									type: "text",
-									index: 0,
+								const existingCaptionTrackId = findCaptionTrackIdInScene({
+									tracks: editor.timeline.getTracks(),
 								});
+								const captionTrackId =
+									existingCaptionTrackId ??
+									editor.timeline.addTrack({
+										type: "text",
+										index: 0,
+									});
 								editor.timeline.insertElement({
 									placement: {
 										mode: "explicit",
@@ -2703,11 +2806,16 @@ export function useEditorActions() {
 
 	useActionHandler(
 		"select-all-captions",
-		() => {
+		(args) => {
+			const trackId =
+				typeof args?.trackId === "string" && args.trackId.length > 0
+					? args.trackId
+					: null;
 			const captionElements = editor
 				.timeline
 				.getTracks()
 				.filter((track) => track.type === "text")
+				.filter((track) => (trackId ? track.id === trackId : true))
 				.flatMap((track) =>
 					track.elements
 						.filter(
@@ -2722,7 +2830,7 @@ export function useEditorActions() {
 						})),
 				);
 			if (captionElements.length === 0) {
-				toast.error("No captions found");
+				toast.error(trackId ? "No captions found on selected track" : "No captions found");
 				return;
 			}
 			setElementSelection({ elements: captionElements });

@@ -301,7 +301,9 @@ export function Timeline() {
 															className="text-muted-foreground hover:text-foreground cursor-pointer"
 															onClick={(event) => {
 																event.stopPropagation();
-																invokeAction("select-all-captions");
+																invokeAction("select-all-captions", {
+																	trackId: track.id,
+																});
 															}}
 															title="Select all captions"
 															aria-label="Select all captions"
