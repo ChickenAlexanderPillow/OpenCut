@@ -71,4 +71,22 @@ describe("transcript editor core", () => {
 		expect(applied[1]?.removed).toBe(true);
 		expect(applied[2]?.removed).toBe(false);
 	});
+
+	test("extends cuts through inter-word gaps after removed words", () => {
+		const words = [
+			{ id: "w1", text: "from", startTime: 0.0, endTime: 0.2, removed: true },
+			{ id: "w2", text: "poland", startTime: 0.28, endTime: 0.5, removed: true },
+			{
+				id: "w3",
+				text: "european",
+				startTime: 0.7,
+				endTime: 0.95,
+				removed: false,
+			},
+		];
+		const cuts = buildTranscriptCutsFromWords({ words });
+		expect(cuts).toHaveLength(1);
+		expect(cuts[0]?.start).toBeCloseTo(0.0, 3);
+		expect(cuts[0]?.end).toBeCloseTo(0.7, 3);
+	});
 });

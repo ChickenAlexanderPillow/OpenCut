@@ -267,12 +267,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 				: -1
 			: fallbackWordIndex;
 		const captionTimingWords = captionWordTimings.map((timing) => timing.word);
-		const contentTokens = this.params.content.match(/\S+/g) ?? [];
-		const captionWords =
-			captionTimingWords.length > 0 &&
-			contentTokens.length === captionTimingWords.length
-				? contentTokens
-				: captionTimingWords;
+		const captionWords = captionTimingWords;
 		const wordsOnScreenRaw = this.params.captionStyle?.wordsOnScreen;
 		const wordsOnScreen =
 			typeof wordsOnScreenRaw === "number"

@@ -4,6 +4,8 @@ import { useTimelineStore } from "@/stores/timeline-store";
 import { useActionHandler } from "@/hooks/actions/use-action-handler";
 import { useEditor } from "../use-editor";
 import { useElementSelection } from "../timeline/element/use-element-selection";
+import { Command } from "@/lib/commands/base-command";
+import { EditorCore } from "@/core";
 import { getElementsAtTime } from "@/lib/timeline";
 import { toast } from "sonner";
 import { TracksSnapshotCommand } from "@/lib/commands/timeline";
@@ -421,6 +423,224 @@ function buildDefaultTranscriptSegmentsUi({
 	}));
 }
 
+function hasTrackStructureChange({
+	beforeTracks,
+	afterTracks,
+}: {
+	beforeTracks: TimelineTrack[];
+	afterTracks: TimelineTrack[];
+}): boolean {
+	if (beforeTracks.length !== afterTracks.length) return true;
+	for (let trackIndex = 0; trackIndex < beforeTracks.length; trackIndex++) {
+		const beforeTrack = beforeTracks[trackIndex];
+		const afterTrack = afterTracks[trackIndex];
+		if (!beforeTrack || !afterTrack || beforeTrack.id !== afterTrack.id) return true;
+		if (beforeTrack.elements.length !== afterTrack.elements.length) return true;
+		for (let elementIndex = 0; elementIndex < beforeTrack.elements.length; elementIndex++) {
+			if (beforeTrack.elements[elementIndex]?.id !== afterTrack.elements[elementIndex]?.id) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+type CompactTranscriptPatch = {
+	trackId: string;
+	elementId: string;
+	beforeDuration: number;
+	afterDuration: number;
+	beforeUpdatedAt: string;
+	afterUpdatedAt: string;
+	beforeSegmentsUi?: Array<{
+		id: string;
+		wordStartIndex: number;
+		wordEndIndex: number;
+		label?: string;
+	}>;
+	afterSegmentsUi?: Array<{
+		id: string;
+		wordStartIndex: number;
+		wordEndIndex: number;
+		label?: string;
+	}>;
+	wordDiffs: CompactTranscriptWordDiff[];
+};
+
+type CompactTranscriptWordDiff = {
+	id: string;
+	text?: { before: string; after: string };
+	removed?: { before: boolean; after: boolean };
+	segmentId?: { before?: string; after?: string };
+};
+
+function buildCompactTranscriptPatch({
+	trackId,
+	elementId,
+	beforeElement,
+	afterElement,
+}: {
+	trackId: string;
+	elementId: string;
+	beforeElement: VideoElement | AudioElement;
+	afterElement: VideoElement | AudioElement;
+}): CompactTranscriptPatch | null {
+	const beforeEdit = beforeElement.transcriptEdit;
+	const afterEdit = afterElement.transcriptEdit;
+	if (!beforeEdit || !afterEdit) return null;
+	if (beforeEdit.words.length !== afterEdit.words.length) return null;
+
+	const wordDiffs: CompactTranscriptWordDiff[] = [];
+	for (let index = 0; index < beforeEdit.words.length; index++) {
+		const beforeWord = beforeEdit.words[index];
+		const afterWord = afterEdit.words[index];
+		if (!beforeWord || !afterWord || beforeWord.id !== afterWord.id) {
+			return null;
+		}
+		if (
+			Math.abs(beforeWord.startTime - afterWord.startTime) > 0.0001 ||
+			Math.abs(beforeWord.endTime - afterWord.endTime) > 0.0001
+		) {
+			return null;
+		}
+
+		const diff: CompactTranscriptWordDiff = { id: beforeWord.id };
+		if (beforeWord.text !== afterWord.text) {
+			diff.text = { before: beforeWord.text, after: afterWord.text };
+		}
+		const beforeRemoved = Boolean(beforeWord.removed);
+		const afterRemoved = Boolean(afterWord.removed);
+		if (beforeRemoved !== afterRemoved) {
+			diff.removed = { before: beforeRemoved, after: afterRemoved };
+		}
+		if ((beforeWord.segmentId ?? undefined) !== (afterWord.segmentId ?? undefined)) {
+			diff.segmentId = {
+				before: beforeWord.segmentId ?? undefined,
+				after: afterWord.segmentId ?? undefined,
+			};
+		}
+		if (diff.text || diff.removed || diff.segmentId) {
+			wordDiffs.push(diff);
+		}
+	}
+
+	return {
+		trackId,
+		elementId,
+		beforeDuration: beforeElement.duration,
+		afterDuration: afterElement.duration,
+		beforeUpdatedAt: beforeEdit.updatedAt,
+		afterUpdatedAt: afterEdit.updatedAt,
+		beforeSegmentsUi: beforeEdit.segmentsUi ? [...beforeEdit.segmentsUi] : undefined,
+		afterSegmentsUi: afterEdit.segmentsUi ? [...afterEdit.segmentsUi] : undefined,
+		wordDiffs,
+	};
+}
+
+class CompactTranscriptMutationCommand extends Command {
+	constructor(
+		private patches: CompactTranscriptPatch[],
+		private mediaElementIds: string[],
+	) {
+		super();
+	}
+
+	private applyPatches({
+		direction,
+	}: {
+		direction: "before" | "after";
+	}): void {
+		const editor = EditorCore.getInstance();
+		const patchByTrack = new Map<string, Map<string, CompactTranscriptPatch>>();
+		for (const patch of this.patches) {
+			const byElement = patchByTrack.get(patch.trackId) ?? new Map<string, CompactTranscriptPatch>();
+			byElement.set(patch.elementId, patch);
+			patchByTrack.set(patch.trackId, byElement);
+		}
+		let nextTracks = editor.timeline.getTracks().map((track) => {
+			const elementPatches = patchByTrack.get(track.id);
+			if (!elementPatches) return track;
+			if (track.type !== "video" && track.type !== "audio") return track;
+			const nextElements = track.elements.map((element) => {
+				const patch = elementPatches.get(element.id);
+				if (!patch) return element;
+				if (!isTranscriptEditableMediaElement(element)) return element;
+				if (!element.transcriptEdit) return element;
+				const wordsById = new Map(
+					element.transcriptEdit.words.map((word) => [
+						word.id,
+						{ ...word },
+					]),
+				);
+				for (const wordDiff of patch.wordDiffs) {
+					const word = wordsById.get(wordDiff.id);
+					if (!word) continue;
+					if (wordDiff.text) {
+						word.text =
+							direction === "before" ? wordDiff.text.before : wordDiff.text.after;
+					}
+					if (wordDiff.removed) {
+						word.removed =
+							direction === "before"
+								? wordDiff.removed.before
+								: wordDiff.removed.after;
+					}
+					if (wordDiff.segmentId) {
+						word.segmentId =
+							direction === "before"
+								? wordDiff.segmentId.before
+								: wordDiff.segmentId.after;
+					}
+				}
+				const words = element.transcriptEdit.words.map((word) => {
+					const nextWord = wordsById.get(word.id);
+					return nextWord ?? word;
+				});
+				const segmentsUi =
+					direction === "before" ? patch.beforeSegmentsUi : patch.afterSegmentsUi;
+				const cuts = buildTranscriptCutsFromWords({ words });
+				return {
+					...element,
+					duration:
+						direction === "before"
+							? patch.beforeDuration
+							: patch.afterDuration,
+					transcriptEdit: {
+						...element.transcriptEdit,
+						words,
+						cuts,
+						segmentsUi,
+						updatedAt:
+							direction === "before"
+								? patch.beforeUpdatedAt
+								: patch.afterUpdatedAt,
+					},
+				};
+			});
+			return { ...track, elements: nextElements } as TimelineTrack;
+		});
+
+		for (const mediaElementId of this.mediaElementIds) {
+			const syncResult = syncCaptionsFromTranscriptEdits({
+				tracks: nextTracks,
+				mediaElementId,
+			});
+			if (syncResult.changed) {
+				nextTracks = syncResult.tracks;
+			}
+		}
+		editor.timeline.updateTracks(nextTracks);
+	}
+
+	execute(): void {
+		this.applyPatches({ direction: "after" });
+	}
+
+	undo(): void {
+		this.applyPatches({ direction: "before" });
+	}
+}
+
 function applyTranscriptEditMutation({
 	editor,
 	trackId,
@@ -556,9 +776,56 @@ function applyTranscriptEditMutation({
 		}
 	}
 
-	editor.command.execute({
-		command: new TracksSnapshotCommand(tracks, syncedTracks),
-	});
+	if (hasTrackStructureChange({ beforeTracks: tracks, afterTracks: syncedTracks })) {
+		editor.command.execute({
+			command: new TracksSnapshotCommand(tracks, syncedTracks),
+		});
+	} else {
+		const patches: CompactTranscriptPatch[] = [];
+		let canUseCompactPatches = true;
+		for (const mediaElementId of relatedElementIds) {
+			const beforeRecord = tracks
+				.flatMap((track) => track.elements.map((element) => ({ track, element })))
+				.find((item) => item.element.id === mediaElementId);
+			const afterRecord = syncedTracks
+				.flatMap((track) => track.elements.map((element) => ({ track, element })))
+				.find((item) => item.element.id === mediaElementId);
+			if (!beforeRecord || !afterRecord) continue;
+			if (
+				(beforeRecord.element.type !== "video" &&
+					beforeRecord.element.type !== "audio") ||
+				(afterRecord.element.type !== "video" && afterRecord.element.type !== "audio")
+			) {
+				continue;
+			}
+			const patch = buildCompactTranscriptPatch({
+				trackId: beforeRecord.track.id,
+				elementId: beforeRecord.element.id,
+				beforeElement: beforeRecord.element,
+				afterElement: afterRecord.element,
+			});
+			if (!patch) {
+				canUseCompactPatches = false;
+				break;
+			}
+			patches.push(patch);
+		}
+		if (patches.length === 0) {
+			return { changed: false };
+		}
+		if (!canUseCompactPatches) {
+			editor.command.execute({
+				command: new TracksSnapshotCommand(tracks, syncedTracks),
+			});
+		} else {
+			editor.command.execute({
+				command: new CompactTranscriptMutationCommand(
+					patches,
+					Array.from(relatedElementIds),
+				),
+			});
+		}
+	}
 	editor.save.markDirty();
 	void editor.save.flush();
 
@@ -1781,6 +2048,45 @@ export function useEditorActions() {
 				mutateWords: (words) =>
 					words.map((word) =>
 						word.id === wordId ? { ...word, text } : word,
+					),
+			});
+			if (result.error) {
+				toast.error(result.error);
+			}
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"transcript-update-words",
+		(args) => {
+			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
+			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
+			const updates = Array.isArray(args?.updates)
+				? args.updates.filter(
+						(item): item is { wordId: string; text: string } =>
+							Boolean(
+								item &&
+								typeof item.wordId === "string" &&
+								item.wordId.length > 0 &&
+								typeof item.text === "string" &&
+								item.text.trim().length > 0,
+							),
+				  )
+				: [];
+			if (!trackId || !elementId || updates.length === 0) return;
+			const textByWordId = new Map(
+				updates.map((item) => [item.wordId, item.text.trim()]),
+			);
+			const result = applyTranscriptEditMutation({
+				editor,
+				trackId,
+				elementId,
+				mutateWords: (words) =>
+					words.map((word) =>
+						textByWordId.has(word.id)
+							? { ...word, text: textByWordId.get(word.id) ?? word.text }
+							: word,
 					),
 			});
 			if (result.error) {

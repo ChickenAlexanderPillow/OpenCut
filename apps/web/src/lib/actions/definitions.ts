@@ -114,6 +114,15 @@ export const ACTIONS = {
 			text: "string",
 		},
 	},
+	"transcript-update-words": {
+		description: "Update multiple transcript words",
+		category: "editing",
+		args: {
+			trackId: "string",
+			elementId: "string",
+			updates: "Array<{ wordId: string; text: string }>",
+		},
+	},
 	"transcript-set-words-removed": {
 		description: "Set transcript words removed state",
 		category: "editing",

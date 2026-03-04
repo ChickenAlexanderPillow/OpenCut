@@ -158,13 +158,23 @@ export function buildTranscriptCutsFromWords({
 }: {
 	words: TranscriptEditWord[];
 }): TranscriptEditCutRange[] {
-	const rawCuts = words
-		.filter((word) => word.removed)
-		.map((word) => ({
+	const normalized = normalizeTranscriptWords({ words });
+	const rawCuts: TranscriptEditCutRange[] = [];
+	for (let index = 0; index < normalized.length; index++) {
+		const word = normalized[index];
+		if (!word.removed) continue;
+		const nextWord = normalized[index + 1];
+		// Extend removed regions through the transient gap until next word starts
+		// so there are no tiny audible leftovers between deleted words.
+		const end = nextWord
+			? Math.max(word.endTime, nextWord.startTime)
+			: word.endTime;
+		rawCuts.push({
 			start: word.startTime,
-			end: word.endTime,
-			reason: "manual" as const,
-		}));
+			end,
+			reason: "manual",
+		});
+	}
 	return mergeCutRanges({ cuts: rawCuts });
 }
 

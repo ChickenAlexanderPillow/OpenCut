@@ -16,6 +16,13 @@ export type TActionArgsMap = {
 	"transcript-update-word":
 		| { trackId: string; elementId: string; wordId: string; text: string }
 		| undefined;
+	"transcript-update-words":
+		| {
+				trackId: string;
+				elementId: string;
+				updates: Array<{ wordId: string; text: string }>;
+		  }
+		| undefined;
 	"transcript-set-words-removed":
 		| {
 				trackId: string;

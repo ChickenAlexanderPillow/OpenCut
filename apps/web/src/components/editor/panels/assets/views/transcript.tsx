@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelView } from "@/components/editor/panels/assets/views/base-view";
 import { useEditor } from "@/hooks/use-editor";
 import { useElementSelection } from "@/hooks/timeline/element/use-element-selection";
@@ -20,7 +20,8 @@ import type {
 import type { TranscriptEditWord } from "@/types/transcription";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { AlignJustify, Check, Pencil, Scissors, X } from "lucide-react";
+import { toast } from "sonner";
+import { AlignJustify, Check, Pencil, X } from "lucide-react";
 
 type MediaRef = {
 	trackId: string;
@@ -95,6 +96,41 @@ function getActiveMediaRef({
 	return null;
 }
 
+function getMediaRefById({
+	tracks,
+	mediaElementId,
+}: {
+	tracks: ReturnType<ReturnType<typeof useEditor>["timeline"]["getTracks"]>;
+	mediaElementId: string;
+}): MediaRef | null {
+	for (const track of tracks) {
+		for (const element of track.elements) {
+			if (!isMediaElement(element)) continue;
+			if (element.id !== mediaElementId) continue;
+			return { trackId: track.id, element };
+		}
+	}
+	return null;
+}
+
+function getSelectedCaptionElement({
+	tracks,
+	selectedElements,
+}: {
+	tracks: ReturnType<ReturnType<typeof useEditor>["timeline"]["getTracks"]>;
+	selectedElements: Array<{ trackId: string; elementId: string }>;
+}): { trackId: string; element: TextElement } | null {
+	for (const selected of selectedElements) {
+		const track = tracks.find((item) => item.id === selected.trackId);
+		if (!track || track.type !== "text") continue;
+		const element = track.elements.find((item) => item.id === selected.elementId);
+		if (!element || element.type !== "text") continue;
+		if ((element.captionWordTimings?.length ?? 0) === 0) continue;
+		return { trackId: selected.trackId, element };
+	}
+	return null;
+}
+
 function getCaptionSourceTrackInfo({
 	tracks,
 	mediaElementId,
@@ -149,22 +185,6 @@ function buildDefaultSegmentGroups({
 	return groups.filter((group) => group.words.length > 0);
 }
 
-function getWordIdFromNode({
-	node,
-}: {
-	node: Node | null;
-}): string | null {
-	if (!node) return null;
-	const element =
-		node instanceof HTMLElement
-			? node
-			: node.parentElement instanceof HTMLElement
-				? node.parentElement
-				: null;
-	if (!element) return null;
-	return element.closest<HTMLElement>("[data-word-id]")?.dataset.wordId ?? null;
-}
-
 export function TranscriptView() {
 	const editor = useEditor();
 	const { selectedElements } = useElementSelection();
@@ -172,13 +192,32 @@ export function TranscriptView() {
 	const currentTime = editor.playback.getCurrentTime();
 	const [editingWordId, setEditingWordId] = useState<string | null>(null);
 	const [editingWordText, setEditingWordText] = useState("");
+	const [editingTargetWordIds, setEditingTargetWordIds] = useState<string[]>([]);
 	const [selectedWordIds, setSelectedWordIds] = useState<string[]>([]);
+	const [isSelectionActive, setIsSelectionActive] = useState(false);
+	const [hoveredWordId, setHoveredWordId] = useState<string | null>(null);
 	const selectionContainerRef = useRef<HTMLDivElement | null>(null);
-
-	const activeMedia = useMemo(
-		() => getActiveMediaRef({ tracks, selectedElements }),
+	const activeMediaRef = useRef<MediaRef | null>(null);
+	const orderedWordIdsRef = useRef<string[]>([]);
+	const editingWordIdRef = useRef<string | null>(null);
+	const selectedWordIdsRef = useRef<string[]>([]);
+	const selectedCaption = useMemo(
+		() => getSelectedCaptionElement({ tracks, selectedElements }),
 		[tracks, selectedElements],
 	);
+
+	const activeMedia = useMemo(() => {
+		const sourceMediaId =
+			selectedCaption?.element.captionSourceRef?.mediaElementId ?? null;
+		if (sourceMediaId) {
+			const sourceMedia = getMediaRefById({
+				tracks,
+				mediaElementId: sourceMediaId,
+			});
+			if (sourceMedia) return sourceMedia;
+		}
+		return getActiveMediaRef({ tracks, selectedElements });
+	}, [tracks, selectedElements, selectedCaption]);
 
 	const words = useMemo(() => {
 		if (!activeMedia) return [];
@@ -253,49 +292,119 @@ export function TranscriptView() {
 		() => groups.flatMap((group) => group.words.map((word) => word.id)),
 		[groups],
 	);
+	const selectedCaptionWordIds = useMemo(() => {
+		if (!selectedCaption || !activeMedia) return new Set<string>();
+		if (
+			selectedCaption.element.captionSourceRef?.mediaElementId &&
+			selectedCaption.element.captionSourceRef.mediaElementId !== activeMedia.element.id
+		) {
+			return new Set<string>();
+		}
+		const timings = selectedCaption.element.captionWordTimings ?? [];
+		if (timings.length === 0) return new Set<string>();
+		const ranges = timings.map((timing) => ({
+			start: mapCompressedTimeToSourceTime({
+				compressedTime: timing.startTime,
+				cuts,
+			}),
+			end: mapCompressedTimeToSourceTime({
+				compressedTime: timing.endTime,
+				cuts,
+			}),
+		}));
+		const highlighted = wordsWithCutState
+			.filter((word) =>
+				ranges.some(
+					(range) => word.endTime > range.start && word.startTime < range.end,
+				),
+			)
+			.map((word) => word.id);
+		return new Set(highlighted);
+	}, [selectedCaption, activeMedia, cuts, wordsWithCutState]);
+	const selectedWordIdsSet = useMemo(
+		() => new Set(selectedWordIds),
+		[selectedWordIds],
+	);
 
 	useEffect(() => {
 		if (!editingWordId) return;
 		if (!wordsWithCutState.some((word) => word.id === editingWordId)) {
 			setEditingWordId(null);
 			setEditingWordText("");
+			setEditingTargetWordIds([]);
 		}
 	}, [editingWordId, wordsWithCutState]);
 
+	const setSelectedWordIdsIfChanged = useCallback((next: string[]) => {
+		setSelectedWordIds((previous) => {
+			if (
+				previous.length === next.length &&
+				previous.every((value, index) => value === next[index])
+			) {
+				return previous;
+			}
+			return next;
+		});
+	}, []);
+
 	useEffect(() => {
-		if (!activeMedia) return;
+		activeMediaRef.current = activeMedia;
+	}, [activeMedia]);
+
+	useEffect(() => {
+		orderedWordIdsRef.current = orderedWordIds;
+	}, [orderedWordIds]);
+
+	useEffect(() => {
+		editingWordIdRef.current = editingWordId;
+	}, [editingWordId]);
+
+	useEffect(() => {
+		selectedWordIdsRef.current = selectedWordIds;
+	}, [selectedWordIds]);
+
+	useEffect(() => {
 		const captureSelectionWords = () => {
 			const container = selectionContainerRef.current;
 			if (!container) {
-				setSelectedWordIds([]);
+				setSelectedWordIdsIfChanged([]);
+				setIsSelectionActive(false);
 				return;
 			}
 			const selection = window.getSelection();
+			if (!selection || selection.rangeCount === 0) {
+				setIsSelectionActive(false);
+				return;
+			}
+			if (selection.isCollapsed) {
+				setIsSelectionActive(false);
+				return;
+			}
 			if (
-				!selection ||
-				selection.rangeCount === 0 ||
-				selection.isCollapsed ||
 				!container.contains(selection.anchorNode) ||
 				!container.contains(selection.focusNode)
 			) {
-				setSelectedWordIds([]);
+				setIsSelectionActive(false);
 				return;
 			}
-			const startWordId = getWordIdFromNode({ node: selection.anchorNode });
-			const endWordId = getWordIdFromNode({ node: selection.focusNode });
-			if (!startWordId || !endWordId) {
-				setSelectedWordIds([]);
+			const range = selection.getRangeAt(0);
+			const wordNodes = Array.from(
+				container.querySelectorAll<HTMLElement>("[data-word-id]"),
+			);
+			const selectedIds = wordNodes
+				.filter((node) => range.intersectsNode(node))
+				.map((node) => node.dataset.wordId ?? "")
+			.filter((id) => id.length > 0);
+			if (selectedIds.length === 0) {
+				setIsSelectionActive(false);
 				return;
 			}
-			const startIndex = orderedWordIds.indexOf(startWordId);
-			const endIndex = orderedWordIds.indexOf(endWordId);
-			if (startIndex < 0 || endIndex < 0) {
-				setSelectedWordIds([]);
-				return;
-			}
-			const from = Math.min(startIndex, endIndex);
-			const to = Math.max(startIndex, endIndex);
-			setSelectedWordIds(orderedWordIds.slice(from, to + 1));
+			const currentOrderedWordIds = orderedWordIdsRef.current;
+			const selectedSet = new Set(selectedIds);
+			setSelectedWordIdsIfChanged(
+				currentOrderedWordIds.filter((id) => selectedSet.has(id)),
+			);
+			setIsSelectionActive(true);
 		};
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (
@@ -304,9 +413,13 @@ export function TranscriptView() {
 			) {
 				return;
 			}
-			if (editingWordId) return;
+			if (editingWordIdRef.current) return;
 			const container = selectionContainerRef.current;
-			if (!container || selectedWordIds.length === 0) return;
+			const currentSelectedWordIds = selectedWordIdsRef.current;
+			const currentActiveMedia = activeMediaRef.current;
+			if (!container || !currentActiveMedia || currentSelectedWordIds.length === 0) {
+				return;
+			}
 			const selection = window.getSelection();
 			if (
 				!selection ||
@@ -319,13 +432,14 @@ export function TranscriptView() {
 			}
 			event.preventDefault();
 			invokeAction("transcript-set-words-removed", {
-				trackId: activeMedia.trackId,
-				elementId: activeMedia.element.id,
-				wordIds: selectedWordIds,
+				trackId: currentActiveMedia.trackId,
+				elementId: currentActiveMedia.element.id,
+				wordIds: currentSelectedWordIds,
 				removed: true,
 			});
 			selection.removeAllRanges();
-			setSelectedWordIds([]);
+			setSelectedWordIdsIfChanged([]);
+			setIsSelectionActive(false);
 		};
 		document.addEventListener("selectionchange", captureSelectionWords);
 		window.addEventListener("keydown", onKeyDown);
@@ -333,12 +447,68 @@ export function TranscriptView() {
 			document.removeEventListener("selectionchange", captureSelectionWords);
 			window.removeEventListener("keydown", onKeyDown);
 		};
-	}, [
-		activeMedia,
-		editingWordId,
-		orderedWordIds,
-		selectedWordIds,
-	]);
+	}, [setSelectedWordIdsIfChanged]);
+
+	useEffect(() => {
+		const container = selectionContainerRef.current;
+		if (!container) return;
+		const onMouseMove = (event: MouseEvent) => {
+			const target =
+				event.target instanceof HTMLElement ? event.target : null;
+			const wordId =
+				target?.closest<HTMLElement>("[data-word-id]")?.dataset.wordId ?? null;
+			setHoveredWordId(wordId);
+		};
+		const onMouseLeave = () => {
+			setHoveredWordId(null);
+		};
+		container.addEventListener("mousemove", onMouseMove);
+		container.addEventListener("mouseleave", onMouseLeave);
+		return () => {
+			container.removeEventListener("mousemove", onMouseMove);
+			container.removeEventListener("mouseleave", onMouseLeave);
+		};
+	}, []);
+
+	const clearEditingState = useCallback(() => {
+		setEditingWordId(null);
+		setEditingWordText("");
+		setEditingTargetWordIds([]);
+	}, []);
+
+	const commitWordEdit = useCallback(() => {
+		if (!activeMedia) return;
+		const targetIds = editingTargetWordIds.filter((id) => id.length > 0);
+		if (targetIds.length === 0 || !editingWordId) return;
+		const text = editingWordText.trim();
+		if (!text) return;
+		if (targetIds.length === 1) {
+			invokeAction("transcript-update-word", {
+				trackId: activeMedia.trackId,
+				elementId: activeMedia.element.id,
+				wordId: targetIds[0] ?? editingWordId,
+				text,
+			});
+			clearEditingState();
+			return;
+		}
+		const tokens = text.split(/\s+/).filter(Boolean);
+		if (tokens.length !== targetIds.length) {
+			toast.error(
+				`Selected ${targetIds.length} words. Edited text must have exactly ${targetIds.length} words.`,
+			);
+			return;
+		}
+		invokeAction("transcript-update-words", {
+			trackId: activeMedia.trackId,
+			elementId: activeMedia.element.id,
+			updates: targetIds.map((wordId, index) => ({
+				wordId,
+				text: tokens[index] ?? "",
+			})),
+		});
+		clearEditingState();
+	}, [activeMedia, editingTargetWordIds, editingWordId, editingWordText, clearEditingState]);
 
 	if (!activeMedia) {
 		return (
@@ -401,142 +571,176 @@ export function TranscriptView() {
 				<span className="ml-auto">Captions linked: {captionLinks}</span>
 			</div>
 
-			<div ref={selectionContainerRef} className="space-y-2">
+			<div
+				ref={selectionContainerRef}
+				className="space-y-4 [&_*::selection]:bg-transparent [&_*::selection]:text-inherit"
+				onMouseDownCapture={(event) => {
+					if (selectedWordIds.length === 0) return;
+					const target =
+						event.target instanceof HTMLElement ? event.target : null;
+					const clickedWordId =
+						target?.closest<HTMLElement>("[data-word-id]")?.dataset.wordId ?? null;
+					if (!clickedWordId || !selectedWordIdsSet.has(clickedWordId)) {
+						setSelectedWordIdsIfChanged([]);
+						setIsSelectionActive(false);
+					}
+				}}
+			>
 				{groups.map((group, groupIndex) => {
 					if (group.words.length === 0) return null;
 					const start = group.words[0]?.startTime ?? 0;
 					return (
-						<div key={group.id} className="rounded-md border p-2">
-							<div className="flex items-center justify-between mb-2">
-								<div className="text-xs text-muted-foreground">
-									{formatTime(start)} Segment {groupIndex + 1}
-								</div>
-								<div className="flex items-center gap-1">
-									<Button
-										variant="ghost"
-										size="icon"
-										className="size-6"
-										onClick={() => {
-											const splitWord =
-												group.words[Math.floor(group.words.length / 2)];
-											if (!splitWord) return;
-											invokeAction("transcript-split-segment-ui", {
-												trackId: activeMedia.trackId,
-												elementId: activeMedia.element.id,
-												wordId: splitWord.id,
-											});
-										}}
-									>
-										<Scissors className="size-3.5" />
-									</Button>
-								</div>
+						<div key={group.id} className="space-y-2">
+							<div className="text-xs text-muted-foreground">
+								{formatTime(start)} Paragraph {groupIndex + 1}
 							</div>
-							<div className="text-sm leading-7 select-text">
+							<p
+								className="text-sm leading-7 select-text border-l pl-3"
+								onMouseUp={(event) => {
+									if (editingWordId) return;
+									const target =
+										event.target instanceof HTMLElement ? event.target : null;
+									if (!target) return;
+									if (target.closest("[data-word-edit-trigger='true']")) return;
+									const wordId =
+										target.closest<HTMLElement>("[data-word-id]")?.dataset
+											.wordId ?? null;
+									if (!wordId) return;
+									if (
+										selectedWordIds.length > 1 &&
+										selectedWordIdsSet.has(wordId)
+									) {
+										const selectedWords = wordsWithCutState.filter((word) =>
+											selectedWordIdsSet.has(word.id),
+										);
+										const shouldRemove = !selectedWords.every(
+											(word) => word.removed,
+										);
+										invokeAction("transcript-set-words-removed", {
+											trackId: activeMedia.trackId,
+											elementId: activeMedia.element.id,
+											wordIds: selectedWordIds,
+											removed: shouldRemove,
+										});
+										return;
+									}
+									const selection = window.getSelection();
+									if (selection && !selection.isCollapsed) return;
+									invokeAction("transcript-toggle-word", {
+										trackId: activeMedia.trackId,
+										elementId: activeMedia.element.id,
+										wordId,
+									});
+								}}
+							>
 								{group.words.map((word) => (
-								<span
-									key={word.id}
-									className="relative group/word inline-block mr-1.5"
-									data-word-id={word.id}
-								>
-									{editingWordId === word.id ? (
-										<span className="h-7 rounded-full border bg-secondary inline-flex items-center pr-1 pl-2 align-middle">
-											<input
-												value={editingWordText}
-												onChange={(event) =>
-													setEditingWordText(event.target.value)
-												}
-												onKeyDown={(event) => {
-													if (event.key === "Enter") {
-														const text = editingWordText.trim();
-														if (!text) return;
-														invokeAction("transcript-update-word", {
-															trackId: activeMedia.trackId,
-															elementId: activeMedia.element.id,
-															wordId: word.id,
-															text,
-														});
-														setEditingWordId(null);
-														setEditingWordText("");
+									<span
+										key={word.id}
+										className="relative group/word inline-block mr-1.5"
+										data-word-id={word.id}
+									>
+										{editingWordId === word.id ? (
+											<span className="h-7 rounded-full border bg-secondary inline-flex items-center pr-1 pl-2 align-middle">
+												<input
+													value={editingWordText}
+													onChange={(event) =>
+														setEditingWordText(event.target.value)
 													}
-													if (event.key === "Escape") {
-														setEditingWordId(null);
-														setEditingWordText("");
-													}
-												}}
-												className="bg-transparent text-xs outline-none w-24"
-											/>
-											<Button
-												variant="ghost"
-												size="icon"
-												className="size-5"
-												onClick={() => {
-													const text = editingWordText.trim();
-													if (!text) return;
-													invokeAction("transcript-update-word", {
-														trackId: activeMedia.trackId,
-														elementId: activeMedia.element.id,
-														wordId: word.id,
-														text,
-													});
-													setEditingWordId(null);
-													setEditingWordText("");
-												}}
-											>
-												<Check className="size-3.5" />
-											</Button>
-											<Button
-												variant="ghost"
-												size="icon"
-												className="size-5"
-												onClick={() => {
-													setEditingWordId(null);
-													setEditingWordText("");
-												}}
-											>
-												<X className="size-3.5" />
-											</Button>
-										</span>
-									) : (
-										<>
-											<button
-												type="button"
-												onClick={() => {
-													const selection = window.getSelection();
-													if (selection && !selection.isCollapsed) return;
-													invokeAction("transcript-toggle-word", {
-														trackId: activeMedia.trackId,
-														elementId: activeMedia.element.id,
-														wordId: word.id,
-													});
-												}}
+													onKeyDown={(event) => {
+														if (event.key === "Enter") {
+															commitWordEdit();
+														}
+														if (event.key === "Escape") {
+															clearEditingState();
+														}
+													}}
+													className="bg-transparent text-xs outline-none w-24"
+												/>
+												<Button
+													variant="ghost"
+													size="icon"
+													className="size-5"
+													onClick={commitWordEdit}
+												>
+													<Check className="size-3.5" />
+												</Button>
+												<Button
+													variant="ghost"
+													size="icon"
+													className="size-5"
+													onClick={clearEditingState}
+												>
+													<X className="size-3.5" />
+												</Button>
+											</span>
+										) : (
+											<>
+											<span
 												className={[
-													"border-0 bg-transparent p-0 m-0 font-inherit text-inherit rounded-full px-0.5 py-0.5 transition-colors cursor-pointer",
-													"hover:bg-secondary",
+													"select-text rounded-full px-0.5 py-0.5 transition-colors cursor-pointer",
+													!isSelectionActive ? "hover:bg-secondary" : "",
+													!isSelectionActive ? "group-hover/word:bg-secondary" : "",
+													hoveredWordId &&
+													selectedWordIds.length > 1 &&
+													selectedWordIdsSet.has(hoveredWordId) &&
+													selectedWordIdsSet.has(word.id)
+														? "bg-secondary"
+														: "",
 													word.removed ? "opacity-40 line-through" : "",
-													currentWordId === word.id ? "bg-secondary/70" : "",
+													currentWordId === word.id ? "text-white" : "",
 													selectedWordIds.includes(word.id) ? "bg-accent" : "",
-												]
-													.filter(Boolean)
-													.join(" ")}
-											>
-												{word.text}
-											</button>
-											<Button
-												variant="ghost"
-												size="icon"
-												className="absolute -top-1 -right-1 size-4 rounded-full border bg-background opacity-0 group-hover/word:opacity-100 transition-opacity"
-												onClick={() => {
-													setEditingWordId(word.id);
-													setEditingWordText(word.text);
-												}}
-											>
-												<Pencil className="size-2.5" />
-											</Button>
-										</>
-									)}
-								</span>
+														selectedCaptionWordIds.has(word.id)
+															? "ring-1 ring-primary/70"
+															: "",
+													]
+														.filter(Boolean)
+														.join(" ")}
+													style={
+														currentWordId === word.id
+															? { backgroundColor: "#c71e3a" }
+															: undefined
+													}
+												>
+													{word.text}
+												</span>
+												<Button
+													variant="ghost"
+													size="icon"
+													className="absolute -top-1 -right-1 size-4 rounded-full opacity-0 group-hover/word:opacity-100 transition-opacity"
+													data-word-edit-trigger="true"
+													onClick={() => {
+														if (
+															selectedWordIds.length > 1 &&
+															selectedWordIdsSet.has(word.id)
+														) {
+															const orderedSelected = orderedWordIds.filter((id) =>
+																selectedWordIdsSet.has(id),
+															);
+															const wordsById = new Map(
+																wordsWithCutState.map((item) => [item.id, item.text]),
+															);
+															setEditingTargetWordIds(orderedSelected);
+															setEditingWordId(orderedSelected[0] ?? word.id);
+															setEditingWordText(
+																orderedSelected
+																	.map((id) => wordsById.get(id) ?? "")
+																	.filter(Boolean)
+																	.join(" "),
+															);
+															return;
+														}
+														setEditingTargetWordIds([word.id]);
+														setEditingWordId(word.id);
+														setEditingWordText(word.text);
+													}}
+												>
+													<Pencil className="size-2.5" />
+												</Button>
+											</>
+										)}
+									</span>
 								))}
-							</div>
+							</p>
 						</div>
 					);
 				})}

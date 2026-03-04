@@ -6,14 +6,15 @@ function isGeneratedCaptionElement(element: unknown): boolean {
 		type?: string;
 		name?: string;
 		captionWordTimings?: Array<unknown>;
-		captionStyle?: { linkedToCaptionGroup?: boolean };
+		captionSourceRef?: unknown;
 	};
 	return (
 		candidate.type === "text" &&
-		typeof candidate.name === "string" &&
-		candidate.name.startsWith("Caption ") &&
-		(candidate.captionWordTimings?.length ?? 0) > 0 &&
-		candidate.captionStyle?.linkedToCaptionGroup !== false
+		(
+			(candidate.captionWordTimings?.length ?? 0) > 0 ||
+			Boolean(candidate.captionSourceRef) ||
+			(typeof candidate.name === "string" && candidate.name.startsWith("Caption "))
+		)
 	);
 }
 
@@ -37,4 +38,3 @@ export function findCaptionTrackIdInScene({
 
 	return null;
 }
-
