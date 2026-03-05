@@ -23,6 +23,7 @@ import {
 	UpdateBookmarkCommand,
 } from "@/lib/commands/scene";
 import { clearTranscriptTimelineSnapshotCache } from "@/lib/transcript-editor/snapshot";
+import { normalizeLegacyCompanionAudioInScenes } from "@/lib/timeline/legacy-companion-audio";
 
 export class ScenesManager {
 	private active: TScene | null = null;
@@ -188,21 +189,27 @@ export class ScenesManager {
 					this.ensureScenesHaveMainTrack({
 						scenes: result.project.scenes ?? [],
 					});
-				const currentScene = findCurrentScene({
+				const {
+					scenes: normalizedScenes,
+					changed: hasNormalizedLegacyCompanionAudio,
+				} = normalizeLegacyCompanionAudioInScenes({
 					scenes: ensuredScenes,
+				});
+				const currentScene = findCurrentScene({
+					scenes: normalizedScenes,
 					currentSceneId: result.project.currentSceneId,
 				});
 
-				this.list = ensuredScenes;
+				this.list = normalizedScenes;
 				this.active = currentScene;
 				this.notify();
 
-				if (hasAddedMainTrack) {
+				if (hasAddedMainTrack || hasNormalizedLegacyCompanionAudio) {
 					const activeProject = this.editor.project.getActive();
 					if (activeProject) {
 						const updatedProject = {
 							...activeProject,
-							scenes: ensuredScenes,
+							scenes: normalizedScenes,
 							metadata: {
 								...activeProject.metadata,
 								updatedAt: new Date(),
@@ -231,24 +238,30 @@ export class ScenesManager {
 		const ensuredScenes = ensureMainScene({ scenes });
 		const { scenes: scenesWithMainTracks, hasAddedMainTrack } =
 			this.ensureScenesHaveMainTrack({ scenes: ensuredScenes });
+		const {
+			scenes: normalizedScenes,
+			changed: hasNormalizedLegacyCompanionAudio,
+		} = normalizeLegacyCompanionAudioInScenes({
+			scenes: scenesWithMainTracks,
+		});
 		const currentScene = currentSceneId
-			? scenesWithMainTracks.find((s) => s.id === currentSceneId)
+			? normalizedScenes.find((s) => s.id === currentSceneId)
 			: null;
 
-		const fallbackScene = getMainScene({ scenes: scenesWithMainTracks });
+		const fallbackScene = getMainScene({ scenes: normalizedScenes });
 
-		this.list = scenesWithMainTracks;
+		this.list = normalizedScenes;
 		this.active = currentScene || fallbackScene;
 		this.notify();
 
 		const hasAddedMainScene = ensuredScenes.length > scenes.length;
-		if (hasAddedMainScene || hasAddedMainTrack) {
+		if (hasAddedMainScene || hasAddedMainTrack || hasNormalizedLegacyCompanionAudio) {
 			const activeProject = this.editor.project.getActive();
 
 			if (activeProject) {
 				const updatedProject = {
 					...activeProject,
-					scenes: scenesWithMainTracks,
+					scenes: normalizedScenes,
 					metadata: {
 						...activeProject.metadata,
 						updatedAt: new Date(),

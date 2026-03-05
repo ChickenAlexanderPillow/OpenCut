@@ -410,8 +410,20 @@ async function resolveAudioBufferForVideoElement({
 		sourceNode.connect(offlineContext.destination);
 		sourceNode.start(0);
 
+		const rendered = await offlineContext.startRendering();
+		const renderedChannels = Array.from(
+			{ length: rendered.numberOfChannels },
+			(_, channel) => rendered.getChannelData(channel),
+		);
+		const renderedPeak = computePeakFromChannels({ channels: renderedChannels });
+		// Some codec/container combos decode as near-silence through mediabunny while
+		// browser decodeAudioData succeeds; force fallback in that case.
+		if (isPeakSilent({ peak: renderedPeak })) {
+			throw new Error("Decoded near-silent audio via mediabunny; trying browser fallback");
+		}
+
 		return {
-			buffer: await offlineContext.startRendering(),
+			buffer: rendered,
 			windowed: true,
 		};
 	} catch (error) {

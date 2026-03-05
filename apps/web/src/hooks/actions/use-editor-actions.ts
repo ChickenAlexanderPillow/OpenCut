@@ -62,7 +62,6 @@ import { DEFAULT_BLEND_MODE, DEFAULT_OPACITY, DEFAULT_TRANSFORM } from "@/consta
 import { getVideoInfo } from "@/lib/media/mediabunny";
 import { ALL_FORMATS, AudioBufferSink, BlobSource, Input } from "mediabunny";
 import {
-	applyCutRangesToWords,
 	buildPauseCutsFromWords,
 	buildCaptionPayloadFromTranscriptWords,
 	buildTranscriptCutsFromWords,
@@ -1100,7 +1099,7 @@ function buildClipElement({
 			startTime: 0,
 			trimStart: startTime,
 			trimEnd,
-			muted: true,
+			muted: false,
 			hidden: false,
 			transform: {
 				...DEFAULT_TRANSFORM,
@@ -2048,7 +2047,6 @@ export function useEditorActions() {
 				if (!transcriptionCache) {
 					let transcriptionOperationId: string | undefined;
 					let projectProcessId: string | undefined;
-					const blueHighlightPreset = resolveBlueHighlightCaptionPreset();
 					try {
 						toast.info("No transcript cache found. Generating transcript...");
 						transcriptionOperationId = transcriptionStatus.start(
@@ -3247,47 +3245,6 @@ export function useEditorActions() {
 								boundMediaTrackId = boundMediaElementId ? mainTrack.id : null;
 							}
 
-							const audioTrackId = editor.timeline.addTrack({
-								type: "audio",
-							});
-							const sourceDuration = Math.max(
-								candidate.endTime,
-								mediaAsset.duration ?? candidate.endTime,
-							);
-							const trimEnd = Math.max(0, sourceDuration - candidate.endTime);
-							editor.timeline.insertElement({
-								placement: {
-									mode: "explicit",
-									trackId: audioTrackId,
-								},
-								element: {
-									type: "audio",
-									sourceType: "upload",
-									mediaId: mediaAsset.id,
-									name: `${mediaAsset.name} audio`,
-									duration: candidate.duration,
-									startTime: 0,
-									trimStart: candidate.startTime,
-									trimEnd,
-									volume: 1,
-									muted: false,
-								},
-							});
-							if (!boundMediaElementId) {
-								const refreshedAudioTrack = editor.timeline.getTrackById({
-									trackId: audioTrackId,
-								});
-								boundMediaElementId =
-									refreshedAudioTrack?.elements
-										.find(
-											(element) =>
-												element.type === "audio" &&
-												element.startTime === 0 &&
-												Math.abs(element.duration - candidate.duration) < 0.02,
-										)
-										?.id ?? null;
-								boundMediaTrackId = boundMediaElementId ? audioTrackId : null;
-							}
 							if (boundMediaElementId && continuousCaption) {
 								const transcriptWords = normalizeTranscriptWords({
 									words: continuousCaption.wordTimings.map((timing, index) => ({
@@ -3298,26 +3255,28 @@ export function useEditorActions() {
 										removed: false,
 									})),
 								});
-								editor.timeline.updateElements({
-									updates: [
-										{
-											trackId: boundMediaTrackId ?? audioTrackId,
-											elementId: boundMediaElementId,
-											updates: {
-												transcriptEdit: {
-													version: 1,
-													source: "word-level",
-													words: transcriptWords,
-													cuts: buildTranscriptCutsFromWords({
+								if (boundMediaTrackId) {
+									editor.timeline.updateElements({
+										updates: [
+											{
+												trackId: boundMediaTrackId,
+												elementId: boundMediaElementId,
+												updates: {
+													transcriptEdit: {
+														version: 1,
+														source: "word-level",
 														words: transcriptWords,
-													}),
-													updatedAt: new Date().toISOString(),
+														cuts: buildTranscriptCutsFromWords({
+															words: transcriptWords,
+														}),
+														updatedAt: new Date().toISOString(),
+													},
 												},
 											},
-										},
-									],
-									pushHistory: false,
-								});
+										],
+										pushHistory: false,
+									});
+								}
 							}
 
 							if (continuousCaption) {
@@ -3534,6 +3493,9 @@ export function useEditorActions() {
 		"toggle-elements-muted-selected",
 		() => {
 			editor.timeline.toggleElementsMuted({ elements: selectedElements });
+			// Force-refresh mixed timeline audio so mute/unmute is audible immediately.
+			editor.audio.clearCachedTimelineAudio();
+			void editor.audio.primeCurrentTimelineAudio();
 		},
 		undefined,
 	);

@@ -7,9 +7,11 @@
 	],
 	"scripts": {
 		"dev:web": "cd apps/web && bun run dev",
+		"dev:web:low-mem": "node scripts/dev-web-low-mem.mjs",
 		"build:web": "cd apps/web && bun run build",
 		"kill:playwright": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/kill-playwright-sessions.ps1",
 		"docker:up": "node scripts/docker-preflight.mjs && docker compose up -d --build redis serverless-redis-http local-transcribe web",
+		"docker:up:core": "node scripts/docker-preflight.mjs && node scripts/docker-up-core.mjs",
 		"docker:up:web": "node scripts/docker-preflight.mjs && docker compose up -d --build local-transcribe web",
 		"docker:down": "docker compose down",
 		"docker:logs": "docker compose logs -f web local-transcribe",

@@ -82,6 +82,12 @@ Thanks to [Vercel](https://vercel.com?utm_source=github-opencut&utm_campaign=oss
    bun dev:web
    ```
 
+   Lower-memory option for WSL users:
+
+   ```bash
+   bun run dev:web:low-mem
+   ```
+
 The application will be available at [http://localhost:3000](http://localhost:3000).
 
 The `.env.example` has sensible defaults that match the Docker Compose config — it should work out of the box.
@@ -102,10 +108,33 @@ For this repo, the full stack (web + local transcribe + redis) can be started wi
 bun run docker:up
 ```
 
+Lower-memory Docker option (skips `local-transcribe`):
+
+```bash
+bun run docker:up:core
+```
+
 To stop it:
 
 ```bash
 bun run docker:down
+```
+
+### WSL Memory Cap (Windows)
+
+If `vmmemwsl` keeps growing, set a hard memory cap for WSL in `%UserProfile%\.wslconfig`:
+
+```ini
+[wsl2]
+memory=8GB
+processors=6
+swap=2GB
+```
+
+Apply it with:
+
+```powershell
+wsl --shutdown
 ```
 
 ## Contributing

@@ -25,7 +25,6 @@ import { useTimelineStore } from "@/stores/timeline-store";
 import { TracksSnapshotCommand } from "@/lib/commands/timeline";
 import { enforceMainTrackStart } from "@/lib/timeline/track-utils";
 import type {
-	AudioElement,
 	DropTarget,
 	ElementDragState,
 	TextElement,
@@ -65,14 +64,8 @@ interface PendingDragState {
 	clickOffsetTime: number;
 }
 
-const COMPANION_ALIGNMENT_TOLERANCE_SECONDS = 0.05;
-
 function isVideoElement(element: TimelineElement): element is VideoElement {
 	return element.type === "video";
-}
-
-function isAudioElement(element: TimelineElement): element is AudioElement {
-	return element.type === "audio";
 }
 
 function isTextElement(element: TimelineElement): element is TextElement {
@@ -98,20 +91,6 @@ function getDragCompanionElements({
 	for (const track of tracks) {
 		for (const element of track.elements) {
 			if (element.id === draggedElementId && track.id === draggedTrackId) continue;
-			if (
-				isAudioElement(element) &&
-				element.sourceType === "upload" &&
-				element.mediaId === draggedElement.mediaId &&
-				Math.abs(element.startTime - draggedElement.startTime) <=
-					COMPANION_ALIGNMENT_TOLERANCE_SECONDS &&
-				Math.abs(element.duration - draggedElement.duration) <=
-					COMPANION_ALIGNMENT_TOLERANCE_SECONDS &&
-				Math.abs(element.trimStart - draggedElement.trimStart) <=
-					COMPANION_ALIGNMENT_TOLERANCE_SECONDS
-			) {
-				companions.push({ trackId: track.id, elementId: element.id });
-				continue;
-			}
 			if (
 				isTextElement(element) &&
 				element.captionSourceRef?.mediaElementId === draggedElement.id
@@ -621,6 +600,7 @@ export function useElementInteraction({
 		endDrag,
 		onSnapPointChange,
 		editor.timeline,
+		editor.command,
 		tracksContainerRef,
 		tracksScrollRef,
 		headerRef,

@@ -868,14 +868,6 @@ export function dedupeTranscriptEditsInTracks({
 				return candidateUpdatedAtMs > bestUpdatedAtMs ? candidate : best;
 			}, group[0]);
 		keepIds.add(primary.id);
-		// Keep aligned cross-type companions (video+audio) so both playback streams
-		// retain identical transcript cut maps; this avoids "shorten-only" stale audio.
-		for (const candidate of group) {
-			if (candidate.id === primary.id) continue;
-			if (candidate.type === primary.type) continue;
-			if (!isCompanionAligned({ target: primary, candidate })) continue;
-			keepIds.add(candidate.id);
-		}
 	}
 
 	let changed = false;

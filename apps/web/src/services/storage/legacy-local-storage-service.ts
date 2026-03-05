@@ -152,6 +152,7 @@ class LegacyLocalStorageService {
 			externalProjectLink: project.externalProjectLink,
 			externalMediaLinks: project.externalMediaLinks,
 			externalTranscriptCache: project.externalTranscriptCache,
+			waveformPeaksCache: project.waveformPeaksCache,
 		};
 
 		await this.projectsAdapter.set(project.metadata.id, serializedProject);
@@ -214,6 +215,7 @@ class LegacyLocalStorageService {
 			externalProjectLink: serializedProject.externalProjectLink,
 			externalMediaLinks: serializedProject.externalMediaLinks,
 			externalTranscriptCache: serializedProject.externalTranscriptCache,
+			waveformPeaksCache: serializedProject.waveformPeaksCache,
 		};
 
 		return { project };

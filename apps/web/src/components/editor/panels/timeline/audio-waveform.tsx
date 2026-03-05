@@ -3,6 +3,8 @@ import { decodeMediaFileToAudioBuffer } from "@/lib/media/audio";
 import {
 	deleteWaveformPeaksCacheEntry,
 	getWaveformPeaksCacheEntry,
+	getResolvedWaveformPeaksCacheEntry,
+	setResolvedWaveformPeaksCacheEntry,
 	setWaveformPeaksCacheEntry,
 	touchWaveformPeaksCacheEntry,
 } from "@/lib/media/waveform-cache";
@@ -11,6 +13,9 @@ interface AudioWaveformProps {
 	audioUrl?: string;
 	audioBuffer?: AudioBuffer;
 	audioFile?: File;
+	cacheKey?: string;
+	initialPeaks?: number[];
+	onPeaksResolved?: (peaks: number[]) => void;
 	height?: number;
 	className?: string;
 }
@@ -117,6 +122,9 @@ export function AudioWaveform({
 	audioUrl,
 	audioBuffer,
 	audioFile,
+	cacheKey,
+	initialPeaks,
+	onPeaksResolved,
 	height = 32,
 	className = "",
 }: AudioWaveformProps) {
@@ -131,8 +139,26 @@ export function AudioWaveform({
 		const renderWaveform = async () => {
 			if (!waveformRef.current || !canvasRef.current) return;
 			if (!audioBuffer && !audioFile && !audioUrl) return;
+			if (initialPeaks && initialPeaks.length > 0) {
+				const drawn = drawPeaksToCanvas({
+					canvas: canvasRef.current,
+					container: waveformRef.current,
+					peaks: initialPeaks,
+					height,
+				});
+				if (cacheKey) {
+					setResolvedWaveformPeaksCacheEntry({
+						cacheKey,
+						value: initialPeaks,
+					});
+				}
+				setError(!drawn);
+				setIsLoading(false);
+				return;
+			}
 
 			let peaks: number[] | null = null;
+			let resolvedCacheKey: string | null = null;
 
 			if (audioBuffer) {
 				peaks = extractPeaks({
@@ -140,8 +166,15 @@ export function AudioWaveform({
 					length: 2048,
 				});
 			} else if (audioFile) {
-				const cacheKey = getDecodedBufferCacheKey(audioFile);
-				let peaksTask = getWaveformPeaksCacheEntry({ cacheKey });
+				const fileCacheKey = cacheKey ?? `file:${getDecodedBufferCacheKey(audioFile)}`;
+				resolvedCacheKey = fileCacheKey;
+				const resolvedPeaks = getResolvedWaveformPeaksCacheEntry({
+					cacheKey: fileCacheKey,
+				});
+				if (resolvedPeaks) {
+					peaks = resolvedPeaks;
+				}
+				let peaksTask = getWaveformPeaksCacheEntry({ cacheKey: fileCacheKey });
 				if (!peaksTask) {
 					peaksTask = (async () => {
 						const decodedBuffer = await decodeMediaFileToAudioBuffer({
@@ -154,31 +187,42 @@ export function AudioWaveform({
 						});
 					})();
 					setWaveformPeaksCacheEntry({
-						cacheKey,
+						cacheKey: fileCacheKey,
 						value: peaksTask,
 					});
 				} else {
-					touchWaveformPeaksCacheEntry({ cacheKey });
+					touchWaveformPeaksCacheEntry({ cacheKey: fileCacheKey });
 				}
-				peaks = await peaksTask;
+				if (!peaks) {
+					peaks = await peaksTask;
+				}
 				if (!peaks || peaks.length === 0) {
-					deleteWaveformPeaksCacheEntry({ cacheKey });
+					deleteWaveformPeaksCacheEntry({ cacheKey: fileCacheKey });
 				}
 			} else if (audioUrl) {
-				const cacheKey = `url:${audioUrl}`;
-				let peaksTask = getWaveformPeaksCacheEntry({ cacheKey });
+				const urlCacheKey = cacheKey ?? `url:${audioUrl}`;
+				resolvedCacheKey = urlCacheKey;
+				const resolvedPeaks = getResolvedWaveformPeaksCacheEntry({
+					cacheKey: urlCacheKey,
+				});
+				if (resolvedPeaks) {
+					peaks = resolvedPeaks;
+				}
+				let peaksTask = getWaveformPeaksCacheEntry({ cacheKey: urlCacheKey });
 				if (!peaksTask) {
 					peaksTask = decodeAudioUrlToPeaks({ audioUrl });
 					setWaveformPeaksCacheEntry({
-						cacheKey,
+						cacheKey: urlCacheKey,
 						value: peaksTask,
 					});
 				} else {
-					touchWaveformPeaksCacheEntry({ cacheKey });
+					touchWaveformPeaksCacheEntry({ cacheKey: urlCacheKey });
 				}
-				peaks = await peaksTask;
+				if (!peaks) {
+					peaks = await peaksTask;
+				}
 				if (!peaks || peaks.length === 0) {
-					deleteWaveformPeaksCacheEntry({ cacheKey });
+					deleteWaveformPeaksCacheEntry({ cacheKey: urlCacheKey });
 				}
 			}
 
@@ -189,6 +233,13 @@ export function AudioWaveform({
 				setIsLoading(false);
 				return;
 			}
+			if (resolvedCacheKey) {
+				setResolvedWaveformPeaksCacheEntry({
+					cacheKey: resolvedCacheKey,
+					value: peaks,
+				});
+			}
+			onPeaksResolved?.(peaks);
 
 			const drawn = drawPeaksToCanvas({
 				canvas: canvasRef.current,
@@ -206,7 +257,7 @@ export function AudioWaveform({
 		return () => {
 			mounted = false;
 		};
-	}, [audioUrl, audioBuffer, audioFile, height]);
+	}, [audioUrl, audioBuffer, audioFile, cacheKey, initialPeaks, onPeaksResolved, height]);
 
 	if (error) {
 		return (

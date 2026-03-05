@@ -1,8 +1,10 @@
-const MAX_CACHED_WAVEFORMS = 64;
+const MAX_CACHED_WAVEFORMS = 256;
 const waveformPeaksCache = new Map<string, Promise<number[] | null>>();
+const resolvedWaveformPeaksCache = new Map<string, number[]>();
 
 export function clearWaveformPeaksCache(): void {
 	waveformPeaksCache.clear();
+	resolvedWaveformPeaksCache.clear();
 }
 
 export function getWaveformPeaksCacheEntry({
@@ -43,10 +45,38 @@ export function setWaveformPeaksCacheEntry({
 	waveformPeaksCache.set(cacheKey, value);
 }
 
+export function setResolvedWaveformPeaksCacheEntry({
+	cacheKey,
+	value,
+}: {
+	cacheKey: string;
+	value: number[];
+}): void {
+	if (
+		!resolvedWaveformPeaksCache.has(cacheKey) &&
+		resolvedWaveformPeaksCache.size >= MAX_CACHED_WAVEFORMS
+	) {
+		const oldestKey = resolvedWaveformPeaksCache.keys().next().value;
+		if (typeof oldestKey === "string") {
+			resolvedWaveformPeaksCache.delete(oldestKey);
+		}
+	}
+	resolvedWaveformPeaksCache.set(cacheKey, value);
+}
+
+export function getResolvedWaveformPeaksCacheEntry({
+	cacheKey,
+}: {
+	cacheKey: string;
+}): number[] | undefined {
+	return resolvedWaveformPeaksCache.get(cacheKey);
+}
+
 export function deleteWaveformPeaksCacheEntry({
 	cacheKey,
 }: {
 	cacheKey: string;
 }): void {
 	waveformPeaksCache.delete(cacheKey);
+	resolvedWaveformPeaksCache.delete(cacheKey);
 }

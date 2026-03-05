@@ -95,6 +95,12 @@ export interface TProject {
 	externalProjectLink?: ExternalProjectLink;
 	externalMediaLinks?: Record<string, ExternalProjectLink>;
 	externalTranscriptCache?: Record<string, ExternalProjectTranscriptCacheEntry>;
+	waveformPeaksCache?: Record<string, TWaveformPeaksCacheEntry>;
+}
+
+export interface TWaveformPeaksCacheEntry {
+	peaks: number[];
+	updatedAt: string;
 }
 
 export interface TClipWordTranscriptionCacheEntry {

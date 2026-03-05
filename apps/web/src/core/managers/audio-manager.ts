@@ -187,11 +187,6 @@ export class AudioManager {
 		this.timelineDirty = true;
 		const isPlaying = this.editor.playback.getIsPlaying();
 		const isScrubbing = this.editor.playback.getIsScrubbing();
-		// Text-based edits can trigger frequent updates; avoid rebuilding the
-		// full mixed timeline audio while idle. Rebuild lazily on playback.
-		if (!isPlaying && !isScrubbing) {
-			return;
-		}
 		if (this.buildingBuffer) {
 			this.rebuildRequestedDuringBuild = true;
 			return;
@@ -206,7 +201,7 @@ export class AudioManager {
 		this.rebuildDebounceTimer = window.setTimeout(() => {
 			this.rebuildDebounceTimer = null;
 			void this.ensureBufferReady();
-		}, 120);
+		}, isPlaying || isScrubbing ? 120 : 260);
 	};
 
 	private handleUserGesture = (): void => {

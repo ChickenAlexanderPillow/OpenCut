@@ -714,7 +714,7 @@ describe("sync captions from transcript edits", () => {
 		expect(dedupedB?.transcriptEdit).toBeUndefined();
 	});
 
-	test("dedupe keeps transcript edit on aligned video+audio companions", () => {
+	test("dedupe keeps transcript edit only on caption-target companion (aligned video+audio)", () => {
 		const words = [{ id: "shared:word:0", text: "hello", startTime: 0, endTime: 0.5 }];
 		const audio = {
 			...createAudioElement({
@@ -767,7 +767,7 @@ describe("sync captions from transcript edits", () => {
 		];
 
 		const result = dedupeTranscriptEditsInTracks({ tracks });
-		expect(result.changed).toBe(false);
+		expect(result.changed).toBe(true);
 		const dedupedVideoTrack = result.tracks.find((track) => track.id === "video-track");
 		const dedupedAudioTrack = result.tracks.find((track) => track.id === "audio-track");
 		expect(dedupedVideoTrack?.type).toBe("video");
@@ -776,11 +776,11 @@ describe("sync captions from transcript edits", () => {
 		const dedupedVideoElement = dedupedVideoTrack.elements[0];
 		expect(dedupedVideoElement?.type).toBe("video");
 		if (!dedupedVideoElement || dedupedVideoElement.type !== "video") return;
-		expect(dedupedVideoElement.transcriptEdit).toBeDefined();
+		expect(dedupedVideoElement.transcriptEdit).toBeUndefined();
 		expect(dedupedAudioTrack.elements[0]?.transcriptEdit).toBeDefined();
 	});
 
-	test("dedupe keeps transcript edit on overlapping video+audio companions with slight drift", () => {
+	test("dedupe keeps transcript edit only on caption-target companion with slight drift", () => {
 		const words = [{ id: "shared:word:0", text: "hello", startTime: 0, endTime: 0.5 }];
 		const audio = {
 			...createAudioElement({
@@ -845,7 +845,8 @@ describe("sync captions from transcript edits", () => {
 		const dedupedVideoElement = dedupedVideoTrack.elements[0];
 		expect(dedupedVideoElement?.type).toBe("video");
 		if (!dedupedVideoElement || dedupedVideoElement.type !== "video") return;
-		expect(dedupedVideoElement.transcriptEdit).toBeDefined();
+		expect(result.changed).toBe(true);
+		expect(dedupedVideoElement.transcriptEdit).toBeUndefined();
 		expect(dedupedAudioTrack.elements[0]?.transcriptEdit).toBeDefined();
 	});
 

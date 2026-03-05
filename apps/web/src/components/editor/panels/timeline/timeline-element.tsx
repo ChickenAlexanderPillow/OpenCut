@@ -47,6 +47,26 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { uppercase } from "@/utils/string";
 import type { ComponentProps } from "react";
 
+const MAX_PERSISTED_WAVEFORM_ENTRIES = 200;
+const MAX_PERSISTED_PEAKS = 768;
+
+function downsamplePeaksForPersistence({
+	peaks,
+	maxLength = MAX_PERSISTED_PEAKS,
+}: {
+	peaks: number[];
+	maxLength?: number;
+}): number[] {
+	if (peaks.length <= maxLength) return peaks;
+	const step = peaks.length / maxLength;
+	const sampled: number[] = [];
+	for (let i = 0; i < maxLength; i++) {
+		const index = Math.min(peaks.length - 1, Math.floor(i * step));
+		sampled.push(peaks[index] ?? 0);
+	}
+	return sampled;
+}
+
 function getDisplayShortcut(action: TAction) {
 	const { defaultShortcuts } = getActionDefinition(action);
 	if (!defaultShortcuts?.length) {
@@ -118,6 +138,7 @@ export function TimelineElement({
 	const editor = useEditor();
 	const { selectedElements } = useElementSelection();
 	const { requestRevealMedia } = useAssetsPanelStore();
+	const activeProject = editor.project.getActive();
 
 	const mediaAssets = editor.media.getAssets();
 	let mediaAsset: MediaAsset | null = null;
@@ -165,6 +186,65 @@ export function TimelineElement({
 	};
 
 	const isMuted = canElementHaveAudio(element) && element.muted === true;
+	const waveformPeaksCache = activeProject.waveformPeaksCache ?? {};
+
+	const getPersistedWaveformPeaks = ({
+		cacheKey,
+	}: {
+		cacheKey?: string;
+	}): number[] | undefined => {
+		if (!cacheKey) return undefined;
+		const cached = waveformPeaksCache[cacheKey]?.peaks;
+		return Array.isArray(cached) && cached.length > 0 ? cached : undefined;
+	};
+
+	const persistWaveformPeaks = ({
+		cacheKey,
+		peaks,
+	}: {
+		cacheKey?: string;
+		peaks: number[];
+	}): void => {
+		if (!cacheKey || peaks.length === 0) return;
+		const currentProject = editor.project.getActive();
+		if (!currentProject) return;
+		const existing = currentProject.waveformPeaksCache?.[cacheKey]?.peaks;
+		if (existing && existing.length === peaks.length) return;
+
+		const nextEntry = {
+			peaks: downsamplePeaksForPersistence({ peaks }),
+			updatedAt: new Date().toISOString(),
+		};
+		const nextCache = {
+			...(currentProject.waveformPeaksCache ?? {}),
+			[cacheKey]: nextEntry,
+		};
+		const entries = Object.entries(nextCache);
+		if (entries.length > MAX_PERSISTED_WAVEFORM_ENTRIES) {
+			entries.sort(([, a], [, b]) => {
+				const aTime = Date.parse(a.updatedAt ?? "") || 0;
+				const bTime = Date.parse(b.updatedAt ?? "") || 0;
+				return bTime - aTime;
+			});
+			const trimmed = entries.slice(0, MAX_PERSISTED_WAVEFORM_ENTRIES);
+			const trimmedCache = Object.fromEntries(trimmed);
+			editor.project.setActiveProject({
+				project: {
+					...currentProject,
+					waveformPeaksCache: trimmedCache,
+				},
+			});
+			editor.save.markDirty();
+			return;
+		}
+		editor.project.setActiveProject({
+			project: {
+				...currentProject,
+				waveformPeaksCache: nextCache,
+			},
+		});
+		editor.save.markDirty();
+	};
 
 	return (
 		<ContextMenu>
@@ -187,6 +267,8 @@ export function TimelineElement({
 						hasAudio={hasAudio}
 						isMuted={isMuted}
 						mediaAssets={mediaAssets}
+						getPersistedWaveformPeaks={getPersistedWaveformPeaks}
+						onWaveformPeaksResolved={persistWaveformPeaks}
 						onElementClick={onElementClick}
 						onElementMouseDown={onElementMouseDown}
 						handleResizeStart={handleResizeStart}
@@ -276,6 +358,8 @@ function ElementInner({
 	hasAudio,
 	isMuted,
 	mediaAssets,
+	getPersistedWaveformPeaks,
+	onWaveformPeaksResolved,
 	onElementClick,
 	onElementMouseDown,
 	handleResizeStart,
@@ -286,6 +370,14 @@ function ElementInner({
 	hasAudio: boolean;
 	isMuted: boolean;
 	mediaAssets: MediaAsset[];
+	getPersistedWaveformPeaks: ({ cacheKey }: { cacheKey?: string }) => number[] | undefined;
+	onWaveformPeaksResolved: ({
+		cacheKey,
+		peaks,
+	}: {
+		cacheKey?: string;
+		peaks: number[];
+	}) => void;
 	onElementClick: (e: React.MouseEvent, element: TimelineElementType) => void;
 	onElementMouseDown: (
 		e: React.MouseEvent,
@@ -322,6 +414,8 @@ function ElementInner({
 						track={track}
 						isSelected={isSelected}
 						mediaAssets={mediaAssets}
+						getPersistedWaveformPeaks={getPersistedWaveformPeaks}
+						onWaveformPeaksResolved={onWaveformPeaksResolved}
 					/>
 				</div>
 				{transcriptCutOverlays.map((overlay) => (
@@ -401,11 +495,21 @@ function ElementContent({
 	track,
 	isSelected,
 	mediaAssets,
+	getPersistedWaveformPeaks,
+	onWaveformPeaksResolved,
 }: {
 	element: TimelineElementType;
 	track: TimelineTrack;
 	isSelected: boolean;
 	mediaAssets: MediaAsset[];
+	getPersistedWaveformPeaks: ({ cacheKey }: { cacheKey?: string }) => number[] | undefined;
+	onWaveformPeaksResolved: ({
+		cacheKey,
+		peaks,
+	}: {
+		cacheKey?: string;
+		peaks: number[];
+	}) => void;
 }) {
 	if (element.type === "text") {
 		return (
@@ -449,6 +553,26 @@ function ElementContent({
 						<AudioWaveform
 							audioBuffer={audioBuffer}
 							audioUrl={audioUrl}
+							cacheKey={
+								element.sourceType === "upload"
+									? `media:${element.mediaId}`
+									: `library:${element.sourceUrl}`
+							}
+							initialPeaks={getPersistedWaveformPeaks({
+								cacheKey:
+									element.sourceType === "upload"
+										? `media:${element.mediaId}`
+										: `library:${element.sourceUrl}`,
+							})}
+							onPeaksResolved={(peaks) =>
+								onWaveformPeaksResolved({
+									cacheKey:
+										element.sourceType === "upload"
+											? `media:${element.mediaId}`
+											: `library:${element.sourceUrl}`,
+									peaks,
+								})
+							}
 							audioFile={
 								element.sourceType === "upload"
 									? mediaAssets.find((asset) => asset.id === element.mediaId)?.file
@@ -504,7 +628,56 @@ function ElementContent({
 							bottom: isSelected ? "0.25rem" : "0rem",
 						}}
 					/>
+					{mediaAsset.type === "video" &&
+						mediaSupportsAudio({ media: mediaAsset }) && (
+							<div className="pointer-events-none absolute right-1 bottom-0 left-1 z-[1]">
+								<AudioWaveform
+									audioUrl={mediaAsset.url}
+									audioFile={mediaAsset.file}
+									cacheKey={`media:${mediaAsset.id}`}
+									initialPeaks={getPersistedWaveformPeaks({
+										cacheKey: `media:${mediaAsset.id}`,
+									})}
+									onPeaksResolved={(peaks) =>
+										onWaveformPeaksResolved({
+											cacheKey: `media:${mediaAsset.id}`,
+											peaks,
+										})
+									}
+									height={Math.max(14, Math.floor(trackHeight * 0.42))}
+									className="w-full opacity-80"
+								/>
+							</div>
+						)}
 				</div>
+			</div>
+		);
+	}
+
+	if (mediaAsset.type === "video") {
+		return (
+			<div className="relative flex size-full items-center justify-center">
+				<span className="text-foreground/80 truncate px-2 text-xs">{element.name}</span>
+				{mediaSupportsAudio({ media: mediaAsset }) && (
+					<div className="pointer-events-none absolute right-1 bottom-0 left-1 z-[1]">
+						<AudioWaveform
+							audioUrl={mediaAsset.url}
+							audioFile={mediaAsset.file}
+							cacheKey={`media:${mediaAsset.id}`}
+							initialPeaks={getPersistedWaveformPeaks({
+								cacheKey: `media:${mediaAsset.id}`,
+							})}
+							onPeaksResolved={(peaks) =>
+								onWaveformPeaksResolved({
+									cacheKey: `media:${mediaAsset.id}`,
+									peaks,
+								})
+							}
+							height={Math.max(14, Math.floor(getTrackHeight({ type: track.type }) * 0.42))}
+							className="w-full opacity-80"
+						/>
+					</div>
+				)}
 			</div>
 		);
 	}

@@ -1,6 +1,7 @@
 import { Command } from "@/lib/commands/base-command";
 import type { TimelineTrack } from "@/types/timeline";
 import { canElementHaveAudio } from "@/lib/timeline/element-utils";
+import { canTracktHaveAudio } from "@/lib/timeline/track-utils";
 import { EditorCore } from "@/core";
 
 export class ToggleElementsMutedCommand extends Command {
@@ -42,7 +43,15 @@ export class ToggleElementsMutedCommand extends Command {
 					? { ...element, muted: shouldMute }
 					: element;
 			});
-			return { ...track, elements: newElements } as typeof track;
+			const shouldUnmuteTrack =
+				!shouldMute &&
+				canTracktHaveAudio(track) &&
+				mutableElements.some(({ trackId }) => trackId === track.id);
+			return {
+				...track,
+				...(shouldUnmuteTrack ? { muted: false } : {}),
+				elements: newElements,
+			} as typeof track;
 		});
 
 		editor.timeline.updateTracks(updatedTracks);
