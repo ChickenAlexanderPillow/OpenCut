@@ -58,6 +58,37 @@ function getDisplayShortcut(action: TAction) {
 	});
 }
 
+function isTranscriptMediaElement(
+	element: TimelineElementType,
+): element is Extract<TimelineElementType, { type: "video" | "audio" }> {
+	return element.type === "video" || element.type === "audio";
+}
+
+function getVisibleTranscriptCutOverlays({
+	element,
+}: {
+	element: TimelineElementType;
+}): Array<{ leftPercent: number; widthPercent: number }> {
+	if (!isTranscriptMediaElement(element)) return [];
+	const cuts = element.transcriptEdit?.cuts ?? [];
+	if (cuts.length === 0 || element.duration <= 0) return [];
+
+	const visibleStart = element.trimStart;
+	const visibleEnd = element.trimStart + element.duration;
+	const overlays: Array<{ leftPercent: number; widthPercent: number }> = [];
+
+	for (const cut of cuts) {
+		const start = Math.max(visibleStart, cut.start);
+		const end = Math.min(visibleEnd, cut.end);
+		if (end - start <= 0) continue;
+		overlays.push({
+			leftPercent: ((start - visibleStart) / element.duration) * 100,
+			widthPercent: ((end - start) / element.duration) * 100,
+		});
+	}
+	return overlays;
+}
+
 interface TimelineElementProps {
 	element: TimelineElementType;
 	track: TimelineTrack;
@@ -127,8 +158,7 @@ export function TimelineElement({
 		displayedDuration * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
 	const elementLeft = displayedStartTime * 50 * zoomLevel;
 
-	const handleRevealInMedia = ({ event }: { event: React.MouseEvent }) => {
-		event.stopPropagation();
+	const revealInMedia = () => {
 		if (hasMediaId(element)) {
 			requestRevealMedia(element.mediaId);
 		}
@@ -193,14 +223,32 @@ export function TimelineElement({
 						Duplicate
 					</ActionMenuItem>
 				)}
-				{selectedElements.length === 1 && hasMediaId(element) && (
+				{hasMediaId(element) && (
 					<>
 						<ContextMenuItem
 							icon={<HugeiconsIcon icon={Search01Icon} />}
-							onClick={(event) => handleRevealInMedia({ event })}
+							onSelect={(event) => {
+								event.preventDefault();
+								event.stopPropagation();
+								revealInMedia();
+							}}
 						>
 							Reveal media
 						</ContextMenuItem>
+						{isTranscriptMediaElement(element) && (
+							<ContextMenuItem
+								onSelect={(event) => {
+									event.preventDefault();
+									event.stopPropagation();
+									invokeAction("rebuild-captions-for-clip", {
+										trackId: track.id,
+										elementId: element.id,
+									});
+								}}
+							>
+								Rebuild captions for clip
+							</ContextMenuItem>
+						)}
 						<ContextMenuItem
 							icon={<HugeiconsIcon icon={Exchange01Icon} />}
 							disabled
@@ -251,6 +299,7 @@ function ElementInner({
 }) {
 	const showMutedOverlay = element.type === "audio" && hasAudio && isMuted;
 	const showHiddenOverlay = canElementBeHidden(element) && element.hidden;
+	const transcriptCutOverlays = getVisibleTranscriptCutOverlays({ element });
 
 	return (
 		<div
@@ -275,6 +324,16 @@ function ElementInner({
 						mediaAssets={mediaAssets}
 					/>
 				</div>
+				{transcriptCutOverlays.map((overlay) => (
+					<div
+						key={`${overlay.leftPercent.toFixed(3)}:${overlay.widthPercent.toFixed(3)}`}
+						className="pointer-events-none absolute top-0 bottom-0 bg-black/35"
+						style={{
+							left: `${overlay.leftPercent}%`,
+							width: `${overlay.widthPercent}%`,
+						}}
+					/>
+				))}
 
 				{(showMutedOverlay || showHiddenOverlay) && (
 					<div className="bg-opacity-50 pointer-events-none absolute inset-0 flex items-center justify-center bg-black">
@@ -553,12 +612,13 @@ function ActionMenuItem({
 	action,
 	children,
 	...props
-}: Omit<ComponentProps<typeof ContextMenuItem>, "onClick" | "textRight"> & {
+}: Omit<ComponentProps<typeof ContextMenuItem>, "onSelect" | "textRight"> & {
 	action: TAction;
 }) {
 	return (
 		<ContextMenuItem
-			onClick={(event) => {
+			onSelect={(event) => {
+				event.preventDefault();
 				event.stopPropagation();
 				invokeAction(action);
 			}}

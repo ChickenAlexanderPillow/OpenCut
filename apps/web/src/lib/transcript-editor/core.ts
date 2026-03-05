@@ -1,4 +1,9 @@
-import { CAPTION_TAIL_PAD_SECONDS } from "@/lib/transcript-editor/constants";
+import {
+	CAPTION_TAIL_PAD_SECONDS,
+	DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS,
+	PAUSE_REMOVAL_CUT_END_PADDING_SECONDS,
+	PAUSE_REMOVAL_CUT_START_PADDING_SECONDS,
+} from "@/lib/transcript-editor/constants";
 import type {
 	TranscriptEditCutRange,
 	TranscriptEditWord,
@@ -23,6 +28,18 @@ export const DEFAULT_FILLER_PHRASES = new Set([
 	"kind of",
 	"sort of",
 ]);
+
+function mergeCutReason({
+	previous,
+	current,
+}: {
+	previous: TranscriptEditCutRange["reason"];
+	current: TranscriptEditCutRange["reason"];
+}): TranscriptEditCutRange["reason"] {
+	if (previous === "manual" || current === "manual") return "manual";
+	if (previous === "filler" || current === "filler") return "filler";
+	return "pause";
+}
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
@@ -110,10 +127,10 @@ export function mergeCutRanges({
 		const previous = merged[merged.length - 1];
 		if (current.start <= previous.end + 0.01) {
 			previous.end = Math.max(previous.end, current.end);
-			previous.reason =
-				previous.reason === "manual" || current.reason === "manual"
-					? "manual"
-					: "filler";
+			previous.reason = mergeCutReason({
+				previous: previous.reason,
+				current: current.reason,
+			});
 			continue;
 		}
 		merged.push({ ...current });
@@ -139,6 +156,7 @@ export function applyCutRangesToWords({
 
 	return normalizedWords.map((word) => {
 		const removedByCuts = mergedCuts.some((cut) =>
+			cut.reason !== "pause" &&
 			rangesOverlap({
 				aStart: word.startTime,
 				aEnd: word.endTime,
@@ -160,22 +178,106 @@ export function buildTranscriptCutsFromWords({
 }): TranscriptEditCutRange[] {
 	const normalized = normalizeTranscriptWords({ words });
 	const rawCuts: TranscriptEditCutRange[] = [];
-	for (let index = 0; index < normalized.length; index++) {
+	let index = 0;
+	while (index < normalized.length) {
 		const word = normalized[index];
-		if (!word.removed) continue;
-		const nextWord = normalized[index + 1];
-		// Extend removed regions through the transient gap until next word starts
-		// so there are no tiny audible leftovers between deleted words.
-		const end = nextWord
-			? Math.max(word.endTime, nextWord.startTime)
-			: word.endTime;
+		if (!word.removed) {
+			index += 1;
+			continue;
+		}
+
+		const previousKeptWord = (() => {
+			for (let cursor = index - 1; cursor >= 0; cursor--) {
+				const candidate = normalized[cursor];
+				if (!candidate) continue;
+				if (!candidate.removed) return candidate;
+			}
+			return null;
+		})();
+		const rangeStart = previousKeptWord
+			? Math.min(word.startTime, previousKeptWord.endTime)
+			: word.startTime;
+		let rangeEnd = word.endTime;
+		let cursor = index + 1;
+
+		// Collapse contiguous removed words into one cut and include their inter-word gaps.
+		while (cursor < normalized.length && normalized[cursor]?.removed) {
+			rangeEnd = Math.max(rangeEnd, normalized[cursor].endTime);
+			cursor += 1;
+		}
+
+		// Extend through the transient gap until the next kept word starts.
+		const nextKeptWord = normalized[cursor];
+		if (nextKeptWord) {
+			rangeEnd = Math.max(rangeEnd, nextKeptWord.startTime);
+		}
+
 		rawCuts.push({
-			start: word.startTime,
-			end,
+			start: rangeStart,
+			end: rangeEnd,
 			reason: "manual",
 		});
+		index = cursor;
 	}
 	return mergeCutRanges({ cuts: rawCuts });
+}
+
+export function buildPauseCutsFromWords({
+	words,
+	thresholdSeconds = DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS,
+	startPaddingSeconds = PAUSE_REMOVAL_CUT_START_PADDING_SECONDS,
+	endPaddingSeconds = PAUSE_REMOVAL_CUT_END_PADDING_SECONDS,
+}: {
+	words: TranscriptEditWord[];
+	thresholdSeconds?: number;
+	startPaddingSeconds?: number;
+	endPaddingSeconds?: number;
+}): TranscriptEditCutRange[] {
+	const normalized = normalizeTranscriptWords({ words }).filter(
+		(word) => !word.removed,
+	);
+	const minGap = Math.max(0.01, thresholdSeconds);
+	const prePad = Math.max(0, startPaddingSeconds);
+	const resumePad = Math.max(0, endPaddingSeconds);
+	const rawCuts: TranscriptEditCutRange[] = [];
+
+	for (let index = 0; index < normalized.length - 1; index++) {
+		const currentWord = normalized[index];
+		const nextWord = normalized[index + 1];
+		if (!currentWord || !nextWord) continue;
+		const gap = nextWord.startTime - currentWord.endTime;
+		if (gap <= minGap) continue;
+		const start = Math.max(0, currentWord.endTime + prePad);
+		const end = Math.max(start + 0.01, nextWord.startTime - resumePad);
+		if (end - start <= 0.01) continue;
+		rawCuts.push({
+			start,
+			end,
+			reason: "pause",
+		});
+	}
+
+	return mergeCutRanges({ cuts: rawCuts });
+}
+
+export function buildCompressedCutBoundaryTimes({
+	cuts,
+}: {
+	cuts: TranscriptEditCutRange[];
+}): number[] {
+	const merged = mergeCutRanges({ cuts });
+	if (merged.length === 0) return [];
+	const boundaries: number[] = [];
+	let sourceCursor = 0;
+	let compressedCursor = 0;
+	for (const cut of merged) {
+		const keepDuration = Math.max(0, cut.start - sourceCursor);
+		const boundaryTime = compressedCursor + keepDuration;
+		boundaries.push(boundaryTime);
+		compressedCursor = boundaryTime;
+		sourceCursor = Math.max(sourceCursor, cut.end);
+	}
+	return boundaries;
 }
 
 export function mapCompressedTimeToSourceTime({
@@ -243,8 +345,10 @@ export function computeKeepDuration({
 
 export function buildCaptionPayloadFromTranscriptWords({
 	words,
+	cuts,
 }: {
 	words: TranscriptEditWord[];
+	cuts?: TranscriptEditCutRange[];
 }): {
 	content: string;
 	startTime: number;
@@ -252,21 +356,26 @@ export function buildCaptionPayloadFromTranscriptWords({
 	wordTimings: Array<{ word: string; startTime: number; endTime: number }>;
 } | null {
 	const normalized = normalizeTranscriptWords({ words });
-	const cuts = buildTranscriptCutsFromWords({ words: normalized });
-	const active = normalized.filter((word) => !word.removed);
+	const transcriptCuts = cuts
+		? mergeCutRanges({ cuts })
+		: buildTranscriptCutsFromWords({ words: normalized });
+	// Captions intentionally hide filler words even when transcript keeps them editable.
+	const active = normalized.filter(
+		(word) => !word.removed && !isFillerWordOrPhrase({ text: word.text }),
+	);
 	if (active.length === 0) return null;
 
 	const timings = active
 		.map((word) => {
 			const startTime = mapSourceTimeToCompressedTime({
 				sourceTime: word.startTime,
-				cuts,
+				cuts: transcriptCuts,
 			});
 			const endTime = Math.max(
 				startTime + 0.01,
 				mapSourceTimeToCompressedTime({
 					sourceTime: word.endTime,
-					cuts,
+					cuts: transcriptCuts,
 				}),
 			);
 			return {

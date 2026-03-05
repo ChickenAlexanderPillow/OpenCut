@@ -22,11 +22,16 @@ import {
 	type SnapPoint,
 } from "@/lib/timeline/snap-utils";
 import { useTimelineStore } from "@/stores/timeline-store";
+import { TracksSnapshotCommand } from "@/lib/commands/timeline";
+import { enforceMainTrackStart } from "@/lib/timeline/track-utils";
 import type {
+	AudioElement,
 	DropTarget,
 	ElementDragState,
+	TextElement,
 	TimelineElement,
 	TimelineTrack,
+	VideoElement,
 } from "@/types/timeline";
 
 interface UseElementInteractionProps {
@@ -58,6 +63,64 @@ interface PendingDragState {
 	startMouseY: number;
 	startElementTime: number;
 	clickOffsetTime: number;
+}
+
+const COMPANION_ALIGNMENT_TOLERANCE_SECONDS = 0.05;
+
+function isVideoElement(element: TimelineElement): element is VideoElement {
+	return element.type === "video";
+}
+
+function isAudioElement(element: TimelineElement): element is AudioElement {
+	return element.type === "audio";
+}
+
+function isTextElement(element: TimelineElement): element is TextElement {
+	return element.type === "text";
+}
+
+function getDragCompanionElements({
+	tracks,
+	draggedTrackId,
+	draggedElementId,
+}: {
+	tracks: TimelineTrack[];
+	draggedTrackId: string;
+	draggedElementId: string;
+}): Array<{ trackId: string; elementId: string }> {
+	const draggedTrack = tracks.find((track) => track.id === draggedTrackId);
+	const draggedElement = draggedTrack?.elements.find(
+		(element) => element.id === draggedElementId,
+	);
+	if (!draggedElement || !isVideoElement(draggedElement)) return [];
+
+	const companions: Array<{ trackId: string; elementId: string }> = [];
+	for (const track of tracks) {
+		for (const element of track.elements) {
+			if (element.id === draggedElementId && track.id === draggedTrackId) continue;
+			if (
+				isAudioElement(element) &&
+				element.sourceType === "upload" &&
+				element.mediaId === draggedElement.mediaId &&
+				Math.abs(element.startTime - draggedElement.startTime) <=
+					COMPANION_ALIGNMENT_TOLERANCE_SECONDS &&
+				Math.abs(element.duration - draggedElement.duration) <=
+					COMPANION_ALIGNMENT_TOLERANCE_SECONDS &&
+				Math.abs(element.trimStart - draggedElement.trimStart) <=
+					COMPANION_ALIGNMENT_TOLERANCE_SECONDS
+			) {
+				companions.push({ trackId: track.id, elementId: element.id });
+				continue;
+			}
+			if (
+				isTextElement(element) &&
+				element.captionSourceRef?.mediaElementId === draggedElement.id
+			) {
+				companions.push({ trackId: track.id, elementId: element.id });
+			}
+		}
+	}
+	return companions;
 }
 
 function getClickOffsetTime({
@@ -445,6 +508,73 @@ export function useElementInteraction({
 
 			const sourceTrack = tracks.find(({ id }) => id === dragState.trackId);
 			if (!sourceTrack) {
+				endDrag();
+				onSnapPointChange?.(null);
+				return;
+			}
+
+			const companionElements = getDragCompanionElements({
+				tracks,
+				draggedTrackId: dragState.trackId,
+				draggedElementId: dragState.elementId,
+			});
+			if (companionElements.length > 0) {
+				const selection = [
+					{ trackId: dragState.trackId, elementId: dragState.elementId },
+					...companionElements,
+				];
+				const records = selection
+					.map(({ trackId, elementId }) => {
+						const track = tracks.find((candidate) => candidate.id === trackId);
+						const element = track?.elements.find(
+							(candidate) => candidate.id === elementId,
+						);
+						return track && element ? { track, element } : null;
+					})
+					.filter((record): record is NonNullable<typeof record> => record !== null);
+
+				const draggedRecord = records.find(
+					(record) =>
+						record.track.id === dragState.trackId &&
+						record.element.id === dragState.elementId,
+				);
+				if (!draggedRecord) {
+					endDrag();
+					onSnapPointChange?.(null);
+					return;
+				}
+
+				const requestedPrimaryStart = Math.max(0, snappedTime);
+				const adjustedPrimaryStart = enforceMainTrackStart({
+					tracks,
+					targetTrackId: draggedRecord.track.id,
+					requestedStartTime: requestedPrimaryStart,
+					excludeElementId: draggedRecord.element.id,
+				});
+				const shiftDelta = adjustedPrimaryStart - draggedRecord.element.startTime;
+				if (Math.abs(shiftDelta) > 0.0001) {
+					const updatesByTrack = new Map<string, Map<string, number>>();
+					for (const record of records) {
+						const nextStart = Math.max(0, record.element.startTime + shiftDelta);
+						const perTrack =
+							updatesByTrack.get(record.track.id) ?? new Map<string, number>();
+						perTrack.set(record.element.id, nextStart);
+						updatesByTrack.set(record.track.id, perTrack);
+					}
+					const nextTracks = tracks.map((track) => {
+						const perTrack = updatesByTrack.get(track.id);
+						if (!perTrack) return track;
+						const nextElements = track.elements.map((element) =>
+							perTrack.has(element.id)
+								? { ...element, startTime: perTrack.get(element.id) ?? element.startTime }
+								: element,
+						);
+						return { ...track, elements: nextElements } as TimelineTrack;
+					});
+					editor.command.execute({
+						command: new TracksSnapshotCommand(tracks, nextTracks),
+					});
+				}
 				endDrag();
 				onSnapPointChange?.(null);
 				return;

@@ -13,6 +13,7 @@ import {
 	wrapTextToWidth,
 } from "@/lib/text/layout";
 import { resolveSafeAreaAnchoredPositionY } from "@/constants/safe-area-constants";
+import { toTimelineCaptionWordTimings } from "@/lib/captions/timing";
 
 export interface ElementBounds {
 	cx: number;
@@ -172,7 +173,11 @@ export function getElementBounds({
 				).letterSpacing = `${letterSpacing}px`;
 			}
 
-			const captionWordTimings = element.captionWordTimings ?? [];
+			const captionWordTimings = toTimelineCaptionWordTimings({
+				timings: element.captionWordTimings ?? [],
+				elementStartTime: element.startTime,
+				elementDuration: element.duration,
+			});
 			const captionWords = captionWordTimings.map((timing) => timing.word);
 			const wordsOnScreenRaw = element.captionStyle?.wordsOnScreen;
 			const wordsOnScreen =

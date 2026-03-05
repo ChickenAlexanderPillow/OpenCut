@@ -2,12 +2,19 @@ import { describe, expect, test } from "bun:test";
 import {
 	applyCutRangesToWords,
 	buildCaptionPayloadFromTranscriptWords,
+	buildPauseCutsFromWords,
 	buildTranscriptCutsFromWords,
+	buildCompressedCutBoundaryTimes,
 	computeKeepDuration,
 	mapCompressedTimeToSourceTime,
 	mapSourceTimeToCompressedTime,
 	withFillerWordsRemoved,
 } from "@/lib/transcript-editor/core";
+import {
+	DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS,
+	PAUSE_REMOVAL_CUT_END_PADDING_SECONDS,
+	PAUSE_REMOVAL_CUT_START_PADDING_SECONDS,
+} from "@/lib/transcript-editor/constants";
 
 describe("transcript editor core", () => {
 	test("builds cuts and caption payload from removed words", () => {
@@ -88,5 +95,66 @@ describe("transcript editor core", () => {
 		expect(cuts).toHaveLength(1);
 		expect(cuts[0]?.start).toBeCloseTo(0.0, 3);
 		expect(cuts[0]?.end).toBeCloseTo(0.7, 3);
+	});
+
+	test("removes internal gaps for consecutive removed phrase words", () => {
+		const words = [
+			{ id: "w1", text: "Well,", startTime: 0.0, endTime: 0.2, removed: true },
+			{ id: "w2", text: "I", startTime: 0.32, endTime: 0.45, removed: true },
+			{ id: "w3", text: "think", startTime: 0.62, endTime: 0.9, removed: true },
+			{ id: "w4", text: "so", startTime: 1.1, endTime: 1.4, removed: false },
+		];
+		const cuts = buildTranscriptCutsFromWords({ words });
+		expect(cuts).toHaveLength(1);
+		expect(cuts[0]?.start).toBeCloseTo(0.0, 3);
+		expect(cuts[0]?.end).toBeCloseTo(1.1, 3);
+	});
+
+	test("absorbs pre-gap before a muted word to avoid frozen captions", () => {
+		const words = [
+			{ id: "w1", text: "hello", startTime: 0.0, endTime: 0.2, removed: false },
+			{ id: "w2", text: "um", startTime: 0.5, endTime: 0.6, removed: true },
+			{ id: "w3", text: "world", startTime: 0.9, endTime: 1.2, removed: false },
+		];
+		const cuts = buildTranscriptCutsFromWords({ words });
+		expect(cuts).toHaveLength(1);
+		expect(cuts[0]?.start).toBeCloseTo(0.2, 3);
+		expect(cuts[0]?.end).toBeCloseTo(0.9, 3);
+	});
+
+	test("builds pause cuts with threshold and speech-safe boundary padding", () => {
+		const words = [
+			{ id: "w1", text: "hello", startTime: 0.0, endTime: 0.2, removed: false },
+			{
+				id: "w2",
+				text: "world",
+				startTime: 0.2 + DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS - 0.05,
+				endTime: 0.95,
+				removed: false,
+			},
+			{ id: "w3", text: "again", startTime: 2.0, endTime: 2.3, removed: false },
+		];
+		const cuts = buildPauseCutsFromWords({ words });
+		expect(cuts).toHaveLength(1);
+		expect(cuts[0]?.start).toBeCloseTo(
+			0.95 + PAUSE_REMOVAL_CUT_START_PADDING_SECONDS,
+			3,
+		);
+		expect(cuts[0]?.end).toBeCloseTo(
+			2.0 - PAUSE_REMOVAL_CUT_END_PADDING_SECONDS,
+			3,
+		);
+	});
+
+	test("builds compressed cut boundaries for smoothing", () => {
+		const boundaries = buildCompressedCutBoundaryTimes({
+			cuts: [
+				{ start: 1.0, end: 1.4, reason: "pause" as const },
+				{ start: 2.0, end: 2.5, reason: "manual" as const },
+			],
+		});
+		expect(boundaries).toHaveLength(2);
+		expect(boundaries[0]).toBeCloseTo(1.0, 3);
+		expect(boundaries[1]).toBeCloseTo(1.6, 3);
 	});
 });

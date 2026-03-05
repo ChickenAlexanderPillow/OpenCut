@@ -11,6 +11,8 @@ import {
 	mapCompressedTimeToSourceTime,
 	normalizeTranscriptWords,
 } from "@/lib/transcript-editor/core";
+import { DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS } from "@/lib/transcript-editor/constants";
+import { toElementLocalCaptionTime } from "@/lib/captions/timing";
 import type {
 	AudioElement,
 	TextElement,
@@ -19,7 +21,6 @@ import type {
 } from "@/types/timeline";
 import type { TranscriptEditWord } from "@/types/transcription";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { AlignJustify, Check, Pencil, X } from "lucide-react";
 
@@ -129,28 +130,6 @@ function getSelectedCaptionElement({
 		return { trackId: selected.trackId, element };
 	}
 	return null;
-}
-
-function getCaptionSourceTrackInfo({
-	tracks,
-	mediaElementId,
-}: {
-	tracks: ReturnType<ReturnType<typeof useEditor>["timeline"]["getTracks"]>;
-	mediaElementId: string;
-}): Array<{ trackId: string; element: TextElement }> {
-	return tracks.flatMap((track) =>
-		track.type === "text"
-			? track.elements
-					.filter(
-						(element) =>
-							element.type === "text" &&
-							(element.captionWordTimings?.length ?? 0) > 0 &&
-							(!element.captionSourceRef ||
-								element.captionSourceRef.mediaElementId === mediaElementId),
-					)
-					.map((element) => ({ trackId: track.id, element }))
-			: [],
-	);
 }
 
 function buildDefaultSegmentGroups({
@@ -278,16 +257,6 @@ export function TranscriptView() {
 					.filter((group) => group.words.length > 0)
 			: buildDefaultSegmentGroups({ words: wordsWithCutState });
 
-	const captionLinks = useMemo(
-		() =>
-			activeMedia
-				? getCaptionSourceTrackInfo({
-						tracks,
-						mediaElementId: activeMedia.element.id,
-					}).length
-				: 0,
-		[activeMedia, tracks],
-	);
 	const orderedWordIds = useMemo(
 		() => groups.flatMap((group) => group.words.map((word) => word.id)),
 		[groups],
@@ -304,11 +273,21 @@ export function TranscriptView() {
 		if (timings.length === 0) return new Set<string>();
 		const ranges = timings.map((timing) => ({
 			start: mapCompressedTimeToSourceTime({
-				compressedTime: timing.startTime,
+				compressedTime: toElementLocalCaptionTime({
+					time: timing.startTime,
+					elementStartTime: selectedCaption.element.startTime,
+					timings,
+					elementDuration: selectedCaption.element.duration,
+				}),
 				cuts,
 			}),
 			end: mapCompressedTimeToSourceTime({
-				compressedTime: timing.endTime,
+				compressedTime: toElementLocalCaptionTime({
+					time: timing.endTime,
+					elementStartTime: selectedCaption.element.startTime,
+					timings,
+					elementDuration: selectedCaption.element.duration,
+				}),
 				cuts,
 			}),
 		}));
@@ -552,6 +531,19 @@ export function TranscriptView() {
 						variant="outline"
 						size="sm"
 						onClick={() =>
+							invokeAction("transcript-remove-pauses", {
+								trackId: activeMedia.trackId,
+								elementId: activeMedia.element.id,
+								thresholdSeconds: DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS,
+							})
+						}
+					>
+						Remove Pauses
+					</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={() =>
 							invokeAction("transcript-restore-all", {
 								trackId: activeMedia.trackId,
 								elementId: activeMedia.element.id,
@@ -563,14 +555,6 @@ export function TranscriptView() {
 				</div>
 			}
 		>
-			<div className="rounded-md border p-2 text-xs text-muted-foreground flex items-center gap-2">
-				<Badge variant="secondary">
-					{activeMedia.element.type.toUpperCase()}
-				</Badge>
-				<span>{activeMedia.element.name}</span>
-				<span className="ml-auto">Captions linked: {captionLinks}</span>
-			</div>
-
 			<div
 				ref={selectionContainerRef}
 				className="space-y-4 [&_*::selection]:bg-transparent [&_*::selection]:text-inherit"

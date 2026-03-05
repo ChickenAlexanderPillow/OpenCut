@@ -20,7 +20,7 @@ export interface TranscriptEditWord {
 export interface TranscriptEditCutRange {
 	start: number;
 	end: number;
-	reason: "manual" | "filler";
+	reason: "manual" | "filler" | "pause";
 }
 
 export interface TranscriptionResult {

@@ -1,11 +1,14 @@
 import { Input, ALL_FORMATS, BlobSource, AudioBufferSink } from "mediabunny";
 import { collectAudioMixSources } from "@/lib/media/audio";
 import {
+	buildCompressedCutBoundaryTimes,
 	mapCompressedTimeToSourceTime,
 	mapSourceTimeToCompressedTime,
 } from "@/lib/transcript-editor/core";
+import { TRANSCRIPT_CUT_AUDIO_SMOOTHING_SECONDS } from "@/lib/transcript-editor/constants";
 import type { TimelineTrack } from "@/types/timeline";
 import type { MediaAsset } from "@/types/assets";
+import type { TranscriptEditCutRange } from "@/types/transcription";
 
 export async function getVideoInfo({
 	videoFile,
@@ -22,22 +25,26 @@ export async function getVideoInfo({
 		formats: ALL_FORMATS,
 	});
 
-	const duration = await input.computeDuration();
-	const videoTrack = await input.getPrimaryVideoTrack();
+	try {
+		const duration = await input.computeDuration();
+		const videoTrack = await input.getPrimaryVideoTrack();
 
-	if (!videoTrack) {
-		throw new Error("No video track found in the file");
+		if (!videoTrack) {
+			throw new Error("No video track found in the file");
+		}
+
+		const packetStats = await videoTrack.computePacketStats(100);
+		const fps = packetStats.averagePacketRate;
+
+		return {
+			duration,
+			width: videoTrack.displayWidth,
+			height: videoTrack.displayHeight,
+			fps,
+		};
+	} finally {
+		input.dispose();
 	}
-
-	const packetStats = await videoTrack.computePacketStats(100);
-	const fps = packetStats.averagePacketRate;
-
-	return {
-		duration,
-		width: videoTrack.displayWidth,
-		height: videoTrack.displayHeight,
-		fps,
-	};
 }
 
 const SAMPLE_RATE = 44100;
@@ -130,7 +137,7 @@ async function decodeAndMixAudioSource({
 		duration: number;
 		trimStart: number;
 		gain: number;
-		transcriptCuts?: Array<{ start: number; end: number; reason: "manual" | "filler" }>;
+		transcriptCuts?: TranscriptEditCutRange[];
 	};
 	mixBuffers: Float32Array[];
 	totalSamples: number;
@@ -139,56 +146,79 @@ async function decodeAndMixAudioSource({
 		source: new BlobSource(source.file),
 		formats: ALL_FORMATS,
 	});
+	try {
+		const audioTrack = await input.getPrimaryAudioTrack();
+		if (!audioTrack) return;
 
-	const audioTrack = await input.getPrimaryAudioTrack();
-	if (!audioTrack) return;
-
-	const sink = new AudioBufferSink(audioTrack);
-	const sourceWindowDuration = source.transcriptCuts?.length
-		? mapCompressedTimeToSourceTime({
-				compressedTime: source.duration,
-				cuts: source.transcriptCuts,
-			})
-		: source.duration;
-	const trimEnd = source.trimStart + sourceWindowDuration;
-
-	for await (const { buffer, timestamp } of sink.buffers(
-		source.trimStart,
-		trimEnd,
-	)) {
-		const relativeTime = timestamp - source.trimStart;
-		const mappedStart = source.transcriptCuts?.length
-			? mapSourceTimeToCompressedTime({
-					sourceTime: Math.max(0, relativeTime),
+		const sink = new AudioBufferSink(audioTrack);
+		const sourceWindowDuration = source.transcriptCuts?.length
+			? mapCompressedTimeToSourceTime({
+					compressedTime: source.duration,
 					cuts: source.transcriptCuts,
 				})
-			: relativeTime;
-		const outputStartSample = Math.floor((source.startTime + mappedStart) * SAMPLE_RATE);
+			: source.duration;
+		const cutBoundaries =
+			source.transcriptCuts && source.transcriptCuts.length > 0
+				? buildCompressedCutBoundaryTimes({ cuts: source.transcriptCuts })
+				: [];
+		const boundaryIndexes = new Array(NUM_CHANNELS).fill(0);
+		const trimEnd = source.trimStart + sourceWindowDuration;
 
-		// resample if needed
-		const resampleRatio = SAMPLE_RATE / buffer.sampleRate;
+		for await (const { buffer, timestamp } of sink.buffers(
+			source.trimStart,
+			trimEnd,
+		)) {
+			const relativeTime = timestamp - source.trimStart;
+			const mappedStart = source.transcriptCuts?.length
+				? mapSourceTimeToCompressedTime({
+						sourceTime: Math.max(0, relativeTime),
+						cuts: source.transcriptCuts,
+					})
+				: relativeTime;
+			const outputStartSample = Math.floor(
+				(source.startTime + mappedStart) * SAMPLE_RATE,
+			);
 
-		for (let ch = 0; ch < NUM_CHANNELS; ch++) {
-			const sourceChannel = Math.min(ch, buffer.numberOfChannels - 1);
-			const channelData = buffer.getChannelData(sourceChannel);
-			const outputChannel = mixBuffers[ch];
+			// resample if needed
+			const resampleRatio = SAMPLE_RATE / buffer.sampleRate;
 
-			const resampledLength = Math.floor(channelData.length * resampleRatio);
-			for (let i = 0; i < resampledLength; i++) {
-				const outputIdx = outputStartSample + i;
-				if (outputIdx < 0 || outputIdx >= totalSamples) continue;
+			for (let ch = 0; ch < NUM_CHANNELS; ch++) {
+				const sourceChannel = Math.min(ch, buffer.numberOfChannels - 1);
+				const channelData = buffer.getChannelData(sourceChannel);
+				const outputChannel = mixBuffers[ch];
 
-				const sourcePos = i / resampleRatio;
-				const leftIndex = Math.floor(sourcePos);
-				const rightIndex = Math.min(leftIndex + 1, channelData.length - 1);
-				if (leftIndex >= channelData.length) break;
-				const alpha = sourcePos - leftIndex;
-				const leftSample = channelData[leftIndex] ?? 0;
-				const rightSample = channelData[rightIndex] ?? leftSample;
-				outputChannel[outputIdx] +=
-					(leftSample * (1 - alpha) + rightSample * alpha) * source.gain;
+				const resampledLength = Math.floor(channelData.length * resampleRatio);
+				for (let i = 0; i < resampledLength; i++) {
+					const outputIdx = outputStartSample + i;
+					if (outputIdx < 0 || outputIdx >= totalSamples) continue;
+					const compressedTime = mappedStart + i / SAMPLE_RATE;
+
+					const sourcePos = i / resampleRatio;
+					const leftIndex = Math.floor(sourcePos);
+					const rightIndex = Math.min(leftIndex + 1, channelData.length - 1);
+					if (leftIndex >= channelData.length) break;
+					const alpha = sourcePos - leftIndex;
+					const leftSample = channelData[leftIndex] ?? 0;
+					const rightSample = channelData[rightIndex] ?? leftSample;
+					const smoothing =
+						cutBoundaries.length > 0
+							? getBoundarySmoothingGain({
+									compressedTime,
+									boundaries: cutBoundaries,
+									fadeSeconds: TRANSCRIPT_CUT_AUDIO_SMOOTHING_SECONDS,
+									boundaryIndex: boundaryIndexes[ch] ?? 0,
+								})
+							: { gain: 1, boundaryIndex: boundaryIndexes[ch] ?? 0 };
+					boundaryIndexes[ch] = smoothing.boundaryIndex;
+					outputChannel[outputIdx] +=
+						(leftSample * (1 - alpha) + rightSample * alpha) *
+						source.gain *
+						smoothing.gain;
+				}
 			}
 		}
+	} finally {
+		input.dispose();
 	}
 }
 
@@ -244,4 +274,49 @@ function writeString({
 	for (let i = 0; i < str.length; i++) {
 		view.setUint8(offset + i, str.charCodeAt(i));
 	}
+}
+
+function getBoundarySmoothingGain({
+	compressedTime,
+	boundaries,
+	fadeSeconds,
+	boundaryIndex,
+}: {
+	compressedTime: number;
+	boundaries: number[];
+	fadeSeconds: number;
+	boundaryIndex: number;
+}): { gain: number; boundaryIndex: number } {
+	if (boundaries.length === 0 || fadeSeconds <= 0) {
+		return { gain: 1, boundaryIndex };
+	}
+	let nextBoundaryIndex = Math.max(0, boundaryIndex);
+	while (
+		nextBoundaryIndex < boundaries.length - 1 &&
+		compressedTime > boundaries[nextBoundaryIndex + 1]
+	) {
+		nextBoundaryIndex += 1;
+	}
+	let nearestDistance = Number.POSITIVE_INFINITY;
+	const currentBoundary = boundaries[nextBoundaryIndex];
+	if (typeof currentBoundary === "number") {
+		nearestDistance = Math.min(
+			nearestDistance,
+			Math.abs(compressedTime - currentBoundary),
+		);
+	}
+	const nextBoundary = boundaries[nextBoundaryIndex + 1];
+	if (typeof nextBoundary === "number") {
+		nearestDistance = Math.min(
+			nearestDistance,
+			Math.abs(compressedTime - nextBoundary),
+		);
+	}
+	if (nearestDistance >= fadeSeconds) {
+		return { gain: 1, boundaryIndex: nextBoundaryIndex };
+	}
+	return {
+		gain: Math.max(0, nearestDistance / fadeSeconds),
+		boundaryIndex: nextBoundaryIndex,
+	};
 }

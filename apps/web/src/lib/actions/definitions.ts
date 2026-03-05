@@ -138,6 +138,11 @@ export const ACTIONS = {
 		category: "editing",
 		args: { trackId: "string", elementId: "string" },
 	},
+	"transcript-remove-pauses": {
+		description: "Remove long pauses from transcript",
+		category: "editing",
+		args: { trackId: "string", elementId: "string", thresholdSeconds: "number" },
+	},
 	"transcript-restore-all": {
 		description: "Restore all removed transcript words",
 		category: "editing",
@@ -147,6 +152,11 @@ export const ACTIONS = {
 		description: "Split transcript segment in UI",
 		category: "editing",
 		args: { trackId: "string", elementId: "string", wordId: "string" },
+	},
+	"rebuild-captions-for-clip": {
+		description: "Rebuild captions for a clip and replace the current caption track",
+		category: "editing",
+		args: { trackId: "string", elementId: "string" },
 	},
 	"clear-viral-clips-session": {
 		description: "Clear generated viral clips session",

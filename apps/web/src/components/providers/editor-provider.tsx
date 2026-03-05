@@ -28,6 +28,9 @@ import {
 } from "@/lib/clips/transcript";
 import { normalizeGeneratedCaptionsInProject } from "@/lib/captions/generated-caption-normalizer";
 import { syncAllCaptionsFromTranscriptEditsInTracks } from "@/lib/transcript-editor/sync-captions";
+import { videoCache } from "@/services/video-cache/service";
+import { clearWaveformPeaksCache } from "@/components/editor/panels/timeline/audio-waveform";
+import { clearSmartCutAnalysisCache } from "@/lib/editing/smart-cut";
 
 interface EditorProviderProps {
 	projectId: string;
@@ -417,6 +420,111 @@ function EditorRuntimeBindings() {
 	const hasActiveProjectProcesses = activeProject
 		? processes.some((process) => process.projectId === activeProject.metadata.id)
 		: false;
+
+	useEffect(() => {
+		const CHECK_INTERVAL_MS = 30_000;
+		const SOFT_LIMIT_MB = 768;
+		const HARD_LIMIT_MB = 1024;
+		const PRESSURE_SAMPLES = 3;
+		const RELOAD_GUARD_KEY = "opencut:memory:reload-guard";
+		const RELOAD_WINDOW_MS = 5 * 60_000;
+		const MAX_RELOADS_IN_WINDOW = 2;
+		let highPressureCount = 0;
+		let recovering = false;
+
+		const getUsedHeapMb = (): number | null => {
+			const memory = (performance as Performance & {
+				memory?: {
+					usedJSHeapSize?: number;
+				};
+			}).memory;
+			const usedBytes = memory?.usedJSHeapSize;
+			if (typeof usedBytes !== "number" || !Number.isFinite(usedBytes)) return null;
+			return usedBytes / (1024 * 1024);
+		};
+
+		const canAutoReload = (): boolean => {
+			const now = Date.now();
+			try {
+				const raw = sessionStorage.getItem(RELOAD_GUARD_KEY);
+				if (!raw) {
+					sessionStorage.setItem(
+						RELOAD_GUARD_KEY,
+						JSON.stringify({ startedAt: now, count: 1 }),
+					);
+					return true;
+				}
+				const parsed = JSON.parse(raw) as { startedAt?: number; count?: number };
+				const startedAt =
+					typeof parsed.startedAt === "number" ? parsed.startedAt : now;
+				const count = typeof parsed.count === "number" ? parsed.count : 0;
+				if (now - startedAt > RELOAD_WINDOW_MS) {
+					sessionStorage.setItem(
+						RELOAD_GUARD_KEY,
+						JSON.stringify({ startedAt: now, count: 1 }),
+					);
+					return true;
+				}
+				if (count >= MAX_RELOADS_IN_WINDOW) {
+					return false;
+				}
+				sessionStorage.setItem(
+					RELOAD_GUARD_KEY,
+					JSON.stringify({ startedAt, count: count + 1 }),
+				);
+				return true;
+			} catch {
+				return true;
+			}
+		};
+
+		const runRecovery = async ({ usedHeapMb }: { usedHeapMb: number }) => {
+			if (recovering) return;
+			recovering = true;
+			try {
+				videoCache.clearAll();
+				clearWaveformPeaksCache();
+				clearSmartCutAnalysisCache();
+				editor.audio.clearCachedTimelineAudio();
+				await editor.save.flush();
+				await new Promise((resolve) => setTimeout(resolve, 350));
+				const afterRecoveryHeapMb = getUsedHeapMb();
+				const shouldReload =
+					usedHeapMb >= HARD_LIMIT_MB ||
+					(afterRecoveryHeapMb !== null && afterRecoveryHeapMb >= SOFT_LIMIT_MB * 0.92);
+				if (!shouldReload || hasActiveProjectProcesses) return;
+				if (!canAutoReload()) {
+					console.warn("Memory pressure persists; reload guard blocked auto-reload");
+					return;
+				}
+				console.warn("Auto-reloading editor due to sustained memory pressure");
+				window.location.reload();
+			} catch (error) {
+				console.warn("Memory recovery failed", error);
+			} finally {
+				recovering = false;
+			}
+		};
+
+		const intervalId = window.setInterval(() => {
+			if (document.hidden) return;
+			const usedHeapMb = getUsedHeapMb();
+			if (usedHeapMb === null) return;
+			if (usedHeapMb >= SOFT_LIMIT_MB) {
+				highPressureCount += 1;
+			} else {
+				highPressureCount = 0;
+			}
+			const needsRecovery =
+				usedHeapMb >= HARD_LIMIT_MB || highPressureCount >= PRESSURE_SAMPLES;
+			if (!needsRecovery) return;
+			void runRecovery({ usedHeapMb });
+		}, CHECK_INTERVAL_MS);
+
+		return () => {
+			window.clearInterval(intervalId);
+		};
+	}, [editor, hasActiveProjectProcesses]);
 
 	useEffect(() => {
 		const handleBeforeUnload = (event: BeforeUnloadEvent) => {

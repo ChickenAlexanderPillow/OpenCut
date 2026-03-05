@@ -4,6 +4,131 @@ import { generateUUID } from "@/utils/id";
 import { EditorCore } from "@/core";
 import { rippleShiftElements } from "@/lib/timeline";
 import { splitAnimationsAtTime } from "@/lib/animation";
+import {
+	buildTranscriptCutsFromWords,
+	mergeCutRanges,
+	normalizeTranscriptWords,
+} from "@/lib/transcript-editor/core";
+import type { TranscriptEditCutRange } from "@/types/transcription";
+import type { AudioElement, VideoElement } from "@/types/timeline";
+
+function isTranscriptEditableElement(
+	element: unknown,
+): element is VideoElement | AudioElement {
+	if (!element || typeof element !== "object") return false;
+	const candidate = element as { type?: string };
+	return candidate.type === "video" || candidate.type === "audio";
+}
+
+function splitTranscriptEdit({
+	element,
+	leftDuration,
+	rightDuration,
+}: {
+	element: VideoElement | AudioElement;
+	leftDuration: number;
+	rightDuration: number;
+}): {
+	left: VideoElement["transcriptEdit"] | AudioElement["transcriptEdit"];
+	right: VideoElement["transcriptEdit"] | AudioElement["transcriptEdit"];
+} {
+	const transcriptEdit = element.transcriptEdit;
+	if (!transcriptEdit || transcriptEdit.words.length === 0) {
+		return {
+			left: transcriptEdit,
+			right: transcriptEdit,
+		};
+	}
+
+	const leftWords = normalizeTranscriptWords({
+		words: transcriptEdit.words
+			.filter((word) => word.endTime > 0 && word.startTime < leftDuration)
+			.map((word) => ({
+				...word,
+				startTime: Math.max(0, Math.min(leftDuration, word.startTime)),
+				endTime: Math.max(0, Math.min(leftDuration, word.endTime)),
+			})),
+	});
+	const rightWords = normalizeTranscriptWords({
+		words: transcriptEdit.words
+			.filter((word) => word.endTime > leftDuration)
+			.map((word) => ({
+				...word,
+				startTime: Math.max(0, Math.min(rightDuration, word.startTime - leftDuration)),
+				endTime: Math.max(0, Math.min(rightDuration, word.endTime - leftDuration)),
+			})),
+	});
+
+	const buildSegments = (words: typeof leftWords) =>
+		words.length === 0
+			? []
+			: [
+					{
+						id: `${element.id}:seg:0`,
+						wordStartIndex: 0,
+						wordEndIndex: words.length - 1,
+					},
+				];
+
+	const projectCuts = ({
+		cuts,
+		sourceStart,
+		sourceEnd,
+		offset,
+	}: {
+		cuts: TranscriptEditCutRange[];
+		sourceStart: number;
+		sourceEnd: number;
+		offset: number;
+	}): TranscriptEditCutRange[] =>
+		mergeCutRanges({
+			cuts: cuts
+				.map((cut) => ({
+					start: Math.max(sourceStart, cut.start),
+					end: Math.min(sourceEnd, cut.end),
+					reason: cut.reason,
+				}))
+				.filter((cut) => cut.end - cut.start > 0.01)
+				.map((cut) => ({
+					start: Math.max(0, cut.start - offset),
+					end: Math.max(0.01, cut.end - offset),
+					reason: cut.reason,
+				})),
+		});
+
+	return {
+		left: {
+			...transcriptEdit,
+			words: leftWords,
+			cuts:
+				transcriptEdit.cuts && transcriptEdit.cuts.length > 0
+					? projectCuts({
+							cuts: transcriptEdit.cuts,
+							sourceStart: 0,
+							sourceEnd: leftDuration,
+							offset: 0,
+						})
+					: buildTranscriptCutsFromWords({ words: leftWords }),
+			segmentsUi: buildSegments(leftWords),
+			updatedAt: new Date().toISOString(),
+		},
+		right: {
+			...transcriptEdit,
+			words: rightWords,
+			cuts:
+				transcriptEdit.cuts && transcriptEdit.cuts.length > 0
+					? projectCuts({
+							cuts: transcriptEdit.cuts,
+							sourceStart: leftDuration,
+							sourceEnd: leftDuration + rightDuration,
+							offset: leftDuration,
+						})
+					: buildTranscriptCutsFromWords({ words: rightWords }),
+			segmentsUi: buildSegments(rightWords),
+			updatedAt: new Date().toISOString(),
+		},
+	};
+}
 
 export class SplitElementsCommand extends Command {
 	private savedState: TimelineTrack[] | null = null;
@@ -82,6 +207,13 @@ export class SplitElementsCommand extends Command {
 				});
 
 				if (this.retainSide === "left") {
+					const leftTranscriptEdit = isTranscriptEditableElement(element)
+						? splitTranscriptEdit({
+								element,
+								leftDuration: leftVisibleDuration,
+								rightDuration: rightVisibleDuration,
+						  }).left
+						: undefined;
 					return [
 						{
 							...element,
@@ -89,6 +221,9 @@ export class SplitElementsCommand extends Command {
 							trimEnd: element.trimEnd + rightVisibleDuration,
 							name: `${element.name} (left)`,
 							animations: leftAnimations,
+							...(leftTranscriptEdit !== undefined
+								? { transcriptEdit: leftTranscriptEdit }
+								: {}),
 						},
 					];
 				}
@@ -102,6 +237,13 @@ export class SplitElementsCommand extends Command {
 						trackId: track.id,
 						elementId: newId,
 					});
+					const rightTranscriptEdit = isTranscriptEditableElement(element)
+						? splitTranscriptEdit({
+								element,
+								leftDuration: leftVisibleDuration,
+								rightDuration: rightVisibleDuration,
+						  }).right
+						: undefined;
 					return [
 						{
 							...element,
@@ -111,6 +253,9 @@ export class SplitElementsCommand extends Command {
 							trimStart: element.trimStart + leftVisibleDuration,
 							name: `${element.name} (right)`,
 							animations: rightAnimations,
+							...(rightTranscriptEdit !== undefined
+								? { transcriptEdit: rightTranscriptEdit }
+								: {}),
 						},
 					];
 				}
@@ -121,6 +266,13 @@ export class SplitElementsCommand extends Command {
 					trackId: track.id,
 					elementId: secondElementId,
 				});
+				const splitTranscript = isTranscriptEditableElement(element)
+					? splitTranscriptEdit({
+							element,
+							leftDuration: leftVisibleDuration,
+							rightDuration: rightVisibleDuration,
+					  })
+					: null;
 
 				return [
 					{
@@ -129,6 +281,7 @@ export class SplitElementsCommand extends Command {
 						trimEnd: element.trimEnd + rightVisibleDuration,
 						name: `${element.name} (left)`,
 						animations: leftAnimations,
+						...(splitTranscript ? { transcriptEdit: splitTranscript.left } : {}),
 					},
 					{
 						...element,
@@ -138,6 +291,7 @@ export class SplitElementsCommand extends Command {
 						trimStart: element.trimStart + leftVisibleDuration,
 						name: `${element.name} (right)`,
 						animations: rightAnimations,
+						...(splitTranscript ? { transcriptEdit: splitTranscript.right } : {}),
 					},
 				];
 			});

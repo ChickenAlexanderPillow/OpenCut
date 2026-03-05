@@ -12,6 +12,10 @@ interface AudioWaveformProps {
 const MAX_CACHED_WAVEFORMS = 64;
 const waveformPeaksCache = new Map<string, Promise<number[] | null>>();
 
+export function clearWaveformPeaksCache(): void {
+	waveformPeaksCache.clear();
+}
+
 function getDecodedBufferCacheKey(file: File): string {
 	return `${file.name}:${file.size}:${file.lastModified}:${file.type}`;
 }

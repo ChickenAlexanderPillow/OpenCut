@@ -17,6 +17,7 @@ import {
 	wrapTextToWidth,
 } from "@/lib/text/layout";
 import { resolveSafeAreaAnchoredPositionY } from "@/constants/safe-area-constants";
+import { toTimelineCaptionWordTimings } from "@/lib/captions/timing";
 
 function scaleFontSize({
 	fontSize,
@@ -139,6 +140,37 @@ function resolveLatestStartedWordIndex({
 	return -1;
 }
 
+function resolveActiveWordIndex({
+	captionWordTimings,
+	time,
+}: {
+	captionWordTimings: Array<{ startTime: number; endTime: number }>;
+	time: number;
+}): number {
+	for (let i = captionWordTimings.length - 1; i >= 0; i--) {
+		const timing = captionWordTimings[i];
+		if (time >= timing.startTime && time < timing.endTime) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+function resolveNextWordIndex({
+	captionWordTimings,
+	time,
+}: {
+	captionWordTimings: Array<{ startTime: number }>;
+	time: number;
+}): number {
+	for (let i = 0; i < captionWordTimings.length; i++) {
+		if (time < captionWordTimings[i].startTime) {
+			return i;
+		}
+	}
+	return -1;
+}
+
 function buildLinesFromWords({
 	words,
 	maxLines,
@@ -192,6 +224,50 @@ export type TextNodeParams = TextElement & {
 };
 
 export class TextNode extends BaseNode<TextNodeParams> {
+	private cachedCaptionTimingsRef:
+		| Array<{ word: string; startTime: number; endTime: number }>
+		| null = null;
+	private cachedCaptionTimingsStartTime = Number.NaN;
+	private cachedCaptionTimingsDuration = Number.NaN;
+	private cachedTimelineCaptionTimings: Array<{
+		word: string;
+		startTime: number;
+		endTime: number;
+	}> = [];
+	private cachedTimelineCaptionWords: string[] = [];
+
+	private getTimelineCaptionTimings(): Array<{
+		word: string;
+		startTime: number;
+		endTime: number;
+	}> {
+		const sourceTimings = this.params.captionWordTimings ?? [];
+		if (
+			this.cachedCaptionTimingsRef === sourceTimings &&
+			this.cachedCaptionTimingsStartTime === this.params.startTime &&
+			this.cachedCaptionTimingsDuration === this.params.duration
+		) {
+			return this.cachedTimelineCaptionTimings;
+		}
+		this.cachedTimelineCaptionTimings = toTimelineCaptionWordTimings({
+			timings: sourceTimings,
+			elementStartTime: this.params.startTime,
+			elementDuration: this.params.duration,
+		});
+		this.cachedTimelineCaptionWords = this.cachedTimelineCaptionTimings.map(
+			(timing) => timing.word,
+		);
+		this.cachedCaptionTimingsRef = sourceTimings;
+		this.cachedCaptionTimingsStartTime = this.params.startTime;
+		this.cachedCaptionTimingsDuration = this.params.duration;
+		return this.cachedTimelineCaptionTimings;
+	}
+
+	private getTimelineCaptionWords(): string[] {
+		void this.getTimelineCaptionTimings();
+		return this.cachedTimelineCaptionWords;
+	}
+
 	isInRange({ time }: { time: number }) {
 		return (
 			time >= this.params.startTime &&
@@ -237,7 +313,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			this.params.captionStyle?.karaokeWordHighlight === true;
 		const karaokeHighlightMode =
 			this.params.captionStyle?.karaokeHighlightMode ?? "block";
-		const captionWordTimings = this.params.captionWordTimings ?? [];
+		const captionWordTimings = this.getTimelineCaptionTimings();
 		if (captionWordTimings.length > 0) {
 			const firstWordStart = captionWordTimings[0]?.startTime ?? this.params.startTime;
 			const lastWordEnd =
@@ -253,6 +329,14 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			captionWordTimings,
 			time,
 		});
+		const strictActiveWordIndex = resolveActiveWordIndex({
+			captionWordTimings,
+			time,
+		});
+		const nextWordIndex = resolveNextWordIndex({
+			captionWordTimings,
+			time,
+		});
 		const totalWords = this.params.content.match(/\S+/g)?.length ?? 0;
 		const clampedProgress = Math.max(
 			0,
@@ -262,12 +346,9 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			totalWords > 0 ? Math.floor(clampedProgress * totalWords) : -1;
 		const hasWordTimings = captionWordTimings.length > 0;
 		const activeWordIndex = hasWordTimings
-			? latestStartedWordIndex >= 0
-				? latestStartedWordIndex
-				: -1
+			? strictActiveWordIndex
 			: fallbackWordIndex;
-		const captionTimingWords = captionWordTimings.map((timing) => timing.word);
-		const captionWords = captionTimingWords;
+		const captionWords = this.getTimelineCaptionWords();
 		const wordsOnScreenRaw = this.params.captionStyle?.wordsOnScreen;
 		const wordsOnScreen =
 			typeof wordsOnScreenRaw === "number"
@@ -284,11 +365,13 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			captionWords.length > 0 && wordsOnScreen !== null && wordsOnScreen > 0;
 		const cappedWordsOnScreen = wordsOnScreen ?? captionWords.length;
 		const activeWordForWindow =
-			latestStartedWordIndex >= 0
-				? latestStartedWordIndex
-				: activeWordIndex >= 0
-					? activeWordIndex
-					: 0;
+			activeWordIndex >= 0
+				? activeWordIndex
+				: nextWordIndex >= 0
+					? nextWordIndex
+					: latestStartedWordIndex >= 0
+						? latestStartedWordIndex
+						: 0;
 		const lineHeightPx = scaledFontSize * lineHeight;
 		const fontSizeRatio = this.params.fontSize / DEFAULT_TEXT_ELEMENT.fontSize;
 		const backgroundMode =

@@ -26,6 +26,7 @@ export class AudioManager {
 	private driftResyncThresholdSeconds = 0.08;
 	private unsubscribers: Array<() => void> = [];
 	private lastAudioFingerprint = "";
+	private rebuildDebounceTimer: number | null = null;
 
 	constructor(private editor: EditorCore) {
 		this.lastVolume = this.editor.playback.getVolume();
@@ -64,6 +65,10 @@ export class AudioManager {
 			void this.audioContext.close();
 			this.audioContext = null;
 			this.masterGain = null;
+		}
+		if (this.rebuildDebounceTimer !== null && typeof window !== "undefined") {
+			window.clearTimeout(this.rebuildDebounceTimer);
+			this.rebuildDebounceTimer = null;
 		}
 	}
 
@@ -148,11 +153,28 @@ export class AudioManager {
 		}
 		this.lastAudioFingerprint = nextFingerprint;
 		this.timelineDirty = true;
+		const isPlaying = this.editor.playback.getIsPlaying();
+		const isScrubbing = this.editor.playback.getIsScrubbing();
+		// Text-based edits can trigger frequent updates; avoid rebuilding the
+		// full mixed timeline audio while idle. Rebuild lazily on playback.
+		if (!isPlaying && !isScrubbing) {
+			return;
+		}
 		if (this.buildingBuffer) {
 			this.rebuildRequestedDuringBuild = true;
 			return;
 		}
-		void this.ensureBufferReady();
+		if (typeof window === "undefined") {
+			void this.ensureBufferReady();
+			return;
+		}
+		if (this.rebuildDebounceTimer !== null) {
+			window.clearTimeout(this.rebuildDebounceTimer);
+		}
+		this.rebuildDebounceTimer = window.setTimeout(() => {
+			this.rebuildDebounceTimer = null;
+			void this.ensureBufferReady();
+		}, 120);
 	};
 
 	private handleUserGesture = (): void => {
@@ -320,6 +342,17 @@ export class AudioManager {
 	async primeCurrentTimelineAudio(): Promise<void> {
 		await this.unlockAudioContext();
 		await this.ensureBufferReady();
+	}
+
+	clearCachedTimelineAudio({ preserveDirty = true }: { preserveDirty?: boolean } = {}): void {
+		this.stopSource();
+		this.timelineBuffer = null;
+		this.timelineDuration = 0;
+		if (!preserveDirty) {
+			this.timelineDirty = false;
+		}
+		this.rebuildRequestedDuringBuild = false;
+		this.buildGeneration += 1;
 	}
 
 	private computeAudioFingerprint(): string {

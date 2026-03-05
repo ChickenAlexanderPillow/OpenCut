@@ -6,8 +6,21 @@ import { generateUUID } from "@/utils/id";
 
 const MIN_SEGMENT_DURATION_S = 0.2;
 const ANALYSIS_WINDOW_S = 0.05;
+const MAX_ANALYSIS_CACHE_ENTRIES = 8;
 
 const analysisCache = new Map<string, Promise<SmartCutAnalysis>>();
+
+export function clearSmartCutAnalysisCache(): void {
+	analysisCache.clear();
+}
+
+function trimAnalysisCache(): void {
+	while (analysisCache.size > MAX_ANALYSIS_CACHE_ENTRIES) {
+		const oldestKey = analysisCache.keys().next().value as string | undefined;
+		if (!oldestKey) break;
+		analysisCache.delete(oldestKey);
+	}
+}
 
 export interface SmartCutAnalysis {
 	rmsWindowSeconds: number;
@@ -374,6 +387,7 @@ export async function analyzeMediaForSmartCut({
 	})();
 
 	analysisCache.set(cacheKey, analysisPromise);
+	trimAnalysisCache();
 	try {
 		return await analysisPromise;
 	} catch (error) {

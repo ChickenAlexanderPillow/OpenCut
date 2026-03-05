@@ -32,9 +32,15 @@ export type TActionArgsMap = {
 		  }
 		| undefined;
 	"transcript-remove-fillers": { trackId: string; elementId: string } | undefined;
+	"transcript-remove-pauses":
+		| { trackId: string; elementId: string; thresholdSeconds?: number }
+		| undefined;
 	"transcript-restore-all": { trackId: string; elementId: string } | undefined;
 	"transcript-split-segment-ui":
 		| { trackId: string; elementId: string; wordId: string }
+		| undefined;
+	"rebuild-captions-for-clip":
+		| { trackId: string; elementId: string }
 		| undefined;
 	"select-all-captions": { trackId?: string } | undefined;
 	"clear-viral-clips-session": undefined;

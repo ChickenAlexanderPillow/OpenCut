@@ -2,21 +2,25 @@ import type { EditorCore } from "@/core";
 
 type SaveManagerOptions = {
 	debounceMs?: number;
+	minIntervalMs?: number;
 };
 
 export class SaveManager {
 	private debounceMs: number;
+	private minIntervalMs: number;
 	private isPaused = false;
 	private isSaving = false;
 	private hasPendingSave = false;
+	private lastSavedAt = 0;
 	private saveTimer: ReturnType<typeof setTimeout> | null = null;
 	private unsubscribeHandlers: Array<() => void> = [];
 
 	constructor(
 		private editor: EditorCore,
-		{ debounceMs = 800 }: SaveManagerOptions = {},
+		{ debounceMs = 1200, minIntervalMs = 4000 }: SaveManagerOptions = {},
 	) {
 		this.debounceMs = debounceMs;
+		this.minIntervalMs = minIntervalMs;
 	}
 
 	start(): void {
@@ -59,7 +63,7 @@ export class SaveManager {
 
 	async flush(): Promise<void> {
 		this.hasPendingSave = true;
-		await this.saveNow();
+		await this.saveNow({ force: true });
 	}
 
 	getIsDirty(): boolean {
@@ -71,14 +75,25 @@ export class SaveManager {
 		if (this.saveTimer) {
 			clearTimeout(this.saveTimer);
 		}
+		const now = Date.now();
+		const nextAllowedAt = this.lastSavedAt + this.minIntervalMs;
+		const minIntervalDelay = Math.max(0, nextAllowedAt - now);
+		const delay = Math.max(this.debounceMs, minIntervalDelay);
 		this.saveTimer = setTimeout(() => {
 			void this.saveNow();
-		}, this.debounceMs);
+		}, delay);
 	}
 
-	private async saveNow(): Promise<void> {
+	private async saveNow({ force = false }: { force?: boolean } = {}): Promise<void> {
 		if (this.isSaving) return;
 		if (!this.hasPendingSave) return;
+		if (!force) {
+			const now = Date.now();
+			if (now < this.lastSavedAt + this.minIntervalMs) {
+				this.queueSave();
+				return;
+			}
+		}
 
 		const activeProject = this.editor.project.getActive();
 		if (!activeProject) return;
@@ -91,6 +106,7 @@ export class SaveManager {
 
 		try {
 			await this.editor.project.saveCurrentProject();
+			this.lastSavedAt = Date.now();
 		} finally {
 			this.isSaving = false;
 			if (this.hasPendingSave) {

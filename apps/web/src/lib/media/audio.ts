@@ -11,7 +11,11 @@ import { canElementHaveAudio } from "@/lib/timeline/element-utils";
 import { canTracktHaveAudio } from "@/lib/timeline";
 import { mediaSupportsAudio } from "@/lib/media/media-utils";
 import { Input, ALL_FORMATS, BlobSource, AudioBufferSink } from "mediabunny";
-import { mapCompressedTimeToSourceTime } from "@/lib/transcript-editor/core";
+import {
+	buildCompressedCutBoundaryTimes,
+	mapCompressedTimeToSourceTime,
+} from "@/lib/transcript-editor/core";
+import { TRANSCRIPT_CUT_AUDIO_SMOOTHING_SECONDS } from "@/lib/transcript-editor/constants";
 
 const MAX_AUDIO_CHANNELS = 2;
 const EXPORT_SAMPLE_RATE = 44100;
@@ -458,6 +462,51 @@ function mapTrackVolumeToGain(trackVolume: number): number {
 	return 1 + (clamped - 1);
 }
 
+function getBoundarySmoothingGain({
+	compressedTime,
+	boundaries,
+	fadeSeconds,
+	boundaryIndex,
+}: {
+	compressedTime: number;
+	boundaries: number[];
+	fadeSeconds: number;
+	boundaryIndex: number;
+}): { gain: number; boundaryIndex: number } {
+	if (boundaries.length === 0 || fadeSeconds <= 0) {
+		return { gain: 1, boundaryIndex };
+	}
+	let nextBoundaryIndex = Math.max(0, boundaryIndex);
+	while (
+		nextBoundaryIndex < boundaries.length - 1 &&
+		compressedTime > boundaries[nextBoundaryIndex + 1]
+	) {
+		nextBoundaryIndex += 1;
+	}
+	let nearestDistance = Number.POSITIVE_INFINITY;
+	const currentBoundary = boundaries[nextBoundaryIndex];
+	if (typeof currentBoundary === "number") {
+		nearestDistance = Math.min(
+			nearestDistance,
+			Math.abs(compressedTime - currentBoundary),
+		);
+	}
+	const nextBoundary = boundaries[nextBoundaryIndex + 1];
+	if (typeof nextBoundary === "number") {
+		nearestDistance = Math.min(
+			nearestDistance,
+			Math.abs(compressedTime - nextBoundary),
+		);
+	}
+	if (nearestDistance >= fadeSeconds) {
+		return { gain: 1, boundaryIndex: nextBoundaryIndex };
+	}
+	return {
+		gain: Math.max(0, nearestDistance / fadeSeconds),
+		boundaryIndex: nextBoundaryIndex,
+	};
+}
+
 export async function decodeMediaFileToAudioBuffer({
 	file,
 	sampleRate,
@@ -774,35 +823,41 @@ export async function createTimelineAudioBuffer({
 	audioContext?: AudioContext;
 }): Promise<AudioBuffer | null> {
 	const context = audioContext ?? createAudioContext({ sampleRate });
+	const ownsContext = !audioContext;
+	try {
+		const audioElements = await collectAudioElements({
+			tracks,
+			mediaAssets,
+			audioContext: context,
+		});
 
-	const audioElements = await collectAudioElements({
-		tracks,
-		mediaAssets,
-		audioContext: context,
-	});
+		if (audioElements.length === 0) return null;
 
-	if (audioElements.length === 0) return null;
-
-	const outputChannels = 2;
-	const outputLength = Math.ceil(duration * sampleRate);
-	const outputBuffer = context.createBuffer(
-		outputChannels,
-		outputLength,
-		sampleRate,
-	);
-
-	for (const element of audioElements) {
-		if (element.muted) continue;
-
-		mixAudioChannels({
-			element,
-			outputBuffer,
+		const outputChannels = 2;
+		const outputLength = Math.ceil(duration * sampleRate);
+		const outputBuffer = context.createBuffer(
+			outputChannels,
 			outputLength,
 			sampleRate,
-		});
-	}
+		);
 
-	return outputBuffer;
+		for (const element of audioElements) {
+			if (element.muted) continue;
+
+			mixAudioChannels({
+				element,
+				outputBuffer,
+				outputLength,
+				sampleRate,
+			});
+		}
+
+		return outputBuffer;
+	} finally {
+		if (ownsContext) {
+			void context.close().catch(() => undefined);
+		}
+	}
 }
 
 function mixAudioChannels({
@@ -819,6 +874,10 @@ function mixAudioChannels({
 	const { buffer, startTime, trimStart, duration: elementDuration } = element;
 	const gain = clampGain(element.gain);
 	const transcriptCuts = element.transcriptCuts ?? [];
+	const cutBoundaries =
+		transcriptCuts.length > 0
+			? buildCompressedCutBoundaryTimes({ cuts: transcriptCuts })
+			: [];
 
 	const sourceStartSample = Math.floor(trimStart * buffer.sampleRate);
 	const outputStartSample = Math.floor(startTime * sampleRate);
@@ -829,6 +888,7 @@ function mixAudioChannels({
 		const outputData = outputBuffer.getChannelData(channel);
 		const sourceChannel = Math.min(channel, buffer.numberOfChannels - 1);
 		const sourceData = buffer.getChannelData(sourceChannel);
+		let boundaryIndex = 0;
 
 		for (let i = 0; i < resampledLength; i++) {
 			const outputIndex = outputStartSample + i;
@@ -851,8 +911,18 @@ function mixAudioChannels({
 			const leftSample = sourceData[leftIndex] ?? 0;
 			const rightSample = sourceData[rightIndex] ?? leftSample;
 			const sample = leftSample * (1 - alpha) + rightSample * alpha;
+			const smoothing =
+				cutBoundaries.length > 0
+					? getBoundarySmoothingGain({
+							compressedTime: elapsedInTimelineSeconds,
+							boundaries: cutBoundaries,
+							fadeSeconds: TRANSCRIPT_CUT_AUDIO_SMOOTHING_SECONDS,
+							boundaryIndex,
+						})
+					: { gain: 1, boundaryIndex };
+			boundaryIndex = smoothing.boundaryIndex;
 
-			outputData[outputIndex] += sample * gain;
+			outputData[outputIndex] += sample * gain * smoothing.gain;
 		}
 	}
 }
