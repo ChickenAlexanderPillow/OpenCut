@@ -189,34 +189,11 @@ export async function processMediaAssets({
 		let importTargetFps: number | undefined;
 
 		if (fileType === "video" || fileType === "audio") {
-			let sourceWidth: number | undefined;
-			let sourceHeight: number | undefined;
-			let sourceFps: number | undefined;
-
-			if (fileType === "video") {
-				try {
-					const videoInfo = await getVideoInfo({ videoFile: sourceFile });
-					sourceWidth = videoInfo.width;
-					sourceHeight = videoInfo.height;
-					sourceFps = Number.isFinite(videoInfo.fps)
-						? Math.round(videoInfo.fps)
-						: undefined;
-				} catch {}
-			}
-
 			reportOverallProgress({ fileIndex, fileProgress: 10 });
 			try {
 				const transcoded = await transcodingService.transcodeImportMedia({
 					file: sourceFile,
 					mediaType: fileType,
-					sourceInfo:
-						fileType === "video"
-							? {
-									width: sourceWidth,
-									height: sourceHeight,
-									fps: sourceFps,
-								}
-							: undefined,
 					onProgress: ({ progress }) => {
 						const mappedProgress = 10 + Math.round(progress * 0.7);
 						reportOverallProgress({ fileIndex, fileProgress: mappedProgress });

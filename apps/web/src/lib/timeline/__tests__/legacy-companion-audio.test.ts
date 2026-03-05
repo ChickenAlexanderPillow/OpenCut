@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { normalizeLegacyCompanionAudioInScenes } from "@/lib/timeline/legacy-companion-audio";
-import type { TScene } from "@/types/timeline";
+import type { AudioElement, TScene } from "@/types/timeline";
 
 function buildSceneWithCompanion({
 	withExtraAudio = false,
@@ -34,7 +34,7 @@ function buildSceneWithCompanion({
 						trimEnd: 12,
 						muted: true,
 						hidden: false,
-						transform: { x: 0, y: 0, scale: 1, rotation: 0 },
+						transform: { scale: 1, position: { x: 0, y: 0 }, rotate: 0 },
 						opacity: 1,
 					},
 				],
@@ -69,10 +69,10 @@ function buildSceneWithCompanion({
 						},
 					},
 					...(withExtraAudio
-						? [
+						? ([
 								{
 									id: "audio-2",
-									type: "audio",
+									type: "audio" as const,
 									sourceType: "library" as const,
 									sourceUrl: "https://example.com/music.mp3",
 									name: "music",
@@ -83,7 +83,7 @@ function buildSceneWithCompanion({
 									volume: 1,
 									muted: false,
 								},
-						  ]
+						  ] satisfies AudioElement[])
 						: []),
 				],
 			},

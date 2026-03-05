@@ -29,8 +29,26 @@ const CHUNKED_TRANSCRIPTION_TARGET_UPLOAD_BYTES = 8 * 1024 * 1024;
 const CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS = 1.5;
 const CHUNK_PROGRESS_HEARTBEAT_MS = 1200;
 const CLIP_TRANSCRIPTION_API_TIMEOUT_MS = 120000;
-const CLIP_TRANSCRIPTION_API_MODEL = "large-v3";
 const CLIP_TRANSCRIPTION_TARGET_SAMPLE_RATE = 16000;
+
+function resolveClipTranscriptionApiModel({
+	modelId,
+}: {
+	modelId: TranscriptionModelId;
+}): string {
+	switch (modelId) {
+		case "whisper-tiny":
+			return "tiny";
+		case "whisper-small":
+			return "small";
+		case "whisper-medium":
+			return "medium";
+		case "whisper-large-v3-turbo":
+			return "large-v3-turbo";
+		default:
+			return "large-v3";
+	}
+}
 
 function normalizeDurationForFingerprint({
 	duration,
@@ -244,7 +262,12 @@ async function transcribeWavBlobWithClipApi({
 		try {
 			const form = new FormData();
 			form.append("file", wavBlob, "clip.wav");
-			form.append("model", CLIP_TRANSCRIPTION_API_MODEL);
+			form.append(
+				"model",
+				resolveClipTranscriptionApiModel({
+					modelId,
+				}),
+			);
 			form.append("cacheKey", cacheKey);
 			if (language !== "auto") {
 				form.append("language", language);

@@ -43,6 +43,8 @@ services:
       - LOCAL_TRANSCRIBE_MAX_MODEL_CACHE=${LOCAL_TRANSCRIBE_MAX_MODEL_CACHE:-1}
       - LOCAL_TRANSCRIBE_MAX_ALIGN_CACHE=${LOCAL_TRANSCRIBE_MAX_ALIGN_CACHE:-2}
       - LOCAL_TRANSCRIBE_API_KEY=${LOCAL_TRANSCRIBE_API_KEY:-}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
     gpus: all
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=3).read()\""]

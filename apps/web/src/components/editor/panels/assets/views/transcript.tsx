@@ -5,6 +5,12 @@ import { PanelView } from "@/components/editor/panels/assets/views/base-view";
 import { useEditor } from "@/hooks/use-editor";
 import { useElementSelection } from "@/hooks/timeline/element/use-element-selection";
 import { invokeAction } from "@/lib/actions";
+import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
+import {
+	BLUE_HIGHLIGHT_CAPTION_STYLE,
+	BLUE_HIGHLIGHT_CAPTION_TEXT_PROPS,
+} from "@/constants/caption-presets";
+import { DEFAULT_TRANSCRIPTION_MODEL } from "@/constants/transcription-constants";
 import {
 	applyCutRangesToWords,
 	buildTranscriptCutsFromWords,
@@ -14,16 +20,33 @@ import {
 import { getEffectiveTranscriptCutsFromTranscriptEdit } from "@/lib/transcript-editor/snapshot";
 import { DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import { toElementLocalCaptionTime } from "@/lib/captions/timing";
+import { findCaptionTrackIdInScene } from "@/lib/captions/caption-track";
+import {
+	buildCaptionChunks,
+	type CaptionGenerationMode,
+} from "@/lib/transcription/caption";
+import {
+	clipTranscriptSegmentsForWindow,
+	getOrCreateClipTranscriptForAsset,
+} from "@/lib/clips/transcript";
 import type {
 	AudioElement,
 	TextElement,
 	TimelineElement,
 	VideoElement,
 } from "@/types/timeline";
-import type { TranscriptEditWord } from "@/types/transcription";
+import type { MediaAsset } from "@/types/assets";
+import type {
+	TranscriptEditWord,
+	TranscriptionProgress,
+	TranscriptionSegment,
+} from "@/types/transcription";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
 import { AlignJustify, Check, Pencil, X } from "lucide-react";
+import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
+import { useProjectProcessStore } from "@/stores/project-process-store";
 
 type MediaRef = {
 	trackId: string;
@@ -115,6 +138,65 @@ function getMediaRefById({
 	return null;
 }
 
+function getMediaAssetForElement({
+	element,
+	assets,
+}: {
+	element: VideoElement | AudioElement;
+	assets: MediaAsset[];
+}): MediaAsset | null {
+	const mediaId =
+		element.type === "video"
+			? element.mediaId
+			: element.sourceType === "upload"
+				? element.mediaId
+				: null;
+	if (!mediaId) return null;
+	return assets.find((asset) => asset.id === mediaId) ?? null;
+}
+
+function buildTranscriptWordsFromSegments({
+	mediaElementId,
+	segments,
+}: {
+	mediaElementId: string;
+	segments: TranscriptionSegment[];
+}): TranscriptEditWord[] {
+	let wordIndex = 0;
+	const words = segments.flatMap((segment) => {
+		const tokens = segment.text.match(/\S+/g) ?? [];
+		if (tokens.length === 0) return [];
+		const segmentStart = Math.max(0, segment.start);
+		const segmentEnd = Math.max(segmentStart + 0.01, segment.end);
+		const duration = Math.max(0.01, segmentEnd - segmentStart);
+		const weights = tokens.map((token) =>
+			Math.max(1, token.replace(/[^\p{L}\p{N}']+/gu, "").length || token.length),
+		);
+		const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+		let consumed = 0;
+		return tokens.map((token, tokenIndex) => {
+			const startWeight = consumed;
+			consumed += weights[tokenIndex] ?? 1;
+			const endWeight = consumed;
+			const startTime = segmentStart + (duration * startWeight) / totalWeight;
+			const endTime = Math.max(
+				startTime + 0.01,
+				segmentStart + (duration * endWeight) / totalWeight,
+			);
+			const id = `${mediaElementId}:word:${wordIndex}:${startTime.toFixed(3)}`;
+			wordIndex += 1;
+			return {
+				id,
+				text: token,
+				startTime,
+				endTime,
+				removed: false,
+			};
+		});
+	});
+	return normalizeTranscriptWords({ words });
+}
+
 function getSelectedCaptionElement({
 	tracks,
 	selectedElements,
@@ -168,6 +250,9 @@ function buildDefaultSegmentGroups({
 export function TranscriptView() {
 	const editor = useEditor();
 	const { selectedElements } = useElementSelection();
+	const transcriptionStatus = useTranscriptionStatusStore();
+	const { registerProcess, updateProcessLabel, removeProcess } =
+		useProjectProcessStore();
 	const tracks = editor.timeline.getTracks();
 	const currentTime = editor.playback.getCurrentTime();
 	const [editingWordId, setEditingWordId] = useState<string | null>(null);
@@ -176,6 +261,9 @@ export function TranscriptView() {
 	const [selectedWordIds, setSelectedWordIds] = useState<string[]>([]);
 	const [isSelectionActive, setIsSelectionActive] = useState(false);
 	const [hoveredWordId, setHoveredWordId] = useState<string | null>(null);
+	const [isGeneratingCaptions, setIsGeneratingCaptions] = useState(false);
+	const [generateStep, setGenerateStep] = useState("");
+	const [generateError, setGenerateError] = useState<string | null>(null);
 	const selectionContainerRef = useRef<HTMLDivElement | null>(null);
 	const activeMediaRef = useRef<MediaRef | null>(null);
 	const orderedWordIdsRef = useRef<string[]>([]);
@@ -198,6 +286,16 @@ export function TranscriptView() {
 		}
 		return getActiveMediaRef({ tracks, selectedElements });
 	}, [tracks, selectedElements, selectedCaption]);
+	const activeMediaAsset = useMemo(
+		() =>
+			activeMedia
+				? getMediaAssetForElement({
+						element: activeMedia.element,
+						assets: editor.media.getAssets(),
+				  })
+				: null,
+		[activeMedia, editor],
+	);
 
 	const words = useMemo(() => {
 		if (!activeMedia) return [];
@@ -495,9 +593,181 @@ export function TranscriptView() {
 		clearEditingState();
 	}, [activeMedia, editingTargetWordIds, editingWordId, editingWordText, clearEditingState]);
 
+	const handleGenerateCaptions = useCallback(async () => {
+		let transcriptionOperationId: string | undefined;
+		let projectProcessId: string | undefined;
+		try {
+			if (!activeMedia || !activeMediaAsset) {
+				throw new Error("Select one uploaded audio/video element first.");
+			}
+			setIsGeneratingCaptions(true);
+			setGenerateError(null);
+			setGenerateStep("Transcribing...");
+			const activeProject = editor.project.getActive();
+			transcriptionOperationId = transcriptionStatus.start("Transcribing media...");
+			projectProcessId = registerProcess({
+				projectId: activeProject.metadata.id,
+				kind: "transcription",
+				label: "Generating captions...",
+			});
+
+			const onProgress = (progress: TranscriptionProgress) => {
+				if (progress.status === "loading-model") {
+					setGenerateStep(`Loading model ${Math.round(progress.progress)}%`);
+				} else if (progress.status === "transcribing") {
+					setGenerateStep("Transcribing...");
+				}
+				transcriptionStatus.update({
+					operationId: transcriptionOperationId,
+					message: progress.message ?? "Generating captions...",
+					progress: progress.progress,
+				});
+				if (projectProcessId) {
+					updateProcessLabel({
+						id: projectProcessId,
+						label:
+							progress.message ??
+							`Transcription ${Math.round(progress.progress)}%`,
+					});
+				}
+			};
+
+			const transcriptResult = await getOrCreateClipTranscriptForAsset({
+				project: activeProject,
+				asset: activeMediaAsset,
+				modelId: DEFAULT_TRANSCRIPTION_MODEL,
+				language: "auto",
+				onProgress,
+			});
+			const latestProject = editor.project.getActive();
+			editor.project.setActiveProject({
+				project: {
+					...latestProject,
+					clipTranscriptCache: {
+						...(latestProject.clipTranscriptCache ?? {}),
+						[transcriptResult.cacheKey]: transcriptResult.transcript,
+					},
+				},
+			});
+			editor.save.markDirty();
+
+			const sourceWindowSegments = clipTranscriptSegmentsForWindow({
+				segments: transcriptResult.transcript.segments,
+				startTime: activeMedia.element.trimStart,
+				endTime: activeMedia.element.trimStart + activeMedia.element.duration,
+			});
+			if (sourceWindowSegments.length === 0) {
+				throw new Error("No transcript words found for this media window.");
+			}
+			const wordsForEdit = buildTranscriptWordsFromSegments({
+				mediaElementId: activeMedia.element.id,
+				segments: sourceWindowSegments,
+			});
+			const transcriptVersion = 1;
+			editor.timeline.updateElements({
+				updates: [
+					{
+						trackId: activeMedia.trackId,
+						elementId: activeMedia.element.id,
+						updates: {
+							transcriptEdit: {
+								version: transcriptVersion,
+								source: "word-level",
+								words: wordsForEdit,
+								cuts: buildTranscriptCutsFromWords({ words: wordsForEdit }),
+								updatedAt: new Date().toISOString(),
+							},
+						},
+					},
+				],
+				pushHistory: false,
+			});
+
+			setGenerateStep("Generating captions...");
+			const timelineSegments = sourceWindowSegments.map((segment) => ({
+				text: segment.text,
+				start: activeMedia.element.startTime + segment.start,
+				end: activeMedia.element.startTime + segment.end,
+			}));
+			const linkedCaptionElements = editor.timeline.getTracks().flatMap((track) =>
+				track.type !== "text"
+					? []
+					: track.elements
+							.filter(
+								(element) =>
+									element.type === "text" &&
+									element.captionSourceRef?.mediaElementId === activeMedia.element.id,
+							)
+							.map((element) => ({
+								trackId: track.id,
+								elementId: element.id,
+							})),
+			);
+			if (linkedCaptionElements.length > 0) {
+				editor.timeline.deleteElements({ elements: linkedCaptionElements });
+			}
+			const captionChunks = buildCaptionChunks({
+				segments: timelineSegments,
+				mode: "segment" satisfies CaptionGenerationMode,
+			});
+			const existingCaptionTrackId = findCaptionTrackIdInScene({
+				tracks: editor.timeline.getTracks(),
+			});
+			const captionTrackId =
+				existingCaptionTrackId ??
+				editor.timeline.addTrack({
+					type: "text",
+					index: 0,
+				});
+			for (let i = 0; i < captionChunks.length; i++) {
+				const caption = captionChunks[i];
+				editor.timeline.insertElement({
+					placement: { mode: "explicit", trackId: captionTrackId },
+					element: {
+						...DEFAULT_TEXT_ELEMENT,
+						name: `Caption ${i + 1}`,
+						content: caption.text,
+						duration: caption.duration,
+						startTime: caption.startTime,
+						captionWordTimings: caption.wordTimings,
+						...BLUE_HIGHLIGHT_CAPTION_TEXT_PROPS,
+						captionStyle: {
+							...BLUE_HIGHLIGHT_CAPTION_STYLE,
+							fitInCanvas: true,
+							karaokeWordHighlight: true,
+						},
+						captionSourceRef: {
+							mediaElementId: activeMedia.element.id,
+							transcriptVersion,
+						},
+					},
+				});
+			}
+		} catch (error) {
+			setGenerateError(
+				error instanceof Error ? error.message : "Failed to generate captions.",
+			);
+		} finally {
+			setIsGeneratingCaptions(false);
+			setGenerateStep("");
+			transcriptionStatus.stop(transcriptionOperationId);
+			if (projectProcessId) {
+				removeProcess({ id: projectProcessId });
+			}
+		}
+	}, [
+		activeMedia,
+		activeMediaAsset,
+		editor,
+		registerProcess,
+		removeProcess,
+		transcriptionStatus,
+		updateProcessLabel,
+	]);
+
 	if (!activeMedia) {
 		return (
-			<PanelView title="Captions" contentClassName="space-y-2">
+			<PanelView title="Transcript & Captions" contentClassName="space-y-2">
 				<div className="text-sm text-muted-foreground p-3 border rounded-md">
 					Select a clip audio/video element to edit transcript words.
 				</div>
@@ -507,17 +777,32 @@ export function TranscriptView() {
 
 	if (wordsWithCutState.length === 0) {
 		return (
-			<PanelView title="Captions" contentClassName="space-y-2">
+			<PanelView title="Transcript & Captions" contentClassName="space-y-2">
 				<div className="text-sm text-muted-foreground p-3 border rounded-md">
 					Word-level transcript unavailable for this element.
 				</div>
+				{generateError && (
+					<div className="bg-destructive/10 border-destructive/20 rounded-md border p-3">
+						<p className="text-destructive text-sm">{generateError}</p>
+					</div>
+				)}
+				{activeMediaAsset ? (
+					<Button onClick={() => void handleGenerateCaptions()} disabled={isGeneratingCaptions}>
+						{isGeneratingCaptions && <Spinner className="mr-1" />}
+						{isGeneratingCaptions ? generateStep || "Generating..." : "Generate captions"}
+					</Button>
+				) : (
+					<div className="text-xs text-muted-foreground p-2 border rounded-md">
+						Selected media is not transcribable (library audio is not supported).
+					</div>
+				)}
 			</PanelView>
 		);
 	}
 
 	return (
 		<PanelView
-			title="Captions"
+			title="Transcript & Captions"
 			contentClassName="space-y-3 pb-3"
 			actions={
 				<div className="flex items-center gap-1">

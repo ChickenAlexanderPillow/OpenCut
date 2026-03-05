@@ -9,6 +9,8 @@ const webEnvSchema = z.object({
 	// Public
 	NEXT_PUBLIC_SITE_URL: z.url().default("http://localhost:3000"),
 	NEXT_PUBLIC_MARBLE_API_URL: z.url(),
+	NEXT_PUBLIC_LOCAL_TRANSCRIBE_URL: z.url().optional(),
+	NEXT_PUBLIC_LOCAL_TRANSCRIBE_API_KEY: z.string().optional(),
 
 	// Server
 	BETTER_AUTH_SECRET: z.string(),
@@ -35,6 +37,14 @@ const webEnvSchema = z.object({
 			if (!value) return 120000;
 			const parsed = Number.parseInt(value, 10);
 			return Number.isFinite(parsed) && parsed > 0 ? parsed : 120000;
+		}),
+	LOCAL_TRANSCODE_TIMEOUT_MS: z
+		.string()
+		.optional()
+		.transform((value) => {
+			if (!value) return 1800000;
+			const parsed = Number.parseInt(value, 10);
+			return Number.isFinite(parsed) && parsed > 0 ? parsed : 1800000;
 		}),
 	LOCAL_TRANSCRIBE_API_KEY: z.string().optional(),
 	LOCAL_TRANSCRIBE_MODEL: z.string().optional(),

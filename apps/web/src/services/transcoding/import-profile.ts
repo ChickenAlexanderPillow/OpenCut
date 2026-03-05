@@ -1,7 +1,7 @@
 export const IMPORT_TRANSCODE_PROFILE = "chrome-h264-aac-1080p30" as const;
 export const IMPORT_VIDEO_MAX_DIMENSION = 1080;
 export const IMPORT_VIDEO_MAX_FPS = 30;
-export const IMPORT_AUDIO_BITRATE = 128_000;
+export const IMPORT_AUDIO_BITRATE = 192_000;
 
 export interface VideoSourceInfo {
 	width?: number;

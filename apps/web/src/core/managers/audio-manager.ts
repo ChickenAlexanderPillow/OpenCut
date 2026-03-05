@@ -185,6 +185,11 @@ export class AudioManager {
 		}
 		this.lastAudioFingerprint = nextFingerprint;
 		this.timelineDirty = true;
+		if (this.editor.media.isLoadingMedia()) {
+			// Defer audio buffer rebuild until media assets finish loading to avoid
+			// building an empty/silent mix and immediately rebuilding again.
+			return;
+		}
 		const isPlaying = this.editor.playback.getIsPlaying();
 		const isScrubbing = this.editor.playback.getIsScrubbing();
 		if (this.buildingBuffer) {
@@ -259,6 +264,10 @@ export class AudioManager {
 		if (!this.timelineDirty) return;
 		if (this.buildingBuffer) {
 			this.rebuildRequestedDuringBuild = true;
+			return;
+		}
+		if (this.editor.media.isLoadingMedia()) {
+			// Keep the dirty flag so we rebuild once media loading completes.
 			return;
 		}
 

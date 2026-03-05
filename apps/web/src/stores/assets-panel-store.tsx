@@ -43,7 +43,7 @@ export const tabs = {
 	},
 	transcript: {
 		icon: createHugeiconsIcon({ icon: ClosedCaptionIcon }),
-		label: "Captions",
+		label: "Transcript & Captions",
 	},
 	text: {
 		icon: createHugeiconsIcon({ icon: TextIcon }),

@@ -56,6 +56,21 @@ function buildVideoFilter(): string {
 	].join(",");
 }
 
+async function runFfmpegWithTimeout({
+	args,
+	timeoutMs,
+}: {
+	args: string[];
+	timeoutMs: number;
+}): Promise<void> {
+	await Promise.race([
+		ffmpeg.exec(args),
+		new Promise((_, reject) =>
+			setTimeout(() => reject(new Error("Transcoding timed out")), timeoutMs),
+		),
+	]);
+}
+
 async function ensureFfmpegLoaded({
 	assetBaseUrl,
 }: {
@@ -132,53 +147,66 @@ async function transcode({
 			const profile = resolveImportVideoProfile({ sourceInfo });
 			const maxrate = Math.round(profile.videoBitrate * 1.3);
 			const bufsize = Math.round(profile.videoBitrate * 2);
+			const codecCandidates = ["libx264", "h264", "mpeg4"] as const;
+			let encoded = false;
+			let lastError: unknown = null;
+			for (const codec of codecCandidates) {
+				try {
+					const args = [
+						"-i",
+						inputName,
+						"-map",
+						"0:v:0",
+						"-map",
+						"0:a:0?",
+						"-vf",
+						buildVideoFilter(),
+						"-r",
+						String(profile.targetFps),
+						"-c:v",
+						codec,
+						...(codec !== "mpeg4"
+							? ([
+									"-preset",
+									"veryfast",
+									"-profile:v",
+									"high",
+									"-level:v",
+									"4.1",
+								] as const)
+							: []),
+						"-pix_fmt",
+						"yuv420p",
+						"-b:v",
+						String(profile.videoBitrate),
+						"-maxrate",
+						String(maxrate),
+						"-bufsize",
+						String(bufsize),
+						"-c:a",
+						"aac",
+						"-b:a",
+						`${Math.round(profile.audioBitrate / 1000)}k`,
+						"-ar",
+						"48000",
+						"-ac",
+						"2",
+						"-movflags",
+						"+faststart",
+						outputName,
+					];
 
-			const args = [
-				"-i",
-				inputName,
-				"-map",
-				"0:v:0",
-				"-map",
-				"0:a:0?",
-				"-vf",
-				buildVideoFilter(),
-				"-r",
-				String(profile.targetFps),
-				"-c:v",
-				"libx264",
-				"-preset",
-				"veryfast",
-				"-profile:v",
-				"high",
-				"-level:v",
-				"4.1",
-				"-pix_fmt",
-				"yuv420p",
-				"-b:v",
-				String(profile.videoBitrate),
-				"-maxrate",
-				String(maxrate),
-				"-bufsize",
-				String(bufsize),
-				"-c:a",
-				"aac",
-				"-b:a",
-				`${Math.round(profile.audioBitrate / 1000)}k`,
-				"-ar",
-				"48000",
-				"-ac",
-				"2",
-				"-movflags",
-				"+faststart",
-				outputName,
-			];
-
-			await Promise.race([
-				ffmpeg.exec(args),
-				new Promise((_, reject) =>
-					setTimeout(() => reject(new Error("Transcoding timed out")), timeoutMs),
-				),
-			]);
+					await runFfmpegWithTimeout({ args, timeoutMs });
+					encoded = true;
+					break;
+				} catch (error) {
+					lastError = error;
+				}
+			}
+			if (!encoded) {
+				if (lastError instanceof Error) throw lastError;
+				throw new Error("Video transcoding failed for all codec candidates");
+			}
 
 			const output = await ffmpeg.readFile(outputName);
 			if (typeof output === "string") {
@@ -220,12 +248,7 @@ async function transcode({
 			outputName,
 		];
 
-		await Promise.race([
-			ffmpeg.exec(args),
-			new Promise((_, reject) =>
-				setTimeout(() => reject(new Error("Transcoding timed out")), timeoutMs),
-			),
-		]);
+		await runFfmpegWithTimeout({ args, timeoutMs });
 
 		const output = await ffmpeg.readFile(outputName);
 		if (typeof output === "string") {
@@ -262,7 +285,17 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
 		self.postMessage(response satisfies WorkerResponse);
 	} catch (error) {
 		const baseMessage =
-			error instanceof Error ? error.message : "Failed to transcode media";
+			error instanceof Error
+				? error.message
+				: typeof error === "string"
+					? error
+					: (() => {
+							try {
+								return JSON.stringify(error);
+							} catch {
+								return String(error);
+							}
+						})();
 		const enrichedMessage =
 			lastFfmpegErrorLine && !baseMessage.includes(lastFfmpegErrorLine)
 				? `${baseMessage} (${lastFfmpegErrorLine})`

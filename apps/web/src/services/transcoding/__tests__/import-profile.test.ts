@@ -34,11 +34,11 @@ describe("import transcoding profile", () => {
 		expect(normalizeTargetFps({ fps: 60 })).toBe(30);
 	});
 
-	test("audio-only profile implication uses AAC 128k", () => {
+	test("audio-only profile implication uses AAC 192k", () => {
 		const profile = resolveImportVideoProfile({
 			sourceInfo: { width: 640, height: 360, fps: 30 },
 		});
-		expect(profile.audioBitrate).toBe(128_000);
+		expect(profile.audioBitrate).toBe(192_000);
 	});
 
 	test("480p and 720p bitrate tiers are selected correctly", () => {
