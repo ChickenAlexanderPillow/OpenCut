@@ -21,13 +21,42 @@ import { getEffectiveTranscriptCutsFromTranscriptEdit } from "@/lib/transcript-e
 const MAX_AUDIO_CHANNELS = 2;
 const EXPORT_SAMPLE_RATE = 44100;
 const SILENCE_FLOOR = 1e-4;
+const sharedDecodeContexts = new Map<string, AudioContext>();
+
+function getSharedDecodeContext({
+	sampleRate,
+}: {
+	sampleRate?: number;
+}): AudioContext {
+	const key =
+		typeof sampleRate === "number" && Number.isFinite(sampleRate)
+			? String(Math.floor(sampleRate))
+			: "native";
+	const existing = sharedDecodeContexts.get(key);
+	if (existing && existing.state !== "closed") {
+		return existing;
+	}
+	const created = createAudioContext(
+		typeof sampleRate === "number" ? { sampleRate } : undefined,
+	);
+	sharedDecodeContexts.set(key, created);
+	return created;
+}
 
 export type CollectedAudioElement = Omit<
 	AudioElement,
 	"type" | "mediaId" | "volume" | "id" | "name" | "sourceType" | "sourceUrl"
-> & { buffer: AudioBuffer; gain: number; transcriptCuts?: TranscriptEditCutRange[] };
+> & {
+	buffer: AudioBuffer;
+	gain: number;
+	transcriptCuts?: TranscriptEditCutRange[];
+};
 
-export function createAudioContext({ sampleRate }: { sampleRate?: number } = {}): AudioContext {
+export function createAudioContext({
+	sampleRate,
+}: {
+	sampleRate?: number;
+} = {}): AudioContext {
 	const AudioContextConstructor =
 		window.AudioContext ||
 		(window as typeof window & { webkitAudioContext?: typeof AudioContext })
@@ -150,15 +179,17 @@ export async function collectAudioElements({
 
 	for (const track of tracks) {
 		if (canTracktHaveAudio(track) && track.muted) continue;
-		const trackGain =
-			track.type === "audio" ? mapTrackVolumeToGain(track.volume ?? 1) : 1;
+		const trackGain = canTracktHaveAudio(track)
+			? mapTrackVolumeToGain(track.volume ?? 1)
+			: 1;
 
 		for (const element of track.elements) {
 			if (!canElementHaveAudio(element)) continue;
 			if (element.duration <= 0) continue;
-			const effectiveTranscriptCuts = getEffectiveTranscriptCutsFromTranscriptEdit({
-				transcriptEdit: element.transcriptEdit,
-			});
+			const effectiveTranscriptCuts =
+				getEffectiveTranscriptCutsFromTranscriptEdit({
+					transcriptEdit: element.transcriptEdit,
+				});
 
 			const isTrackMuted = canTracktHaveAudio(track) && track.muted;
 
@@ -296,13 +327,15 @@ async function resolveAudioBufferForElement({
 }): Promise<AudioBuffer | null> {
 	try {
 		if (element.buffer) return element.buffer;
-		const effectiveTranscriptCuts = getEffectiveTranscriptCutsFromTranscriptEdit({
-			transcriptEdit: element.transcriptEdit,
-		});
+		const effectiveTranscriptCuts =
+			getEffectiveTranscriptCutsFromTranscriptEdit({
+				transcriptEdit: element.transcriptEdit,
+			});
 
 		if (element.sourceType === "upload") {
 			const asset = mediaMap.get(element.mediaId);
-			if (!asset || (asset.type !== "audio" && asset.type !== "video")) return null;
+			if (!asset || (asset.type !== "audio" && asset.type !== "video"))
+				return null;
 
 			if (asset.type === "video") {
 				const resolved = await resolveAudioBufferForVideoElement({
@@ -381,7 +414,10 @@ async function resolveAudioBufferForVideoElement({
 		if (chunks.length === 0) return null;
 
 		const nativeSampleRate = chunks[0].sampleRate;
-		const numChannels = Math.min(MAX_AUDIO_CHANNELS, chunks[0].numberOfChannels);
+		const numChannels = Math.min(
+			MAX_AUDIO_CHANNELS,
+			chunks[0].numberOfChannels,
+		);
 
 		const nativeChannels = Array.from(
 			{ length: numChannels },
@@ -390,17 +426,29 @@ async function resolveAudioBufferForVideoElement({
 		let offset = 0;
 		for (const chunk of chunks) {
 			for (let channel = 0; channel < numChannels; channel++) {
-				const sourceData = chunk.getChannelData(Math.min(channel, chunk.numberOfChannels - 1));
+				const sourceData = chunk.getChannelData(
+					Math.min(channel, chunk.numberOfChannels - 1),
+				);
 				nativeChannels[channel].set(sourceData, offset);
 			}
 			offset += chunk.length;
 		}
 
 		// use OfflineAudioContext for high-quality resampling to target rate
-		const outputSamples = Math.ceil(totalSamples * (targetSampleRate / nativeSampleRate));
-		const offlineContext = new OfflineAudioContext(numChannels, outputSamples, targetSampleRate);
+		const outputSamples = Math.ceil(
+			totalSamples * (targetSampleRate / nativeSampleRate),
+		);
+		const offlineContext = new OfflineAudioContext(
+			numChannels,
+			outputSamples,
+			targetSampleRate,
+		);
 
-		const nativeBuffer = audioContext.createBuffer(numChannels, totalSamples, nativeSampleRate);
+		const nativeBuffer = audioContext.createBuffer(
+			numChannels,
+			totalSamples,
+			nativeSampleRate,
+		);
 		for (let ch = 0; ch < numChannels; ch++) {
 			nativeBuffer.copyToChannel(nativeChannels[ch], ch);
 		}
@@ -415,11 +463,15 @@ async function resolveAudioBufferForVideoElement({
 			{ length: rendered.numberOfChannels },
 			(_, channel) => rendered.getChannelData(channel),
 		);
-		const renderedPeak = computePeakFromChannels({ channels: renderedChannels });
+		const renderedPeak = computePeakFromChannels({
+			channels: renderedChannels,
+		});
 		// Some codec/container combos decode as near-silence through mediabunny while
 		// browser decodeAudioData succeeds; force fallback in that case.
 		if (isPeakSilent({ peak: renderedPeak })) {
-			throw new Error("Decoded near-silent audio via mediabunny; trying browser fallback");
+			throw new Error(
+				"Decoded near-silent audio via mediabunny; trying browser fallback",
+			);
 		}
 
 		return {
@@ -427,7 +479,10 @@ async function resolveAudioBufferForVideoElement({
 			windowed: true,
 		};
 	} catch (error) {
-		console.warn("Failed to decode video audio with mediabunny, trying fallback:", error);
+		console.warn(
+			"Failed to decode video audio with mediabunny, trying fallback:",
+			error,
+		);
 		try {
 			const arrayBuffer = await readBlobArrayBufferWithFallback({
 				audioBlob: mediaAsset.file,
@@ -460,12 +515,60 @@ export interface AudioClipSource {
 	id: string;
 	sourceKey: string;
 	file: File;
+	mediaIdentity: {
+		id: string;
+		type: MediaAsset["type"] | "library-audio";
+		size: number;
+		lastModified: number;
+	};
 	startTime: number;
 	duration: number;
 	trimStart: number;
 	trimEnd: number;
 	muted: boolean;
 	gain: number;
+	transcriptRevision: string;
+	transcriptCuts?: TranscriptEditCutRange[];
+}
+
+function buildTranscriptAudioRevision({
+	transcriptEdit,
+}: {
+	transcriptEdit:
+		| {
+				updatedAt: string;
+				words: Array<{ id: string; text: string; removed?: boolean }>;
+				cuts: Array<{ start: number; end: number; reason: string }>;
+		  }
+		| undefined;
+}): string {
+	if (!transcriptEdit) return "";
+	const effectiveCuts = transcriptEdit.cuts
+		.filter(
+			(cut) =>
+				Number.isFinite(cut.start) &&
+				Number.isFinite(cut.end) &&
+				cut.end > cut.start,
+		)
+		.map((cut) => ({
+			start: Math.max(0, cut.start),
+			end: Math.max(0, cut.end),
+			reason: cut.reason ?? "remove",
+		}))
+		.sort((left, right) => left.start - right.start || left.end - right.end);
+	let hash = 5381;
+	const updateHash = (value: string): void => {
+		for (let index = 0; index < value.length; index++) {
+			hash = (hash * 33) ^ value.charCodeAt(index);
+		}
+	};
+	// Audio graph changes should only track effective cut boundaries.
+	for (const cut of effectiveCuts) {
+		updateHash(cut.start.toFixed(3));
+		updateHash(cut.end.toFixed(3));
+		updateHash(cut.reason);
+	}
+	return `${effectiveCuts.length}:${(hash >>> 0).toString(36)}`;
 }
 
 function clampGain(value: number): number {
@@ -529,54 +632,119 @@ function getBoundarySmoothingGain({
 export async function decodeMediaFileToAudioBuffer({
 	file,
 	sampleRate,
+	trimStart = 0,
+	trimDuration,
 }: {
 	file: File;
 	sampleRate?: number;
+	trimStart?: number;
+	trimDuration?: number;
 }): Promise<AudioBuffer | null> {
-	const context = createAudioContext(
-		typeof sampleRate === "number" ? { sampleRate } : undefined,
-	);
+	const context = getSharedDecodeContext({
+		sampleRate: typeof sampleRate === "number" ? sampleRate : undefined,
+	});
 	const input = new Input({
 		source: new BlobSource(file),
 		formats: ALL_FORMATS,
 	});
 
 	try {
+		const safeTrimStart = Number.isFinite(trimStart)
+			? Math.max(0, trimStart)
+			: 0;
+		const safeTrimDuration =
+			typeof trimDuration === "number" && Number.isFinite(trimDuration)
+				? Math.max(0, trimDuration)
+				: undefined;
+		const trimEnd =
+			typeof safeTrimDuration === "number"
+				? safeTrimStart + safeTrimDuration
+				: undefined;
+
 		const audioTrack = await input.getPrimaryAudioTrack();
 		if (audioTrack) {
 			const sink = new AudioBufferSink(audioTrack);
 			const chunks: AudioBuffer[] = [];
 			let totalSamples = 0;
-			for await (const { buffer } of sink.buffers()) {
+			for await (const { buffer } of sink.buffers(safeTrimStart, trimEnd)) {
 				chunks.push(buffer);
 				totalSamples += buffer.length;
 			}
 			if (chunks.length > 0 && totalSamples > 0) {
 				const first = chunks[0];
 				const channels = Math.max(1, first.numberOfChannels);
-				const merged = context.createBuffer(channels, totalSamples, first.sampleRate);
+				const merged = context.createBuffer(
+					channels,
+					totalSamples,
+					first.sampleRate,
+				);
 				for (let channelIndex = 0; channelIndex < channels; channelIndex++) {
 					const channelData = new Float32Array(totalSamples);
 					let offset = 0;
 					for (const chunk of chunks) {
-						const sourceChannel = Math.min(channelIndex, chunk.numberOfChannels - 1);
+						const sourceChannel = Math.min(
+							channelIndex,
+							chunk.numberOfChannels - 1,
+						);
 						channelData.set(chunk.getChannelData(sourceChannel), offset);
 						offset += chunk.length;
 					}
 					merged.copyToChannel(channelData, channelIndex);
 				}
-				return merged;
+				const mergedChannels = Array.from(
+					{ length: merged.numberOfChannels },
+					(_, channelIndex) => merged.getChannelData(channelIndex),
+				);
+				const mergedPeak = computePeakFromChannels({
+					channels: mergedChannels,
+				});
+				if (!isPeakSilent({ peak: mergedPeak })) {
+					return merged;
+				}
 			}
 		}
 
 		const arrayBuffer = await file.arrayBuffer();
-		return await context.decodeAudioData(arrayBuffer.slice(0));
+		const decoded = await context.decodeAudioData(arrayBuffer.slice(0));
+		if (typeof safeTrimDuration !== "number") {
+			return decoded;
+		}
+		const startSample = Math.max(
+			0,
+			Math.floor(safeTrimStart * decoded.sampleRate),
+		);
+		const endSample = Math.max(
+			startSample,
+			Math.min(
+				decoded.length,
+				Math.ceil((safeTrimStart + safeTrimDuration) * decoded.sampleRate),
+			),
+		);
+		const sliceLength = Math.max(0, endSample - startSample);
+		if (sliceLength <= 0) return null;
+		const sliced = context.createBuffer(
+			decoded.numberOfChannels,
+			sliceLength,
+			decoded.sampleRate,
+		);
+		for (
+			let channelIndex = 0;
+			channelIndex < decoded.numberOfChannels;
+			channelIndex++
+		) {
+			const source = decoded.getChannelData(channelIndex);
+			sliced.copyToChannel(
+				source.subarray(startSample, endSample),
+				channelIndex,
+				0,
+			);
+		}
+		return sliced;
 	} catch (error) {
 		console.warn("Failed to decode media file to audio buffer:", error);
 		return null;
 	} finally {
 		input.dispose();
-		void context.close().catch(() => undefined);
 	}
 }
 
@@ -636,12 +804,24 @@ async function fetchLibraryAudioClip({
 			id: element.id,
 			sourceKey: element.id,
 			file,
+			mediaIdentity: {
+				id: element.id,
+				type: "library-audio",
+				size: file.size,
+				lastModified: file.lastModified,
+			},
 			startTime: element.startTime,
 			duration: element.duration,
 			trimStart: element.trimStart,
 			trimEnd: element.trimEnd,
 			muted,
 			gain,
+			transcriptRevision: buildTranscriptAudioRevision({
+				transcriptEdit: element.transcriptEdit,
+			}),
+			transcriptCuts: getEffectiveTranscriptCutsFromTranscriptEdit({
+				transcriptEdit: element.transcriptEdit,
+			}),
 		};
 	} catch (error) {
 		console.warn("Failed to fetch library audio:", error);
@@ -686,12 +866,30 @@ function collectMediaAudioClip({
 		id: element.id,
 		sourceKey: mediaAsset.id,
 		file: mediaAsset.file,
+		mediaIdentity: {
+			id: mediaAsset.id,
+			type: mediaAsset.type,
+			size: mediaAsset.file.size,
+			lastModified: mediaAsset.file.lastModified,
+		},
 		startTime: element.startTime,
 		duration: element.duration,
 		trimStart: element.trimStart,
 		trimEnd: element.trimEnd,
 		muted,
 		gain,
+		transcriptRevision:
+			"transcriptEdit" in element
+				? buildTranscriptAudioRevision({
+						transcriptEdit: element.transcriptEdit,
+					})
+				: "",
+		transcriptCuts:
+			"transcriptEdit" in element
+				? getEffectiveTranscriptCutsFromTranscriptEdit({
+						transcriptEdit: element.transcriptEdit,
+					})
+				: [],
 	};
 }
 
@@ -710,8 +908,9 @@ export async function collectAudioMixSources({
 
 	for (const track of tracks) {
 		if (canTracktHaveAudio(track) && track.muted) continue;
-		const trackGain =
-			track.type === "audio" ? mapTrackVolumeToGain(track.volume ?? 1) : 1;
+		const trackGain = canTracktHaveAudio(track)
+			? mapTrackVolumeToGain(track.volume ?? 1)
+			: 1;
 
 		for (const element of track.elements) {
 			if (!canElementHaveAudio(element)) continue;
@@ -772,8 +971,9 @@ export async function collectAudioClips({
 
 	for (const track of tracks) {
 		const isTrackMuted = canTracktHaveAudio(track) && track.muted;
-		const trackGain =
-			track.type === "audio" ? mapTrackVolumeToGain(track.volume ?? 1) : 1;
+		const trackGain = canTracktHaveAudio(track)
+			? mapTrackVolumeToGain(track.volume ?? 1)
+			: 1;
 
 		for (const element of track.elements) {
 			if (!canElementHaveAudio(element)) continue;

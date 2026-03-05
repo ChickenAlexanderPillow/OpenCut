@@ -12,9 +12,9 @@ if (-not (Test-Path ".venv")) {
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 
-if (-not $env:LOCAL_TRANSCRIBE_MODEL) { $env:LOCAL_TRANSCRIBE_MODEL = "large-v3" }
+if (-not $env:LOCAL_TRANSCRIBE_MODEL) { $env:LOCAL_TRANSCRIBE_MODEL = "medium" }
 if (-not $env:LOCAL_TRANSCRIBE_DEVICE) { $env:LOCAL_TRANSCRIBE_DEVICE = "cuda" }
-if (-not $env:LOCAL_TRANSCRIBE_COMPUTE_TYPE) { $env:LOCAL_TRANSCRIBE_COMPUTE_TYPE = "float16" }
+if (-not $env:LOCAL_TRANSCRIBE_COMPUTE_TYPE) { $env:LOCAL_TRANSCRIBE_COMPUTE_TYPE = "int8_float16" }
 if (-not $env:LOCAL_TRANSCRIBE_VAD_FILTER) { $env:LOCAL_TRANSCRIBE_VAD_FILTER = "false" }
 
 # Force CUDA-enabled torch wheels on Windows/NVIDIA setups.

@@ -4,7 +4,7 @@ import { useEditor } from "@/hooks/use-editor";
 type ElementRef = { trackId: string; elementId: string };
 
 export function useElementSelection() {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: [] });
 	const selectedElements = useSyncExternalStore(
 		(listener) => editor.selection.subscribe(listener),
 		() => editor.selection.getSelectedElements(),

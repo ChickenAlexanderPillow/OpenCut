@@ -86,7 +86,7 @@ const VIRAL_CLIP_TARGET_SECONDS = 36;
 const VIRAL_CLIP_MAX_SECONDS = 65;
 const CLIP_SCORING_TRANSCRIPT_MAX_CHARS = 20000;
 const CLIP_SCORING_TIMEOUT_MS = 120000;
-const CLIP_IMPORT_TRANSCRIPTION_MODEL = "large-v3-turbo";
+const CLIP_IMPORT_TRANSCRIPTION_MODEL = "medium";
 const CLIP_TRANSCRIPTION_TIMEOUT_MS = 60000;
 const CLIP_TRANSCRIPTION_MIN_DURATION_SECONDS = 0.35;
 const CLIP_TRANSCRIPTION_MAX_DURATION_SECONDS = 240;
@@ -976,6 +976,8 @@ function applyTranscriptEditMutation({
 		return track;
 	});
 
+	const isRealtimePlayback =
+		editor.playback.getIsPlaying() || editor.playback.getIsScrubbing();
 	let syncedTracks = updatedTracks;
 	const syncResult = syncCaptionsFromTranscriptEdits({
 		tracks: syncedTracks,
@@ -984,18 +986,22 @@ function applyTranscriptEditMutation({
 	if (!syncResult.error && syncResult.changed) {
 		syncedTracks = syncResult.tracks;
 	}
-	const deduped = dedupeTranscriptEditsInTracks({ tracks: syncedTracks });
-	const dedupeChanged = deduped.changed;
-	if (deduped.changed) {
-		syncedTracks = deduped.tracks;
-	}
-	const driftCheck = validateAndHealCaptionDriftInTracks({
-		tracks: syncedTracks,
-		projectId: editor.project.getActive().metadata.id,
-	});
-	const driftChanged = driftCheck.changed;
-	if (driftChanged) {
-		syncedTracks = driftCheck.tracks;
+	let dedupeChanged = false;
+	let driftChanged = false;
+	if (!isRealtimePlayback) {
+		const deduped = dedupeTranscriptEditsInTracks({ tracks: syncedTracks });
+		dedupeChanged = deduped.changed;
+		if (deduped.changed) {
+			syncedTracks = deduped.tracks;
+		}
+		const driftCheck = validateAndHealCaptionDriftInTracks({
+			tracks: syncedTracks,
+			projectId: editor.project.getActive().metadata.id,
+		});
+		driftChanged = driftCheck.changed;
+		if (driftChanged) {
+			syncedTracks = driftCheck.tracks;
+		}
 	}
 
 	if (hasTrackStructureChange({ beforeTracks: tracks, afterTracks: syncedTracks })) {
@@ -1049,10 +1055,6 @@ function applyTranscriptEditMutation({
 		}
 	}
 	editor.save.markDirty();
-	editor.audio.clearCachedTimelineAudio();
-	if (editor.playback.getIsPlaying() || editor.playback.getIsScrubbing()) {
-		void editor.audio.primeCurrentTimelineAudio();
-	}
 
 	return { changed: true };
 }
@@ -1378,6 +1380,7 @@ async function transcribeClipAudioWithApi({
 	wavBlob: Blob;
 	cacheKey: string;
 }): Promise<TranscriptionSegment[] | null> {
+	const requestStartedAt = Date.now();
 	const endpoints = resolveClipTranscriptionApiCandidates();
 	let lastNetworkError: Error | null = null;
 
@@ -1408,6 +1411,9 @@ async function transcribeClipAudioWithApi({
 				granularity?: "word" | "segment" | "none";
 				engine?: string;
 				model?: string;
+				timingsMs?: Record<string, number>;
+				audioDurationSeconds?: number;
+				wordCount?: number;
 			};
 			if (json.granularity && json.granularity !== "word") {
 				throw new Error(
@@ -1427,14 +1433,21 @@ async function transcribeClipAudioWithApi({
 					end: Math.max(segment.start + 0.01, segment.end),
 				}));
 			if (segments.length > 0) {
-				const durationSeconds =
-					segments[segments.length - 1]!.end - segments[0]!.start;
-				console.info("Clip transcription debug", {
+				const durationMs = Date.now() - requestStartedAt;
+				const durationSeconds = json.audioDurationSeconds ??
+					Math.max(0, segments[segments.length - 1]!.end - segments[0]!.start);
+				console.info("Clip transcription metrics", {
 					cacheKey,
 					engine: json.engine ?? "unknown",
 					model: json.model ?? "unknown",
-					wordCount: segments.length,
+					wordCount: json.wordCount ?? segments.length,
 					durationSeconds,
+					durationMs,
+					realtimeFactor:
+						durationSeconds > 0
+							? Number((durationMs / 1000 / durationSeconds).toFixed(3))
+							: null,
+					timingsMs: json.timingsMs ?? null,
 				});
 			}
 			return segments.length > 0 ? segments : null;

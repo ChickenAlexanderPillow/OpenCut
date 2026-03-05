@@ -4,6 +4,7 @@ from collections import OrderedDict
 import gc
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -92,7 +93,7 @@ class LocalWhisperXEngine:
 		)
 		segments_iter, info = asr_model.transcribe(
 			audio,
-			beam_size=5,
+			beam_size=1,
 			word_timestamps=True,
 			vad_filter=vad_filter,
 		)
@@ -116,14 +117,25 @@ class LocalWhisperXEngine:
 		audio_bytes: bytes,
 		config: TranscribeConfig,
 	) -> dict[str, Any]:
+		total_started_at = time.perf_counter()
 		with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
 			temp_file.write(audio_bytes)
 			temp_path = Path(temp_file.name)
 
 		try:
+			timings_ms: dict[str, float] = {}
+
 			# whisperx.load_audio normalizes to mono 16k via ffmpeg.
+			load_audio_started_at = time.perf_counter()
 			audio = whisperx.load_audio(str(temp_path))
+			timings_ms["load_audio"] = (time.perf_counter() - load_audio_started_at) * 1000.0
+			audio_duration_seconds = (
+				max(0.0, float(len(audio)) / 16000.0)
+				if hasattr(audio, "__len__")
+				else 0.0
+			)
 			used_device = self._resolve_device(config.device)
+			asr_started_at = time.perf_counter()
 			try:
 				asr_result = self._run_asr(
 					audio=audio,
@@ -163,8 +175,10 @@ class LocalWhisperXEngine:
 				)
 				used_model = fallback_model
 				used_compute = fallback_compute
+			timings_ms["asr"] = (time.perf_counter() - asr_started_at) * 1000.0
 
 			language = asr_result["language"] or "en"
+			align_started_at = time.perf_counter()
 			align_model, metadata = self._get_align_model(
 				language=language,
 				device=used_device,
@@ -195,7 +209,9 @@ class LocalWhisperXEngine:
 					)
 				else:
 					raise
+			timings_ms["align"] = (time.perf_counter() - align_started_at) * 1000.0
 			word_segments = aligned.get("word_segments", []) or []
+			postprocess_started_at = time.perf_counter()
 			words = []
 			for item in word_segments:
 				word = (item.get("word") or "").strip()
@@ -212,6 +228,9 @@ class LocalWhisperXEngine:
 						"end": end_f,
 					}
 				)
+			timings_ms["postprocess"] = (time.perf_counter() - postprocess_started_at) * 1000.0
+			total_ms = (time.perf_counter() - total_started_at) * 1000.0
+			timings_ms["total"] = total_ms
 
 			return {
 				"text": " ".join(segment.get("text", "").strip() for segment in asr_result["segments"]).strip(),
@@ -221,6 +240,9 @@ class LocalWhisperXEngine:
 				"compute_type": used_compute,
 				"device": used_device,
 				"engine": "whisperx",
+				"timings_ms": timings_ms,
+				"audio_duration_seconds": audio_duration_seconds,
+				"word_count": len(words),
 			}
 		finally:
 			try:

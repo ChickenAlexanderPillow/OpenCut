@@ -31,6 +31,7 @@ export interface VideoTrack extends BaseTrack {
 	elements: (VideoElement | ImageElement)[];
 	isMain: boolean;
 	muted: boolean;
+	volume?: number;
 	hidden: boolean;
 }
 

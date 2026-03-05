@@ -15,6 +15,9 @@ type ClipTranscriptionSuccessPayload = {
 	granularity: "word";
 	engine: string;
 	model: string;
+	timingsMs?: Record<string, number>;
+	audioDurationSeconds?: number;
+	wordCount?: number;
 };
 
 const clipTranscriptionResultCache = new Map<
@@ -34,6 +37,9 @@ const localResponseSchema = z.object({
 	language: z.string().optional(),
 	model: z.string().min(1),
 	engine: z.literal("whisperx").or(z.literal("local-whisperx")).optional(),
+	timings_ms: z.record(z.string(), z.number().finite().nonnegative()).optional(),
+	audio_duration_seconds: z.number().finite().nonnegative().optional(),
+	word_count: z.number().int().nonnegative().optional(),
 	words: z
 		.array(
 			z.object({
@@ -172,6 +178,9 @@ async function callLocalWhisperX({
 	segments: Array<{ text: string; start: number; end: number }>;
 	model: string;
 	engine: "local-whisperx";
+	timingsMs?: Record<string, number>;
+	audioDurationSeconds?: number;
+	wordCount?: number;
 }> {
 	if (!webEnv.LOCAL_TRANSCRIBE_URL) {
 		throw new Error("LOCAL_TRANSCRIBE_URL is not configured");
@@ -181,12 +190,12 @@ async function callLocalWhisperX({
 	form.append("file", file, file.name || "clip.wav");
 	form.append(
 		"model",
-		requestedModel || webEnv.LOCAL_TRANSCRIBE_MODEL || "large-v3",
+		requestedModel || webEnv.LOCAL_TRANSCRIBE_MODEL || "medium",
 	);
 	form.append("device", webEnv.LOCAL_TRANSCRIBE_DEVICE || "cuda");
 	form.append(
 		"compute_type",
-		webEnv.LOCAL_TRANSCRIBE_COMPUTE_TYPE || "float16",
+		webEnv.LOCAL_TRANSCRIBE_COMPUTE_TYPE || "int8_float16",
 	);
 	form.append(
 		"vad_filter",
@@ -257,6 +266,9 @@ async function callLocalWhisperX({
 			segments,
 			model: payload.model,
 			engine: "local-whisperx",
+			timingsMs: payload.timings_ms,
+			audioDurationSeconds: payload.audio_duration_seconds,
+			wordCount: payload.word_count,
 		};
 	} finally {
 		clearTimeout(timeoutId);
@@ -338,9 +350,9 @@ export async function POST(request: NextRequest) {
 		const cacheKey =
 			typeof cacheKeyValue === "string" ? cacheKeyValue.toString().trim() : "";
 		const model =
-			(form.get("model") ?? webEnv.LOCAL_TRANSCRIBE_MODEL ?? "large-v3")
+			(form.get("model") ?? webEnv.LOCAL_TRANSCRIBE_MODEL ?? "medium")
 				.toString()
-				.trim() || "large-v3";
+				.trim() || "medium";
 		if (!(file instanceof File)) {
 			return NextResponse.json({ error: "file is required" }, { status: 400 });
 		}
@@ -352,17 +364,29 @@ export async function POST(request: NextRequest) {
 		}
 
 		const runTranscription = async (): Promise<ClipTranscriptionSuccessPayload> => {
+			const startedAt = Date.now();
 			if (webEnv.LOCAL_TRANSCRIBE_ENABLED) {
 				try {
 					const result = await callLocalWhisperX({
 						file,
 						requestedModel: model,
 					});
+					console.info("Clip transcription metrics", {
+						engine: result.engine,
+						model: result.model,
+						durationMs: Date.now() - startedAt,
+						audioDurationSeconds: result.audioDurationSeconds ?? null,
+						wordCount: result.wordCount ?? result.segments.length,
+						timingsMs: result.timingsMs ?? null,
+					});
 					return {
 						segments: result.segments,
 						granularity: "word",
 						engine: result.engine,
 						model: result.model,
+						timingsMs: result.timingsMs,
+						audioDurationSeconds: result.audioDurationSeconds,
+						wordCount: result.wordCount ?? result.segments.length,
 					};
 				} catch (error) {
 					const message =
@@ -411,6 +435,12 @@ export async function POST(request: NextRequest) {
 					"HTTP_422:Transcription did not return word-level timestamps. Clip import requires per-word timing.",
 				);
 			}
+			console.info("Clip transcription metrics", {
+				engine: "openai-fallback",
+				model: "whisper-1",
+				durationMs: Date.now() - startedAt,
+				wordCount: segments.length,
+			});
 
 			return {
 				segments,

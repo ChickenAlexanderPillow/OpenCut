@@ -432,9 +432,6 @@ function EditorRuntimeBindings() {
 	useEffect(() => {
 		const CHECK_INTERVAL_MS = 30_000;
 		const PRESSURE_SAMPLES = 3;
-		const RELOAD_GUARD_KEY = "opencut:memory:reload-guard";
-		const RELOAD_WINDOW_MS = 5 * 60_000;
-		const MAX_RELOADS_IN_WINDOW = 2;
 		const FALLBACK_SOFT_LIMIT_MB = 768;
 		const FALLBACK_HARD_LIMIT_MB = 1024;
 		let highPressureCount = 0;
@@ -466,44 +463,6 @@ function EditorRuntimeBindings() {
 			};
 		};
 
-		const canAutoReload = (): boolean => {
-			const now = Date.now();
-			try {
-				const raw = sessionStorage.getItem(RELOAD_GUARD_KEY);
-				if (!raw) {
-					sessionStorage.setItem(
-						RELOAD_GUARD_KEY,
-						JSON.stringify({ startedAt: now, count: 1 }),
-					);
-					return true;
-				}
-				const parsed = JSON.parse(raw) as {
-					startedAt?: number;
-					count?: number;
-				};
-				const startedAt =
-					typeof parsed.startedAt === "number" ? parsed.startedAt : now;
-				const count = typeof parsed.count === "number" ? parsed.count : 0;
-				if (now - startedAt > RELOAD_WINDOW_MS) {
-					sessionStorage.setItem(
-						RELOAD_GUARD_KEY,
-						JSON.stringify({ startedAt: now, count: 1 }),
-					);
-					return true;
-				}
-				if (count >= MAX_RELOADS_IN_WINDOW) {
-					return false;
-				}
-				sessionStorage.setItem(
-					RELOAD_GUARD_KEY,
-					JSON.stringify({ startedAt, count: count + 1 }),
-				);
-				return true;
-			} catch {
-				return true;
-			}
-		};
-
 		const runRecovery = async ({
 			usedHeapMb,
 			softLimitMb,
@@ -530,14 +489,9 @@ function EditorRuntimeBindings() {
 					(afterRecoveryHeapMb !== null &&
 						afterRecoveryHeapMb >= softLimitMb * 0.92);
 				if (!shouldReload || hasActiveProjectProcesses) return;
-				if (!canAutoReload()) {
-					console.warn(
-						"Memory pressure persists; reload guard blocked auto-reload",
-					);
-					return;
-				}
-				console.warn("Auto-reloading editor due to sustained memory pressure");
-				window.location.reload();
+				console.warn(
+					"Memory pressure persists after cache recovery; skipping auto-reload to avoid interrupting editing",
+				);
 			} catch (error) {
 				console.warn("Memory recovery failed", error);
 			} finally {

@@ -189,20 +189,38 @@ export class TimelineManager {
 	setAudioTrackVolume({
 		trackId,
 		volume,
+		pushHistory = true,
 	}: {
 		trackId: string;
 		volume: number;
+		pushHistory?: boolean;
 	}): void {
 		const clampedVolume = Math.max(0, Math.min(2, volume));
-		const tracks = this.getTracks();
-		const updatedTracks = tracks.map((track) => {
-			if (track.id !== trackId || track.type !== "audio") return track;
+		const currentTracks = this.getTracks();
+		const updatedTracks = currentTracks.map((track) => {
+			if (track.id !== trackId) return track;
+			if (track.type !== "audio" && track.type !== "video") return track;
 			return {
 				...track,
 				volume: clampedVolume,
 			};
 		});
-		this.updateTracks(updatedTracks);
+		if (!pushHistory) {
+			this.previewTracker.begin({ state: currentTracks });
+			this.updateTracks(updatedTracks);
+			return;
+		}
+
+		const previewSnapshot = this.previewTracker.end();
+		if (previewSnapshot !== null) {
+			this.updateTracks(updatedTracks);
+			const command = new TracksSnapshotCommand(previewSnapshot, updatedTracks);
+			this.editor.command.push({ command });
+			return;
+		}
+
+		const command = new TracksSnapshotCommand(currentTracks, updatedTracks);
+		this.editor.command.execute({ command });
 	}
 
 	splitElements({

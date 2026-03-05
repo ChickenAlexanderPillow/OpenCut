@@ -61,7 +61,7 @@ export function Timeline() {
 	const tracksContainerHeight = { min: 0, max: 800 };
 	const { snappingEnabled, fitViewRequestId } = useTimelineStore();
 	const { clearElementSelection, setElementSelection } = useElementSelection();
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: ["timeline", "project"] });
 	const timeline = editor.timeline;
 	const tracks = timeline.getTracks();
 	const seek = (time: number) => editor.playback.seek({ time });
@@ -315,29 +315,30 @@ export function Timeline() {
 														isMainTrack(track) && (
 															<div className="bg-red-500 size-1.5 rounded-full" />
 														)}
-													{canTracktHaveAudio(track) &&
-														track.type !== "audio" && (
-														<TrackToggleIcon
-															isOff={track.muted}
-															icons={{
-																on: VolumeHighIcon,
-																off: VolumeOffIcon,
-															}}
-															onClick={() =>
-																editor.timeline.toggleTrackMute({
-																	trackId: track.id,
-																})
-															}
-														/>
-													)}
-													{track.type === "audio" && (
+													{canTracktHaveAudio(track) && (
 														<AudioTrackVolumeScrubber
+															muted={track.muted}
 															volume={track.volume ?? 1}
-															onChange={(nextVolume) => {
+															onChange={(nextVolume, options) => {
 																editor.timeline.setAudioTrackVolume({
 																	trackId: track.id,
 																	volume: nextVolume,
+																	pushHistory: options?.pushHistory ?? true,
 																});
+																const latestTrack =
+																	editor.timeline.getTrackById({
+																		trackId: track.id,
+																	});
+																if (
+																	nextVolume > 0.001 &&
+																	latestTrack &&
+																	canTracktHaveAudio(latestTrack) &&
+																	latestTrack.muted
+																) {
+																	editor.timeline.toggleTrackMute({
+																		trackId: track.id,
+																	});
+																}
 															}}
 														/>
 													)}
@@ -620,20 +621,34 @@ function TrackToggleIcon({
 }
 
 function AudioTrackVolumeScrubber({
+	muted = false,
 	volume,
 	onChange,
 }: {
+	muted?: boolean;
 	volume: number;
-	onChange: (volume: number) => void;
+	onChange: (
+		volume: number,
+		options?: {
+			pushHistory?: boolean;
+		},
+	) => void;
 }) {
 	const normalizedVolume = Math.max(0, Math.min(2, volume));
+	const effectiveVolume = muted ? 0 : normalizedVolume;
 	const [isHovering, setIsHovering] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
 	const startXRef = useRef(0);
 	const startVolumeRef = useRef(normalizedVolume);
+	const dragDeltaRef = useRef(0);
 	const hasDraggedRef = useRef(false);
-	const lastNonZeroVolumeRef = useRef(normalizedVolume > 0 ? normalizedVolume : 1);
+	const pointerLockElementRef = useRef<HTMLElement | null>(null);
+	const pointerLockActiveRef = useRef(false);
+	const lastNonZeroVolumeRef = useRef(
+		normalizedVolume > 0 ? normalizedVolume : 1,
+	);
 	const dragFrameRef = useRef<number | null>(null);
+	const latestDragVolumeRef = useRef(effectiveVolume);
 
 	useEffect(() => {
 		if (normalizedVolume > 0.001) {
@@ -650,33 +665,66 @@ function AudioTrackVolumeScrubber({
 		};
 	}, []);
 
-	const displayedPercent = Math.round(normalizedVolume * 100);
+	const displayedPercent = Math.round(effectiveVolume * 100);
 	const icon =
-		normalizedVolume <= 0.001
+		effectiveVolume <= 0.001
 			? VolumeOffIcon
-			: normalizedVolume < 0.75
+			: effectiveVolume < 0.75
 				? VolumeLowIcon
 				: VolumeHighIcon;
 
-	const setVolumeFromPointerDelta = ({
-		clientX,
-	}: {
-		clientX: number;
-	}) => {
+	const setVolumeFromPointerDelta = ({ clientX }: { clientX: number }) => {
 		const deltaX = clientX - startXRef.current;
 		const rawNext = startVolumeRef.current + deltaX * 0.005;
 		const nextVolume = Math.max(0, Math.min(2, rawNext));
-		onChange(nextVolume);
+		latestDragVolumeRef.current = nextVolume;
+		onChange(nextVolume, { pushHistory: false });
 	};
 
-	const startDrag = ({ clientX }: { clientX: number }) => {
+	const setVolumeFromMovementDelta = ({ movementX }: { movementX: number }) => {
+		dragDeltaRef.current += movementX;
+		const rawNext = startVolumeRef.current + dragDeltaRef.current * 0.005;
+		const nextVolume = Math.max(0, Math.min(2, rawNext));
+		latestDragVolumeRef.current = nextVolume;
+		onChange(nextVolume, { pushHistory: false });
+	};
+
+	const startDrag = ({
+		clientX,
+		lockTarget,
+	}: {
+		clientX: number;
+		lockTarget: HTMLElement | null;
+	}) => {
 		startXRef.current = clientX;
-		startVolumeRef.current = normalizedVolume;
+		startVolumeRef.current = effectiveVolume;
+		dragDeltaRef.current = 0;
 		hasDraggedRef.current = false;
+		latestDragVolumeRef.current = effectiveVolume;
+		pointerLockElementRef.current = lockTarget;
+		if (lockTarget && typeof lockTarget.requestPointerLock === "function") {
+			try {
+				lockTarget.requestPointerLock();
+			} catch {}
+		}
 		setIsDragging(true);
 	};
 
 	const handlePointerMove = (event: PointerEvent) => {
+		if (pointerLockActiveRef.current) {
+			const deltaX = Math.abs(dragDeltaRef.current + event.movementX);
+			if (!hasDraggedRef.current && deltaX >= 2) {
+				hasDraggedRef.current = true;
+			}
+			if (!hasDraggedRef.current) return;
+			event.preventDefault();
+			if (dragFrameRef.current != null) return;
+			dragFrameRef.current = window.requestAnimationFrame(() => {
+				dragFrameRef.current = null;
+				setVolumeFromMovementDelta({ movementX: event.movementX });
+			});
+			return;
+		}
 		const deltaX = Math.abs(event.clientX - startXRef.current);
 		if (!hasDraggedRef.current && deltaX >= 2) {
 			hasDraggedRef.current = true;
@@ -691,16 +739,29 @@ function AudioTrackVolumeScrubber({
 	};
 
 	const stopDrag = () => {
+		if (
+			typeof document !== "undefined" &&
+			document.pointerLockElement &&
+			typeof document.exitPointerLock === "function"
+		) {
+			try {
+				document.exitPointerLock();
+			} catch {}
+		}
 		if (!hasDraggedRef.current) {
-			if (normalizedVolume <= 0.001) {
-				onChange(lastNonZeroVolumeRef.current || 1);
+			if (effectiveVolume <= 0.001) {
+				onChange(lastNonZeroVolumeRef.current || 1, { pushHistory: true });
 			} else {
 				lastNonZeroVolumeRef.current = normalizedVolume;
-				onChange(0);
+				onChange(0, { pushHistory: true });
 			}
+		} else {
+			onChange(latestDragVolumeRef.current, { pushHistory: true });
 		}
 		setIsDragging(false);
 		hasDraggedRef.current = false;
+		pointerLockElementRef.current = null;
+		pointerLockActiveRef.current = false;
 		if (dragFrameRef.current != null) {
 			window.cancelAnimationFrame(dragFrameRef.current);
 			dragFrameRef.current = null;
@@ -709,10 +770,19 @@ function AudioTrackVolumeScrubber({
 
 	useEffect(() => {
 		if (!isDragging) return;
+		const handlePointerLockChange = () => {
+			pointerLockActiveRef.current =
+				document.pointerLockElement === pointerLockElementRef.current;
+		};
+		document.addEventListener("pointerlockchange", handlePointerLockChange);
 		window.addEventListener("pointermove", handlePointerMove);
 		window.addEventListener("pointerup", stopDrag);
 		window.addEventListener("pointercancel", stopDrag);
 		return () => {
+			document.removeEventListener(
+				"pointerlockchange",
+				handlePointerLockChange,
+			);
 			window.removeEventListener("pointermove", handlePointerMove);
 			window.removeEventListener("pointerup", stopDrag);
 			window.removeEventListener("pointercancel", stopDrag);
@@ -729,18 +799,35 @@ function AudioTrackVolumeScrubber({
 		>
 			<button
 				type="button"
-				className={`flex items-center justify-center rounded p-0.5 ${
+				className={`flex items-center gap-1 rounded px-1 py-0.5 ${
 					isDragging ? "bg-muted" : ""
 				}`}
 				onPointerDown={(event) => {
 					event.stopPropagation();
-					event.currentTarget.setPointerCapture(event.pointerId);
-					startDrag({ clientX: event.clientX });
+					startDrag({
+						clientX: event.clientX,
+						lockTarget: event.currentTarget,
+					});
 				}}
 				aria-label="Adjust audio track volume"
 				title="Click to mute/unmute. Drag left/right to adjust volume."
 			>
-				<HugeiconsIcon icon={icon} className="text-muted-foreground size-4 cursor-ew-resize" />
+				<span
+					aria-hidden
+					className={`bg-muted-foreground/60 inline-block h-3 w-[2px] rounded-full ${
+						isDragging || isHovering ? "opacity-100" : "opacity-60"
+					}`}
+				/>
+				<HugeiconsIcon
+					icon={icon}
+					className="text-muted-foreground size-4 cursor-ew-resize"
+				/>
+				<span
+					aria-hidden
+					className={`bg-muted-foreground/60 inline-block h-3 w-[2px] rounded-full ${
+						isDragging || isHovering ? "opacity-100" : "opacity-60"
+					}`}
+				/>
 			</button>
 			{(isHovering || isDragging) && (
 				<div className="bg-background text-foreground absolute top-[-1.35rem] left-1/2 -translate-x-1/2 rounded border px-1.5 py-0.5 text-[10px] leading-none">

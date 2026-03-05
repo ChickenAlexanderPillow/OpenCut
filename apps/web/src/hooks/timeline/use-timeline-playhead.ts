@@ -3,10 +3,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useEdgeAutoScroll } from "@/hooks/timeline/use-edge-auto-scroll";
 import { useEditor } from "../use-editor";
 import { useShiftKey } from "@/hooks/use-shift-key";
-import {
-	findSnapPoints,
-	snapToNearestPoint,
-} from "@/lib/timeline/snap-utils";
+import { findSnapPoints, snapToNearestPoint } from "@/lib/timeline/snap-utils";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
 
 interface UseTimelinePlayheadProps {
@@ -24,7 +21,9 @@ export function useTimelinePlayhead({
 	tracksScrollRef,
 	playheadRef,
 }: UseTimelinePlayheadProps) {
-	const editor = useEditor();
+	const editor = useEditor({
+		subscribeTo: ["playback", "timeline", "project", "scenes"],
+	});
 	const activeProject = editor.project.getActive();
 	const currentTime = editor.playback.getCurrentTime();
 	const duration = editor.timeline.getTotalDuration();
@@ -42,6 +41,9 @@ export function useTimelinePlayhead({
 	const [isDraggingRuler, setIsDraggingRuler] = useState(false);
 	const [hasDraggedRuler, setHasDraggedRuler] = useState(false);
 	const lastMouseXRef = useRef<number>(0);
+	const shouldResumeAfterScrubRef = useRef(false);
+	const scrubPauseTokenRef = useRef(0);
+	const scrubResumeDelayMs = 400;
 
 	const playheadPosition =
 		isScrubbing && scrubTime !== null ? scrubTime : currentTime;
@@ -86,8 +88,7 @@ export function useTimelinePlayhead({
 			const time = (() => {
 				if (!shouldSnap) return frameTime;
 				const tracks = editor.timeline.getTracks();
-				const bookmarks =
-					editor.scenes.getActiveScene()?.bookmarks ?? [];
+				const bookmarks = editor.scenes.getActiveScene()?.bookmarks ?? [];
 				const snapPoints = findSnapPoints({
 					tracks,
 					playheadTime: frameTime,
@@ -123,6 +124,10 @@ export function useTimelinePlayhead({
 		({ event }: { event: React.MouseEvent }) => {
 			event.preventDefault();
 			event.stopPropagation();
+			shouldResumeAfterScrubRef.current = editor.playback.getIsPlaying();
+			if (shouldResumeAfterScrubRef.current) {
+				editor.playback.pause();
+			}
 			editor.playback.setScrubbing({ isScrubbing: true });
 			handleScrub({ event });
 		},
@@ -138,11 +143,15 @@ export function useTimelinePlayhead({
 			event.preventDefault();
 			setIsDraggingRuler(true);
 			setHasDraggedRuler(false);
+			shouldResumeAfterScrubRef.current = editor.playback.getIsPlaying();
+			if (shouldResumeAfterScrubRef.current) {
+				editor.playback.pause();
+			}
 
-		editor.playback.setScrubbing({ isScrubbing: true });
-		handleScrub({ event, snappingEnabled: false });
-	},
-	[handleScrub, playheadRef, editor.playback],
+			editor.playback.setScrubbing({ isScrubbing: true });
+			handleScrub({ event, snappingEnabled: false });
+		},
+		[handleScrub, playheadRef, editor.playback],
 	);
 
 	const handlePlayheadMouseDownEvent = useCallback(
@@ -194,6 +203,15 @@ export function useTimelinePlayhead({
 				}
 				setHasDraggedRuler(false);
 			}
+
+			if (shouldResumeAfterScrubRef.current) {
+				shouldResumeAfterScrubRef.current = false;
+				const resumeToken = ++scrubPauseTokenRef.current;
+				window.setTimeout(() => {
+					if (scrubPauseTokenRef.current !== resumeToken) return;
+					editor.playback.play();
+				}, scrubResumeDelayMs);
+			}
 		};
 
 		const onMouseMove = (event: MouseEvent) => handleMouseMove({ event });
@@ -216,6 +234,7 @@ export function useTimelinePlayhead({
 		editor,
 		tracksScrollRef,
 		zoomLevel,
+		scrubResumeDelayMs,
 	]);
 
 	useEffect(() => {

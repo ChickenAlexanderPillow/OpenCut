@@ -135,7 +135,7 @@ export function TimelineElement({
 	onElementClick,
 	dragState,
 }: TimelineElementProps) {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: ["media", "project"] });
 	const { selectedElements } = useElementSelection();
 	const { requestRevealMedia } = useAssetsPanelStore();
 	const activeProject = editor.project.getActive();

@@ -49,7 +49,7 @@ export const TRANSCRIPTION_MODELS: TranscriptionModel[] = [
 ];
 
 export const DEFAULT_TRANSCRIPTION_MODEL: TranscriptionModelId =
-	"whisper-small";
+	"whisper-medium";
 
 export const DEFAULT_CHUNK_LENGTH_SECONDS = 30;
 export const DEFAULT_STRIDE_SECONDS = 5;

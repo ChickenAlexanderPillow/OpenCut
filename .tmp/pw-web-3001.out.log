@@ -1,0 +1,12 @@
+▲ Next.js 16.1.3 (Turbopack)
+- Local:         http://localhost:3001
+- Network:       http://192.168.1.38:3001
+- Environments: .env.local, .env
+
+✓ Starting...
+Creating turbopack project { dir: 'C:\\Coding\\opencut\\apps\\web', testMode: true }
+✓ Ready in 1089ms
+ GET / 307 in 1475ms (compile: 1107ms, proxy.ts: 142ms, render: 226ms)
+ GET /projects 200 in 468ms (compile: 167ms, proxy.ts: 4ms, render: 297ms)
+ GET /editor/e1832f77-bb77-4554-86f8-e7efbc6adf10 200 in 799ms (compile: 765ms, proxy.ts: 3ms, render: 30ms)
+[?25h
