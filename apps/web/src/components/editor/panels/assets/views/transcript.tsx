@@ -248,6 +248,18 @@ function buildDefaultSegmentGroups({
 }
 
 export function TranscriptView() {
+	const textBasedEditingDisabled =
+		process.env.NEXT_PUBLIC_DISABLE_TEXT_BASED_EDITING !== "false";
+	if (textBasedEditingDisabled) {
+		return (
+			<PanelView title="Transcript & Captions" contentClassName="space-y-2">
+				<div className="text-sm text-muted-foreground p-3 border rounded-md">
+					Text-based editing is temporarily disabled for diagnostics.
+				</div>
+			</PanelView>
+		);
+	}
+
 	const editor = useEditor();
 	const { selectedElements } = useElementSelection();
 	const transcriptionStatus = useTranscriptionStatusStore();
@@ -327,6 +339,19 @@ export function TranscriptView() {
 			}),
 		[words, cuts],
 	);
+	const hasLinkedCaptions = useMemo(() => {
+		if (!activeMedia) return false;
+		return tracks.some((track) => {
+			if (track.type !== "text") return false;
+			return track.elements.some(
+				(element) =>
+					element.type === "text" &&
+					(element.captionWordTimings?.length ?? 0) > 0 &&
+					element.captionSourceRef?.mediaElementId === activeMedia.element.id,
+			);
+		});
+	}, [activeMedia, tracks]);
+	const hasTranscriptData = useMemo(() => wordsWithCutState.length > 0, [wordsWithCutState]);
 
 	const currentWordId = useMemo(() => {
 		if (!activeMedia || wordsWithCutState.length === 0) return null;
@@ -600,6 +625,16 @@ export function TranscriptView() {
 			if (!activeMedia || !activeMediaAsset) {
 				throw new Error("Select one uploaded audio/video element first.");
 			}
+			if ((activeMedia.element.transcriptEdit?.words?.length ?? 0) > 0) {
+				setIsGeneratingCaptions(true);
+				setGenerateError(null);
+				setGenerateStep("Rebuilding from transcript...");
+				invokeAction("rebuild-captions-for-clip", {
+					trackId: activeMedia.trackId,
+					elementId: activeMedia.element.id,
+				});
+				return;
+			}
 			setIsGeneratingCaptions(true);
 			setGenerateError(null);
 			setGenerateStep("Transcribing...");
@@ -775,11 +810,11 @@ export function TranscriptView() {
 		);
 	}
 
-	if (wordsWithCutState.length === 0) {
+	if (!hasLinkedCaptions || !hasTranscriptData) {
 		return (
 			<PanelView title="Transcript & Captions" contentClassName="space-y-2">
 				<div className="text-sm text-muted-foreground p-3 border rounded-md">
-					Word-level transcript unavailable for this element.
+					No captions for this clip.
 				</div>
 				{generateError && (
 					<div className="bg-destructive/10 border-destructive/20 rounded-md border p-3">
@@ -806,18 +841,6 @@ export function TranscriptView() {
 			contentClassName="space-y-3 pb-3"
 			actions={
 				<div className="flex items-center gap-1">
-					<Button
-						variant="outline"
-						size="sm"
-						onClick={() =>
-							invokeAction("transcript-remove-fillers", {
-								trackId: activeMedia.trackId,
-								elementId: activeMedia.element.id,
-							})
-						}
-					>
-						Remove Fillers
-					</Button>
 					<Button
 						variant="outline"
 						size="sm"

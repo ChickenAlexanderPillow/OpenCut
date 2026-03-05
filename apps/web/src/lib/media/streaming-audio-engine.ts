@@ -146,6 +146,7 @@ export class StreamingTimelineAudioEngine {
 	private decodedWindowByKey = new Map<string, DecodedClipWindow>();
 	private lastDecodedWindowByClipId = new Map<string, DecodedClipWindow>();
 	private isPlaying = false;
+	private transportGeneration = 0;
 	private timelineAnchorTime = 0;
 	private contextAnchorTime = 0;
 	private startupRequestedAt: number | null = null;
@@ -245,6 +246,7 @@ export class StreamingTimelineAudioEngine {
 	}
 
 	start({ atTime }: { atTime: number }): void {
+		this.transportGeneration += 1;
 		this.isPlaying = true;
 		this.startupRequestedAt = performance.now();
 		this.startupMs = null;
@@ -261,6 +263,7 @@ export class StreamingTimelineAudioEngine {
 	}
 
 	stop(): void {
+		this.transportGeneration += 1;
 		this.isPlaying = false;
 		this.stopScheduler();
 		this.clearScheduledNodes();
@@ -459,31 +462,6 @@ export class StreamingTimelineAudioEngine {
 		}
 	}
 
-	private async withTimeout<T>({
-		promise,
-		timeoutMs,
-		fallback,
-	}: {
-		promise: Promise<T>;
-		timeoutMs: number;
-		fallback: T;
-	}): Promise<T> {
-		if (
-			!Number.isFinite(timeoutMs) ||
-			timeoutMs <= 0 ||
-			typeof window === "undefined"
-		) {
-			return promise;
-		}
-		return await new Promise<T>((resolve) => {
-			const timer = window.setTimeout(() => resolve(fallback), timeoutMs);
-			void promise
-				.then((value) => resolve(value))
-				.catch(() => resolve(fallback))
-				.finally(() => window.clearTimeout(timer));
-		});
-	}
-
 	private async tick(): Promise<void> {
 		if (!this.isPlaying) return;
 		if (this.schedulerBusy) {
@@ -491,8 +469,10 @@ export class StreamingTimelineAudioEngine {
 			return;
 		}
 
+		const runGeneration = this.transportGeneration;
 		this.schedulerBusy = true;
 		try {
+			if (!this.isPlaying || runGeneration !== this.transportGeneration) return;
 			const timelineNow = this.getClockTime();
 			const contextNow = this.audioContext.currentTime;
 			const contextHorizon = contextNow + this.lookaheadSeconds;
@@ -508,6 +488,9 @@ export class StreamingTimelineAudioEngine {
 			let hadScheduled = false;
 
 			for (const clip of this.clips) {
+				if (!this.isPlaying || runGeneration !== this.transportGeneration) {
+					break;
+				}
 				if (clip.muted || clip.gain <= 0) continue;
 				const clipEnd = clip.startTime + clip.duration;
 				if (clip.startTime >= timelineHorizon || clipEnd <= timelineNow)
@@ -529,6 +512,7 @@ export class StreamingTimelineAudioEngine {
 					timelineNow,
 					timelineHorizon,
 					contextNow,
+					runGeneration,
 				});
 				hadScheduled = hadScheduled || scheduledForClip;
 			}
@@ -787,12 +771,14 @@ export class StreamingTimelineAudioEngine {
 		timelineNow,
 		timelineHorizon,
 		contextNow,
+		runGeneration,
 	}: {
 		clip: StreamingClip;
 		decodedWindow: DecodedClipWindow;
 		timelineNow: number;
 		timelineHorizon: number;
 		contextNow: number;
+		runGeneration: number;
 	}): boolean {
 		const buffer = decodedWindow.buffer;
 		let scheduledAny = false;
@@ -822,6 +808,7 @@ export class StreamingTimelineAudioEngine {
 			localEnd: windowEnd - clipStart,
 		});
 		for (let index = 0; index < segmentPoints.length - 1; index++) {
+			if (!this.isPlaying || runGeneration !== this.transportGeneration) break;
 			const localSegmentStart = segmentPoints[index];
 			const localSegmentEnd = segmentPoints[index + 1];
 			if (
@@ -914,6 +901,7 @@ export class StreamingTimelineAudioEngine {
 				sourceAbsoluteStart - decodedWindow.sourceWindowStart,
 			);
 			if (boundedPlaybackDuration < this.minSegmentDurationSeconds) continue;
+			if (!this.isPlaying || runGeneration !== this.transportGeneration) break;
 
 			const source = this.audioContext.createBufferSource();
 			source.buffer = buffer;
@@ -975,9 +963,6 @@ export class StreamingTimelineAudioEngine {
 
 			source.connect(gainNode);
 			gainNode.connect(this.destinationNode);
-			source.start(contextStart, sourceOffset, boundedPlaybackDuration);
-			source.stop(contextStart + boundedPlaybackDuration + 0.01);
-
 			const scheduledNode: ScheduledNode = {
 				key,
 				clipId: clip.id,
@@ -993,6 +978,8 @@ export class StreamingTimelineAudioEngine {
 				gainNode.disconnect();
 				this.scheduledByKey.delete(key);
 			});
+			source.start(contextStart, sourceOffset, boundedPlaybackDuration);
+			source.stop(contextStart + boundedPlaybackDuration + 0.01);
 			const scheduledTimelineEnd =
 				timelinePlaybackStart +
 				Math.max(

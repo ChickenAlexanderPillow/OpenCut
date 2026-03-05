@@ -88,7 +88,7 @@ function ExportPopover({
 		DEFAULT_EXPORT_OPTIONS.quality,
 	);
 	const [includeAudio, setIncludeAudio] = useState<boolean>(
-		DEFAULT_EXPORT_OPTIONS.includeAudio || true,
+		DEFAULT_EXPORT_OPTIONS.includeAudio ?? true,
 	);
 	const [isExporting, setIsExporting] = useState(false);
 	const [progress, setProgress] = useState(0);

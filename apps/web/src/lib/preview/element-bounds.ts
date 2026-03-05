@@ -42,9 +42,19 @@ type CachedTextBounds = {
 	bounds: ElementBounds;
 };
 
+type CachedCaptionPagePlan = {
+	signature: string;
+	pages: Array<{
+		chunkStart: number;
+		pageSize: number;
+		content: string;
+	}>;
+};
+
 const MAX_PREVIEW_CACHE_ENTRIES = 300;
 const captionTimingCacheByElementId = new Map<string, CachedCaptionTimingData>();
 const textBoundsCacheByElementId = new Map<string, CachedTextBounds>();
+const captionPagePlanCacheByElementId = new Map<string, CachedCaptionPagePlan>();
 
 const sharedMeasureCanvas =
 	typeof document !== "undefined" ? document.createElement("canvas") : null;
@@ -117,6 +127,23 @@ function getCachedCaptionTimingData({
 	captionTimingCacheByElementId.set(element.id, data);
 	evictOldestEntry(captionTimingCacheByElementId);
 	return data;
+}
+
+function resolveCaptionPageForWordIndex({
+	pages,
+	activeWordIndex,
+}: {
+	pages: Array<{ chunkStart: number; pageSize: number; content: string }>;
+	activeWordIndex: number;
+}): { chunkStart: number; pageSize: number; content: string } | null {
+	if (pages.length === 0) return null;
+	if (activeWordIndex < 0) return pages[0] ?? null;
+	for (const page of pages) {
+		if (activeWordIndex < page.chunkStart + page.pageSize) {
+			return page;
+		}
+	}
+	return pages[pages.length - 1] ?? null;
 }
 
 function clampWordCount(value: number): number {
@@ -295,7 +322,7 @@ export function getElementBounds({
 					? latestStartedWordIndex
 					: 0;
 			const backgroundMode = element.captionStyle?.backgroundFitMode ?? "block";
-			const textLayoutSignature = [
+			const pagePlanSignature = [
 				captionTimingData.signature,
 				canvasWidth,
 				canvasHeight,
@@ -312,15 +339,15 @@ export function getElementBounds({
 				letterSpacing.toFixed(3),
 				wordsOnScreen ?? "all",
 				maxLinesOnScreen,
-				latestStartedWordIndex,
 				backgroundMode,
-				element.content,
+				element.captionStyle?.anchorToSafeAreaBottom ?? true,
+				element.captionStyle?.safeAreaBottomOffset ?? 0,
+				element.captionStyle?.anchorToSafeAreaTop ?? false,
+				element.captionStyle?.safeAreaTopOffset ?? 0,
+				fitInCanvas ? 1 : 0,
+				neverShrinkFont ? 1 : 0,
 			].join("|");
-			const cachedBounds = textBoundsCacheByElementId.get(element.id);
-			if (cachedBounds?.signature === textLayoutSignature) {
-				return cachedBounds.bounds;
-			}
-
+			const cachedPagePlan = captionPagePlanCacheByElementId.get(element.id);
 			const getFitPageSize = ({
 				start,
 				maxWords,
@@ -398,60 +425,88 @@ export function getElementBounds({
 				return 1;
 			};
 
-			const getWindow = (): { chunkStart: number; pageSize: number } => {
-				if (!shouldLimitWordsOnScreen) {
-					return {
-						chunkStart: 0,
-						pageSize: captionWords.length > 0 ? captionWords.length : 0,
-					};
-				}
-
-				let pageStart = 0;
-				while (pageStart < captionWords.length) {
-					const maxPageSize = Math.min(
-						cappedWordsOnScreen,
-						captionWords.length - pageStart,
-					);
-					const pageSize = getFitPageSize({
-						start: pageStart,
-						maxWords: maxPageSize,
-					});
-					if (activeWordForWindow < pageStart + pageSize) {
-						return { chunkStart: pageStart, pageSize };
-					}
-					pageStart += pageSize;
-				}
-
-				const fallbackStart = Math.max(
-					0,
-					captionWords.length - cappedWordsOnScreen,
-				);
-				return {
-					chunkStart: fallbackStart,
-					pageSize: getFitPageSize({
-						start: fallbackStart,
-						maxWords: Math.min(
-							cappedWordsOnScreen,
-							captionWords.length - fallbackStart,
-						),
-					}),
-				};
-			};
-
-			const windowed = getWindow();
+			const pages =
+				cachedPagePlan?.signature === pagePlanSignature
+					? cachedPagePlan.pages
+					: (() => {
+							const nextPages: Array<{
+								chunkStart: number;
+								pageSize: number;
+								content: string;
+							}> = [];
+							if (captionWords.length === 0) return nextPages;
+							if (!shouldLimitWordsOnScreen) {
+								nextPages.push({
+									chunkStart: 0,
+									pageSize: captionWords.length,
+									content: buildLinesFromWords({
+										words: captionWords,
+										maxLines: maxLinesOnScreen,
+									}).join("\n"),
+								});
+								return nextPages;
+							}
+							let pageStart = 0;
+							while (pageStart < captionWords.length) {
+								const maxPageSize = Math.min(
+									cappedWordsOnScreen,
+									captionWords.length - pageStart,
+								);
+								const pageSize = getFitPageSize({
+									start: pageStart,
+									maxWords: maxPageSize,
+								});
+								const renderWords = captionWords.slice(
+									pageStart,
+									pageStart + pageSize,
+								);
+								nextPages.push({
+									chunkStart: pageStart,
+									pageSize,
+									content: buildLinesFromWords({
+										words: renderWords,
+										maxLines: maxLinesOnScreen,
+									}).join("\n"),
+								});
+								pageStart += pageSize;
+							}
+							return nextPages;
+						})();
+			if (cachedPagePlan?.signature !== pagePlanSignature) {
+				captionPagePlanCacheByElementId.set(element.id, {
+					signature: pagePlanSignature,
+					pages,
+				});
+				evictOldestEntry(captionPagePlanCacheByElementId);
+			}
+			const activePage = resolveCaptionPageForWordIndex({
+				pages,
+				activeWordIndex: activeWordForWindow,
+			});
+			const textLayoutSignature = [
+				pagePlanSignature,
+				activePage?.chunkStart ?? 0,
+				activePage?.pageSize ?? 0,
+				element.content,
+			].join("|");
+			const cachedBounds = textBoundsCacheByElementId.get(element.id);
+			if (cachedBounds?.signature === textLayoutSignature) {
+				return cachedBounds.bounds;
+			}
 			const renderWords =
 				captionWords.length > 0
 					? captionWords.slice(
-							windowed.chunkStart,
-							windowed.chunkStart + windowed.pageSize,
+							activePage?.chunkStart ?? 0,
+							(activePage?.chunkStart ?? 0) + (activePage?.pageSize ?? 0),
 						)
 					: [];
 			const renderContent =
 				renderWords.length > 0
-					? buildLinesFromWords({
+					? (activePage?.content ??
+						buildLinesFromWords({
 							words: renderWords,
 							maxLines: maxLinesOnScreen,
-						}).join("\n")
+						}).join("\n"))
 					: element.content;
 			const maxWrapWidth = canvasWidth - Math.min(canvasWidth, canvasHeight) * 0.08;
 			const shouldWrapToMaintainFontSize =

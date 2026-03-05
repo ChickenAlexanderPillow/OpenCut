@@ -16,6 +16,10 @@ import { clamp } from "@/utils/math";
 import { useEditor } from "@/hooks/use-editor";
 import { DEFAULT_COLOR } from "@/constants/project-constants";
 import {
+	createBlueHighlightCaptionStyle,
+	createBlueHighlightCaptionTextProps,
+} from "@/constants/caption-presets";
+import {
 	DEFAULT_LETTER_SPACING,
 	DEFAULT_LINE_HEIGHT,
 	DEFAULT_TEXT_BACKGROUND,
@@ -117,39 +121,8 @@ const BUILTIN_BLUE_HIGHLIGHT_PRESET: CaptionGlobalPreset = {
 	builtIn: true,
 	updatedAt: new Date(0).toISOString(),
 	snapshot: {
-		transform: DEFAULT_TEXT_ELEMENT.transform,
-		opacity: DEFAULT_TEXT_ELEMENT.opacity,
-		blendMode: DEFAULT_TEXT_ELEMENT.blendMode,
-		fontSize: 65,
-		fontFamily: DEFAULT_TEXT_ELEMENT.fontFamily,
-		color: DEFAULT_TEXT_ELEMENT.color,
-		background: DEFAULT_TEXT_ELEMENT.background,
-		textAlign: DEFAULT_TEXT_ELEMENT.textAlign,
-		fontWeight: "bold",
-		fontStyle: DEFAULT_TEXT_ELEMENT.fontStyle,
-		textDecoration: DEFAULT_TEXT_ELEMENT.textDecoration,
-		letterSpacing: DEFAULT_TEXT_ELEMENT.letterSpacing,
-		lineHeight: DEFAULT_TEXT_ELEMENT.lineHeight,
-		captionStyle: {
-			fitInCanvas: true,
-			neverShrinkFont: false,
-			karaokeWordHighlight: true,
-			karaokeHighlightMode: "block",
-			karaokeHighlightEaseInOnly: false,
-			karaokeScaleHighlightedWord: false,
-			karaokeUnderlineThickness: DEFAULT_KARAOKE_UNDERLINE_THICKNESS,
-			karaokeHighlightColor: "#3B82F6",
-			karaokeHighlightTextColor: "#FFFFFF",
-			karaokeHighlightOpacity: 1,
-			karaokeHighlightRoundness: 24,
-			backgroundFitMode: "block",
-			wordsOnScreen: 3,
-			maxLinesOnScreen: 2,
-			wordDisplayPreset: "balanced",
-			linkedToCaptionGroup: true,
-			anchorToSafeAreaBottom: true,
-			safeAreaBottomOffset: 0,
-		},
+		...createBlueHighlightCaptionTextProps(),
+		captionStyle: createBlueHighlightCaptionStyle(),
 	},
 };
 
@@ -477,16 +450,10 @@ function CaptionSection({
 			defaultValue: [BUILTIN_BLUE_HIGHLIGHT_PRESET],
 		});
 	const captionPresets = useMemo(() => {
-		const builtInOverride = storedCaptionPresets.find(
-			(preset) => preset.id === BUILTIN_BLUE_HIGHLIGHT_PRESET.id,
-		);
-		const effectiveBuiltIn = builtInOverride
-			? { ...builtInOverride, builtIn: true }
-			: BUILTIN_BLUE_HIGHLIGHT_PRESET;
 		const withoutBuiltIn = storedCaptionPresets.filter(
 			(preset) => preset.id !== BUILTIN_BLUE_HIGHLIGHT_PRESET.id,
 		);
-		return [effectiveBuiltIn, ...withoutBuiltIn];
+		return [BUILTIN_BLUE_HIGHLIGHT_PRESET, ...withoutBuiltIn];
 	}, [storedCaptionPresets]);
 	const [selectedCaptionPresetId, setSelectedCaptionPresetId] = useState(
 		BUILTIN_BLUE_HIGHLIGHT_PRESET.id,
@@ -611,6 +578,10 @@ function CaptionSection({
 
 	const handleUpdateCaptionPreset = () => {
 		if (!selectedCaptionPreset) return;
+		if (selectedCaptionPreset.builtIn) {
+			toast.error("Built-in presets cannot be updated");
+			return;
+		}
 		const name = captionPresetName.trim();
 		if (!name) {
 			toast.error("Preset name is required");

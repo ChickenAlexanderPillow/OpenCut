@@ -14,6 +14,8 @@ import type {
 } from "@/services/renderer/webgpu-types";
 import { getRendererCapabilities } from "@/services/renderer/scene-partition";
 
+const EXPORT_AUDIO_BUILD_TIMEOUT_MS = 20_000;
+
 export class RendererManager {
 	private renderTree: RootNode | null = null;
 	private listeners = new Set<() => void>();
@@ -135,11 +137,30 @@ export class RendererManager {
 			let audioBuffer: AudioBuffer | null = null;
 			if (includeAudio) {
 				onProgress?.({ progress: 0.05 });
-				audioBuffer = await createTimelineAudioBuffer({
-					tracks,
-					mediaAssets,
-					duration,
-				});
+				try {
+					audioBuffer = await Promise.race([
+						createTimelineAudioBuffer({
+							tracks,
+							mediaAssets,
+							duration,
+						}),
+						new Promise<null>((_, reject) => {
+							setTimeout(() => {
+								reject(
+									new Error(
+										`Timeline audio build timed out after ${EXPORT_AUDIO_BUILD_TIMEOUT_MS}ms`,
+									),
+								);
+							}, EXPORT_AUDIO_BUILD_TIMEOUT_MS);
+						}),
+					]);
+				} catch (error) {
+					console.warn(
+						"Export audio preparation failed; continuing without audio:",
+						error,
+					);
+					audioBuffer = null;
+				}
 			}
 
 			const scene = buildScene({

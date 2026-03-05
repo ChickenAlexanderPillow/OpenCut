@@ -10,6 +10,12 @@ import { AudioManager } from "./managers/audio-manager";
 import { SelectionManager } from "./managers/selection-manager";
 import { AppLifecycleManager } from "./managers/app-lifecycle-manager";
 
+const EDITOR_CORE_GLOBAL_KEY = "__opencut_editor_core_singleton__";
+
+type GlobalWithEditorCore = typeof globalThis & {
+	[EDITOR_CORE_GLOBAL_KEY]?: EditorCore | null;
+};
+
 export class EditorCore {
 	private static instance: EditorCore | null = null;
 
@@ -41,15 +47,32 @@ export class EditorCore {
 	}
 
 	static getInstance(): EditorCore {
+		const globalScope = globalThis as GlobalWithEditorCore;
+		const globalInstance = globalScope[EDITOR_CORE_GLOBAL_KEY] ?? null;
+		if (globalInstance) {
+			EditorCore.instance = globalInstance;
+			return globalInstance;
+		}
 		if (!EditorCore.instance) {
 			EditorCore.instance = new EditorCore();
 		}
+		globalScope[EDITOR_CORE_GLOBAL_KEY] = EditorCore.instance;
 		return EditorCore.instance;
 	}
 
 	static reset(): void {
-		EditorCore.instance?.lifecycle.dispose();
-		EditorCore.instance?.audio.dispose();
+		const globalScope = globalThis as GlobalWithEditorCore;
+		const instance =
+			EditorCore.instance ?? globalScope[EDITOR_CORE_GLOBAL_KEY] ?? null;
+		instance?.dispose();
 		EditorCore.instance = null;
+		globalScope[EDITOR_CORE_GLOBAL_KEY] = null;
+	}
+
+	private dispose(): void {
+		this.playback.pause();
+		this.save.pause();
+		this.lifecycle.dispose();
+		this.audio.dispose();
 	}
 }

@@ -1803,6 +1803,8 @@ function computeRemovedTimelineRangesFromTranscriptCuts({
 
 export function useEditorActions() {
 	const editor = useEditor();
+	const textBasedEditingDisabled =
+		process.env.NEXT_PUBLIC_DISABLE_TEXT_BASED_EDITING !== "false";
 	const activeProject = editor.project.getActive();
 	const transcriptionStatus = useTranscriptionStatusStore();
 	const { registerProcess, updateProcessLabel, removeProcess } =
@@ -2244,6 +2246,7 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-toggle-word",
 		(args) => {
+			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			const wordId = typeof args?.wordId === "string" ? args.wordId : "";
@@ -2268,6 +2271,7 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-update-word",
 		(args) => {
+			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			const wordId = typeof args?.wordId === "string" ? args.wordId : "";
@@ -2297,6 +2301,7 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-update-words",
 		(args) => {
+			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			const updates = Array.isArray(args?.updates)
@@ -2336,6 +2341,7 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-set-words-removed",
 		(args) => {
+			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			const wordIds = Array.isArray(args?.wordIds)
@@ -2363,6 +2369,7 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-remove-fillers",
 		(args) => {
+			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			if (!trackId || !elementId) return;
@@ -2391,6 +2398,7 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-remove-pauses",
 		(args) => {
+			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			const thresholdSecondsRaw = args?.thresholdSeconds;
@@ -2430,6 +2438,7 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-restore-all",
 		(args) => {
+			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			if (!trackId || !elementId) return;
@@ -2453,6 +2462,7 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-split-segment-ui",
 		(args) => {
+			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			const wordId = typeof args?.wordId === "string" ? args.wordId : "";

@@ -1,10 +1,12 @@
 import type { EditorCore } from "@/core";
-import {
-	createAudioContext,
-	createTimelineAudioBuffer,
-} from "@/lib/media/audio";
-import { getAudioDecodeCacheStats } from "@/lib/media/audio-decode-cache";
+import { createAudioContext } from "@/lib/media/audio";
 import { StreamingTimelineAudioEngine } from "@/lib/media/streaming-audio-engine";
+
+const AUDIO_MANAGER_GLOBAL_KEY = "__opencut_audio_manager_singleton__";
+
+type GlobalWithAudioManager = typeof globalThis & {
+	[AUDIO_MANAGER_GLOBAL_KEY]?: AudioManager | null;
+};
 
 function buildTranscriptAudioRevision({
 	transcriptEdit,
@@ -50,13 +52,6 @@ export class AudioManager {
 	private audioContext: AudioContext | null = null;
 	private masterGain: GainNode | null = null;
 	private outputCompressor: DynamicsCompressorNode | null = null;
-	private playbackSource: AudioBufferSourceNode | null = null;
-	private timelineBuffer: AudioBuffer | null = null;
-	private timelineDuration = 0;
-	private timelineDirty = true;
-	private buildingBuffer = false;
-	private rebuildRequestedDuringBuild = false;
-	private buildGeneration = 0;
 	private lastIsPlaying = false;
 	private lastIsScrubbing = false;
 	private lastVolume = 1;
@@ -64,8 +59,6 @@ export class AudioManager {
 	private lastSeekTime = 0;
 	private minSeekRestartIntervalMs = 40;
 	private minSeekTimeDeltaSeconds = 1 / 60;
-	private playbackStartContextTime = 0;
-	private playbackStartTimelineTime = 0;
 	private playbackRequestId = 0;
 	private lastDriftCorrectionAt = 0;
 	private driftCorrectionCooldownMs = 120;
@@ -79,6 +72,13 @@ export class AudioManager {
 	private streamingEngine: StreamingTimelineAudioEngine | null = null;
 
 	constructor(private editor: EditorCore) {
+		const globalScope = globalThis as GlobalWithAudioManager;
+		const existing = globalScope[AUDIO_MANAGER_GLOBAL_KEY] ?? null;
+		if (existing && existing !== this) {
+			existing.dispose();
+		}
+		globalScope[AUDIO_MANAGER_GLOBAL_KEY] = this;
+
 		this.lastVolume = this.editor.playback.getVolume();
 		this.lastAudioFingerprint = this.computeAudioFingerprint();
 
@@ -97,7 +97,6 @@ export class AudioManager {
 			});
 			window.addEventListener("keydown", this.handleUserGesture);
 			window.setTimeout(() => {
-				if (!this.isStreamingEngineEnabled()) return;
 				void this.prepareStreamingGraph({
 					playhead: this.editor.playback.getCurrentTime(),
 					prewarm: true,
@@ -107,6 +106,10 @@ export class AudioManager {
 	}
 
 	dispose(): void {
+		const globalScope = globalThis as GlobalWithAudioManager;
+		if (globalScope[AUDIO_MANAGER_GLOBAL_KEY] === this) {
+			globalScope[AUDIO_MANAGER_GLOBAL_KEY] = null;
+		}
 		this.stopPlaybackOutputs();
 		for (const unsub of this.unsubscribers) {
 			unsub();
@@ -137,15 +140,6 @@ export class AudioManager {
 		this.stopOutputMetering();
 	}
 
-	private isStreamingEngineEnabled(): boolean {
-		const envFlag = process.env.NEXT_PUBLIC_AUDIO_STREAMING_ENGINE_V1;
-		if (typeof envFlag === "string") {
-			const normalized = envFlag.trim().toLowerCase();
-			if (["0", "false", "off", "no"].includes(normalized)) return false;
-		}
-		return true;
-	}
-
 	private handlePlaybackChange = (): void => {
 		const isPlaying = this.editor.playback.getIsPlaying();
 		const isScrubbing = this.editor.playback.getIsScrubbing();
@@ -165,6 +159,9 @@ export class AudioManager {
 			} else {
 				this.playbackRequestId += 1;
 				this.stopPlaybackOutputs();
+				this.streamingEngine?.dispose();
+				this.streamingEngine = null;
+				void this.suspendContext();
 			}
 		}
 
@@ -207,11 +204,7 @@ export class AudioManager {
 			// Scrub-end restart handles output; skip live seek scheduling while dragging.
 			return;
 		}
-		if (this.isStreamingEngineEnabled()) {
-			this.streamingEngine?.seek({ time });
-			return;
-		}
-		void this.startPlayback({ time });
+		this.streamingEngine?.seek({ time });
 	};
 
 	private handlePlaybackUpdate = (event: Event): void => {
@@ -222,10 +215,8 @@ export class AudioManager {
 		const detail = (event as CustomEvent<{ time: number }>).detail;
 		if (!detail) return;
 
-		const expectedTimelineFromAudio = this.isStreamingEngineEnabled()
-			? (this.streamingEngine?.getClockTime() ?? detail.time)
-			: this.playbackStartTimelineTime +
-				(this.audioContext.currentTime - this.playbackStartContextTime);
+		const expectedTimelineFromAudio =
+			this.streamingEngine?.getClockTime() ?? detail.time;
 		const drift = detail.time - expectedTimelineFromAudio;
 
 		if (Math.abs(drift) < this.driftResyncThresholdSeconds) return;
@@ -234,11 +225,7 @@ export class AudioManager {
 			return;
 
 		this.lastDriftCorrectionAt = now;
-		if (this.isStreamingEngineEnabled()) {
-			this.streamingEngine?.seek({ time: detail.time });
-			return;
-		}
-		void this.startPlayback({ time: detail.time });
+		this.streamingEngine?.seek({ time: detail.time });
 	};
 
 	private handleTimelineOrMediaChange = (): void => {
@@ -247,18 +234,13 @@ export class AudioManager {
 			return;
 		}
 		this.lastAudioFingerprint = nextFingerprint;
-		this.timelineDirty = true;
 
 		const isPlaying = this.editor.playback.getIsPlaying();
 		const isScrubbing = this.editor.playback.getIsScrubbing();
 		if (typeof window === "undefined") {
-			if (this.isStreamingEngineEnabled()) {
-				void this.prepareStreamingGraph({
-					playhead: this.editor.playback.getCurrentTime(),
-				});
-			} else {
-				void this.ensureBufferReady();
-			}
+			void this.prepareStreamingGraph({
+				playhead: this.editor.playback.getCurrentTime(),
+			});
 			return;
 		}
 
@@ -268,14 +250,10 @@ export class AudioManager {
 		this.rebuildDebounceTimer = window.setTimeout(
 			() => {
 				this.rebuildDebounceTimer = null;
-				if (this.isStreamingEngineEnabled()) {
-					void this.prepareStreamingGraph({
-						playhead: this.editor.playback.getCurrentTime(),
-						prewarm: !isPlaying && !isScrubbing,
-					});
-					return;
-				}
-				void this.ensureBufferReady();
+				void this.prepareStreamingGraph({
+					playhead: this.editor.playback.getCurrentTime(),
+					prewarm: !isPlaying && !isScrubbing,
+				});
 			},
 			isPlaying || isScrubbing ? 90 : 180,
 		);
@@ -325,7 +303,6 @@ export class AudioManager {
 	}
 
 	private ensureStreamingEngine(): StreamingTimelineAudioEngine | null {
-		if (!this.isStreamingEngineEnabled()) return null;
 		const audioContext = this.ensureAudioContext();
 		if (!audioContext) return null;
 		if (!this.masterGain) return null;
@@ -394,86 +371,12 @@ export class AudioManager {
 			if (prewarm) {
 				void engine.prewarm({ playhead, horizonSeconds: 12 });
 			}
-			this.timelineDirty = false;
 		} catch (error) {
 			console.warn("Streaming audio engine prepare failed:", error);
 		}
 	}
 
-	private async ensureBufferReady(): Promise<void> {
-		if (!this.timelineDirty) return;
-		if (this.buildingBuffer) {
-			this.rebuildRequestedDuringBuild = true;
-			return;
-		}
-		if (this.editor.media.isLoadingMedia()) {
-			return;
-		}
-
-		const audioContext = this.ensureAudioContext();
-		if (!audioContext) return;
-
-		const generation = ++this.buildGeneration;
-		this.buildingBuffer = true;
-		this.rebuildRequestedDuringBuild = false;
-
-		try {
-			const tracks = this.editor.timeline.getTracks();
-			const mediaAssets = this.editor.media.getAssets();
-			const duration = this.editor.timeline.getTotalDuration();
-
-			if (duration <= 0) {
-				if (generation === this.buildGeneration) {
-					this.timelineBuffer = null;
-					this.timelineDuration = 0;
-					this.timelineDirty = false;
-				}
-				return;
-			}
-
-			const buffer = await createTimelineAudioBuffer({
-				tracks,
-				mediaAssets,
-				duration,
-				audioContext,
-				sampleRate: audioContext.sampleRate,
-			});
-
-			if (generation !== this.buildGeneration) return;
-			if (this.rebuildRequestedDuringBuild) return;
-
-			this.timelineBuffer = buffer;
-			this.timelineDuration = duration;
-			this.timelineDirty = false;
-
-			if (this.editor.playback.getIsPlaying()) {
-				void this.startPlayback({
-					time: this.editor.playback.getCurrentTime(),
-				});
-			}
-		} catch (error) {
-			console.warn("Failed to build timeline audio buffer:", error);
-		} finally {
-			if (generation === this.buildGeneration) {
-				this.buildingBuffer = false;
-			}
-			if (this.rebuildRequestedDuringBuild || this.timelineDirty) {
-				void this.ensureBufferReady();
-			}
-		}
-	}
-
-	private stopLegacySource(): void {
-		if (!this.playbackSource) return;
-		try {
-			this.playbackSource.stop();
-		} catch {}
-		this.playbackSource.disconnect();
-		this.playbackSource = null;
-	}
-
 	private stopPlaybackOutputs(): void {
-		this.stopLegacySource();
 		this.streamingEngine?.stop();
 	}
 
@@ -529,62 +432,23 @@ export class AudioManager {
 			return;
 		}
 
-		if (this.isStreamingEngineEnabled()) {
-			try {
-				await this.prepareStreamingGraph({ playhead: time, prewarm: true });
-				if (requestId !== this.playbackRequestId) return;
-				if (!this.editor.playback.getIsPlaying()) return;
-				this.stopLegacySource();
-				this.streamingEngine?.start({ atTime: time });
-				this.streamingEngine?.seek({ time });
-				return;
-			} catch (error) {
-				console.warn("Streaming playback failed:", error);
-				return;
-			}
+		try {
+			await this.prepareStreamingGraph({ playhead: time, prewarm: true });
+			if (requestId !== this.playbackRequestId) return;
+			if (!this.editor.playback.getIsPlaying()) return;
+			this.streamingEngine?.stop();
+			this.streamingEngine?.start({ atTime: time });
+			this.streamingEngine?.seek({ time });
+		} catch (error) {
+			console.warn("Streaming playback failed:", error);
 		}
-
-		await this.ensureBufferReady();
-		if (requestId !== this.playbackRequestId) return;
-
-		this.stopLegacySource();
-
-		if (requestId !== this.playbackRequestId) return;
-		if (!this.editor.playback.getIsPlaying()) return;
-		if (!this.timelineBuffer) return;
-		if (this.timelineDuration <= 0) return;
-
-		const clampedTime = Math.max(0, Math.min(this.timelineDuration, time));
-		const startTime =
-			clampedTime >= this.timelineDuration
-				? Math.max(0, this.timelineDuration - 1 / 120)
-				: clampedTime;
-
-		const source = audioContext.createBufferSource();
-		source.buffer = this.timelineBuffer;
-		source.connect(this.masterGain ?? audioContext.destination);
-		source.start(audioContext.currentTime, startTime);
-
-		this.playbackSource = source;
-		this.playbackStartContextTime = audioContext.currentTime;
-		this.playbackStartTimelineTime = startTime;
-
-		source.addEventListener("ended", () => {
-			if (this.playbackSource === source) {
-				this.playbackSource = null;
-			}
-		});
 	}
 
 	async primeCurrentTimelineAudio(): Promise<void> {
 		await this.unlockAudioContext();
-		if (this.isStreamingEngineEnabled()) {
-			const playhead = this.editor.playback.getCurrentTime();
-			await this.prepareStreamingGraph({ playhead });
-			await this.streamingEngine?.prewarm({ playhead });
-			return;
-		}
-		await this.ensureBufferReady();
+		const playhead = this.editor.playback.getCurrentTime();
+		await this.prepareStreamingGraph({ playhead });
+		await this.streamingEngine?.prewarm({ playhead });
 	}
 
 	clearCachedTimelineAudio({
@@ -593,11 +457,7 @@ export class AudioManager {
 		preserveDirty?: boolean;
 	} = {}): void {
 		this.stopPlaybackOutputs();
-		this.timelineBuffer = null;
-		this.timelineDuration = 0;
-		this.timelineDirty = !!preserveDirty;
-		this.rebuildRequestedDuringBuild = false;
-		this.buildGeneration += 1;
+		void preserveDirty;
 		this.streamingEngine?.clearCaches();
 	}
 
@@ -606,7 +466,7 @@ export class AudioManager {
 		cacheHitRate: number;
 		dropouts: number;
 	} {
-		if (this.isStreamingEngineEnabled() && this.streamingEngine) {
+		if (this.streamingEngine) {
 			const health = this.streamingEngine.getHealth();
 			return {
 				startupMs: health.startupMs,
@@ -614,10 +474,9 @@ export class AudioManager {
 				dropouts: health.dropouts,
 			};
 		}
-		const cacheStats = getAudioDecodeCacheStats();
 		return {
 			startupMs: null,
-			cacheHitRate: cacheStats.entries > 0 ? 1 : 0,
+			cacheHitRate: 0,
 			dropouts: 0,
 		};
 	}
