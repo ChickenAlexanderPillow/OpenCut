@@ -30,6 +30,7 @@ import { DEFAULT_TIMELINE_VIEW_STATE } from "@/constants/timeline-constants";
 import { loadFonts } from "@/lib/fonts/google-fonts";
 import { collectFontFamilies } from "@/lib/timeline/element-utils";
 import { DEFAULT_BRAND_OVERLAYS } from "@/constants/brand-overlay-constants";
+import { clearRuntimeCaches } from "@/lib/editor/runtime-cache-policy";
 
 export interface MigrationState {
 	isMigrating: boolean;
@@ -136,8 +137,9 @@ export class ProjectManager {
 		this.editor.save.pause();
 		this.editor.playback.pause();
 		await this.ensureStorageMigrations();
-		this.editor.media.clearAllAssets();
-		this.editor.scenes.clearScenes();
+		this.active = null;
+		this.notify();
+		clearRuntimeCaches({ editor: this.editor, policy: "project-switch" });
 
 		try {
 			const result = await storageService.loadProject({ id });
@@ -251,10 +253,7 @@ export class ProjectManager {
 				this.active && idSet.has(this.active.metadata.id);
 
 			if (shouldClearActive) {
-				this.editor.playback.pause();
-				this.active = null;
-				this.editor.media.clearAllAssets();
-				this.editor.scenes.clearScenes();
+				this.closeProject();
 			}
 
 			this.notify();
@@ -264,12 +263,10 @@ export class ProjectManager {
 	}
 
 	closeProject(): void {
-		this.editor.playback.pause();
 		this.active = null;
 		this.notify();
 
-		this.editor.media.clearAllAssets();
-		this.editor.scenes.clearScenes();
+		this.clearProjectRuntimeState();
 	}
 
 	async renameProject({
@@ -643,7 +640,13 @@ export class ProjectManager {
 	}
 
 	private notify(): void {
-		this.listeners.forEach((fn) => fn());
+		this.listeners.forEach((fn) => {
+			fn();
+		});
+	}
+
+	private clearProjectRuntimeState(): void {
+		clearRuntimeCaches({ editor: this.editor, policy: "project-exit" });
 	}
 
 	private scheduleFontSync = (): void => {

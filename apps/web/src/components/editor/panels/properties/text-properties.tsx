@@ -1469,6 +1469,20 @@ function ContentSection({
 	trackId: string;
 }) {
 	const editor = useEditor();
+	const isTranscriptDrivenCaption =
+		(element.captionWordTimings?.length ?? 0) > 0 ||
+		element.captionSourceRef !== undefined;
+
+	const transcriptDerivedContent = useMemo(() => {
+		const timings = element.captionWordTimings ?? [];
+		if (timings.length === 0) {
+			return element.content ?? "";
+		}
+		return timings
+			.map((timing) => timing.word)
+			.filter((word) => word.trim().length > 0)
+			.join(" ");
+	}, [element.captionWordTimings, element.content]);
 
 	const content = usePropertyDraft({
 		displayValue: element.content,
@@ -1486,14 +1500,28 @@ function ContentSection({
 		<Section collapsible sectionKey="text:content" hasBorderTop={false}>
 			<SectionHeader title="Content" />
 			<SectionContent>
-				<Textarea
-					placeholder="Name"
-					value={content.displayValue}
-					className="min-h-60"
-					onFocus={content.onFocus}
-					onChange={content.onChange}
-					onBlur={content.onBlur}
-				/>
+				{isTranscriptDrivenCaption ? (
+					<div className="text-muted-foreground space-y-2 text-xs">
+						<p>
+							Content is transcript-driven for this caption. Edit words in the
+							Transcript panel.
+						</p>
+						<Textarea
+							value={transcriptDerivedContent}
+							className="min-h-60"
+							readOnly
+						/>
+					</div>
+				) : (
+					<Textarea
+						placeholder="Name"
+						value={content.displayValue}
+						className="min-h-60"
+						onFocus={content.onFocus}
+						onChange={content.onChange}
+						onBlur={content.onBlur}
+					/>
+				)}
 			</SectionContent>
 		</Section>
 	);

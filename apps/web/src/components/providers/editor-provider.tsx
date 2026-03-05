@@ -23,14 +23,13 @@ import { CURRENT_PROJECT_VERSION } from "@/services/storage/migrations";
 import { DEFAULT_BRAND_OVERLAYS } from "@/constants/brand-overlay-constants";
 import type { TProject } from "@/types/project";
 import { processMediaAssets } from "@/lib/media/processing";
-import {
-	buildClipTranscriptEntryFromLinkedExternalTranscript,
-} from "@/lib/clips/transcript";
+import { buildClipTranscriptEntryFromLinkedExternalTranscript } from "@/lib/clips/transcript";
 import { normalizeGeneratedCaptionsInProject } from "@/lib/captions/generated-caption-normalizer";
-import { syncAllCaptionsFromTranscriptEditsInTracks } from "@/lib/transcript-editor/sync-captions";
-import { videoCache } from "@/services/video-cache/service";
-import { clearWaveformPeaksCache } from "@/components/editor/panels/timeline/audio-waveform";
-import { clearSmartCutAnalysisCache } from "@/lib/editing/smart-cut";
+import {
+	dedupeTranscriptEditsInTracks,
+	syncAllCaptionsFromTranscriptEditsInTracks,
+} from "@/lib/transcript-editor/sync-captions";
+import { clearRuntimeCaches } from "@/lib/editor/runtime-cache-policy";
 
 interface EditorProviderProps {
 	projectId: string;
@@ -134,11 +133,8 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 								segments: transcript.segmentsJson ?? [],
 								segmentsCount: transcript.segmentsCount ?? 0,
 								audioDurationSeconds: transcript.audioDurationSeconds ?? null,
-								qualityMeta:
-									transcript.qualityMetaJson ??
-									undefined,
-								updatedAt:
-									transcript.updatedAt ?? now.toISOString(),
+								qualityMeta: transcript.qualityMetaJson ?? undefined,
+								updatedAt: transcript.updatedAt ?? now.toISOString(),
 							},
 						}
 					: undefined,
@@ -153,8 +149,7 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 			externalProjectId: string;
 		}) => {
 			let sourceAsset =
-				editor
-					.media
+				editor.media
 					.getAssets()
 					.find(
 						(asset) =>
@@ -191,8 +186,9 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 						},
 					);
 					if (mediaResponse.ok) {
-						const mediaNameHeader =
-							mediaResponse.headers.get("x-source-media-name");
+						const mediaNameHeader = mediaResponse.headers.get(
+							"x-source-media-name",
+						);
 						const blob = await mediaResponse.blob();
 						const mediaName = mediaNameHeader || "linked-source-media";
 						const mediaFile = new File([blob], mediaName, {
@@ -208,8 +204,7 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 							});
 						}
 						sourceAsset =
-							editor
-								.media
+							editor.media
 								.getAssets()
 								.find(
 									(asset) =>
@@ -218,7 +213,10 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 								) ?? null;
 					}
 				} catch (error) {
-					console.warn("Failed to import linked source media into project", error);
+					console.warn(
+						"Failed to import linked source media into project",
+						error,
+					);
 				}
 			}
 
@@ -252,21 +250,22 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 				};
 				if (!applyPayload.suitability.isSuitable) return;
 
-				const transcriptEntry = buildClipTranscriptEntryFromLinkedExternalTranscript({
-					asset: sourceAsset,
-					modelId: "whisper-tiny",
-					language: "auto",
-					externalTranscript: {
-						sourceSystem: applyPayload.sourceSystem,
-						externalProjectId: applyPayload.externalProjectId,
-						transcriptText: applyPayload.transcriptText,
-						segments: applyPayload.segments,
-						segmentsCount: applyPayload.segmentsCount,
-						audioDurationSeconds: applyPayload.audioDurationSeconds,
-						qualityMeta: applyPayload.qualityMeta,
-						updatedAt: applyPayload.updatedAt,
-					},
-				});
+				const transcriptEntry =
+					buildClipTranscriptEntryFromLinkedExternalTranscript({
+						asset: sourceAsset,
+						modelId: "whisper-tiny",
+						language: "auto",
+						externalTranscript: {
+							sourceSystem: applyPayload.sourceSystem,
+							externalProjectId: applyPayload.externalProjectId,
+							transcriptText: applyPayload.transcriptText,
+							segments: applyPayload.segments,
+							segmentsCount: applyPayload.segmentsCount,
+							audioDurationSeconds: applyPayload.audioDurationSeconds,
+							qualityMeta: applyPayload.qualityMeta,
+							updatedAt: applyPayload.updatedAt,
+						},
+					});
 				if (!transcriptEntry) return;
 
 				const nextProject: TProject = {
@@ -296,10 +295,17 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 						project: loadedProject,
 					});
 					const syncedScenes = normalized.project.scenes.map((scene) => {
-						const synced = syncAllCaptionsFromTranscriptEditsInTracks({
+						const deduped = dedupeTranscriptEditsInTracks({
 							tracks: scene.tracks,
 						});
-						return synced.changed ? { ...scene, tracks: synced.tracks } : scene;
+						const baseTracks = deduped.changed ? deduped.tracks : scene.tracks;
+						const synced = syncAllCaptionsFromTranscriptEditsInTracks({
+							tracks: baseTracks,
+						});
+						const nextTracks = synced.changed ? synced.tracks : baseTracks;
+						return nextTracks !== scene.tracks
+							? { ...scene, tracks: nextTracks }
+							: scene;
 					});
 					const hasSyncedChanges = syncedScenes.some(
 						(scene, index) => scene !== normalized.project.scenes[index],
@@ -418,29 +424,46 @@ function EditorRuntimeBindings() {
 	const requestOpen = useProjectExitStore((state) => state.requestOpen);
 
 	const hasActiveProjectProcesses = activeProject
-		? processes.some((process) => process.projectId === activeProject.metadata.id)
+		? processes.some(
+				(process) => process.projectId === activeProject.metadata.id,
+			)
 		: false;
 
 	useEffect(() => {
 		const CHECK_INTERVAL_MS = 30_000;
-		const SOFT_LIMIT_MB = 768;
-		const HARD_LIMIT_MB = 1024;
 		const PRESSURE_SAMPLES = 3;
 		const RELOAD_GUARD_KEY = "opencut:memory:reload-guard";
 		const RELOAD_WINDOW_MS = 5 * 60_000;
 		const MAX_RELOADS_IN_WINDOW = 2;
+		const FALLBACK_SOFT_LIMIT_MB = 768;
+		const FALLBACK_HARD_LIMIT_MB = 1024;
 		let highPressureCount = 0;
 		let recovering = false;
 
-		const getUsedHeapMb = (): number | null => {
-			const memory = (performance as Performance & {
-				memory?: {
-					usedJSHeapSize?: number;
-				};
-			}).memory;
+		const getHeapStats = (): {
+			usedHeapMb: number;
+			heapLimitMb: number | null;
+		} | null => {
+			const memory = (
+				performance as Performance & {
+					memory?: {
+						usedJSHeapSize?: number;
+						jsHeapSizeLimit?: number;
+					};
+				}
+			).memory;
 			const usedBytes = memory?.usedJSHeapSize;
-			if (typeof usedBytes !== "number" || !Number.isFinite(usedBytes)) return null;
-			return usedBytes / (1024 * 1024);
+			if (typeof usedBytes !== "number" || !Number.isFinite(usedBytes))
+				return null;
+			const limitBytes = memory?.jsHeapSizeLimit;
+			const heapLimitMb =
+				typeof limitBytes === "number" && Number.isFinite(limitBytes)
+					? limitBytes / (1024 * 1024)
+					: null;
+			return {
+				usedHeapMb: usedBytes / (1024 * 1024),
+				heapLimitMb,
+			};
 		};
 
 		const canAutoReload = (): boolean => {
@@ -454,7 +477,10 @@ function EditorRuntimeBindings() {
 					);
 					return true;
 				}
-				const parsed = JSON.parse(raw) as { startedAt?: number; count?: number };
+				const parsed = JSON.parse(raw) as {
+					startedAt?: number;
+					count?: number;
+				};
 				const startedAt =
 					typeof parsed.startedAt === "number" ? parsed.startedAt : now;
 				const count = typeof parsed.count === "number" ? parsed.count : 0;
@@ -478,23 +504,36 @@ function EditorRuntimeBindings() {
 			}
 		};
 
-		const runRecovery = async ({ usedHeapMb }: { usedHeapMb: number }) => {
+		const runRecovery = async ({
+			usedHeapMb,
+			softLimitMb,
+			hardLimitMb,
+			isHardPressure,
+		}: {
+			usedHeapMb: number;
+			softLimitMb: number;
+			hardLimitMb: number;
+			isHardPressure: boolean;
+		}) => {
 			if (recovering) return;
 			recovering = true;
 			try {
-				videoCache.clearAll();
-				clearWaveformPeaksCache();
-				clearSmartCutAnalysisCache();
-				editor.audio.clearCachedTimelineAudio();
+				clearRuntimeCaches({
+					editor,
+					policy: isHardPressure ? "memory-hard" : "memory-soft",
+				});
 				await editor.save.flush();
 				await new Promise((resolve) => setTimeout(resolve, 350));
-				const afterRecoveryHeapMb = getUsedHeapMb();
+				const afterRecoveryHeapMb = getHeapStats()?.usedHeapMb ?? null;
 				const shouldReload =
-					usedHeapMb >= HARD_LIMIT_MB ||
-					(afterRecoveryHeapMb !== null && afterRecoveryHeapMb >= SOFT_LIMIT_MB * 0.92);
+					usedHeapMb >= hardLimitMb ||
+					(afterRecoveryHeapMb !== null &&
+						afterRecoveryHeapMb >= softLimitMb * 0.92);
 				if (!shouldReload || hasActiveProjectProcesses) return;
 				if (!canAutoReload()) {
-					console.warn("Memory pressure persists; reload guard blocked auto-reload");
+					console.warn(
+						"Memory pressure persists; reload guard blocked auto-reload",
+					);
 					return;
 				}
 				console.warn("Auto-reloading editor due to sustained memory pressure");
@@ -508,17 +547,36 @@ function EditorRuntimeBindings() {
 
 		const intervalId = window.setInterval(() => {
 			if (document.hidden) return;
-			const usedHeapMb = getUsedHeapMb();
-			if (usedHeapMb === null) return;
-			if (usedHeapMb >= SOFT_LIMIT_MB) {
+			const heapStats = getHeapStats();
+			if (!heapStats) return;
+			const { usedHeapMb, heapLimitMb } = heapStats;
+			const softLimitMb =
+				heapLimitMb !== null
+					? Math.min(FALLBACK_SOFT_LIMIT_MB, heapLimitMb * 0.75)
+					: FALLBACK_SOFT_LIMIT_MB;
+			const hardLimitMb =
+				heapLimitMb !== null
+					? Math.min(FALLBACK_HARD_LIMIT_MB, heapLimitMb * 0.88)
+					: FALLBACK_HARD_LIMIT_MB;
+			const hardByRatio =
+				heapLimitMb !== null && usedHeapMb >= heapLimitMb * 0.92;
+
+			if (usedHeapMb >= softLimitMb) {
 				highPressureCount += 1;
 			} else {
 				highPressureCount = 0;
 			}
 			const needsRecovery =
-				usedHeapMb >= HARD_LIMIT_MB || highPressureCount >= PRESSURE_SAMPLES;
+				usedHeapMb >= hardLimitMb ||
+				highPressureCount >= PRESSURE_SAMPLES ||
+				hardByRatio;
 			if (!needsRecovery) return;
-			void runRecovery({ usedHeapMb });
+			void runRecovery({
+				usedHeapMb,
+				softLimitMb,
+				hardLimitMb,
+				isHardPressure: usedHeapMb >= hardLimitMb || hardByRatio,
+			});
 		}, CHECK_INTERVAL_MS);
 
 		return () => {
@@ -542,7 +600,8 @@ function EditorRuntimeBindings() {
 			if (!hasActiveProjectProcesses) return;
 			if (event.defaultPrevented) return;
 			if (event.button !== 0) return;
-			if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+			if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+				return;
 
 			const target = event.target as HTMLElement | null;
 			const link = target?.closest("a[href]") as HTMLAnchorElement | null;

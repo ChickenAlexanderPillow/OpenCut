@@ -22,11 +22,15 @@ import type { ExternalProjectTranscriptCacheEntry } from "@/types/external-proje
 export const CLIP_TRANSCRIPT_CACHE_VERSION = 1;
 const CHUNKED_TRANSCRIPTION_DURATION_THRESHOLD_SECONDS = 4 * 60;
 const CHUNKED_TRANSCRIPTION_FILE_SIZE_THRESHOLD_BYTES = 180 * 1024 * 1024;
-const CHUNKED_TRANSCRIPTION_WINDOW_SECONDS = 60;
+const CHUNKED_TRANSCRIPTION_MIN_WINDOW_SECONDS = 60;
+const CHUNKED_TRANSCRIPTION_MAX_WINDOW_SECONDS = 180;
+const CHUNKED_TRANSCRIPTION_TARGET_CHUNK_COUNT = 8;
+const CHUNKED_TRANSCRIPTION_TARGET_UPLOAD_BYTES = 8 * 1024 * 1024;
 const CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS = 1.5;
 const CHUNK_PROGRESS_HEARTBEAT_MS = 1200;
 const CLIP_TRANSCRIPTION_API_TIMEOUT_MS = 120000;
 const CLIP_TRANSCRIPTION_API_MODEL = "large-v3";
+const CLIP_TRANSCRIPTION_TARGET_SAMPLE_RATE = 16000;
 
 function normalizeDurationForFingerprint({
 	duration,
@@ -72,6 +76,48 @@ function getClipTranscriptCacheKey({
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
+}
+
+function resampleMonoSamplesForTranscription({
+	samples,
+	sampleRate,
+	targetSampleRate = CLIP_TRANSCRIPTION_TARGET_SAMPLE_RATE,
+}: {
+	samples: Float32Array;
+	sampleRate: number;
+	targetSampleRate?: number;
+}): { samples: Float32Array; sampleRate: number } {
+	if (
+		!Number.isFinite(sampleRate) ||
+		sampleRate <= 0 ||
+		!Number.isFinite(targetSampleRate) ||
+		targetSampleRate <= 0 ||
+		sampleRate === targetSampleRate
+	) {
+		return { samples, sampleRate };
+	}
+
+	const targetLength = Math.max(
+		1,
+		Math.round((samples.length * targetSampleRate) / sampleRate),
+	);
+	const resampled = new Float32Array(targetLength);
+	const ratio = sampleRate / targetSampleRate;
+
+	for (let i = 0; i < targetLength; i++) {
+		const srcIndex = i * ratio;
+		const left = Math.floor(srcIndex);
+		const right = Math.min(left + 1, samples.length - 1);
+		const weight = srcIndex - left;
+		const leftValue = samples[left] ?? 0;
+		const rightValue = samples[right] ?? leftValue;
+		resampled[i] = leftValue * (1 - weight) + rightValue * weight;
+	}
+
+	return {
+		samples: resampled,
+		sampleRate: targetSampleRate,
+	};
 }
 
 function encodeMonoPcm16WavBlob({
@@ -155,7 +201,33 @@ async function transcribeWithClipApi({
 	modelId: TranscriptionModelId;
 	cacheKey: string;
 }): Promise<{ text: string; segments: TranscriptionSegment[] }> {
-	const wavBlob = encodeMonoPcm16WavBlob({ samples, sampleRate });
+	const normalizedAudio = resampleMonoSamplesForTranscription({
+		samples,
+		sampleRate,
+	});
+	const wavBlob = encodeMonoPcm16WavBlob({
+		samples: normalizedAudio.samples,
+		sampleRate: normalizedAudio.sampleRate,
+	});
+	return await transcribeWavBlobWithClipApi({
+		wavBlob,
+		language,
+		modelId,
+		cacheKey,
+	});
+}
+
+async function transcribeWavBlobWithClipApi({
+	wavBlob,
+	language,
+	modelId,
+	cacheKey,
+}: {
+	wavBlob: Blob;
+	language: TranscriptionLanguage;
+	modelId: TranscriptionModelId;
+	cacheKey: string;
+}): Promise<{ text: string; segments: TranscriptionSegment[] }> {
 	if (wavBlob.size <= 0) {
 		return { text: "", segments: [] };
 	}
@@ -246,15 +318,119 @@ function shouldUseChunkedTranscription({ asset }: { asset: MediaAsset }): boolea
 	return false;
 }
 
-async function decodeAudioChunkToMono({
+function resolveChunkWindowSeconds({
+	duration,
+}: {
+	duration: number;
+}): number {
+	if (!Number.isFinite(duration) || duration <= 0) {
+		return CHUNKED_TRANSCRIPTION_MIN_WINDOW_SECONDS;
+	}
+
+	const bytesPerSecond = CLIP_TRANSCRIPTION_TARGET_SAMPLE_RATE * 2;
+	const maxWindowByUploadSize = Math.max(
+		CHUNKED_TRANSCRIPTION_MIN_WINDOW_SECONDS,
+		Math.floor(
+			Math.max(1, CHUNKED_TRANSCRIPTION_TARGET_UPLOAD_BYTES - 44) /
+				Math.max(1, bytesPerSecond),
+		),
+	);
+	const maxAllowedWindow = Math.min(
+		CHUNKED_TRANSCRIPTION_MAX_WINDOW_SECONDS,
+		maxWindowByUploadSize,
+	);
+
+	const desiredWindow = Math.ceil(duration / CHUNKED_TRANSCRIPTION_TARGET_CHUNK_COUNT);
+	return clamp(
+		desiredWindow,
+		CHUNKED_TRANSCRIPTION_MIN_WINDOW_SECONDS,
+		Math.max(CHUNKED_TRANSCRIPTION_MIN_WINDOW_SECONDS, maxAllowedWindow),
+	);
+}
+
+type ChunkDecodePlan = {
+	chunkIndex: number;
+	logicalStart: number;
+	logicalEnd: number;
+	decodeStart: number;
+	decodeEnd: number;
+};
+
+type PreparedChunkAudio = ChunkDecodePlan & {
+	wavBlob: Blob;
+};
+
+function buildChunkDecodePlans({
+	duration,
+	windowSeconds,
+}: {
+	duration: number;
+	windowSeconds: number;
+}): ChunkDecodePlan[] {
+	const chunkCount = Math.max(1, Math.ceil(duration / Math.max(1, windowSeconds)));
+	const plans: ChunkDecodePlan[] = [];
+	for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++) {
+		const logicalStart = chunkIndex * windowSeconds;
+		const logicalEnd = Math.min(duration, logicalStart + windowSeconds);
+		const decodeStart = Math.max(
+			0,
+			logicalStart - (chunkIndex === 0 ? 0 : CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS),
+		);
+		const decodeEnd = Math.min(duration, logicalEnd + CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS);
+		plans.push({
+			chunkIndex,
+			logicalStart,
+			logicalEnd,
+			decodeStart,
+			decodeEnd,
+		});
+	}
+	return plans;
+}
+
+function mergeToMonoSamples({
+	chunks,
+}: {
+	chunks: AudioBuffer[];
+}): { samples: Float32Array; sampleRate: number } | null {
+	if (chunks.length === 0) return null;
+	const sampleRate = chunks[0].sampleRate;
+	const totalSamples = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+	if (totalSamples <= 0) return null;
+
+	const monoSamples = new Float32Array(totalSamples);
+	let writeOffset = 0;
+	for (const chunk of chunks) {
+		const channelCount = Math.max(1, chunk.numberOfChannels);
+		for (let i = 0; i < chunk.length; i++) {
+			let channelSum = 0;
+			for (let channel = 0; channel < channelCount; channel++) {
+				channelSum += chunk.getChannelData(channel)[i] ?? 0;
+			}
+			monoSamples[writeOffset + i] = channelSum / channelCount;
+		}
+		writeOffset += chunk.length;
+	}
+
+	return {
+		samples: monoSamples,
+		sampleRate,
+	};
+}
+
+async function prepareChunkAudioForTranscription({
 	asset,
-	startTime,
-	endTime,
+	plans,
+	onProgress,
 }: {
 	asset: MediaAsset;
-	startTime: number;
-	endTime: number;
-}): Promise<{ samples: Float32Array; sampleRate: number } | null> {
+	plans: ChunkDecodePlan[];
+	onProgress?: (progress: TranscriptionProgress) => void;
+}): Promise<PreparedChunkAudio[]> {
+	const prepared: PreparedChunkAudio[] = [];
+	const chunkCount = plans.length;
+	const preparationScale = 50;
+
 	const input = new Input({
 		source: new BlobSource(asset.file),
 		formats: ALL_FORMATS,
@@ -262,37 +438,72 @@ async function decodeAudioChunkToMono({
 
 	try {
 		const audioTrack = await input.getPrimaryAudioTrack();
-		if (!audioTrack) return null;
-
+		if (!audioTrack) return prepared;
 		const sink = new AudioBufferSink(audioTrack);
-		const chunks: AudioBuffer[] = [];
 
-		for await (const { buffer } of sink.buffers(startTime, endTime)) {
-			chunks.push(buffer);
-		}
+		for (const plan of plans) {
+			const prepBaseProgress = (plan.chunkIndex / chunkCount) * preparationScale;
+			const prepMaxSoftProgress =
+				((plan.chunkIndex + 0.92) / chunkCount) * preparationScale;
+			onProgress?.({
+				status: "transcribing",
+				progress: Math.round(prepBaseProgress),
+				message: `Preparing chunk ${plan.chunkIndex + 1}/${chunkCount} audio...`,
+			});
 
-		if (chunks.length === 0) return null;
-		const sampleRate = chunks[0].sampleRate;
-		const totalSamples = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-		const monoSamples = new Float32Array(totalSamples);
+			let decodeHeartbeatProgress = prepBaseProgress;
+			const decodeHeartbeatId = window.setInterval(() => {
+				decodeHeartbeatProgress = Math.min(
+					prepMaxSoftProgress,
+					decodeHeartbeatProgress + Math.max(0.2, 2 / chunkCount),
+				);
+				onProgress?.({
+					status: "transcribing",
+					progress: Math.round(decodeHeartbeatProgress),
+					message: `Preparing chunk ${plan.chunkIndex + 1}/${chunkCount} audio...`,
+				});
+			}, CHUNK_PROGRESS_HEARTBEAT_MS);
 
-		let writeOffset = 0;
-		for (const chunk of chunks) {
-			const channelCount = Math.max(1, chunk.numberOfChannels);
-			for (let i = 0; i < chunk.length; i++) {
-				let channelSum = 0;
-				for (let channel = 0; channel < channelCount; channel++) {
-					channelSum += chunk.getChannelData(channel)[i] ?? 0;
-				}
-				monoSamples[writeOffset + i] = channelSum / channelCount;
+			const chunks: AudioBuffer[] = [];
+			for await (const { buffer } of sink.buffers(plan.decodeStart, plan.decodeEnd)) {
+				chunks.push(buffer);
 			}
-			writeOffset += chunk.length;
+			window.clearInterval(decodeHeartbeatId);
+
+			const merged = mergeToMonoSamples({ chunks });
+			if (!merged || merged.samples.length === 0) {
+				onProgress?.({
+					status: "transcribing",
+					progress: Math.round(
+						((plan.chunkIndex + 1) / chunkCount) * preparationScale,
+					),
+					message: `Preparing chunk ${plan.chunkIndex + 1}/${chunkCount} audio...`,
+				});
+				continue;
+			}
+			const normalizedChunkAudio = resampleMonoSamplesForTranscription({
+				samples: merged.samples,
+				sampleRate: merged.sampleRate,
+			});
+
+			prepared.push({
+				...plan,
+				wavBlob: encodeMonoPcm16WavBlob({
+					samples: normalizedChunkAudio.samples,
+					sampleRate: normalizedChunkAudio.sampleRate,
+				}),
+			});
+
+			onProgress?.({
+				status: "transcribing",
+				progress: Math.round(
+					((plan.chunkIndex + 1) / chunkCount) * preparationScale,
+				),
+				message: `Preparing chunk ${plan.chunkIndex + 1}/${chunkCount} audio...`,
+			});
 		}
 
-		return {
-			samples: monoSamples,
-			sampleRate,
-		};
+		return prepared;
 	} finally {
 		input.dispose();
 	}
@@ -328,62 +539,28 @@ async function transcribeAssetInChunks({
 		};
 	}
 
-	const chunkCount = Math.max(1, Math.ceil(duration / CHUNKED_TRANSCRIPTION_WINDOW_SECONDS));
+	const windowSeconds = resolveChunkWindowSeconds({ duration });
+	const plans = buildChunkDecodePlans({ duration, windowSeconds });
+	const chunkCount = plans.length;
 	const mergedSegments: TranscriptionSegment[] = [];
 	const mergedTextParts: string[] = [];
+	const preparedChunks = await prepareChunkAudioForTranscription({
+		asset,
+		plans,
+		onProgress,
+	});
+	const preparedByIndex = new Map(
+		preparedChunks.map((chunk) => [chunk.chunkIndex, chunk] as const),
+	);
 
-	for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++) {
-		const chunkBaseProgress = (chunkIndex / chunkCount) * 100;
-		const chunkMaxSoftProgress = ((chunkIndex + 0.92) / chunkCount) * 100;
-
-		const logicalStart = chunkIndex * CHUNKED_TRANSCRIPTION_WINDOW_SECONDS;
-		const logicalEnd = Math.min(
-			duration,
-			logicalStart + CHUNKED_TRANSCRIPTION_WINDOW_SECONDS,
-		);
-
-		const decodeStart = Math.max(
-			0,
-			logicalStart - (chunkIndex === 0 ? 0 : CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS),
-		);
-		const decodeEnd = Math.min(duration, logicalEnd + CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS);
-		onProgress?.({
-			status: "transcribing",
-			progress: Math.round(chunkBaseProgress),
-			message: `Preparing chunk ${chunkIndex + 1}/${chunkCount} audio...`,
-		});
-		let decodeHeartbeatProgress = chunkBaseProgress;
-		const decodeHeartbeatId = window.setInterval(() => {
-			decodeHeartbeatProgress = Math.min(
-				chunkMaxSoftProgress,
-				decodeHeartbeatProgress + Math.max(0.2, 2 / chunkCount),
-			);
-			onProgress?.({
-				status: "transcribing",
-				progress: Math.round(decodeHeartbeatProgress),
-				message: `Preparing chunk ${chunkIndex + 1}/${chunkCount} audio...`,
-			});
-		}, CHUNK_PROGRESS_HEARTBEAT_MS);
-		const decodedChunk = await decodeAudioChunkToMono({
-			asset,
-			startTime: decodeStart,
-			endTime: decodeEnd,
-		});
-		window.clearInterval(decodeHeartbeatId);
-
-		if (!decodedChunk || decodedChunk.samples.length === 0) {
-			onProgress?.({
-				status: "transcribing",
-				progress: Math.round(((chunkIndex + 1) / chunkCount) * 100),
-				message: `Transcribing chunk ${chunkIndex + 1}/${chunkCount}...`,
-			});
-			continue;
-		}
+	for (const plan of plans) {
+		const chunkBaseProgress = 50 + (plan.chunkIndex / chunkCount) * 50;
+		const chunkMaxSoftProgress = 50 + ((plan.chunkIndex + 0.92) / chunkCount) * 50;
 
 		onProgress?.({
 			status: "transcribing",
 			progress: Math.round(chunkBaseProgress),
-			message: `Transcribing chunk ${chunkIndex + 1}/${chunkCount}...`,
+			message: `Transcribing chunk ${plan.chunkIndex + 1}/${chunkCount}...`,
 		});
 
 		let heartbeatProgress = chunkBaseProgress;
@@ -397,19 +574,23 @@ async function transcribeAssetInChunks({
 			onProgress?.({
 				status: "transcribing",
 				progress: Math.round(progress),
-				message: `Transcribing chunk ${chunkIndex + 1}/${chunkCount}...`,
+				message: `Transcribing chunk ${plan.chunkIndex + 1}/${chunkCount}...`,
 			});
 		}, CHUNK_PROGRESS_HEARTBEAT_MS);
 
 		let chunkResult: Awaited<ReturnType<typeof transcribeWithClipApi>>;
 		try {
-			chunkResult = await transcribeWithClipApi({
-				samples: decodedChunk.samples,
-				sampleRate: decodedChunk.sampleRate,
-				language,
-				modelId,
-				cacheKey: `${asset.id}:${modelId}:${language}:chunk:${chunkIndex}:${decodeStart.toFixed(3)}:${decodeEnd.toFixed(3)}`,
-			});
+			const prepared = preparedByIndex.get(plan.chunkIndex);
+			if (!prepared || prepared.wavBlob.size <= 0) {
+				chunkResult = { text: "", segments: [] };
+			} else {
+				chunkResult = await transcribeWavBlobWithClipApi({
+					wavBlob: prepared.wavBlob,
+					language,
+					modelId,
+					cacheKey: `${asset.id}:${modelId}:${language}:chunk:${plan.chunkIndex}:${plan.decodeStart.toFixed(3)}:${plan.decodeEnd.toFixed(3)}`,
+				});
+			}
 			chunkProgressFromWorker = chunkMaxSoftProgress;
 		} finally {
 			window.clearInterval(heartbeatId);
@@ -417,21 +598,24 @@ async function transcribeAssetInChunks({
 
 		onProgress?.({
 			status: "transcribing",
-			progress: Math.round(((chunkIndex + 1) / chunkCount) * 100),
-			message: `Transcribing chunk ${chunkIndex + 1}/${chunkCount}...`,
+			progress: Math.round(50 + ((plan.chunkIndex + 1) / chunkCount) * 50),
+			message: `Transcribing chunk ${plan.chunkIndex + 1}/${chunkCount}...`,
 		});
 
 		const adjustedSegments = chunkResult.segments
 			.map((segment) => ({
 				text: segment.text,
-				start: segment.start + decodeStart,
-				end: segment.end + decodeStart,
+				start: segment.start + plan.decodeStart,
+				end: segment.end + plan.decodeStart,
 			}))
-			.filter((segment) => segment.end > logicalStart && segment.start < logicalEnd)
+			.filter(
+				(segment) =>
+					segment.end > plan.logicalStart && segment.start < plan.logicalEnd,
+			)
 			.map((segment) => ({
 				text: segment.text,
-				start: clamp(segment.start, logicalStart, logicalEnd),
-				end: clamp(segment.end, logicalStart, logicalEnd),
+				start: clamp(segment.start, plan.logicalStart, plan.logicalEnd),
+				end: clamp(segment.end, plan.logicalStart, plan.logicalEnd),
 			}))
 			.filter((segment) => segment.end > segment.start);
 

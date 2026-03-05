@@ -72,9 +72,12 @@ import {
 	normalizeTranscriptWords,
 } from "@/lib/transcript-editor/core";
 import { DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS } from "@/lib/transcript-editor/constants";
+import { clearTranscriptTimelineSnapshotCache } from "@/lib/transcript-editor/snapshot";
 import {
+	dedupeTranscriptEditsInTracks,
 	rebuildCaptionTrackForMediaElement,
 	syncCaptionsFromTranscriptEdits,
+	validateAndHealCaptionDriftInTracks,
 } from "@/lib/transcript-editor/sync-captions";
 
 const MIN_VIRAL_CLIP_SCORE = 56;
@@ -360,6 +363,26 @@ function getEditableMediaElementSourceId({
 	return null;
 }
 
+function rangesOverlap({
+	startA,
+	endA,
+	startB,
+	endB,
+	tolerance = 0.05,
+}: {
+	startA: number;
+	endA: number;
+	startB: number;
+	endB: number;
+	tolerance?: number;
+}): boolean {
+	const aStart = Math.min(startA, endA);
+	const aEnd = Math.max(startA, endA);
+	const bStart = Math.min(startB, endB);
+	const bEnd = Math.max(startB, endB);
+	return aEnd > bStart - tolerance && bEnd > aStart - tolerance;
+}
+
 function getTranscriptCompanionElementIds({
 	tracks,
 	target,
@@ -389,6 +412,27 @@ function getTranscriptCompanionElementIds({
 						(target.trimStart + target.duration),
 				) < 0.05;
 			if (startAligned && trimAligned && endAligned) {
+				ids.add(candidate.id);
+				continue;
+			}
+
+			const candidateTimelineEnd = candidate.startTime + candidate.duration;
+			const targetTimelineEnd = target.startTime + target.duration;
+			const candidateSourceEnd = candidate.trimStart + candidate.duration;
+			const targetSourceEnd = target.trimStart + target.duration;
+			const timelineOverlap = rangesOverlap({
+				startA: candidate.startTime,
+				endA: candidateTimelineEnd,
+				startB: target.startTime,
+				endB: targetTimelineEnd,
+			});
+			const sourceOverlap = rangesOverlap({
+				startA: candidate.trimStart,
+				endA: candidateSourceEnd,
+				startB: target.trimStart,
+				endB: targetSourceEnd,
+			});
+			if (timelineOverlap && sourceOverlap) {
 				ids.add(candidate.id);
 			}
 		}
@@ -764,12 +808,25 @@ class CompactTranscriptMutationCommand extends Command {
 
 		const primaryMediaElementId = this.mediaElementIds[0];
 		if (primaryMediaElementId) {
-			const syncResult = syncCaptionsFromTranscriptEdits({
+			for (const mediaElementId of this.mediaElementIds) {
+				const syncResult = syncCaptionsFromTranscriptEdits({
+					tracks: nextTracks,
+					mediaElementId,
+				});
+				if (syncResult.changed) {
+					nextTracks = syncResult.tracks;
+				}
+			}
+			const deduped = dedupeTranscriptEditsInTracks({ tracks: nextTracks });
+			if (deduped.changed) {
+				nextTracks = deduped.tracks;
+			}
+			const driftCheck = validateAndHealCaptionDriftInTracks({
 				tracks: nextTracks,
-				mediaElementId: primaryMediaElementId,
+				projectId: editor.project.getActive().metadata.id,
 			});
-			if (syncResult.changed) {
-				nextTracks = syncResult.tracks;
+			if (driftCheck.changed) {
+				nextTracks = driftCheck.tracks;
 			}
 		}
 		editor.timeline.updateTracks(nextTracks);
@@ -928,6 +985,19 @@ function applyTranscriptEditMutation({
 	if (!syncResult.error && syncResult.changed) {
 		syncedTracks = syncResult.tracks;
 	}
+	const deduped = dedupeTranscriptEditsInTracks({ tracks: syncedTracks });
+	const dedupeChanged = deduped.changed;
+	if (deduped.changed) {
+		syncedTracks = deduped.tracks;
+	}
+	const driftCheck = validateAndHealCaptionDriftInTracks({
+		tracks: syncedTracks,
+		projectId: editor.project.getActive().metadata.id,
+	});
+	const driftChanged = driftCheck.changed;
+	if (driftChanged) {
+		syncedTracks = driftCheck.tracks;
+	}
 
 	if (hasTrackStructureChange({ beforeTracks: tracks, afterTracks: syncedTracks })) {
 		editor.command.execute({
@@ -966,7 +1036,7 @@ function applyTranscriptEditMutation({
 		if (patches.length === 0) {
 			return { changed: false };
 		}
-		if (!canUseCompactPatches) {
+		if (!canUseCompactPatches || dedupeChanged || driftChanged) {
 			editor.command.execute({
 				command: new TracksSnapshotCommand(tracks, syncedTracks),
 			});
@@ -980,6 +1050,10 @@ function applyTranscriptEditMutation({
 		}
 	}
 	editor.save.markDirty();
+	editor.audio.clearCachedTimelineAudio();
+	if (editor.playback.getIsPlaying() || editor.playback.getIsScrubbing()) {
+		void editor.audio.primeCurrentTimelineAudio();
+	}
 
 	return { changed: true };
 }
@@ -2461,11 +2535,35 @@ export function useEditorActions() {
 				toast.info("No caption rebuild changes were needed");
 				return;
 			}
+			const deduped = dedupeTranscriptEditsInTracks({ tracks: rebuilt.tracks });
+			const nextTracks = deduped.changed ? deduped.tracks : rebuilt.tracks;
 			editor.command.execute({
-				command: new TracksSnapshotCommand(tracks, rebuilt.tracks),
+				command: new TracksSnapshotCommand(tracks, nextTracks),
 			});
+			clearTranscriptTimelineSnapshotCache();
 			editor.save.markDirty();
 			toast.success("Rebuilt captions for clip");
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"caption-run-drift-check",
+		() => {
+			const tracks = editor.timeline.getTracks();
+			const driftCheck = validateAndHealCaptionDriftInTracks({
+				tracks,
+				projectId: editor.project.getActive().metadata.id,
+			});
+			if (!driftCheck.changed) {
+				toast.info("No caption drift detected");
+				return;
+			}
+			editor.command.execute({
+				command: new TracksSnapshotCommand(tracks, driftCheck.tracks),
+			});
+			editor.save.markDirty();
+			toast.success("Caption drift detected and auto-healed");
 		},
 		undefined,
 	);

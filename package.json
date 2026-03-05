@@ -8,6 +8,7 @@
 	"scripts": {
 		"dev:web": "cd apps/web && bun run dev",
 		"build:web": "cd apps/web && bun run build",
+		"kill:playwright": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/kill-playwright-sessions.ps1",
 		"docker:up": "node scripts/docker-preflight.mjs && docker compose up -d --build redis serverless-redis-http local-transcribe web",
 		"docker:up:web": "node scripts/docker-preflight.mjs && docker compose up -d --build local-transcribe web",
 		"docker:down": "docker compose down",

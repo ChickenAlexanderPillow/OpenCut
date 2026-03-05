@@ -158,6 +158,10 @@ export const ACTIONS = {
 		category: "editing",
 		args: { trackId: "string", elementId: "string" },
 	},
+	"caption-run-drift-check": {
+		description: "Run caption drift check and auto-heal stale captions",
+		category: "editing",
+	},
 	"clear-viral-clips-session": {
 		description: "Clear generated viral clips session",
 		category: "editing",

@@ -30,6 +30,7 @@ import {
 	getPreviewCanvasSize,
 	remapCaptionTransformsForPreviewVariant,
 } from "@/lib/preview/preview-format";
+import { validateAndHealCaptionDriftInTracks } from "@/lib/transcript-editor/sync-captions";
 import {
 	Tooltip,
 	TooltipContent,
@@ -112,9 +113,12 @@ function remapLandscapeVideoScalesForSquarePreview({
 				const sourceWidth = asset?.width ?? 0;
 				const sourceHeight = asset?.height ?? 0;
 				const hasKnownDimensions = sourceWidth > 0 && sourceHeight > 0;
-				const hasKnownLandscape = hasKnownDimensions && sourceWidth > sourceHeight;
+				const hasKnownLandscape =
+					hasKnownDimensions && sourceWidth > sourceHeight;
 				const canApplyUnknownFallback =
-					!hasKnownDimensions && projectIsPortrait && element.transform.scale > 1;
+					!hasKnownDimensions &&
+					projectIsPortrait &&
+					element.transform.scale > 1;
 				if (!hasKnownLandscape && !canApplyUnknownFallback) {
 					return element;
 				}
@@ -217,7 +221,9 @@ export function PreviewPanel() {
 					</Button>
 					{!isProjectSquare && (
 						<Button
-							variant={previewFormatVariant === "square" ? "secondary" : "ghost"}
+							variant={
+								previewFormatVariant === "square" ? "secondary" : "ghost"
+							}
 							size="sm"
 							className={cn("h-7 px-2 text-xs")}
 							onClick={() => triggerFormatSwitch({ variant: "square" })}
@@ -277,8 +283,7 @@ function RenderTreeController() {
 		squareFormatSettings,
 		playbackQuality,
 		previewRendererMode,
-	} =
-		usePreviewStore();
+	} = usePreviewStore();
 	const previewProfile = PREVIEW_PROFILES[playbackQuality];
 	const projectFps = Math.max(1, activeProject.settings.fps);
 	const previewVideoFrameRateCap = projectFps;
@@ -314,6 +319,14 @@ function RenderTreeController() {
 
 	useDeepCompareEffect(() => {
 		if (!activeProject) return;
+		const driftHeal = validateAndHealCaptionDriftInTracks({
+			tracks,
+			projectId: activeProject.metadata.id,
+		});
+		if (driftHeal.changed) {
+			editor.timeline.updateTracks(driftHeal.tracks);
+			return;
+		}
 
 		const duration = editor.timeline.getTotalDuration();
 		const projectWidth = activeProject.settings.canvasSize.width;
@@ -667,6 +680,12 @@ function PreviewCanvas({
 		};
 	}, []);
 
+	useEffect(() => {
+		if (isPageVisible) return;
+		// Release GPU resources immediately while tab/app is hidden.
+		webgpuRenderer.dispose();
+	}, [isPageVisible, webgpuRenderer]);
+
 	useRafLoop(render, { enabled: isPageVisible });
 
 	useEffect(() => {
@@ -677,7 +696,9 @@ function PreviewCanvas({
 
 	useEffect(() => {
 		const sourceCanvas =
-			activeSurface === "webgpu" ? webgpuCanvasRef.current : canvas2dRef.current;
+			activeSurface === "webgpu"
+				? webgpuCanvasRef.current
+				: canvas2dRef.current;
 		if (!sourceCanvas) return;
 		const composite = document.createElement("canvas");
 		composite.width = sourceCanvas.width;
@@ -706,7 +727,9 @@ function PreviewCanvas({
 	}, [freezeFrameToken, activeSurface]);
 
 	const effectiveDisplaySize =
-		isRenderReadyForSize || !transitionHoldSize ? displaySize : transitionHoldSize;
+		isRenderReadyForSize || !transitionHoldSize
+			? displaySize
+			: transitionHoldSize;
 
 	useEffect(() => {
 		setSafeAreaOverlayReady(false);

@@ -42,6 +42,7 @@ export type TActionArgsMap = {
 	"rebuild-captions-for-clip":
 		| { trackId: string; elementId: string }
 		| undefined;
+	"caption-run-drift-check": undefined;
 	"select-all-captions": { trackId?: string } | undefined;
 	"clear-viral-clips-session": undefined;
 };

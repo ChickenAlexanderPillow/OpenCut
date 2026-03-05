@@ -11,6 +11,7 @@ import {
 	mapCompressedTimeToSourceTime,
 	normalizeTranscriptWords,
 } from "@/lib/transcript-editor/core";
+import { getEffectiveTranscriptCutsFromTranscriptEdit } from "@/lib/transcript-editor/snapshot";
 import { DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import { toElementLocalCaptionTime } from "@/lib/captions/timing";
 import type {
@@ -209,12 +210,17 @@ export function TranscriptView() {
 		});
 	}, [activeMedia, tracks]);
 
-	const cuts = useMemo(
-		() =>
-			activeMedia?.element.transcriptEdit?.cuts ??
-			buildTranscriptCutsFromWords({ words }),
-		[activeMedia, words],
-	);
+	const cuts = useMemo(() => {
+		if (!activeMedia) {
+			return buildTranscriptCutsFromWords({ words });
+		}
+		if (!activeMedia.element.transcriptEdit) {
+			return buildTranscriptCutsFromWords({ words });
+		}
+		return getEffectiveTranscriptCutsFromTranscriptEdit({
+			transcriptEdit: activeMedia.element.transcriptEdit,
+		});
+	}, [activeMedia, words]);
 	const wordsWithCutState = useMemo(
 		() =>
 			applyCutRangesToWords({

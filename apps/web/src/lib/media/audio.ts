@@ -16,6 +16,7 @@ import {
 	mapCompressedTimeToSourceTime,
 } from "@/lib/transcript-editor/core";
 import { TRANSCRIPT_CUT_AUDIO_SMOOTHING_SECONDS } from "@/lib/transcript-editor/constants";
+import { getEffectiveTranscriptCutsFromTranscriptEdit } from "@/lib/transcript-editor/snapshot";
 
 const MAX_AUDIO_CHANNELS = 2;
 const EXPORT_SAMPLE_RATE = 44100;
@@ -155,6 +156,9 @@ export async function collectAudioElements({
 		for (const element of track.elements) {
 			if (!canElementHaveAudio(element)) continue;
 			if (element.duration <= 0) continue;
+			const effectiveTranscriptCuts = getEffectiveTranscriptCutsFromTranscriptEdit({
+				transcriptEdit: element.transcriptEdit,
+			});
 
 			const isTrackMuted = canTracktHaveAudio(track) && track.muted;
 
@@ -173,7 +177,7 @@ export async function collectAudioElements({
 										duration: element.duration,
 										trimStart: element.trimStart,
 										trimEnd: element.trimEnd,
-										transcriptCuts: element.transcriptEdit?.cuts,
+										transcriptCuts: effectiveTranscriptCuts,
 										muted: element.muted || isTrackMuted,
 										gain: elementGain,
 									};
@@ -187,7 +191,7 @@ export async function collectAudioElements({
 									trimStart: element.trimStart,
 									trimDuration: resolveSourceWindowDuration({
 										duration: element.duration,
-										cuts: element.transcriptEdit?.cuts,
+										cuts: effectiveTranscriptCuts,
 									}),
 								});
 								if (!resolvedAudio) return null;
@@ -199,7 +203,7 @@ export async function collectAudioElements({
 									// For full-file fallback decode, preserve element trimStart.
 									trimStart: resolvedAudio.windowed ? 0 : element.trimStart,
 									trimEnd: element.trimEnd,
-									transcriptCuts: element.transcriptEdit?.cuts,
+									transcriptCuts: effectiveTranscriptCuts,
 									muted: element.muted || isTrackMuted,
 									gain: elementGain,
 								};
@@ -212,7 +216,7 @@ export async function collectAudioElements({
 								duration: element.duration,
 								trimStart: element.trimStart,
 								trimEnd: element.trimEnd,
-								transcriptCuts: element.transcriptEdit?.cuts,
+								transcriptCuts: effectiveTranscriptCuts,
 								muted: element.muted || isTrackMuted,
 								gain: elementGain,
 							};
@@ -230,7 +234,7 @@ export async function collectAudioElements({
 							duration: element.duration,
 							trimStart: element.trimStart,
 							trimEnd: element.trimEnd,
-							transcriptCuts: element.transcriptEdit?.cuts,
+							transcriptCuts: effectiveTranscriptCuts,
 							muted: element.muted || isTrackMuted,
 							gain: elementGain,
 						};
@@ -250,7 +254,7 @@ export async function collectAudioElements({
 						trimStart: element.trimStart,
 						trimDuration: resolveSourceWindowDuration({
 							duration: element.duration,
-							cuts: element.transcriptEdit?.cuts,
+							cuts: effectiveTranscriptCuts,
 						}),
 					}).then((resolvedAudio) => {
 						if (!resolvedAudio) return null;
@@ -263,7 +267,7 @@ export async function collectAudioElements({
 							duration: element.duration,
 							trimStart: resolvedAudio.windowed ? 0 : element.trimStart,
 							trimEnd: element.trimEnd,
-							transcriptCuts: element.transcriptEdit?.cuts,
+							transcriptCuts: effectiveTranscriptCuts,
 							muted: elementMuted || isTrackMuted,
 							gain: trackGain,
 						};
@@ -292,6 +296,9 @@ async function resolveAudioBufferForElement({
 }): Promise<AudioBuffer | null> {
 	try {
 		if (element.buffer) return element.buffer;
+		const effectiveTranscriptCuts = getEffectiveTranscriptCutsFromTranscriptEdit({
+			transcriptEdit: element.transcriptEdit,
+		});
 
 		if (element.sourceType === "upload") {
 			const asset = mediaMap.get(element.mediaId);
@@ -304,7 +311,7 @@ async function resolveAudioBufferForElement({
 					trimStart: element.trimStart,
 					trimDuration: resolveSourceWindowDuration({
 						duration: element.duration,
-						cuts: element.transcriptEdit?.cuts,
+						cuts: effectiveTranscriptCuts,
 					}),
 				});
 				return resolved?.buffer ?? null;
@@ -646,7 +653,9 @@ function collectMediaAudioSource({
 		trimStart: element.trimStart,
 		trimEnd: element.trimEnd,
 		gain,
-		transcriptCuts: element.transcriptEdit?.cuts,
+		transcriptCuts: getEffectiveTranscriptCutsFromTranscriptEdit({
+			transcriptEdit: element.transcriptEdit,
+		}),
 	};
 }
 

@@ -314,13 +314,15 @@ export function mapSourceTimeToCompressedTime({
 	let sourceCursor = 0;
 	let compressedCursor = 0;
 	for (const cut of merged) {
-		if (safeTime < cut.start) {
+		const keepBeforeCut = Math.max(0, cut.start - sourceCursor);
+		const cutBoundary = compressedCursor + keepBeforeCut;
+		if (safeTime <= cut.start) {
 			return compressedCursor + (safeTime - sourceCursor);
 		}
 		if (safeTime <= cut.end) {
-			return compressedCursor;
+			return cutBoundary;
 		}
-		compressedCursor += Math.max(0, cut.start - sourceCursor);
+		compressedCursor = cutBoundary;
 		sourceCursor = cut.end;
 	}
 	return compressedCursor + (safeTime - sourceCursor);
@@ -359,8 +361,12 @@ export function buildCaptionPayloadFromTranscriptWords({
 	const transcriptCuts = cuts
 		? mergeCutRanges({ cuts })
 		: buildTranscriptCutsFromWords({ words: normalized });
+	const wordsWithCutState = applyCutRangesToWords({
+		words: normalized,
+		cuts: transcriptCuts,
+	});
 	// Captions intentionally hide filler words even when transcript keeps them editable.
-	const active = normalized.filter(
+	const active = wordsWithCutState.filter(
 		(word) => !word.removed && !isFillerWordOrPhrase({ text: word.text }),
 	);
 	if (active.length === 0) return null;

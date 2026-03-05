@@ -22,6 +22,10 @@ export function clearFontAtlasCache(): void {
 	atlasFetchPromise = null;
 }
 
+export function clearLoadedGoogleFontsCache(): void {
+	fullLoaded.clear();
+}
+
 async function fetchAtlas(): Promise<FontAtlas | null> {
 	if (cachedAtlas) return cachedAtlas;
 	if (atlasFetchPromise) return atlasFetchPromise;

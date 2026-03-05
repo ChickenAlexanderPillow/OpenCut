@@ -15,6 +15,10 @@ interface CachedImageSource {
 
 const imageSourceCache = new Map<string, Promise<CachedImageSource>>();
 
+export function clearImageSourceCache(): void {
+	imageSourceCache.clear();
+}
+
 function loadImageSource(
 	url: string,
 	maxSourceSize?: number,

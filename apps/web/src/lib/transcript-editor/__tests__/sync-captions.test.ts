@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
 import {
+	dedupeTranscriptEditsInTracks,
 	rebuildCaptionTrackForMediaElement,
 	syncCaptionsFromTranscriptEdits,
 } from "@/lib/transcript-editor/sync-captions";
-import type { AudioElement, TextElement, TimelineTrack } from "@/types/timeline";
+import type { AudioElement, TextElement, TimelineTrack, VideoElement } from "@/types/timeline";
 
 function createAudioElement({
 	id,
@@ -74,6 +75,48 @@ function createCaption({
 		captionStyle: {
 			...(DEFAULT_TEXT_ELEMENT.captionStyle ?? {}),
 			linkedToCaptionGroup: true,
+		},
+	};
+}
+
+function createVideoElement({
+	id,
+	startTime,
+	duration,
+	mediaId,
+	words,
+}: {
+	id: string;
+	startTime: number;
+	duration: number;
+	mediaId: string;
+	words: Array<{
+		id: string;
+		text: string;
+		startTime: number;
+		endTime: number;
+		removed?: boolean;
+	}>;
+}): VideoElement {
+	return {
+		id,
+		type: "video",
+		name: id,
+		mediaId,
+		startTime,
+		duration,
+		trimStart: 0,
+		trimEnd: 0,
+		muted: false,
+		hidden: false,
+		transform: DEFAULT_TEXT_ELEMENT.transform,
+		opacity: 1,
+		transcriptEdit: {
+			version: 1,
+			source: "word-level",
+			words,
+			cuts: [],
+			updatedAt: new Date().toISOString(),
 		},
 	};
 }
@@ -203,7 +246,7 @@ describe("sync captions from transcript edits", () => {
 		}
 	});
 
-	test("keeps caption link stable across companion media ids sharing transcript source", () => {
+	test("re-points caption link to currently edited media id across companions", () => {
 		const companionA = createAudioElement({
 			id: "audio-a",
 			startTime: 0,
@@ -268,7 +311,7 @@ describe("sync captions from transcript edits", () => {
 		expect(syncedTextTrack.elements).toHaveLength(1);
 		const syncedCaption = syncedTextTrack.elements[0];
 		expect(syncedCaption?.content).toBe("beta");
-		expect(syncedCaption?.captionSourceRef?.mediaElementId).toBe("audio-a");
+		expect(syncedCaption?.captionSourceRef?.mediaElementId).toBe("audio-b");
 	});
 
 	test("writes timeline-aligned recalculated caption timings for non-zero media start", () => {
@@ -600,5 +643,275 @@ describe("sync captions from transcript edits", () => {
 		expect(rebuilt.content).toBe("fresh caption");
 		expect(rebuilt.captionSourceRef?.mediaElementId).toBe("audio-1");
 		expect(rebuilt.startTime).toBeCloseTo(3.2, 3);
+	});
+
+	test("dedupe transcript edits keeps only caption-linked transcript per shared source", () => {
+		const sharedUpdatedAtOld = "2024-01-01T00:00:00.000Z";
+		const sharedUpdatedAtNew = "2025-01-01T00:00:00.000Z";
+		const audioA: AudioElement = {
+			...createAudioElement({
+				id: "audio-a",
+				startTime: 0,
+				duration: 2,
+				words: [{ id: "shared:word:0", text: "old", startTime: 0, endTime: 0.4 }],
+			}),
+			transcriptEdit: {
+				version: 1,
+				source: "word-level",
+				words: [{ id: "shared:word:0", text: "old", startTime: 0, endTime: 0.4 }],
+				cuts: [],
+				updatedAt: sharedUpdatedAtOld,
+			},
+		};
+		const audioB: AudioElement = {
+			...createAudioElement({
+				id: "audio-b",
+				startTime: 0,
+				duration: 2,
+				words: [{ id: "shared:word:0", text: "new", startTime: 0, endTime: 0.5 }],
+			}),
+			transcriptEdit: {
+				version: 1,
+				source: "word-level",
+				words: [{ id: "shared:word:0", text: "new", startTime: 0, endTime: 0.5 }],
+				cuts: [],
+				updatedAt: sharedUpdatedAtNew,
+			},
+		};
+		const linkedCaption = createCaption({
+			id: "caption-1",
+			sourceMediaElementId: "audio-a",
+			startTime: 0,
+			duration: 0.4,
+			content: "old",
+			wordTimings: [{ word: "old", startTime: 0, endTime: 0.4 }],
+		});
+		const tracks: TimelineTrack[] = [
+			{
+				id: "audio-track",
+				type: "audio",
+				name: "Audio",
+				muted: false,
+				elements: [audioA, audioB],
+			},
+			{
+				id: "text-track",
+				type: "text",
+				name: "Captions",
+				hidden: false,
+				elements: [linkedCaption],
+			},
+		];
+
+		const result = dedupeTranscriptEditsInTracks({ tracks });
+		expect(result.changed).toBe(true);
+		const dedupedAudioTrack = result.tracks.find((track) => track.id === "audio-track");
+		expect(dedupedAudioTrack?.type).toBe("audio");
+		if (dedupedAudioTrack?.type !== "audio") return;
+		const dedupedA = dedupedAudioTrack.elements.find((element) => element.id === "audio-a");
+		const dedupedB = dedupedAudioTrack.elements.find((element) => element.id === "audio-b");
+		expect(dedupedA?.transcriptEdit?.words[0]?.text).toBe("old");
+		expect(dedupedB?.transcriptEdit).toBeUndefined();
+	});
+
+	test("dedupe keeps transcript edit on aligned video+audio companions", () => {
+		const words = [{ id: "shared:word:0", text: "hello", startTime: 0, endTime: 0.5 }];
+		const audio = {
+			...createAudioElement({
+				id: "audio-1",
+				startTime: 10,
+				duration: 4,
+				words,
+			}),
+			mediaId: "media-1",
+		};
+		const video = createVideoElement({
+			id: "video-1",
+			mediaId: "media-1",
+			startTime: 10,
+			duration: 4,
+			words,
+		});
+		const linkedCaption = createCaption({
+			id: "caption-1",
+			sourceMediaElementId: "audio-1",
+			startTime: 10,
+			duration: 0.5,
+			content: "hello",
+			wordTimings: [{ word: "hello", startTime: 10, endTime: 10.5 }],
+		});
+		const tracks: TimelineTrack[] = [
+			{
+				id: "video-track",
+				type: "video",
+				name: "Video",
+				isMain: true,
+				muted: false,
+				hidden: false,
+				elements: [video],
+			},
+			{
+				id: "audio-track",
+				type: "audio",
+				name: "Audio",
+				muted: false,
+				elements: [audio],
+			},
+			{
+				id: "text-track",
+				type: "text",
+				name: "Captions",
+				hidden: false,
+				elements: [linkedCaption],
+			},
+		];
+
+		const result = dedupeTranscriptEditsInTracks({ tracks });
+		expect(result.changed).toBe(false);
+		const dedupedVideoTrack = result.tracks.find((track) => track.id === "video-track");
+		const dedupedAudioTrack = result.tracks.find((track) => track.id === "audio-track");
+		expect(dedupedVideoTrack?.type).toBe("video");
+		expect(dedupedAudioTrack?.type).toBe("audio");
+		if (dedupedVideoTrack?.type !== "video" || dedupedAudioTrack?.type !== "audio") return;
+		const dedupedVideoElement = dedupedVideoTrack.elements[0];
+		expect(dedupedVideoElement?.type).toBe("video");
+		if (!dedupedVideoElement || dedupedVideoElement.type !== "video") return;
+		expect(dedupedVideoElement.transcriptEdit).toBeDefined();
+		expect(dedupedAudioTrack.elements[0]?.transcriptEdit).toBeDefined();
+	});
+
+	test("dedupe keeps transcript edit on overlapping video+audio companions with slight drift", () => {
+		const words = [{ id: "shared:word:0", text: "hello", startTime: 0, endTime: 0.5 }];
+		const audio = {
+			...createAudioElement({
+				id: "audio-1",
+				startTime: 10.03,
+				duration: 4.02,
+				words,
+			}),
+			mediaId: "media-1",
+			trimStart: 0.04,
+		};
+		const video = {
+			...createVideoElement({
+				id: "video-1",
+				mediaId: "media-1",
+				startTime: 10,
+				duration: 4,
+				words,
+			}),
+			trimStart: 0,
+		};
+		const linkedCaption = createCaption({
+			id: "caption-1",
+			sourceMediaElementId: "audio-1",
+			startTime: 10,
+			duration: 0.5,
+			content: "hello",
+			wordTimings: [{ word: "hello", startTime: 10, endTime: 10.5 }],
+		});
+		const tracks: TimelineTrack[] = [
+			{
+				id: "video-track",
+				type: "video",
+				name: "Video",
+				isMain: true,
+				muted: false,
+				hidden: false,
+				elements: [video],
+			},
+			{
+				id: "audio-track",
+				type: "audio",
+				name: "Audio",
+				muted: false,
+				elements: [audio],
+			},
+			{
+				id: "text-track",
+				type: "text",
+				name: "Captions",
+				hidden: false,
+				elements: [linkedCaption],
+			},
+		];
+
+		const result = dedupeTranscriptEditsInTracks({ tracks });
+		const dedupedVideoTrack = result.tracks.find((track) => track.id === "video-track");
+		const dedupedAudioTrack = result.tracks.find((track) => track.id === "audio-track");
+		expect(dedupedVideoTrack?.type).toBe("video");
+		expect(dedupedAudioTrack?.type).toBe("audio");
+		if (dedupedVideoTrack?.type !== "video" || dedupedAudioTrack?.type !== "audio") return;
+		const dedupedVideoElement = dedupedVideoTrack.elements[0];
+		expect(dedupedVideoElement?.type).toBe("video");
+		if (!dedupedVideoElement || dedupedVideoElement.type !== "video") return;
+		expect(dedupedVideoElement.transcriptEdit).toBeDefined();
+		expect(dedupedAudioTrack.elements[0]?.transcriptEdit).toBeDefined();
+	});
+
+	test("muting words does not split caption elements and removes muted words from caption text", () => {
+		const audio: AudioElement = {
+			...createAudioElement({
+				id: "audio-1",
+				startTime: 8,
+				duration: 3,
+				words: [
+					{ id: "w1", text: "hello", startTime: 0.0, endTime: 0.3, removed: false },
+					{ id: "w2", text: "muted", startTime: 0.35, endTime: 0.6, removed: false },
+					{ id: "w3", text: "world", startTime: 0.7, endTime: 1.0, removed: false },
+				],
+			}),
+			transcriptEdit: {
+				version: 1,
+				source: "word-level",
+				words: [
+					{ id: "w1", text: "hello", startTime: 0.0, endTime: 0.3, removed: false },
+					{ id: "w2", text: "muted", startTime: 0.35, endTime: 0.6, removed: false },
+					{ id: "w3", text: "world", startTime: 0.7, endTime: 1.0, removed: false },
+				],
+				cuts: [{ start: 0.3, end: 0.7, reason: "manual" }],
+				updatedAt: new Date().toISOString(),
+			},
+		};
+		const existingCaption = createCaption({
+			id: "caption-1",
+			sourceMediaElementId: "audio-1",
+			startTime: 8,
+			duration: 1.0,
+			content: "hello muted world",
+			wordTimings: [
+				{ word: "hello", startTime: 8.0, endTime: 8.3 },
+				{ word: "muted", startTime: 8.35, endTime: 8.6 },
+				{ word: "world", startTime: 8.7, endTime: 9.0 },
+			],
+		});
+		const tracks: TimelineTrack[] = [
+			{
+				id: "audio-track",
+				type: "audio",
+				name: "Audio",
+				muted: false,
+				elements: [audio],
+			},
+			{
+				id: "text-track",
+				type: "text",
+				name: "Captions",
+				hidden: false,
+				elements: [existingCaption],
+			},
+		];
+
+		const result = syncCaptionsFromTranscriptEdits({
+			tracks,
+			mediaElementId: "audio-1",
+		});
+		expect(result.changed).toBe(true);
+		const textTrack = result.tracks.find((track) => track.id === "text-track");
+		expect(textTrack?.type).toBe("text");
+		if (textTrack?.type !== "text") return;
+		expect(textTrack.elements).toHaveLength(1);
+		expect(textTrack.elements[0]?.content).toBe("hello world");
+		expect(textTrack.elements[0]?.captionWordTimings).toHaveLength(2);
 	});
 });

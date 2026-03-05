@@ -52,6 +52,13 @@ describe("transcript editor core", () => {
 		).toBeCloseTo(1.1, 4);
 	});
 
+	test("keeps boundary at cut start stable for source->compressed mapping", () => {
+		const cuts = [{ start: 0.3, end: 1.0, reason: "manual" as const }];
+		expect(
+			mapSourceTimeToCompressedTime({ sourceTime: 0.3, cuts }),
+		).toBeCloseTo(0.3, 4);
+	});
+
 	test("computes keep duration and removes fillers", () => {
 		const words = [
 			{ id: "w1", text: "I", startTime: 0, endTime: 0.2, removed: false },
@@ -156,5 +163,21 @@ describe("transcript editor core", () => {
 		expect(boundaries).toHaveLength(2);
 		expect(boundaries[0]).toBeCloseTo(1.0, 3);
 		expect(boundaries[1]).toBeCloseTo(1.6, 3);
+	});
+
+	test("caption payload removes muted words when removal is represented by manual cuts", () => {
+		const words = [
+			{ id: "w1", text: "hello", startTime: 0.0, endTime: 0.3, removed: false },
+			{ id: "w2", text: "muted", startTime: 0.35, endTime: 0.6, removed: false },
+			{ id: "w3", text: "world", startTime: 0.7, endTime: 1.0, removed: false },
+		];
+		const cuts = [{ start: 0.3, end: 0.7, reason: "manual" as const }];
+
+		const payload = buildCaptionPayloadFromTranscriptWords({ words, cuts });
+		expect(payload).not.toBeNull();
+		expect(payload?.content).toBe("hello world");
+		expect(payload?.wordTimings).toHaveLength(2);
+		expect(payload?.wordTimings[0]?.word).toBe("hello");
+		expect(payload?.wordTimings[1]?.word).toBe("world");
 	});
 });

@@ -81,8 +81,8 @@ export class WebGPUPreviewRenderer {
 	private cachedPartition: HybridScenePartition | null = null;
 	private pendingVideoFramesToClose: VideoFrame[] = [];
 	private closeVideoFramesTaskInFlight = false;
-	private static readonly MAX_TEXTURE_CACHE = 16;
-	private static readonly MAX_TEXTURE_CACHE_BYTES = 160 * 1024 * 1024; // 160MB
+	private static readonly MAX_TEXTURE_CACHE = 10;
+	private static readonly MAX_TEXTURE_CACHE_BYTES = 96 * 1024 * 1024; // 96MB
 	private static readonly TEXTURE_IDLE_TTL_MS = 10_000;
 
 	constructor({
@@ -233,7 +233,10 @@ export class WebGPUPreviewRenderer {
 	private pruneIdleTextures(): void {
 		const now = Date.now();
 		for (const [key, entry] of this.textureCache.entries()) {
-			if (now - entry.lastAccessAt <= WebGPUPreviewRenderer.TEXTURE_IDLE_TTL_MS) {
+			if (
+				now - entry.lastAccessAt <=
+				WebGPUPreviewRenderer.TEXTURE_IDLE_TTL_MS
+			) {
 				continue;
 			}
 			this.destroyTextureCacheEntry({ key });
@@ -641,7 +644,10 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 	}: {
 		source: GPUCopyExternalImageSource;
 	}): boolean {
-		if (typeof HTMLImageElement !== "undefined" && source instanceof HTMLImageElement) {
+		if (
+			typeof HTMLImageElement !== "undefined" &&
+			source instanceof HTMLImageElement
+		) {
 			return false;
 		}
 		if (typeof ImageBitmap !== "undefined" && source instanceof ImageBitmap) {

@@ -1,6 +1,38 @@
 import type { EditorCore } from "@/core";
 import { createAudioContext, createTimelineAudioBuffer } from "@/lib/media/audio";
 
+function buildTranscriptAudioRevision({
+	transcriptEdit,
+}: {
+	transcriptEdit:
+		| {
+				updatedAt: string;
+				words: Array<{ id: string; text: string; removed?: boolean }>;
+				cuts: Array<{ start: number; end: number; reason: string }>;
+		  }
+		| undefined;
+}): string {
+	if (!transcriptEdit) return "";
+	let hash = 5381;
+	const updateHash = (value: string): void => {
+		for (let index = 0; index < value.length; index++) {
+			hash = (hash * 33) ^ value.charCodeAt(index);
+		}
+	};
+	updateHash(transcriptEdit.updatedAt ?? "");
+	for (const word of transcriptEdit.words) {
+		updateHash(word.id);
+		updateHash(word.text);
+		updateHash(word.removed ? "1" : "0");
+	}
+	for (const cut of transcriptEdit.cuts) {
+		updateHash(cut.start.toFixed(3));
+		updateHash(cut.end.toFixed(3));
+		updateHash(cut.reason);
+	}
+	return `${transcriptEdit.words.length}:${transcriptEdit.cuts.length}:${(hash >>> 0).toString(36)}`;
+}
+
 export class AudioManager {
 	private audioContext: AudioContext | null = null;
 	private masterGain: GainNode | null = null;
@@ -348,9 +380,9 @@ export class AudioManager {
 		this.stopSource();
 		this.timelineBuffer = null;
 		this.timelineDuration = 0;
-		if (!preserveDirty) {
-			this.timelineDirty = false;
-		}
+		// Clearing the mixed buffer should schedule a rebuild by default.
+		// Callers can opt out only for full teardown/reset flows.
+		this.timelineDirty = preserveDirty ? true : false;
 		this.rebuildRequestedDuringBuild = false;
 		this.buildGeneration += 1;
 	}
@@ -383,7 +415,9 @@ export class AudioManager {
 							element.trimEnd,
 							element.volume,
 							element.muted ? 1 : 0,
-							element.transcriptEdit?.updatedAt ?? "",
+							buildTranscriptAudioRevision({
+								transcriptEdit: element.transcriptEdit,
+							}),
 						].join(":"),
 					);
 					continue;
@@ -400,7 +434,9 @@ export class AudioManager {
 							element.trimStart,
 							element.trimEnd,
 							element.muted ? 1 : 0,
-							element.transcriptEdit?.updatedAt ?? "",
+							buildTranscriptAudioRevision({
+								transcriptEdit: element.transcriptEdit,
+							}),
 						].join(":"),
 					);
 				}

@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { decodeMediaFileToAudioBuffer } from "@/lib/media/audio";
+import {
+	deleteWaveformPeaksCacheEntry,
+	getWaveformPeaksCacheEntry,
+	setWaveformPeaksCacheEntry,
+	touchWaveformPeaksCacheEntry,
+} from "@/lib/media/waveform-cache";
 
 interface AudioWaveformProps {
 	audioUrl?: string;
@@ -9,38 +15,8 @@ interface AudioWaveformProps {
 	className?: string;
 }
 
-const MAX_CACHED_WAVEFORMS = 64;
-const waveformPeaksCache = new Map<string, Promise<number[] | null>>();
-
-export function clearWaveformPeaksCache(): void {
-	waveformPeaksCache.clear();
-}
-
 function getDecodedBufferCacheKey(file: File): string {
 	return `${file.name}:${file.size}:${file.lastModified}:${file.type}`;
-}
-
-function touchWaveformCacheEntry({ cacheKey }: { cacheKey: string }): void {
-	const existing = waveformPeaksCache.get(cacheKey);
-	if (!existing) return;
-	waveformPeaksCache.delete(cacheKey);
-	waveformPeaksCache.set(cacheKey, existing);
-}
-
-function setWaveformCacheEntry({
-	cacheKey,
-	value,
-}: {
-	cacheKey: string;
-	value: Promise<number[] | null>;
-}): void {
-	if (!waveformPeaksCache.has(cacheKey) && waveformPeaksCache.size >= MAX_CACHED_WAVEFORMS) {
-		const oldestKey = waveformPeaksCache.keys().next().value;
-		if (typeof oldestKey === "string") {
-			waveformPeaksCache.delete(oldestKey);
-		}
-	}
-	waveformPeaksCache.set(cacheKey, value);
 }
 
 function extractPeaks({
@@ -69,7 +45,11 @@ function extractPeaks({
 	return peaks;
 }
 
-async function decodeAudioUrlToPeaks({ audioUrl }: { audioUrl: string }): Promise<number[] | null> {
+async function decodeAudioUrlToPeaks({
+	audioUrl,
+}: {
+	audioUrl: string;
+}): Promise<number[] | null> {
 	const context = new AudioContext();
 	try {
 		const response = await fetch(audioUrl);
@@ -161,7 +141,7 @@ export function AudioWaveform({
 				});
 			} else if (audioFile) {
 				const cacheKey = getDecodedBufferCacheKey(audioFile);
-				let peaksTask = waveformPeaksCache.get(cacheKey);
+				let peaksTask = getWaveformPeaksCacheEntry({ cacheKey });
 				if (!peaksTask) {
 					peaksTask = (async () => {
 						const decodedBuffer = await decodeMediaFileToAudioBuffer({
@@ -173,32 +153,32 @@ export function AudioWaveform({
 							length: 2048,
 						});
 					})();
-					setWaveformCacheEntry({
+					setWaveformPeaksCacheEntry({
 						cacheKey,
 						value: peaksTask,
 					});
 				} else {
-					touchWaveformCacheEntry({ cacheKey });
+					touchWaveformPeaksCacheEntry({ cacheKey });
 				}
 				peaks = await peaksTask;
 				if (!peaks || peaks.length === 0) {
-					waveformPeaksCache.delete(cacheKey);
+					deleteWaveformPeaksCacheEntry({ cacheKey });
 				}
 			} else if (audioUrl) {
 				const cacheKey = `url:${audioUrl}`;
-				let peaksTask = waveformPeaksCache.get(cacheKey);
+				let peaksTask = getWaveformPeaksCacheEntry({ cacheKey });
 				if (!peaksTask) {
 					peaksTask = decodeAudioUrlToPeaks({ audioUrl });
-					setWaveformCacheEntry({
+					setWaveformPeaksCacheEntry({
 						cacheKey,
 						value: peaksTask,
 					});
 				} else {
-					touchWaveformCacheEntry({ cacheKey });
+					touchWaveformPeaksCacheEntry({ cacheKey });
 				}
 				peaks = await peaksTask;
 				if (!peaks || peaks.length === 0) {
-					waveformPeaksCache.delete(cacheKey);
+					deleteWaveformPeaksCacheEntry({ cacheKey });
 				}
 			}
 

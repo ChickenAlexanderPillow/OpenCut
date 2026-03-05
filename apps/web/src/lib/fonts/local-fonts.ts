@@ -9,6 +9,10 @@ type LocalFontRecord = {
 
 const loadedLocalFonts = new Set<string>();
 
+export function clearLoadedLocalFontsCache(): void {
+	loadedLocalFonts.clear();
+}
+
 function canUseFontApi(): boolean {
 	return typeof window !== "undefined" && "FontFace" in window;
 }

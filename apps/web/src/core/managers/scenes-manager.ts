@@ -22,6 +22,7 @@ import {
 	ToggleBookmarkCommand,
 	UpdateBookmarkCommand,
 } from "@/lib/commands/scene";
+import { clearTranscriptTimelineSnapshotCache } from "@/lib/transcript-editor/snapshot";
 
 export class ScenesManager {
 	private active: TScene | null = null;
@@ -94,6 +95,7 @@ export class ScenesManager {
 		// Scene switches must be immediate and never leak previous-scene playback.
 		this.editor.playback.pause();
 		this.editor.playback.seek({ time: 0 });
+		clearTranscriptTimelineSnapshotCache();
 
 		const activeProject = this.editor.project.getActive();
 
@@ -179,6 +181,7 @@ export class ScenesManager {
 
 	async loadProjectScenes({ projectId }: { projectId: string }): Promise<void> {
 		try {
+			clearTranscriptTimelineSnapshotCache();
 			const result = await storageService.loadProject({ id: projectId });
 			if (result?.project.scenes) {
 				const { scenes: ensuredScenes, hasAddedMainTrack } =
@@ -259,6 +262,7 @@ export class ScenesManager {
 	}
 
 	clearScenes(): void {
+		clearTranscriptTimelineSnapshotCache();
 		this.list = [];
 		this.active = null;
 		this.notify();

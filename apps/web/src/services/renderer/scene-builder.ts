@@ -19,10 +19,9 @@ import { DEFAULT_BRAND_OVERLAYS } from "@/constants/brand-overlay-constants";
 import { resolveLogoOverlayTransform } from "@/lib/branding/logo-overlay";
 import type { VideoCache } from "@/services/video-cache/service";
 import {
-	buildCaptionPayloadFromTranscriptWords,
-	buildTranscriptCutsFromWords,
-	mergeCutRanges,
-} from "@/lib/transcript-editor/core";
+	buildTranscriptTimelineSnapshot,
+	getEffectiveTranscriptCutsFromTranscriptEdit,
+} from "@/lib/transcript-editor/snapshot";
 
 const PREVIEW_MAX_IMAGE_SIZE = 2048;
 
@@ -66,46 +65,6 @@ function resolveCaptionSourceMediaHeuristically({
 	return best;
 }
 
-function resolveEffectiveTranscriptCuts({
-	element,
-}: {
-	element: VideoElement | AudioElement;
-}) {
-	const transcriptEdit = element.transcriptEdit;
-	if (!transcriptEdit) return [];
-	const derivedWordCuts = buildTranscriptCutsFromWords({
-		words: transcriptEdit.words,
-	});
-	const pauseCuts = (transcriptEdit.cuts ?? []).filter(
-		(cut) => cut.reason === "pause",
-	);
-	return mergeCutRanges({
-		cuts: [...derivedWordCuts, ...pauseCuts],
-	});
-}
-
-function isTranscriptAlreadyTimelineAligned({
-	words,
-	mediaStartTime,
-	mediaDuration,
-}: {
-	words: Array<{ startTime: number; endTime: number }>;
-	mediaStartTime: number;
-	mediaDuration: number;
-}): boolean {
-	if (words.length === 0) return false;
-	const minStart = Math.min(...words.map((word) => word.startTime));
-	const maxEnd = Math.max(...words.map((word) => word.endTime));
-	const epsilon = 0.05;
-	const durationSlack = 0.35;
-	const looksLocal =
-		minStart >= -epsilon && maxEnd <= mediaDuration + durationSlack;
-	const looksTimeline =
-		minStart >= mediaStartTime - epsilon &&
-		maxEnd <= mediaStartTime + mediaDuration + durationSlack;
-	return looksTimeline && !looksLocal;
-}
-
 export function resolveLiveCaptionElementFromTranscriptSource({
 	element,
 	sourceMedia,
@@ -117,34 +76,26 @@ export function resolveLiveCaptionElementFromTranscriptSource({
 	if (!transcriptEdit || transcriptEdit.words.length === 0) {
 		return null;
 	}
-	const payload = buildCaptionPayloadFromTranscriptWords({
+	const snapshot = buildTranscriptTimelineSnapshot({
+		mediaElementId: sourceMedia.id,
+		transcriptVersion: transcriptEdit.version,
+		updatedAt: transcriptEdit.updatedAt,
 		words: transcriptEdit.words,
-		cuts: resolveEffectiveTranscriptCuts({ element: sourceMedia }),
-	});
-	if (!payload) {
-		return null;
-	}
-	const alreadyTimelineAligned = isTranscriptAlreadyTimelineAligned({
-		words: transcriptEdit.words,
+		cuts: transcriptEdit.cuts,
 		mediaStartTime: sourceMedia.startTime,
 		mediaDuration: sourceMedia.duration,
 	});
-	const startTime = alreadyTimelineAligned
-		? payload.startTime
-		: sourceMedia.startTime + payload.startTime;
-	const timings = alreadyTimelineAligned
-		? payload.wordTimings
-		: payload.wordTimings.map((timing) => ({
-				word: timing.word,
-				startTime: sourceMedia.startTime + timing.startTime,
-				endTime: sourceMedia.startTime + timing.endTime,
-			}));
+	if (!snapshot.captionPayload) {
+		return null;
+	}
+	const startTime = snapshot.captionPayload.startTime;
+	const timings = snapshot.captionPayload.wordTimings;
 
 	return {
 		...element,
-		content: payload.content,
+		content: snapshot.captionPayload.content,
 		startTime,
-		duration: payload.duration,
+		duration: snapshot.captionPayload.duration,
 		captionWordTimings: timings,
 		captionSourceRef: {
 			mediaElementId: sourceMedia.id,
@@ -235,7 +186,9 @@ export function buildScene(params: BuildSceneParams) {
 							timeOffset: element.startTime,
 							trimStart: element.trimStart,
 							trimEnd: element.trimEnd,
-							transcriptCuts: element.transcriptEdit?.cuts,
+							transcriptCuts: getEffectiveTranscriptCutsFromTranscriptEdit({
+								transcriptEdit: element.transcriptEdit,
+							}),
 							transform: element.transform,
 							opacity: element.opacity,
 							blendMode: element.blendMode,
@@ -273,7 +226,9 @@ export function buildScene(params: BuildSceneParams) {
 					? mediaElementById.get(sourceMediaId)
 					: null;
 				const sourceMedia =
-					(sourceMediaFromRef && isEditableMediaElement(sourceMediaFromRef)
+					(sourceMediaFromRef &&
+					isEditableMediaElement(sourceMediaFromRef) &&
+					(sourceMediaFromRef.transcriptEdit?.words.length ?? 0) > 0
 						? sourceMediaFromRef
 						: null) ??
 					resolveCaptionSourceMediaHeuristically({

@@ -14,6 +14,10 @@ interface CachedStickerSource {
 
 const stickerSourceCache = new Map<string, Promise<CachedStickerSource>>();
 
+export function clearStickerSourceCache(): void {
+	stickerSourceCache.clear();
+}
+
 function loadStickerSource(stickerId: string): Promise<CachedStickerSource> {
 	const cached = stickerSourceCache.get(stickerId);
 	if (cached) return cached;
