@@ -31,6 +31,11 @@ export interface MediaAssetData {
 	previewProxyHeight?: number;
 	previewProxyFps?: number;
 	previewProxyQualityRatio?: number;
+	importTranscoded?: boolean;
+	importTranscodeProfile?: "chrome-h264-aac-1080p30";
+	importVideoBitrate?: number;
+	importAudioBitrate?: number;
+	importTargetFps?: number;
 }
 
 export type SerializedScene = Omit<TScene, "createdAt" | "updatedAt"> & {

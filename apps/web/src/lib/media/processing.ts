@@ -3,6 +3,7 @@ import type { MediaAsset } from "@/types/assets";
 import { getMediaTypeFromFile } from "@/lib/media/media-utils";
 import { getVideoInfo } from "./mediabunny";
 import { Input, ALL_FORMATS, BlobSource, VideoSampleSink } from "mediabunny";
+import { transcodingService } from "@/services/transcoding/service";
 
 export interface ProcessedMediaAsset extends Omit<MediaAsset, "id"> {}
 
@@ -155,7 +156,6 @@ export async function processMediaAssets({
 	const processedAssets: ProcessedMediaAsset[] = [];
 
 	const total = fileArray.length;
-	let completed = 0;
 
 	const reportOverallProgress = ({
 		fileIndex,
@@ -181,7 +181,63 @@ export async function processMediaAssets({
 			continue;
 		}
 
-		const file = sourceFile;
+		let file = sourceFile;
+		let importTranscoded: boolean | undefined;
+		let importTranscodeProfile: "chrome-h264-aac-1080p30" | undefined;
+		let importVideoBitrate: number | undefined;
+		let importAudioBitrate: number | undefined;
+		let importTargetFps: number | undefined;
+
+		if (fileType === "video" || fileType === "audio") {
+			let sourceWidth: number | undefined;
+			let sourceHeight: number | undefined;
+			let sourceFps: number | undefined;
+
+			if (fileType === "video") {
+				try {
+					const videoInfo = await getVideoInfo({ videoFile: sourceFile });
+					sourceWidth = videoInfo.width;
+					sourceHeight = videoInfo.height;
+					sourceFps = Number.isFinite(videoInfo.fps)
+						? Math.round(videoInfo.fps)
+						: undefined;
+				} catch {}
+			}
+
+			reportOverallProgress({ fileIndex, fileProgress: 10 });
+			try {
+				const transcoded = await transcodingService.transcodeImportMedia({
+					file: sourceFile,
+					mediaType: fileType,
+					sourceInfo:
+						fileType === "video"
+							? {
+									width: sourceWidth,
+									height: sourceHeight,
+									fps: sourceFps,
+								}
+							: undefined,
+					onProgress: ({ progress }) => {
+						const mappedProgress = 10 + Math.round(progress * 0.7);
+						reportOverallProgress({ fileIndex, fileProgress: mappedProgress });
+					},
+				});
+				file = transcoded.file;
+				importTranscoded = transcoded.meta.importTranscoded;
+				importTranscodeProfile = transcoded.meta.importTranscodeProfile;
+				importVideoBitrate = transcoded.meta.importVideoBitrate;
+				importAudioBitrate = transcoded.meta.importAudioBitrate;
+				importTargetFps = transcoded.meta.importTargetFps;
+			} catch (error) {
+				console.error("Failed to transcode media during import:", sourceFile.name, error);
+				const details = error instanceof Error ? error.message : "Unknown error";
+				toast.error(
+					`Failed to transcode ${sourceFile.name}; file was not imported. ${details}`,
+				);
+				reportOverallProgress({ fileIndex, fileProgress: 100 });
+				continue;
+			}
+		}
 
 		const url = URL.createObjectURL(file);
 		let thumbnailUrl: string | undefined;
@@ -207,7 +263,7 @@ export async function processMediaAssets({
 				}
 				reportOverallProgress({ fileIndex, fileProgress: 95 });
 			} else if (fileType === "video") {
-				reportOverallProgress({ fileIndex, fileProgress: 8 });
+				reportOverallProgress({ fileIndex, fileProgress: 82 });
 				try {
 					const videoInfo = await getVideoInfo({ videoFile: file });
 					duration = videoInfo.duration;
@@ -234,7 +290,7 @@ export async function processMediaAssets({
 						);
 					}
 				}
-				reportOverallProgress({ fileIndex, fileProgress: 28 });
+				reportOverallProgress({ fileIndex, fileProgress: 90 });
 
 				try {
 					thumbnailUrl = await generateThumbnail({
@@ -244,12 +300,12 @@ export async function processMediaAssets({
 				} catch (error) {
 					console.warn("Thumbnail generation failed; continuing import.", error);
 				}
-				reportOverallProgress({ fileIndex, fileProgress: 40 });
+				reportOverallProgress({ fileIndex, fileProgress: 94 });
 
 				reportOverallProgress({ fileIndex, fileProgress: 95 });
 			} else if (fileType === "audio") {
 				// For audio, we don't set width/height/fps (they'll be undefined)
-				reportOverallProgress({ fileIndex, fileProgress: 25 });
+				reportOverallProgress({ fileIndex, fileProgress: 82 });
 				try {
 					duration = await getMediaDuration({ file });
 				} catch (error) {
@@ -259,7 +315,7 @@ export async function processMediaAssets({
 			}
 
 			processedAssets.push({
-				name: file.name,
+				name: sourceFile.name,
 				type: fileType,
 				file,
 				url,
@@ -268,11 +324,15 @@ export async function processMediaAssets({
 				width,
 				height,
 				fps,
+				importTranscoded,
+				importTranscodeProfile,
+				importVideoBitrate,
+				importAudioBitrate,
+				importTargetFps,
 			});
 
 			await new Promise((resolve) => setTimeout(resolve, 0));
 
-			completed += 1;
 			reportOverallProgress({ fileIndex, fileProgress: 100 });
 		} catch (error) {
 			console.error("Error processing file:", sourceFile.name, error);

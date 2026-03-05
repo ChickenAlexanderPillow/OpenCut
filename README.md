@@ -88,6 +88,15 @@ Thanks to [Vercel](https://vercel.com?utm_source=github-opencut&utm_campaign=oss
    bun run dev:web:low-mem
    ```
 
+   Memory audit and reduction (Windows PowerShell):
+
+   ```bash
+   bun run mem:audit
+   bun run mem:reduce
+   # Aggressive mode: also force-closes Chrome and shuts down Docker Desktop/WSL
+   bun run mem:reduce:aggressive
+   ```
+
 The application will be available at [http://localhost:3000](http://localhost:3000).
 
 The `.env.example` has sensible defaults that match the Docker Compose config — it should work out of the box.
@@ -112,6 +121,16 @@ Lower-memory Docker option (skips `local-transcribe`):
 
 ```bash
 bun run docker:up:core
+```
+
+Transcription quality/memory tuning (Docker env overrides):
+
+```bash
+# Higher quality, higher memory
+LOCAL_TRANSCRIBE_MODEL=large-v3 LOCAL_TRANSCRIBE_COMPUTE_TYPE=float16 bun run docker:up
+
+# Lower memory (default in this repo)
+LOCAL_TRANSCRIBE_MODEL=medium LOCAL_TRANSCRIBE_COMPUTE_TYPE=int8_float16 bun run docker:up
 ```
 
 To stop it:

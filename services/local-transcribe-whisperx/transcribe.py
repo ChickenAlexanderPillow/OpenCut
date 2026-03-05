@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections import OrderedDict
+import gc
+import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,17 +15,30 @@ import whisperx
 
 @dataclass
 class TranscribeConfig:
-	model: str = "large-v3"
+	model: str = "medium"
 	device: str = "cuda"
-	compute_type: str = "float16"
-	batch_size: int = 16
+	compute_type: str = "int8_float16"
 	vad_filter: bool = False
 
 
 class LocalWhisperXEngine:
 	def __init__(self) -> None:
-		self._model_cache: dict[tuple[str, str, str], WhisperModel] = {}
-		self._align_cache: dict[tuple[str, str], tuple[Any, Any]] = {}
+		self._max_model_cache = max(1, int(os.getenv("LOCAL_TRANSCRIBE_MAX_MODEL_CACHE", "1")))
+		self._max_align_cache = max(1, int(os.getenv("LOCAL_TRANSCRIBE_MAX_ALIGN_CACHE", "2")))
+		self._model_cache: "OrderedDict[tuple[str, str, str], WhisperModel]" = OrderedDict()
+		self._align_cache: "OrderedDict[tuple[str, str], tuple[Any, Any]]" = OrderedDict()
+
+	def _trim_caches(self) -> None:
+		while len(self._model_cache) > self._max_model_cache:
+			self._model_cache.popitem(last=False)
+		while len(self._align_cache) > self._max_align_cache:
+			self._align_cache.popitem(last=False)
+		gc.collect()
+		try:
+			if torch.cuda.is_available():
+				torch.cuda.empty_cache()
+		except Exception:
+			pass
 
 	def _resolve_device(self, requested: str) -> str:
 		device = (requested or "cpu").strip().lower()
@@ -39,21 +55,25 @@ class LocalWhisperXEngine:
 		key = (model, device, compute_type)
 		existing = self._model_cache.get(key)
 		if existing:
+			self._model_cache.move_to_end(key)
 			return existing
 		asr_model = WhisperModel(model, device=device, compute_type=compute_type)
 		self._model_cache[key] = asr_model
+		self._trim_caches()
 		return asr_model
 
 	def _get_align_model(self, *, language: str, device: str) -> tuple[Any, Any]:
 		key = (language, device)
 		existing = self._align_cache.get(key)
 		if existing:
+			self._align_cache.move_to_end(key)
 			return existing
 		align_model, metadata = whisperx.load_align_model(
 			language_code=language,
 			device=device,
 		)
 		self._align_cache[key] = (align_model, metadata)
+		self._trim_caches()
 		return align_model, metadata
 
 	def _run_asr(
@@ -207,3 +227,5 @@ class LocalWhisperXEngine:
 				temp_path.unlink(missing_ok=True)
 			except OSError:
 				pass
+			# Release transient allocations after each request.
+			self._trim_caches()

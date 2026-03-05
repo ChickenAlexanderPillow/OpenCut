@@ -298,6 +298,11 @@ class LegacyLocalStorageService {
 			previewProxyHeight: mediaAsset.previewProxyHeight,
 			previewProxyFps: mediaAsset.previewProxyFps,
 			previewProxyQualityRatio: mediaAsset.previewProxyQualityRatio,
+			importTranscoded: mediaAsset.importTranscoded,
+			importTranscodeProfile: mediaAsset.importTranscodeProfile,
+			importVideoBitrate: mediaAsset.importVideoBitrate,
+			importAudioBitrate: mediaAsset.importAudioBitrate,
+			importTargetFps: mediaAsset.importTargetFps,
 		};
 
 		await mediaMetadataAdapter.set(mediaAsset.id, metadata);
@@ -366,6 +371,11 @@ class LegacyLocalStorageService {
 			previewProxyHeight: metadata.previewProxyHeight,
 			previewProxyFps: metadata.previewProxyFps,
 			previewProxyQualityRatio: metadata.previewProxyQualityRatio,
+			importTranscoded: metadata.importTranscoded,
+			importTranscodeProfile: metadata.importTranscodeProfile,
+			importVideoBitrate: metadata.importVideoBitrate,
+			importAudioBitrate: metadata.importAudioBitrate,
+			importTargetFps: metadata.importTargetFps,
 		};
 	}
 

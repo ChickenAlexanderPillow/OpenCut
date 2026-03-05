@@ -87,8 +87,8 @@ def healthz() -> HealthResponse:
 		status="ok",
 		engine="whisperx",
 		device=os.getenv("LOCAL_TRANSCRIBE_DEVICE", "cuda"),
-		default_model=os.getenv("LOCAL_TRANSCRIBE_MODEL", "large-v3"),
-		default_compute_type=os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "float16"),
+		default_model=os.getenv("LOCAL_TRANSCRIBE_MODEL", "medium"),
+		default_compute_type=os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "int8_float16"),
 		default_vad_filter=_parse_bool(
 			os.getenv("LOCAL_TRANSCRIBE_VAD_FILTER"),
 			False,
@@ -115,10 +115,10 @@ async def transcribe_word_timestamps(
 		raise HTTPException(status_code=400, detail="Invalid file size")
 
 	config = TranscribeConfig(
-		model=(model or os.getenv("LOCAL_TRANSCRIBE_MODEL", "large-v3")).strip(),
+		model=(model or os.getenv("LOCAL_TRANSCRIBE_MODEL", "medium")).strip(),
 		device=(device or os.getenv("LOCAL_TRANSCRIBE_DEVICE", "cuda")).strip(),
 		compute_type=(
-			compute_type or os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "float16")
+			compute_type or os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "int8_float16")
 		).strip(),
 		vad_filter=_parse_bool(
 			vad_filter,
