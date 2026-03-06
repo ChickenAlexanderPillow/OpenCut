@@ -217,8 +217,8 @@ describe("scene builder live caption source resolution", () => {
 	});
 
 	test("recomputes caption timing when media moves without transcript edit changes", () => {
-		const transcriptEdit = {
-			version: 1,
+		const transcriptEdit: NonNullable<AudioElement["transcriptEdit"]> = {
+			version: 1 as const,
 			source: "word-level" as const,
 			words: [
 				{ id: "w0", text: "hello", startTime: 0.0, endTime: 0.3, removed: false },

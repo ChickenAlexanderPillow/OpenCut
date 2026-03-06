@@ -275,9 +275,6 @@ export function TimelineRuler({
 						}
 					>
 						<span className="pointer-events-none absolute left-1/2 h-full w-0.5 -translate-x-1/2 bg-emerald-500" />
-						<span className="pointer-events-none absolute -top-3 -left-1 rounded bg-emerald-500 px-1 text-[9px] font-semibold text-white">
-							I
-						</span>
 					</button>
 				)}
 				{outPoint !== null && (
@@ -294,9 +291,6 @@ export function TimelineRuler({
 						}
 					>
 						<span className="pointer-events-none absolute left-1/2 h-full w-0.5 -translate-x-1/2 bg-rose-500" />
-						<span className="pointer-events-none absolute -top-3 -left-1 rounded bg-rose-500 px-1 text-[9px] font-semibold text-white">
-							O
-						</span>
 					</button>
 				)}
 				{timelineTicks}

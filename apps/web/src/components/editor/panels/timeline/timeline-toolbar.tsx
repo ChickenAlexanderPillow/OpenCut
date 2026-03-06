@@ -6,7 +6,7 @@ import {
 	TooltipContent,
 } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
-import { Maximize2, SplitSquareHorizontal, WandSparkles } from "lucide-react";
+import { Maximize2, WandSparkles } from "lucide-react";
 import {
 	SplitButton,
 	SplitButtonLeft,
@@ -38,15 +38,14 @@ import { HugeiconsIcon } from "@hugeicons/react";
 
 function InOutPointIcon({ type }: { type: "in" | "out" }) {
 	const colorClass = type === "in" ? "bg-emerald-500" : "bg-rose-500";
-	const label = type === "in" ? "I" : "O";
+	const arrowClass =
+		type === "in"
+			? "border-y-[3px] border-y-transparent border-l-[4px] border-l-emerald-500"
+			: "border-y-[3px] border-y-transparent border-r-[4px] border-r-rose-500";
 	return (
-		<span className="relative inline-flex h-4 w-3 items-center justify-center">
+		<span className="relative inline-flex h-4 w-4 items-center justify-center">
 			<span className={`h-4 w-0.5 rounded-full ${colorClass}`} />
-			<span
-				className={`absolute -top-1.5 rounded px-0.5 text-[8px] font-semibold text-white ${colorClass}`}
-			>
-				{label}
-			</span>
+			<span className={cn("absolute top-1/2 -translate-y-1/2", arrowClass)} />
 		</span>
 	);
 }
@@ -140,13 +139,6 @@ function ToolbarLeftSection() {
 					onClick={({ event }) =>
 						handleAction({ action: "smart-cut-selected", event })
 					}
-				/>
-
-				<ToolbarButton
-					icon={<SplitSquareHorizontal />}
-					tooltip="Coming soon" /* separate audio */
-					disabled={true}
-					onClick={({ event: _event }) => {}}
 				/>
 
 				<ToolbarButton

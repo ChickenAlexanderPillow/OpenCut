@@ -94,6 +94,7 @@ const CLIP_TRANSCRIPTION_MAX_DURATION_SECONDS = 240;
 const CLIP_TRANSCRIPTION_MAX_FILE_BYTES = 20 * 1024 * 1024;
 const CLIP_WORD_TRANSCRIPTION_CACHE_VERSION = 7;
 const CAPTION_TAIL_PAD_SECONDS = 1 / 30;
+const SMART_CUT_WORD_JOIN_GAP_SECONDS = 0.45;
 const clipTranscriptionInFlight = new Map<
 	string,
 	Promise<TranscriptionSegment[] | null>
@@ -238,6 +239,135 @@ function truncateCandidateSnippet({ text }: { text: string }): string {
 	const prefix = text.slice(0, 1200).trim();
 	const lastWhitespace = prefix.lastIndexOf(" ");
 	return lastWhitespace > 0 ? prefix.slice(0, lastWhitespace).trim() : prefix;
+}
+
+function buildSegmentsFromWordTimings({
+	wordTimings,
+	joinGapSeconds,
+}: {
+	wordTimings: Array<{ startTime: number; endTime: number }>;
+	joinGapSeconds: number;
+}): TranscriptionSegment[] {
+	const sorted = wordTimings
+		.filter(
+			(word) =>
+				Number.isFinite(word.startTime) &&
+				Number.isFinite(word.endTime) &&
+				word.endTime > word.startTime,
+		)
+		.sort((a, b) => a.startTime - b.startTime);
+	if (sorted.length === 0) return [];
+
+	const segments: TranscriptionSegment[] = [];
+	let segmentStart = sorted[0].startTime;
+	let segmentEnd = sorted[0].endTime;
+
+	for (let index = 1; index < sorted.length; index++) {
+		const word = sorted[index];
+		if (word.startTime <= segmentEnd + joinGapSeconds) {
+			segmentEnd = Math.max(segmentEnd, word.endTime);
+			continue;
+		}
+		segments.push({
+			text: "",
+			start: segmentStart,
+			end: segmentEnd,
+		});
+		segmentStart = word.startTime;
+		segmentEnd = word.endTime;
+	}
+
+	segments.push({
+		text: "",
+		start: segmentStart,
+		end: segmentEnd,
+	});
+
+	return segments;
+}
+
+function getSmartCutMediaSourceId({
+	element,
+}: {
+	element: VideoElement | AudioElement;
+}): string | null {
+	if (element.type === "video") return element.mediaId;
+	if (element.sourceType === "upload") return element.mediaId;
+	return null;
+}
+
+function getSmartCutSegmentsForElement({
+	element,
+	tracks,
+	mediaElements,
+	fallbackSegments,
+}: {
+	element: VideoElement | AudioElement;
+	tracks: TimelineTrack[];
+	mediaElements: Array<VideoElement | AudioElement>;
+	fallbackSegments: TranscriptionSegment[] | null;
+}): TranscriptionSegment[] {
+	const clipStart = element.startTime;
+	const clipEnd = element.startTime + element.duration;
+
+	const sourceMediaId = getSmartCutMediaSourceId({ element });
+	const transcriptWordTimings =
+		(element.transcriptEdit?.words ?? [])
+			.filter((word) => !word.removed)
+			.map((word) => ({
+				startTime: element.startTime + (word.startTime - element.trimStart),
+				endTime: element.startTime + (word.endTime - element.trimStart),
+			}));
+	const siblingTranscriptWordTimings =
+		sourceMediaId === null
+			? []
+			: mediaElements
+					.filter((candidate) => {
+						if (candidate.id === element.id) return false;
+						return getSmartCutMediaSourceId({ element: candidate }) === sourceMediaId;
+					})
+					.flatMap((candidate) => candidate.transcriptEdit?.words ?? [])
+					.filter((word) => !word.removed)
+					.map((word) => ({
+						startTime: element.startTime + (word.startTime - element.trimStart),
+						endTime: element.startTime + (word.endTime - element.trimStart),
+					}));
+	const fromTranscriptEdit = [
+		...transcriptWordTimings,
+		...siblingTranscriptWordTimings,
+	].map((word) => ({ startTime: word.startTime, endTime: word.endTime }));
+	const transcriptSegments = buildSegmentsFromWordTimings({
+		wordTimings: fromTranscriptEdit,
+		joinGapSeconds: SMART_CUT_WORD_JOIN_GAP_SECONDS,
+	}).filter((segment) => segment.end > clipStart && segment.start < clipEnd);
+	if (transcriptSegments.length > 0) {
+		return transcriptSegments;
+	}
+
+	const captionWordTimings = tracks
+		.filter((track) => track.type === "text")
+		.flatMap((track) => track.elements)
+		.filter(
+			(caption) =>
+				(caption.captionWordTimings?.length ?? 0) > 0 &&
+				caption.captionSourceRef?.mediaElementId === element.id,
+		)
+		.flatMap((caption) => caption.captionWordTimings ?? [])
+		.map((word) => ({
+			startTime: word.startTime,
+			endTime: word.endTime,
+		}));
+	const captionSegments = buildSegmentsFromWordTimings({
+		wordTimings: captionWordTimings,
+		joinGapSeconds: SMART_CUT_WORD_JOIN_GAP_SECONDS,
+	}).filter((segment) => segment.end > clipStart && segment.start < clipEnd);
+	if (captionSegments.length > 0) {
+		return captionSegments;
+	}
+
+	return (fallbackSegments ?? []).filter(
+		(segment) => segment.end > clipStart && segment.start < clipEnd,
+	);
 }
 
 function buildCoarseFallbackClipCandidatesFromSegments({
@@ -2257,28 +2387,38 @@ export function useEditorActions() {
 					tracks,
 					mediaAssets,
 				});
-
-				if (!transcriptionCache) {
-					toast.error(
-						"Smart Cut needs transcript data. Generate transcript from the Captions panel first.",
-					);
-					return;
-				}
 				const selectedWithElements = editor.timeline.getElementsWithTracks({
 					elements: selectedElements,
 				});
 
-				const processable = selectedWithElements.filter(({ element }) => {
-					if (element.type !== "video" && element.type !== "audio") return false;
-					if (element.type === "video") return mediaById.has(element.mediaId);
-					if (element.sourceType === "upload") return mediaById.has(element.mediaId);
-					return false;
-				});
+				const processable = selectedWithElements.filter(
+					(
+						item,
+					): item is {
+						track: TimelineTrack;
+						element: VideoElement | AudioElement;
+					} => {
+						const { element } = item;
+						if (element.type !== "video" && element.type !== "audio") return false;
+						if (element.type === "video") return mediaById.has(element.mediaId);
+						if (element.sourceType === "upload") return mediaById.has(element.mediaId);
+						return false;
+					},
+				);
 
 				if (processable.length === 0) {
 					toast.error("No selected clips support Smart Cut");
 					return;
 				}
+				const timelineMediaElements = tracks.flatMap((track) =>
+					track.elements.filter(
+						(
+							element,
+						): element is VideoElement | AudioElement =>
+							element.type === "video" ||
+							(element.type === "audio" && element.sourceType === "upload"),
+					),
+				);
 
 				toast.info("Applying transcript-driven Smart Cut...");
 
@@ -2286,17 +2426,30 @@ export function useEditorActions() {
 					string,
 					ReturnType<typeof computeSmartCutFromTranscriptForElement>
 				>();
+				let missingTranscriptCount = 0;
 
 				for (const { track, element } of processable) {
+					const segments = getSmartCutSegmentsForElement({
+						element,
+						tracks,
+						mediaElements: timelineMediaElements,
+						fallbackSegments: transcriptionCache?.segments ?? null,
+					});
+					if (segments.length === 0) {
+						missingTranscriptCount += 1;
+						continue;
+					}
 					const result = computeSmartCutFromTranscriptForElement({
 						element,
-						segments: transcriptionCache.segments,
+						segments,
 					});
 					resultsByElementKey.set(`${track.id}:${element.id}`, result);
 				}
 
 				if (resultsByElementKey.size === 0) {
-					toast.error("Smart Cut could not derive cuts from transcript");
+					toast.error(
+						"Smart Cut could not find transcript/caption timing for selected clips.",
+					);
 					return;
 				}
 
@@ -2342,6 +2495,11 @@ export function useEditorActions() {
 				toast.success(
 					`Smart Cut updated ${changedElements} clip${changedElements > 1 ? "s" : ""} (${totalRemovedDuration.toFixed(1)}s removed)`,
 				);
+				if (missingTranscriptCount > 0) {
+					toast.info(
+						`Skipped ${missingTranscriptCount} clip${missingTranscriptCount > 1 ? "s" : ""} with no transcript timing data.`,
+					);
+				}
 				if (!rippleEditingEnabled) {
 					toast.info(
 						"Enable Ripple Editing to keep generated captions automatically retimed with Smart Cut.",
