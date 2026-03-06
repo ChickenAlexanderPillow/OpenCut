@@ -12,6 +12,7 @@ import {
 	resolveTextPlacement,
 	wrapTextToWidth,
 } from "@/lib/text/layout";
+import { resolveTransformAtTime } from "@/lib/animation";
 import { resolveSafeAreaAnchoredPositionY } from "@/constants/safe-area-constants";
 import { toTimelineCaptionWordTimings } from "@/lib/captions/timing";
 
@@ -52,9 +53,15 @@ type CachedCaptionPagePlan = {
 };
 
 const MAX_PREVIEW_CACHE_ENTRIES = 300;
-const captionTimingCacheByElementId = new Map<string, CachedCaptionTimingData>();
+const captionTimingCacheByElementId = new Map<
+	string,
+	CachedCaptionTimingData
+>();
 const textBoundsCacheByElementId = new Map<string, CachedTextBounds>();
-const captionPagePlanCacheByElementId = new Map<string, CachedCaptionPagePlan>();
+const captionPagePlanCacheByElementId = new Map<
+	string,
+	CachedCaptionPagePlan
+>();
 
 const sharedMeasureCanvas =
 	typeof document !== "undefined" ? document.createElement("canvas") : null;
@@ -248,6 +255,12 @@ export function getElementBounds({
 	if ("hidden" in element && element.hidden) return null;
 
 	const { width: canvasWidth, height: canvasHeight } = canvasSize;
+	const localTime = Math.max(0, currentTime - element.startTime);
+	const resolvedTransform = resolveTransformAtTime({
+		baseTransform: element.transform,
+		animations: element.animations,
+		localTime,
+	});
 
 	if (element.type === "video" || element.type === "image") {
 		const sourceWidth = mediaAsset?.width ?? canvasWidth;
@@ -257,7 +270,7 @@ export function getElementBounds({
 			canvasHeight,
 			sourceWidth,
 			sourceHeight,
-			transform: element.transform,
+			transform: resolvedTransform,
 		});
 	}
 
@@ -267,7 +280,7 @@ export function getElementBounds({
 			canvasHeight,
 			sourceWidth: 200,
 			sourceHeight: 200,
-			transform: element.transform,
+			transform: resolvedTransform,
 		});
 	}
 
@@ -296,7 +309,6 @@ export function getElementBounds({
 			}
 
 			const captionTimingData = getCachedCaptionTimingData({ element });
-			const captionWordTimings = captionTimingData.timings;
 			const captionWords = captionTimingData.words;
 			const wordsOnScreenRaw = element.captionStyle?.wordsOnScreen;
 			const wordsOnScreen =
@@ -318,18 +330,16 @@ export function getElementBounds({
 				captionWords.length > 0 && wordsOnScreen !== null && wordsOnScreen > 0;
 			const cappedWordsOnScreen = wordsOnScreen ?? captionWords.length;
 			const activeWordForWindow =
-				latestStartedWordIndex >= 0
-					? latestStartedWordIndex
-					: 0;
+				latestStartedWordIndex >= 0 ? latestStartedWordIndex : 0;
 			const backgroundMode = element.captionStyle?.backgroundFitMode ?? "block";
 			const pagePlanSignature = [
 				captionTimingData.signature,
 				canvasWidth,
 				canvasHeight,
-				element.transform.position.x.toFixed(2),
-				element.transform.position.y.toFixed(2),
-				element.transform.scale.toFixed(4),
-				element.transform.rotate.toFixed(2),
+				resolvedTransform.position.x.toFixed(2),
+				resolvedTransform.position.y.toFixed(2),
+				resolvedTransform.scale.toFixed(4),
+				resolvedTransform.rotate.toFixed(2),
 				element.textAlign,
 				element.fontFamily,
 				element.fontSize.toFixed(3),
@@ -394,12 +404,12 @@ export function getElementBounds({
 					const candidatePlacement = resolveTextPlacement({
 						canvasWidth,
 						canvasHeight,
-						positionX: canvasWidth / 2 + element.transform.position.x,
+						positionX: canvasWidth / 2 + resolvedTransform.position.x,
 						positionY: resolveSafeAreaAnchoredPositionY({
 							canvasWidth,
 							canvasHeight,
-							transformPositionY: element.transform.position.y,
-							scale: element.transform.scale,
+							transformPositionY: resolvedTransform.position.y,
+							scale: resolvedTransform.scale,
 							visualRect: candidateVisualRect,
 							anchorToSafeAreaBottom:
 								element.captionStyle?.anchorToSafeAreaBottom ?? true,
@@ -407,16 +417,15 @@ export function getElementBounds({
 								element.captionStyle?.safeAreaBottomOffset ?? 0,
 							anchorToSafeAreaTop:
 								element.captionStyle?.anchorToSafeAreaTop ?? false,
-							safeAreaTopOffset:
-								element.captionStyle?.safeAreaTopOffset ?? 0,
+							safeAreaTopOffset: element.captionStyle?.safeAreaTopOffset ?? 0,
 						}),
-						scale: element.transform.scale,
+						scale: resolvedTransform.scale,
 						visualRect: candidateVisualRect,
 						fitInCanvas,
 					});
 					if (
 						candidatePlacement.effectiveScale >=
-						element.transform.scale - 0.001
+						resolvedTransform.scale - 0.001
 					) {
 						return size;
 					}
@@ -508,7 +517,8 @@ export function getElementBounds({
 							maxLines: maxLinesOnScreen,
 						}).join("\n"))
 					: element.content;
-			const maxWrapWidth = canvasWidth - Math.min(canvasWidth, canvasHeight) * 0.08;
+			const maxWrapWidth =
+				canvasWidth - Math.min(canvasWidth, canvasHeight) * 0.08;
 			const shouldWrapToMaintainFontSize =
 				captionWords.length === 0 && Boolean(fitInCanvas);
 			const wrappedContent = shouldWrapToMaintainFontSize
@@ -541,12 +551,12 @@ export function getElementBounds({
 			const placement = resolveTextPlacement({
 				canvasWidth,
 				canvasHeight,
-				positionX: canvasWidth / 2 + element.transform.position.x,
+				positionX: canvasWidth / 2 + resolvedTransform.position.x,
 				positionY: resolveSafeAreaAnchoredPositionY({
 					canvasWidth,
 					canvasHeight,
-					transformPositionY: element.transform.position.y,
-					scale: element.transform.scale,
+					transformPositionY: resolvedTransform.position.y,
+					scale: resolvedTransform.scale,
 					visualRect,
 					anchorToSafeAreaBottom:
 						element.captionStyle?.anchorToSafeAreaBottom ?? true,
@@ -555,7 +565,7 @@ export function getElementBounds({
 						element.captionStyle?.anchorToSafeAreaTop ?? false,
 					safeAreaTopOffset: element.captionStyle?.safeAreaTopOffset ?? 0,
 				}),
-				scale: element.transform.scale,
+				scale: resolvedTransform.scale,
 				visualRect,
 				fitInCanvas,
 			});
@@ -563,7 +573,7 @@ export function getElementBounds({
 			const localCenterY = visualRect.top + visualRect.height / 2;
 			const scaledCenterX = localCenterX * placement.effectiveScale;
 			const scaledCenterY = localCenterY * placement.effectiveScale;
-			const rotationRad = (element.transform.rotate * Math.PI) / 180;
+			const rotationRad = (resolvedTransform.rotate * Math.PI) / 180;
 			const cos = Math.cos(rotationRad);
 			const sin = Math.sin(rotationRad);
 			const rotatedCenterX = scaledCenterX * cos - scaledCenterY * sin;
@@ -573,7 +583,7 @@ export function getElementBounds({
 				cy: placement.y + rotatedCenterY,
 				width: measuredWidth * placement.effectiveScale,
 				height: measuredHeight * placement.effectiveScale,
-				rotation: element.transform.rotate,
+				rotation: resolvedTransform.rotate,
 			};
 			textBoundsCacheByElementId.set(element.id, {
 				signature: textLayoutSignature,
@@ -583,14 +593,14 @@ export function getElementBounds({
 			return computedBounds;
 		}
 
-		const width = measuredWidth * element.transform.scale;
-		const height = measuredHeight * element.transform.scale;
+		const width = measuredWidth * resolvedTransform.scale;
+		const height = measuredHeight * resolvedTransform.scale;
 		return {
-			cx: canvasWidth / 2 + element.transform.position.x,
-			cy: canvasHeight / 2 + element.transform.position.y,
+			cx: canvasWidth / 2 + resolvedTransform.position.x,
+			cy: canvasHeight / 2 + resolvedTransform.position.y,
 			width,
 			height,
-			rotation: element.transform.rotate,
+			rotation: resolvedTransform.rotate,
 		};
 	}
 

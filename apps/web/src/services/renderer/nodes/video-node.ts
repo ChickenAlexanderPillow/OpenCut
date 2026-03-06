@@ -98,37 +98,39 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 
 			const sourceWidth = frame.canvas.width;
 			const sourceHeight = frame.canvas.height;
-		const placement = this.getVisualPlacement({
-			rendererWidth,
-			rendererHeight,
-			sourceWidth,
-			sourceHeight,
-		});
-		const resolved = this.getResolvedVisualState({ time });
+			const resolved = this.getResolvedVisualState({ time });
+			const placement = this.getVisualPlacement({
+				rendererWidth,
+				rendererHeight,
+				sourceWidth,
+				sourceHeight,
+				transform: resolved.transform,
+			});
 
-		return {
-			source: frame.canvas,
-			sourceWidth,
-			sourceHeight,
-			x: placement.x,
-			y: placement.y,
-			width: placement.width,
-			height: placement.height,
-			rotation: resolved.transform.rotate,
-			opacity: resolved.opacity,
-			blendMode: this.params.blendMode,
-		};
+			return {
+				source: frame.canvas,
+				sourceWidth,
+				sourceHeight,
+				x: placement.x,
+				y: placement.y,
+				width: placement.width,
+				height: placement.height,
+				rotation: resolved.transform.rotate,
+				opacity: resolved.opacity,
+				blendMode: this.params.blendMode,
+			};
 		}
 
 		const sourceWidth = gpuFrame.width;
 		const sourceHeight = gpuFrame.height;
+		const resolved = this.getResolvedVisualState({ time });
 		const placement = this.getVisualPlacement({
 			rendererWidth,
 			rendererHeight,
 			sourceWidth,
 			sourceHeight,
+			transform: resolved.transform,
 		});
-		const resolved = this.getResolvedVisualState({ time });
 
 		return {
 			source: gpuFrame.frame,

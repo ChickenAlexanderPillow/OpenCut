@@ -72,6 +72,10 @@ export class AudioManager {
 	private streamingEngine: StreamingTimelineAudioEngine | null = null;
 	private prepareGraphSequence = 0;
 	private audioGraphDirty = false;
+	private audioGraphDirtySinceMs: number | null = null;
+	private pendingGraphRebuild = false;
+	private lastGraphRebuildAtMs: number | null = null;
+	private lastGraphDirtyReason = "initial";
 
 	constructor(private editor: EditorCore) {
 		const globalScope = globalThis as GlobalWithAudioManager;
@@ -127,6 +131,9 @@ export class AudioManager {
 			window.clearTimeout(this.rebuildDebounceTimer);
 			this.rebuildDebounceTimer = null;
 		}
+		this.pendingGraphRebuild = false;
+		this.audioGraphDirty = false;
+		this.audioGraphDirtySinceMs = null;
 		if (this.streamingEngine) {
 			this.streamingEngine.dispose();
 			this.streamingEngine = null;
@@ -154,6 +161,9 @@ export class AudioManager {
 
 		if (isPlaying !== this.lastIsPlaying) {
 			this.lastIsPlaying = isPlaying;
+			// Gate transport output immediately on pause/play transitions so stray nodes
+			// can never leak audible output while paused.
+			this.updateGain();
 			if (isPlaying) {
 				void this.startPlayback({
 					time: this.editor.playback.getCurrentTime(),
@@ -209,7 +219,10 @@ export class AudioManager {
 		if (this.audioGraphDirty) {
 			// Timeline audio changed and graph rebuild is pending; restart against
 			// latest graph immediately to avoid seeking into stale scheduled audio.
-			void this.startPlayback({ time });
+			void this.startPlayback({
+				time,
+				stopCurrentOutputFirst: true,
+			});
 			return;
 		}
 		this.streamingEngine?.seek({ time, immediate: true });
@@ -243,7 +256,10 @@ export class AudioManager {
 			return;
 		}
 		this.lastAudioFingerprint = nextFingerprint;
-		this.audioGraphDirty = true;
+		this.setAudioGraphDirty({
+			dirty: true,
+			reason: "timeline-or-media-change",
+		});
 
 		const isPlaying = this.editor.playback.getIsPlaying();
 		const isScrubbing = this.editor.playback.getIsScrubbing();
@@ -254,25 +270,16 @@ export class AudioManager {
 			return;
 		}
 
-		if (this.rebuildDebounceTimer !== null) {
-			window.clearTimeout(this.rebuildDebounceTimer);
+		// During active playback we must immediately stop stale output and rebuild from
+		// latest timeline edits to avoid doubled/overlapping transport audio.
+		if (isPlaying && !isScrubbing) {
+			this.stopPlaybackOutputs();
+			this.scheduleGraphRebuild({ delayMs: 20 });
+			return;
 		}
-		this.rebuildDebounceTimer = window.setTimeout(
-			() => {
-				this.rebuildDebounceTimer = null;
-				const playhead = this.editor.playback.getCurrentTime();
-				if (this.editor.playback.getIsPlaying() && !this.editor.playback.getIsScrubbing()) {
-					// During active playback, rebuild+restart transport so no stale nodes remain.
-					void this.startPlayback({ time: playhead });
-					return;
-				}
-				void this.prepareStreamingGraph({
-					playhead,
-					prewarm: !this.editor.playback.getIsPlaying() && !this.editor.playback.getIsScrubbing(),
-				});
-			},
-			isPlaying ? 40 : isScrubbing ? 90 : 180,
-		);
+		this.scheduleGraphRebuild({
+			delayMs: isScrubbing ? 40 : 90,
+		});
 	};
 
 	private handleUserGesture = (): void => {
@@ -285,7 +292,9 @@ export class AudioManager {
 
 		this.audioContext = createAudioContext();
 		this.masterGain = this.audioContext.createGain();
-		this.masterGain.gain.value = this.lastVolume;
+		this.masterGain.gain.value = this.editor.playback.getIsPlaying()
+			? this.lastVolume
+			: 0;
 		this.outputCompressor = this.audioContext.createDynamicsCompressor();
 		this.outputCompressor.threshold.setValueAtTime(
 			-14,
@@ -333,7 +342,9 @@ export class AudioManager {
 
 	private updateGain(): void {
 		if (!this.masterGain) return;
-		this.masterGain.gain.value = this.lastVolume;
+		this.masterGain.gain.value = this.editor.playback.getIsPlaying()
+			? this.lastVolume
+			: 0;
 	}
 
 	private async unlockAudioContext(): Promise<void> {
@@ -386,7 +397,10 @@ export class AudioManager {
 				diff: result.diff,
 				playhead,
 			});
-			this.audioGraphDirty = false;
+			this.setAudioGraphDirty({
+				dirty: false,
+				reason: "prepare-complete",
+			});
 			if (prewarm) {
 				void engine.prewarm({ playhead, horizonSeconds: 12 });
 			}
@@ -438,10 +452,19 @@ export class AudioManager {
 		this.outputMeterTimer = null;
 	}
 
-	private async startPlayback({ time }: { time: number }): Promise<void> {
+	private async startPlayback({
+		time,
+		stopCurrentOutputFirst = false,
+	}: {
+		time: number;
+		stopCurrentOutputFirst?: boolean;
+	}): Promise<void> {
 		const requestId = ++this.playbackRequestId;
 		const audioContext = this.ensureAudioContext();
 		if (!audioContext) return;
+		if (stopCurrentOutputFirst) {
+			this.stopPlaybackOutputs();
+		}
 
 		await this.unlockAudioContext();
 		if (requestId !== this.playbackRequestId) return;
@@ -459,7 +482,10 @@ export class AudioManager {
 			this.streamingEngine?.stop();
 			this.streamingEngine?.start({ atTime: time });
 			this.streamingEngine?.seek({ time, immediate: true });
-			this.audioGraphDirty = false;
+			this.setAudioGraphDirty({
+				dirty: false,
+				reason: "playback-restarted",
+			});
 		} catch (error) {
 			console.warn("Streaming playback failed:", error);
 		}
@@ -478,28 +504,188 @@ export class AudioManager {
 		preserveDirty?: boolean;
 	} = {}): void {
 		this.stopPlaybackOutputs();
-		void preserveDirty;
 		this.streamingEngine?.clearCaches();
+		if (preserveDirty) {
+			this.setAudioGraphDirty({
+				dirty: true,
+				reason: "cache-cleared",
+			});
+		} else {
+			this.setAudioGraphDirty({
+				dirty: false,
+				reason: "cache-cleared-reset",
+			});
+		}
 	}
 
 	getAudioHealth(): {
 		startupMs: number | null;
 		cacheHitRate: number;
 		dropouts: number;
+		graphDirty: boolean;
+		pendingRebuild: boolean;
+		staleForMs: number;
+		lastGraphRebuildAtMs: number | null;
 	} {
+		const graphState = this.getAudioGraphState();
 		if (this.streamingEngine) {
 			const health = this.streamingEngine.getHealth();
 			return {
 				startupMs: health.startupMs,
 				cacheHitRate: health.cacheHitRate,
 				dropouts: health.dropouts,
+				graphDirty: graphState.isDirty,
+				pendingRebuild: graphState.pendingRebuild,
+				staleForMs: graphState.staleForMs,
+				lastGraphRebuildAtMs: graphState.lastRebuildAtMs,
 			};
 		}
 		return {
 			startupMs: null,
 			cacheHitRate: 0,
 			dropouts: 0,
+			graphDirty: graphState.isDirty,
+			pendingRebuild: graphState.pendingRebuild,
+			staleForMs: graphState.staleForMs,
+			lastGraphRebuildAtMs: graphState.lastRebuildAtMs,
 		};
+	}
+
+	getAudioGraphState(): {
+		isDirty: boolean;
+		pendingRebuild: boolean;
+		staleForMs: number;
+		lastRebuildAtMs: number | null;
+		reason: string;
+	} {
+		const staleForMs =
+			this.audioGraphDirty && this.audioGraphDirtySinceMs !== null
+				? Math.max(0, this.nowMs() - this.audioGraphDirtySinceMs)
+				: 0;
+		return {
+			isDirty: this.audioGraphDirty,
+			pendingRebuild: this.pendingGraphRebuild,
+			staleForMs,
+			lastRebuildAtMs: this.lastGraphRebuildAtMs,
+			reason: this.lastGraphDirtyReason,
+		};
+	}
+
+	private scheduleGraphRebuild({ delayMs }: { delayMs: number }): void {
+		if (typeof window === "undefined") return;
+		if (this.rebuildDebounceTimer !== null) {
+			window.clearTimeout(this.rebuildDebounceTimer);
+		}
+		this.pendingGraphRebuild = true;
+		this.emitAudioGraphState({
+			phase: "queued",
+			reason: "rebuild-queued",
+		});
+		this.rebuildDebounceTimer = window.setTimeout(() => {
+			this.rebuildDebounceTimer = null;
+			this.pendingGraphRebuild = false;
+			this.emitAudioGraphState({
+				phase: "rebuilding",
+				reason: "rebuild-start",
+			});
+			const playhead = this.editor.playback.getCurrentTime();
+			if (this.editor.playback.getIsPlaying() && !this.editor.playback.getIsScrubbing()) {
+				// During active playback, rebuild+restart transport so no stale nodes remain.
+				void this.startPlayback({
+					time: playhead,
+					stopCurrentOutputFirst: true,
+				});
+				return;
+			}
+			void this.prepareStreamingGraph({
+				playhead,
+				prewarm: !this.editor.playback.getIsPlaying() && !this.editor.playback.getIsScrubbing(),
+			});
+		}, Math.max(0, Math.floor(delayMs)));
+	}
+
+	private setAudioGraphDirty({
+		dirty,
+		reason,
+	}: {
+		dirty: boolean;
+		reason: string;
+	}): void {
+		const wasDirty = this.audioGraphDirty;
+		if (dirty) {
+			this.audioGraphDirty = true;
+			this.lastGraphDirtyReason = reason;
+			if (this.audioGraphDirtySinceMs === null) {
+				this.audioGraphDirtySinceMs = this.nowMs();
+			}
+			// Emit once when entering dirty state, then rely on queued/rebuild events.
+			if (!wasDirty) {
+				this.emitAudioGraphState({
+					phase: "dirty",
+					reason,
+				});
+			}
+			return;
+		}
+
+		this.audioGraphDirty = false;
+		this.lastGraphDirtyReason = reason;
+		const hadPendingGraphRebuild = this.pendingGraphRebuild;
+		const staleForMs =
+			this.audioGraphDirtySinceMs === null
+				? 0
+				: Math.max(0, this.nowMs() - this.audioGraphDirtySinceMs);
+		if (this.rebuildDebounceTimer !== null && typeof window !== "undefined") {
+			window.clearTimeout(this.rebuildDebounceTimer);
+			this.rebuildDebounceTimer = null;
+		}
+		this.pendingGraphRebuild = false;
+		this.audioGraphDirtySinceMs = null;
+		this.lastGraphRebuildAtMs = this.nowMs();
+		if (wasDirty || hadPendingGraphRebuild) {
+			this.emitAudioGraphState({
+				phase: "clean",
+				reason,
+				staleForMs,
+			});
+		}
+	}
+
+	private nowMs(): number {
+		return typeof performance !== "undefined" ? performance.now() : Date.now();
+	}
+
+	private emitAudioGraphState({
+		phase,
+		reason,
+		staleForMs,
+	}: {
+		phase: "dirty" | "queued" | "rebuilding" | "clean";
+		reason: string;
+		staleForMs?: number;
+	}): void {
+		if (typeof window === "undefined") return;
+		const state = this.getAudioGraphState();
+		window.dispatchEvent(
+			new CustomEvent("opencut:audio-graph-state", {
+				detail: state,
+			}),
+		);
+		window.dispatchEvent(
+			new CustomEvent("opencut:audio-diagnostics", {
+				detail: {
+					type: "graph-state",
+					phase,
+					reason,
+					isDirty: state.isDirty,
+					pendingRebuild: state.pendingRebuild,
+					staleForMs: staleForMs ?? state.staleForMs,
+					lastRebuildAtMs: state.lastRebuildAtMs,
+					isPlaying: this.editor.playback.getIsPlaying(),
+					isScrubbing: this.editor.playback.getIsScrubbing(),
+				},
+			}),
+		);
 	}
 
 	private computeAudioFingerprint(): string {

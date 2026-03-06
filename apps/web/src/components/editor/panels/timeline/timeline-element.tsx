@@ -250,6 +250,9 @@ export function TimelineElement({
 		<ContextMenu>
 			<ContextMenuTrigger asChild>
 				<div
+					data-timeline-element-id={element.id}
+					data-timeline-track-id={track.id}
+					data-timeline-element-type={element.type}
 					className={`absolute top-0 h-full select-none`}
 					style={{
 						left: `${elementLeft}px`,
@@ -404,6 +407,7 @@ function ElementInner({
 		>
 			<button
 				type="button"
+				data-timeline-element-hit-target={element.id}
 				className="absolute inset-0 size-full cursor-pointer"
 				onClick={(e) => onElementClick(e, element)}
 				onMouseDown={(e) => onElementMouseDown(e, element)}

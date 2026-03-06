@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -52,6 +54,13 @@ MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 TRANSCODE_MAX_UPLOAD_BYTES = int(
 	os.getenv("LOCAL_TRANSCODE_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024 * 1024))
 )
+TRANSCRIBE_MAX_CONCURRENCY = max(
+	1,
+	int(os.getenv("LOCAL_TRANSCRIBE_MAX_CONCURRENCY", "1")),
+)
+TRANSCRIBE_PRIMARY_LANGUAGE = (
+	os.getenv("LOCAL_TRANSCRIBE_PRIMARY_LANGUAGE", "en").strip().lower() or "en"
+)
 IMPORT_TRANSCODE_PROFILE = "chrome-h264-aac-1080p30"
 IMPORT_AUDIO_BITRATE = 192_000
 IMPORT_VIDEO_MAX_FPS = 30
@@ -84,15 +93,49 @@ app.add_middleware(
 	],
 )
 engine = LocalWhisperXEngine()
+transcribe_semaphore = asyncio.Semaphore(TRANSCRIBE_MAX_CONCURRENCY)
 
 
 class HealthResponse(BaseModel):
 	status: str
 	engine: str
-	device: str
+	requested_device: str
+	resolved_device: str
+	cuda_available: bool
+	cudnn_available: bool
+	cuda_device_count: int
+	cuda_device_name: Optional[str]
+	require_cuda: bool
+	gpu_ready: bool
 	default_model: str
 	default_compute_type: str
 	default_vad_filter: bool
+	primary_language: str
+	force_primary_language: bool
+
+
+def _is_cuda_requested(device: str) -> bool:
+	return (device or "").strip().lower().startswith("cuda")
+
+
+def _is_gpu_ready(runtime: dict[str, object]) -> bool:
+	return bool(
+		runtime.get("cuda_available")
+		and runtime.get("cudnn_available")
+		and int(runtime.get("cuda_device_count") or 0) > 0
+	)
+
+
+def _require_cuda_enabled() -> bool:
+	return _parse_bool(os.getenv("LOCAL_TRANSCRIBE_REQUIRE_CUDA"), False)
+
+
+def _force_primary_language() -> bool:
+	return _parse_bool(os.getenv("LOCAL_TRANSCRIBE_FORCE_PRIMARY_LANGUAGE"), True)
+
+
+def _prewarm_enabled() -> bool:
+	return _parse_bool(os.getenv("LOCAL_TRANSCRIBE_PREWARM"), True)
 
 
 def _require_auth(authorization: Optional[str]) -> None:
@@ -321,18 +364,97 @@ def _run_ffmpeg_command(command: list[str]) -> None:
 		raise RuntimeError(stderr or "Unknown ffmpeg transcode error")
 
 
+@app.on_event("startup")
+async def _prewarm_transcription_models() -> None:
+	if not _prewarm_enabled():
+		return
+	model = os.getenv("LOCAL_TRANSCRIBE_MODEL", "medium").strip() or "medium"
+	device = os.getenv("LOCAL_TRANSCRIBE_DEVICE", "cuda").strip() or "cuda"
+	compute_type = (
+		os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "int8_float16").strip()
+		or "int8_float16"
+	)
+	try:
+		info = await asyncio.to_thread(
+			engine.prewarm,
+			model=model,
+			device=device,
+			compute_type=compute_type,
+			language=TRANSCRIBE_PRIMARY_LANGUAGE,
+		)
+		print("Local transcribe prewarm complete", info, flush=True)
+	except Exception as error:
+		print(f"Local transcribe prewarm skipped: {error}", flush=True)
+
+
+async def _write_upload_file_to_temp(file: UploadFile, max_bytes: int) -> tuple[Path, int]:
+	suffix = Path(file.filename).suffix if file.filename else ""
+	if not suffix:
+		suffix = ".bin"
+	total_bytes = 0
+	temp_path: Path | None = None
+	try:
+		with tempfile.NamedTemporaryFile(
+			prefix="opencut-transcribe-",
+			suffix=suffix,
+			delete=False,
+		) as temp_file:
+			temp_path = Path(temp_file.name)
+			while True:
+				chunk = await file.read(8 * 1024 * 1024)
+				if not chunk:
+					break
+				total_bytes += len(chunk)
+				if total_bytes > max_bytes:
+					raise HTTPException(status_code=400, detail="Invalid file size")
+				temp_file.write(chunk)
+		if total_bytes <= 0:
+			raise HTTPException(status_code=400, detail="Invalid file size")
+		return temp_path, total_bytes
+	except Exception:
+		if temp_path is not None:
+			try:
+				temp_path.unlink(missing_ok=True)
+			except OSError:
+				pass
+		raise
+
+
 @app.get("/healthz", response_model=HealthResponse)
 def healthz() -> HealthResponse:
+	requested_device = os.getenv("LOCAL_TRANSCRIBE_DEVICE", "cuda").strip() or "cuda"
+	require_cuda = _require_cuda_enabled()
+	runtime = engine.get_runtime_device_info()
+	gpu_ready = _is_gpu_ready(runtime)
+	resolved_device = "cuda" if _is_cuda_requested(requested_device) and gpu_ready else "cpu"
+	if require_cuda and _is_cuda_requested(requested_device) and resolved_device != "cuda":
+		raise HTTPException(
+			status_code=503,
+			detail="CUDA was requested but is not available inside local-transcribe",
+		)
 	return HealthResponse(
 		status="ok",
 		engine="whisperx",
-		device=os.getenv("LOCAL_TRANSCRIBE_DEVICE", "cuda"),
+		requested_device=requested_device,
+		resolved_device=resolved_device,
+		cuda_available=bool(runtime.get("cuda_available")),
+		cudnn_available=bool(runtime.get("cudnn_available")),
+		cuda_device_count=int(runtime.get("cuda_device_count") or 0),
+		cuda_device_name=(
+			str(runtime["cuda_device_name"])
+			if runtime.get("cuda_device_name")
+			else None
+		),
+		require_cuda=require_cuda,
+		gpu_ready=gpu_ready,
 		default_model=os.getenv("LOCAL_TRANSCRIBE_MODEL", "medium"),
 		default_compute_type=os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "int8_float16"),
 		default_vad_filter=_parse_bool(
 			os.getenv("LOCAL_TRANSCRIBE_VAD_FILTER"),
 			False,
 		),
+		primary_language=TRANSCRIBE_PRIMARY_LANGUAGE,
+		force_primary_language=_force_primary_language(),
 	)
 
 
@@ -343,6 +465,7 @@ async def transcribe_word_timestamps(
 	device: Optional[str] = Form(default=None),
 	compute_type: Optional[str] = Form(default=None),
 	vad_filter: Optional[str] = Form(default=None),
+	language: Optional[str] = Form(default=None),
 	authorization: Optional[str] = Header(default=None),
 ) -> JSONResponse:
 	_require_auth(authorization)
@@ -350,9 +473,10 @@ async def transcribe_word_timestamps(
 	if not file.filename:
 		raise HTTPException(status_code=400, detail="file is required")
 
-	audio_bytes = await file.read()
-	if len(audio_bytes) == 0 or len(audio_bytes) > MAX_UPLOAD_BYTES:
-		raise HTTPException(status_code=400, detail="Invalid file size")
+	requested_language = (language or "").strip().lower() or None
+	effective_language = (
+		TRANSCRIBE_PRIMARY_LANGUAGE if _force_primary_language() else requested_language
+	)
 
 	config = TranscribeConfig(
 		model=(model or os.getenv("LOCAL_TRANSCRIBE_MODEL", "medium")).strip(),
@@ -364,15 +488,40 @@ async def transcribe_word_timestamps(
 			vad_filter,
 			_parse_bool(os.getenv("LOCAL_TRANSCRIBE_VAD_FILTER"), False),
 		),
+		language=effective_language,
 	)
 
+	require_cuda = _require_cuda_enabled()
+	if require_cuda and _is_cuda_requested(config.device):
+		runtime = engine.get_runtime_device_info()
+		if not _is_gpu_ready(runtime):
+			raise HTTPException(
+				status_code=503,
+				detail="CUDA was requested but is not available inside local-transcribe",
+			)
+
+	temp_path, _ = await _write_upload_file_to_temp(file=file, max_bytes=MAX_UPLOAD_BYTES)
 	try:
-		result = engine.transcribe_with_alignment(
-			audio_bytes=audio_bytes,
-			config=config,
-		)
+		queued_at = time.perf_counter()
+		async with transcribe_semaphore:
+			queue_wait_ms = (time.perf_counter() - queued_at) * 1000.0
+			result = await asyncio.to_thread(
+				engine.transcribe_file_with_alignment,
+				audio_path=temp_path,
+				config=config,
+			)
+			timings = result.get("timings_ms")
+			if isinstance(timings, dict):
+				timings["queue_wait"] = max(0.0, queue_wait_ms)
+			else:
+				result["timings_ms"] = {"queue_wait": max(0.0, queue_wait_ms)}
 	except Exception as error:
 		raise HTTPException(status_code=500, detail=str(error)) from error
+	finally:
+		try:
+			temp_path.unlink(missing_ok=True)
+		except OSError:
+			pass
 
 	if not result.get("words"):
 		raise HTTPException(

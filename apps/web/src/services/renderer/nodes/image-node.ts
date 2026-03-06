@@ -107,13 +107,14 @@ export class ImageNode extends VisualNode<ImageNodeParams> {
 		const { source, width, height } = await this.cachedSource;
 		const sourceWidth = width || rendererWidth;
 		const sourceHeight = height || rendererHeight;
+		const resolved = this.getResolvedVisualState({ time });
 		const placement = this.getVisualPlacement({
 			rendererWidth,
 			rendererHeight,
 			sourceWidth,
 			sourceHeight,
+			transform: resolved.transform,
 		});
-		const resolved = this.getResolvedVisualState({ time });
 
 		return {
 			source,

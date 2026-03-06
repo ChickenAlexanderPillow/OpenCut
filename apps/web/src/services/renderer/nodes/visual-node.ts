@@ -79,6 +79,7 @@ export abstract class VisualNode<
 			rendererHeight: renderer.height,
 			sourceWidth,
 			sourceHeight,
+			transform,
 		});
 
 		renderer.context.globalCompositeOperation = (
@@ -106,11 +107,10 @@ export abstract class VisualNode<
 		renderer.context.restore();
 	}
 
-	protected getResolvedVisualState({
-		time,
-	}: {
-		time: number;
-	}): { transform: Transform; opacity: number } {
+	protected getResolvedVisualState({ time }: { time: number }): {
+		transform: Transform;
+		opacity: number;
+	} {
 		const localTime = this.getLocalTime(time);
 		return {
 			transform: resolveTransformAtTime({
@@ -131,24 +131,22 @@ export abstract class VisualNode<
 		rendererHeight,
 		sourceWidth,
 		sourceHeight,
+		transform = this.params.transform,
 	}: {
 		rendererWidth: number;
 		rendererHeight: number;
 		sourceWidth: number;
 		sourceHeight: number;
+		transform?: Transform;
 	}): VisualPlacement {
 		const containScale = Math.min(
 			rendererWidth / sourceWidth,
 			rendererHeight / sourceHeight,
 		);
-		const scaledWidth =
-			sourceWidth * containScale * this.params.transform.scale;
-		const scaledHeight =
-			sourceHeight * containScale * this.params.transform.scale;
-		const x =
-			rendererWidth / 2 + this.params.transform.position.x - scaledWidth / 2;
-		const y =
-			rendererHeight / 2 + this.params.transform.position.y - scaledHeight / 2;
+		const scaledWidth = sourceWidth * containScale * transform.scale;
+		const scaledHeight = sourceHeight * containScale * transform.scale;
+		const x = rendererWidth / 2 + transform.position.x - scaledWidth / 2;
+		const y = rendererHeight / 2 + transform.position.y - scaledHeight / 2;
 
 		return {
 			x,

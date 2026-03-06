@@ -131,7 +131,26 @@ LOCAL_TRANSCRIBE_MODEL=large-v3 LOCAL_TRANSCRIBE_COMPUTE_TYPE=float16 bun run do
 
 # Lower memory (default in this repo)
 LOCAL_TRANSCRIBE_MODEL=medium LOCAL_TRANSCRIBE_COMPUTE_TYPE=int8_float16 bun run docker:up
+
+# Enforce GPU-only transcription (default true in docker-compose.yml)
+LOCAL_TRANSCRIBE_REQUIRE_CUDA=true bun run docker:up
+
+# Keep queueing predictable on a single GPU
+LOCAL_TRANSCRIBE_MAX_CONCURRENCY=1 bun run docker:up
+
+# Lock transcription/alignment to English and prewarm at startup
+LOCAL_TRANSCRIBE_PRIMARY_LANGUAGE=en LOCAL_TRANSCRIBE_FORCE_PRIMARY_LANGUAGE=true LOCAL_TRANSCRIBE_PREWARM=true bun run docker:up
 ```
+
+Verify local-transcribe is actually running on GPU:
+
+```bash
+docker compose exec -T local-transcribe nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+docker compose exec -T local-transcribe python3 -c "import torch; print('cuda_available=', torch.cuda.is_available()); print('device_count=', torch.cuda.device_count()); print('device_name=', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'n/a')"
+curl http://127.0.0.1:8765/healthz
+```
+
+`local-transcribe` now uses a named Docker volume (`local-transcribe-cache`) for model/cache persistence so repeated restarts avoid re-downloading alignment/model artifacts.
 
 To stop it:
 

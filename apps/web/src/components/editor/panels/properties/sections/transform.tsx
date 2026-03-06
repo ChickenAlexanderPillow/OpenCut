@@ -17,7 +17,8 @@ import {
 	Link05Icon,
 	RotateClockwiseIcon,
 } from "@hugeicons/core-free-icons";
-import { useState } from "react";
+import { Monitor, Smartphone } from "lucide-react";
+import { useMemo, useState } from "react";
 import { DEFAULT_TRANSFORM } from "@/constants/timeline-constants";
 import { KeyframeToggle } from "../keyframe-toggle";
 import { useKeyframedNumberProperty } from "../hooks/use-keyframed-number-property";
@@ -61,6 +62,28 @@ export function TransformSection({
 }) {
 	const editor = useEditor();
 	const [isScaleLocked, setIsScaleLocked] = useState(false);
+	const mediaAsset = useMemo(() => {
+		if (element.type !== "video" && element.type !== "image") return null;
+		return (
+			editor.media.getAssets().find((asset) => asset.id === element.mediaId) ??
+			null
+		);
+	}, [editor, element]);
+	const fitScales = useMemo(() => {
+		if (!mediaAsset) return null;
+		const sourceWidth = mediaAsset.width ?? 0;
+		const sourceHeight = mediaAsset.height ?? 0;
+		if (sourceWidth <= 0 || sourceHeight <= 0) return null;
+		const canvas = editor.project.getActive().settings.canvasSize;
+		const widthRatio = canvas.width / sourceWidth;
+		const heightRatio = canvas.height / sourceHeight;
+		const containScale = Math.min(widthRatio, heightRatio);
+		if (containScale <= 0 || !Number.isFinite(containScale)) return null;
+		return {
+			height: Math.max(1, heightRatio / containScale),
+			width: Math.max(1, widthRatio / containScale),
+		};
+	}, [editor, mediaAsset]);
 	const { localTime, isPlayheadWithinElementRange } = useElementPlayhead({
 		startTime: element.startTime,
 		duration: element.duration,
@@ -70,6 +93,24 @@ export function TransformSection({
 		animations: element.animations,
 		localTime,
 	});
+	const fitMode = useMemo<"height" | "width" | null>(() => {
+		if (!fitScales) return null;
+		if (
+			isNearlyEqual({
+				leftValue: resolvedTransform.scale,
+				rightValue: fitScales.height,
+			})
+		)
+			return "height";
+		if (
+			isNearlyEqual({
+				leftValue: resolvedTransform.scale,
+				rightValue: fitScales.width,
+			})
+		)
+			return "width";
+		return null;
+	}, [fitScales, resolvedTransform.scale]);
 
 	const positionX = useKeyframedNumberProperty({
 		trackId,
@@ -269,6 +310,35 @@ export function TransformSection({
 							>
 								<HugeiconsIcon icon={Link05Icon} />
 							</Button>
+							{fitScales && (
+								<Button
+									type="button"
+									variant={fitMode ? "secondary" : "ghost"}
+									size="icon"
+									title={
+										fitMode === "height" ? "Fit full width" : "Fit full height"
+									}
+									aria-label={
+										fitMode === "height"
+											? "Fit media to full width"
+											: "Fit media to full height"
+									}
+									onClick={() =>
+										scale.commitValue({
+											value:
+												fitMode === "height"
+													? fitScales.width
+													: fitScales.height,
+										})
+									}
+								>
+									{fitMode === "height" ? (
+										<Monitor className="size-4" />
+									) : (
+										<Smartphone className="size-4" />
+									)}
+								</Button>
+							)}
 						</div>
 					</SectionField>
 					<SectionField
@@ -367,8 +437,8 @@ export function TransformSection({
 							</span>
 							<Checkbox
 								checked={
-									(element as TextElement).captionStyle?.anchorToSafeAreaBottom ??
-									true
+									(element as TextElement).captionStyle
+										?.anchorToSafeAreaBottom ?? true
 								}
 								onCheckedChange={(checked) =>
 									editor.timeline.updateElements({

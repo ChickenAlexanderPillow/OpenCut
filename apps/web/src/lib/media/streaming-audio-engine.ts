@@ -173,6 +173,10 @@ export class StreamingTimelineAudioEngine {
 	private readonly decodeChunkSeconds = 12;
 	private readonly maxDecodedWindows = 96;
 
+	private isRunStale(runGeneration: number): boolean {
+		return !this.isPlaying || runGeneration !== this.transportGeneration;
+	}
+
 	constructor(
 		private readonly audioContext: AudioContext,
 		private readonly destinationNode: AudioNode,
@@ -948,6 +952,9 @@ export class StreamingTimelineAudioEngine {
 							clipId: clip.id,
 							peak: scheduledPeak,
 							duration: boundedPlaybackDuration,
+							timelineSegmentStart,
+							timelineSegmentEnd,
+							contextStart,
 						},
 					}),
 				);
@@ -994,6 +1001,15 @@ export class StreamingTimelineAudioEngine {
 
 			source.connect(gainNode);
 			gainNode.connect(this.destinationNode);
+
+			if (this.isRunStale(runGeneration)) {
+				try {
+					source.stop();
+				} catch {}
+				source.disconnect();
+				gainNode.disconnect();
+				break;
+			}
 			const scheduledNode: ScheduledNode = {
 				key,
 				clipId: clip.id,
@@ -1009,6 +1025,11 @@ export class StreamingTimelineAudioEngine {
 				gainNode.disconnect();
 				this.scheduledByKey.delete(key);
 			});
+			if (this.isRunStale(runGeneration)) {
+				this.scheduledByKey.delete(key);
+				this.unscheduleNode({ node: scheduledNode, softStop: false });
+				break;
+			}
 			source.start(contextStart, sourceOffset, boundedPlaybackDuration);
 			source.stop(contextStart + boundedPlaybackDuration + 0.01);
 			const scheduledTimelineEnd =

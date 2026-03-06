@@ -328,6 +328,7 @@ export function useElementInteraction({
 				if (deltaX > DRAG_THRESHOLD_PX || deltaY > DRAG_THRESHOLD_PX) {
 					const activeProject = editor.project.getActive();
 					if (!activeProject) return;
+					editor.playback.pause();
 					const scrollLeft = scrollContainer.scrollLeft;
 					const mouseTime = getMouseTimeFromClientX({
 						clientX,
@@ -435,6 +436,7 @@ export function useElementInteraction({
 		zoomLevel,
 		isElementSelected,
 		selectElement,
+		editor.playback,
 		editor.project,
 		timelineRef,
 		tracksScrollRef,

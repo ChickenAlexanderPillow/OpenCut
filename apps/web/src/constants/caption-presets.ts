@@ -4,7 +4,7 @@ import type { TextElement } from "@/types/timeline";
 export const BLUE_HIGHLIGHT_CAPTION_STYLE: NonNullable<TextElement["captionStyle"]> =
 	{
 		fitInCanvas: true,
-		neverShrinkFont: false,
+		neverShrinkFont: true,
 		karaokeWordHighlight: true,
 		karaokeHighlightMode: "block",
 		karaokeHighlightEaseInOnly: false,
