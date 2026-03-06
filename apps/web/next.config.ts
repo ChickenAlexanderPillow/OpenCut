@@ -5,6 +5,10 @@ const nextConfig: NextConfig = {
 	compiler: {
 		removeConsole: process.env.NODE_ENV === "production",
 	},
+	allowedDevOrigins:
+		process.env.NODE_ENV === "development"
+			? ["127.0.0.1", "::1", "localhost"]
+			: undefined,
 	reactStrictMode: true,
 	productionBrowserSourceMaps: true,
 	output: "standalone",

@@ -123,7 +123,8 @@ class TranscodingService {
 				let errorText: string | undefined;
 				if (!(xhr.status >= 200 && xhr.status < 300)) {
 					try {
-						errorText = xhr.responseType === "text" ? xhr.responseText : undefined;
+						errorText =
+							xhr.responseType === "text" ? xhr.responseText : undefined;
 					} catch {
 						errorText = undefined;
 					}
@@ -140,7 +141,11 @@ class TranscodingService {
 
 			xhr.onerror = () => {
 				clearWaitTimer();
-				reject(new Error("Transcode request failed during upload or network transfer"));
+				reject(
+					new Error(
+						"Transcode request failed during upload or network transfer",
+					),
+				);
 			};
 
 			xhr.ontimeout = () => {
@@ -157,34 +162,69 @@ class TranscodingService {
 		});
 	}
 
-	private resolveTranscodeEndpoint(): {
+	private resolveTranscodeEndpoints(): Array<{
 		url: string;
 		headers?: Record<string, string>;
 		mode: "multipart" | "stream";
-	} {
-		const directUrlFromEnv = process.env.NEXT_PUBLIC_LOCAL_TRANSCRIBE_URL?.trim();
-		const directApiKey = process.env.NEXT_PUBLIC_LOCAL_TRANSCRIBE_API_KEY?.trim();
+	}> {
+		const directUrlFromEnv =
+			process.env.NEXT_PUBLIC_LOCAL_TRANSCRIBE_URL?.trim();
+		const directApiKey =
+			process.env.NEXT_PUBLIC_LOCAL_TRANSCRIBE_API_KEY?.trim();
+		const endpoints: Array<{
+			url: string;
+			headers?: Record<string, string>;
+			mode: "multipart" | "stream";
+		}> = [];
+		const seen = new Set<string>();
+		const pushEndpoint = ({
+			url,
+			mode,
+			headers,
+		}: {
+			url: string;
+			mode: "multipart" | "stream";
+			headers?: Record<string, string>;
+		}) => {
+			const dedupeKey = `${mode}:${url}`;
+			if (seen.has(dedupeKey)) return;
+			seen.add(dedupeKey);
+			endpoints.push({ url, mode, headers });
+		};
+
 		if (directUrlFromEnv) {
-			return {
+			pushEndpoint({
 				url: `${directUrlFromEnv.replace(/\/$/, "")}/v1/transcode-import-stream`,
-				headers: directApiKey ? { Authorization: `Bearer ${directApiKey}` } : undefined,
+				headers: directApiKey
+					? { Authorization: `Bearer ${directApiKey}` }
+					: undefined,
 				mode: "stream",
-			};
+			});
 		}
 
 		if (typeof window !== "undefined") {
-			const isLocalhost =
-				window.location.hostname === "localhost" ||
-				window.location.hostname === "127.0.0.1";
-			if (isLocalhost) {
-				return {
-					url: "http://localhost:8765/v1/transcode-import-stream",
-					mode: "stream",
-				};
+			const normalizedHost = window.location.hostname.toLowerCase();
+			const isLoopback =
+				normalizedHost === "localhost" ||
+				normalizedHost === "127.0.0.1" ||
+				normalizedHost === "::1";
+			if (isLoopback) {
+				const localHosts =
+					normalizedHost === "127.0.0.1"
+						? ["127.0.0.1", "localhost"]
+						: ["localhost", "127.0.0.1"];
+
+				for (const host of localHosts) {
+					pushEndpoint({
+						url: `http://${host}:8765/v1/transcode-import-stream`,
+						mode: "stream",
+					});
+				}
 			}
 		}
 
-		return { url: "/api/media/transcode", mode: "multipart" };
+		pushEndpoint({ url: "/api/media/transcode", mode: "multipart" });
+		return endpoints;
 	}
 
 	async transcodeImportMedia({
@@ -210,120 +250,169 @@ class TranscodingService {
 		onProgress?.({ progress: 2 });
 
 		onProgress?.({ progress: 10 });
-		const endpoint = this.resolveTranscodeEndpoint();
+		const endpoints = this.resolveTranscodeEndpoints();
 		const transcodeTimeoutMs =
-			typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+			typeof timeoutMs === "number" &&
+			Number.isFinite(timeoutMs) &&
+			timeoutMs > 0
 				? Math.round(timeoutMs)
 				: 30 * 60 * 1000;
-
-		let requestBody: FormData | File;
-		let requestHeaders: Record<string, string> | undefined = endpoint.headers;
-		if (endpoint.mode === "stream") {
-			requestBody = file;
-			requestHeaders = {
-				...requestHeaders,
-				"x-media-type": mediaType,
-				"x-file-name": file.name || "import-media",
-				"content-type": file.type || "application/octet-stream",
-			};
-			if (mediaType === "video") {
-				if (
-					typeof sourceInfo?.width === "number" &&
-					Number.isFinite(sourceInfo.width)
-				) {
-					requestHeaders["x-source-width"] = String(Math.round(sourceInfo.width));
-				}
-				if (
-					typeof sourceInfo?.height === "number" &&
-					Number.isFinite(sourceInfo.height)
-				) {
-					requestHeaders["x-source-height"] = String(Math.round(sourceInfo.height));
-				}
-				if (typeof sourceInfo?.fps === "number" && Number.isFinite(sourceInfo.fps)) {
-					requestHeaders["x-source-fps"] = String(Math.round(sourceInfo.fps));
-				}
-			}
-		} else {
-			const form = new FormData();
-			form.append("file", file, file.name || "import-media");
-			form.append("media_type", mediaType);
-			if (mediaType === "video") {
-				if (
-					typeof sourceInfo?.width === "number" &&
-					Number.isFinite(sourceInfo.width)
-				) {
-					form.append("source_width", String(Math.round(sourceInfo.width)));
-				}
-				if (
-					typeof sourceInfo?.height === "number" &&
-					Number.isFinite(sourceInfo.height)
-				) {
-					form.append("source_height", String(Math.round(sourceInfo.height)));
-				}
-				if (typeof sourceInfo?.fps === "number" && Number.isFinite(sourceInfo.fps)) {
-					form.append("source_fps", String(Math.round(sourceInfo.fps)));
-				}
-			}
-			requestBody = form;
-		}
-
-		const response = await this.transcodeRequest({
-			url: endpoint.url,
-			headers: requestHeaders,
-			body: requestBody,
-			timeoutMs: transcodeTimeoutMs,
-			onProgress,
-		});
-		onProgress?.({ progress: 80 });
-
-		if (!response.ok) {
-			const detail = (response.errorText || "").trim();
-			throw new Error(detail || `Transcode request failed (${response.status})`);
-		}
-
-		const payload = response.body;
-		if (payload.size <= 0) {
-			throw new Error("Transcode response returned empty payload");
-		}
-
-		const outputName =
-			response.headers.get("x-output-filename") ||
-			`${file.name}.transcoded.${mediaType === "video" ? "mp4" : "m4a"}`;
-		const contentType =
-			response.headers.get("content-type") ||
-			(mediaType === "video" ? "video/mp4" : "audio/mp4");
-
+		let lastError: Error | undefined;
 		const fallbackProfile = resolveImportVideoProfile({ sourceInfo });
-		const importVideoBitrate = parseOptionalNumber(
-			response.headers.get("x-import-video-bitrate"),
-		);
-		const importAudioBitrate =
-			parseOptionalNumber(response.headers.get("x-import-audio-bitrate")) ||
-			IMPORT_AUDIO_BITRATE;
-		const importTargetFps = parseOptionalNumber(
-			response.headers.get("x-import-target-fps"),
-		);
 
-		onProgress?.({ progress: 100 });
-		return {
-			file: new File([payload], outputName, {
-				type: contentType,
-				lastModified: Date.now(),
-			}),
-			meta: {
-				importTranscoded: true,
-				importTranscodeProfile: IMPORT_TRANSCODE_PROFILE,
-				importVideoBitrate:
-					mediaType === "video"
-						? (importVideoBitrate ?? fallbackProfile.videoBitrate)
-						: undefined,
-				importAudioBitrate,
-				importTargetFps:
-					mediaType === "video"
-						? (importTargetFps ?? fallbackProfile.targetFps)
-						: undefined,
-			},
-		};
+		for (let index = 0; index < endpoints.length; index++) {
+			const endpoint = endpoints[index];
+			let requestBody: FormData | File;
+			let requestHeaders: Record<string, string> | undefined = endpoint.headers;
+
+			if (endpoint.mode === "stream") {
+				requestBody = file;
+				requestHeaders = {
+					...requestHeaders,
+					"x-media-type": mediaType,
+					"x-file-name": file.name || "import-media",
+					"content-type": file.type || "application/octet-stream",
+				};
+				if (mediaType === "video") {
+					if (
+						typeof sourceInfo?.width === "number" &&
+						Number.isFinite(sourceInfo.width)
+					) {
+						requestHeaders["x-source-width"] = String(
+							Math.round(sourceInfo.width),
+						);
+					}
+					if (
+						typeof sourceInfo?.height === "number" &&
+						Number.isFinite(sourceInfo.height)
+					) {
+						requestHeaders["x-source-height"] = String(
+							Math.round(sourceInfo.height),
+						);
+					}
+					if (
+						typeof sourceInfo?.fps === "number" &&
+						Number.isFinite(sourceInfo.fps)
+					) {
+						requestHeaders["x-source-fps"] = String(Math.round(sourceInfo.fps));
+					}
+				}
+			} else {
+				const form = new FormData();
+				form.append("file", file, file.name || "import-media");
+				form.append("media_type", mediaType);
+				if (mediaType === "video") {
+					if (
+						typeof sourceInfo?.width === "number" &&
+						Number.isFinite(sourceInfo.width)
+					) {
+						form.append("source_width", String(Math.round(sourceInfo.width)));
+					}
+					if (
+						typeof sourceInfo?.height === "number" &&
+						Number.isFinite(sourceInfo.height)
+					) {
+						form.append("source_height", String(Math.round(sourceInfo.height)));
+					}
+					if (
+						typeof sourceInfo?.fps === "number" &&
+						Number.isFinite(sourceInfo.fps)
+					) {
+						form.append("source_fps", String(Math.round(sourceInfo.fps)));
+					}
+				}
+				requestBody = form;
+			}
+
+			try {
+				const response = await this.transcodeRequest({
+					url: endpoint.url,
+					headers: requestHeaders,
+					body: requestBody,
+					timeoutMs: transcodeTimeoutMs,
+					onProgress,
+				});
+				onProgress?.({ progress: 80 });
+
+				if (!response.ok) {
+					let detail = (response.errorText || "").trim();
+					if (!detail) {
+						try {
+							const responseText = (await response.body.text()).trim();
+							if (responseText) {
+								try {
+									const parsed = JSON.parse(responseText) as {
+										error?: string;
+										detail?: string;
+									};
+									detail = (
+										parsed.error ||
+										parsed.detail ||
+										responseText
+									).trim();
+								} catch {
+									detail = responseText;
+								}
+							}
+						} catch {
+							detail = "";
+						}
+					}
+					throw new Error(
+						detail || `Transcode request failed (${response.status})`,
+					);
+				}
+
+				const payload = response.body;
+				if (payload.size <= 0) {
+					throw new Error("Transcode response returned empty payload");
+				}
+
+				const outputName =
+					response.headers.get("x-output-filename") ||
+					`${file.name}.transcoded.${mediaType === "video" ? "mp4" : "m4a"}`;
+				const contentType =
+					response.headers.get("content-type") ||
+					(mediaType === "video" ? "video/mp4" : "audio/mp4");
+				const importVideoBitrate = parseOptionalNumber(
+					response.headers.get("x-import-video-bitrate"),
+				);
+				const importAudioBitrate =
+					parseOptionalNumber(response.headers.get("x-import-audio-bitrate")) ||
+					IMPORT_AUDIO_BITRATE;
+				const importTargetFps = parseOptionalNumber(
+					response.headers.get("x-import-target-fps"),
+				);
+
+				onProgress?.({ progress: 100 });
+				return {
+					file: new File([payload], outputName, {
+						type: contentType,
+						lastModified: Date.now(),
+					}),
+					meta: {
+						importTranscoded: true,
+						importTranscodeProfile: IMPORT_TRANSCODE_PROFILE,
+						importVideoBitrate:
+							mediaType === "video"
+								? (importVideoBitrate ?? fallbackProfile.videoBitrate)
+								: undefined,
+						importAudioBitrate,
+						importTargetFps:
+							mediaType === "video"
+								? (importTargetFps ?? fallbackProfile.targetFps)
+								: undefined,
+					},
+				};
+			} catch (error) {
+				lastError =
+					error instanceof Error ? error : new Error("Unknown transcode error");
+				const hasFallback = index < endpoints.length - 1;
+				if (!hasFallback) break;
+			}
+		}
+
+		throw lastError || new Error("Transcode request failed");
 	}
 }
 

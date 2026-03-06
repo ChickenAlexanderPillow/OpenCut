@@ -71,6 +71,7 @@ export class AudioManager {
 	private rebuildDebounceTimer: number | null = null;
 	private streamingEngine: StreamingTimelineAudioEngine | null = null;
 	private prepareGraphSequence = 0;
+	private audioGraphDirty = false;
 
 	constructor(private editor: EditorCore) {
 		const globalScope = globalThis as GlobalWithAudioManager;
@@ -205,12 +206,19 @@ export class AudioManager {
 			// Scrub-end restart handles output; skip live seek scheduling while dragging.
 			return;
 		}
+		if (this.audioGraphDirty) {
+			// Timeline audio changed and graph rebuild is pending; restart against
+			// latest graph immediately to avoid seeking into stale scheduled audio.
+			void this.startPlayback({ time });
+			return;
+		}
 		this.streamingEngine?.seek({ time, immediate: true });
 	};
 
 	private handlePlaybackUpdate = (event: Event): void => {
 		if (!this.editor.playback.getIsPlaying()) return;
 		if (this.editor.playback.getIsScrubbing()) return;
+		if (this.audioGraphDirty) return;
 		if (!this.audioContext) return;
 
 		const detail = (event as CustomEvent<{ time: number }>).detail;
@@ -235,6 +243,7 @@ export class AudioManager {
 			return;
 		}
 		this.lastAudioFingerprint = nextFingerprint;
+		this.audioGraphDirty = true;
 
 		const isPlaying = this.editor.playback.getIsPlaying();
 		const isScrubbing = this.editor.playback.getIsScrubbing();
@@ -251,12 +260,18 @@ export class AudioManager {
 		this.rebuildDebounceTimer = window.setTimeout(
 			() => {
 				this.rebuildDebounceTimer = null;
+				const playhead = this.editor.playback.getCurrentTime();
+				if (this.editor.playback.getIsPlaying() && !this.editor.playback.getIsScrubbing()) {
+					// During active playback, rebuild+restart transport so no stale nodes remain.
+					void this.startPlayback({ time: playhead });
+					return;
+				}
 				void this.prepareStreamingGraph({
-					playhead: this.editor.playback.getCurrentTime(),
-					prewarm: !isPlaying && !isScrubbing,
+					playhead,
+					prewarm: !this.editor.playback.getIsPlaying() && !this.editor.playback.getIsScrubbing(),
 				});
 			},
-			isPlaying || isScrubbing ? 90 : 180,
+			isPlaying ? 40 : isScrubbing ? 90 : 180,
 		);
 	};
 
@@ -371,6 +386,7 @@ export class AudioManager {
 				diff: result.diff,
 				playhead,
 			});
+			this.audioGraphDirty = false;
 			if (prewarm) {
 				void engine.prewarm({ playhead, horizonSeconds: 12 });
 			}
@@ -442,7 +458,8 @@ export class AudioManager {
 			if (!this.editor.playback.getIsPlaying()) return;
 			this.streamingEngine?.stop();
 			this.streamingEngine?.start({ atTime: time });
-			this.streamingEngine?.seek({ time });
+			this.streamingEngine?.seek({ time, immediate: true });
+			this.audioGraphDirty = false;
 		} catch (error) {
 			console.warn("Streaming playback failed:", error);
 		}
