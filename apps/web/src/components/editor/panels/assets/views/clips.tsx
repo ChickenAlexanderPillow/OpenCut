@@ -640,7 +640,7 @@ export function Clips() {
 			.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 	}, [project.clipGenerationCache]);
 
-	const isGenerating =
+	const isGeneratingSessionStatus =
 		status === "extracting" || status === "transcribing" || status === "scoring";
 
 	useEffect(() => {
@@ -668,6 +668,7 @@ export function Clips() {
 			!process.label.startsWith("Importing clips") &&
 			!process.label.startsWith("Preparing clip imports"),
 	);
+	const isGenerating = isGeneratingSessionStatus && Boolean(activeClipGenerationProcess);
 	const isGeneratingCurrentMedia =
 		isGenerating &&
 		Boolean(generatingSourceMediaId) &&
