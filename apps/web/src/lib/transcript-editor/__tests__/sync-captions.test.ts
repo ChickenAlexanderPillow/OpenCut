@@ -262,6 +262,137 @@ describe("sync captions from transcript edits", () => {
 		expect(syncedCaption?.captionWordTimings?.[0]?.startTime).toBeCloseTo(5.0, 3);
 	});
 
+	test("reconcile shifts caption word timings with source move even when transcript words are unavailable", () => {
+		const audioBefore = createAudioElement({
+			id: "audio-1",
+			startTime: 2,
+			duration: 2,
+			words: [],
+		});
+		const caption = createCaption({
+			id: "caption-1",
+			sourceMediaElementId: "audio-1",
+			startTime: 2,
+			duration: 2,
+			content: "move",
+			wordTimings: [{ word: "move", startTime: 2.0, endTime: 2.4 }],
+		});
+		const beforeTracks: TimelineTrack[] = [
+			{
+				id: "audio-track",
+				type: "audio",
+				name: "Audio",
+				muted: false,
+				elements: [audioBefore],
+			},
+			{
+				id: "text-track",
+				type: "text",
+				name: "Captions",
+				hidden: false,
+				elements: [caption],
+			},
+		];
+		const afterTracks: TimelineTrack[] = [
+			{
+				id: "audio-track",
+				type: "audio",
+				name: "Audio",
+				muted: false,
+				elements: [{ ...audioBefore, startTime: 5 }],
+			},
+			{
+				id: "text-track",
+				type: "text",
+				name: "Captions",
+				hidden: false,
+				elements: [caption],
+			},
+		];
+
+		const result = reconcileLinkedCaptionIntegrityInTracks({
+			beforeTracks,
+			tracks: afterTracks,
+		});
+		expect(result.changed).toBe(true);
+		const textTrack = result.tracks.find((track) => track.id === "text-track");
+		expect(textTrack?.type).toBe("text");
+		if (textTrack?.type !== "text") return;
+		const synced = textTrack.elements[0];
+		expect(synced?.startTime).toBeCloseTo(5.0, 3);
+		expect(synced?.captionWordTimings?.[0]?.startTime).toBeCloseTo(5.0, 3);
+		expect(synced?.captionWordTimings?.[0]?.endTime).toBeCloseTo(5.4, 3);
+	});
+
+	test("reconcile shifts stale absolute timings when caption bounds already moved with media", () => {
+		const audioBefore = createAudioElement({
+			id: "audio-1",
+			startTime: 2,
+			duration: 2,
+			words: [],
+		});
+		const captionBefore = createCaption({
+			id: "caption-1",
+			sourceMediaElementId: "audio-1",
+			startTime: 2,
+			duration: 2,
+			content: "move",
+			wordTimings: [{ word: "move", startTime: 2.0, endTime: 2.4 }],
+		});
+		const beforeTracks: TimelineTrack[] = [
+			{
+				id: "audio-track",
+				type: "audio",
+				name: "Audio",
+				muted: false,
+				elements: [audioBefore],
+			},
+			{
+				id: "text-track",
+				type: "text",
+				name: "Captions",
+				hidden: false,
+				elements: [captionBefore],
+			},
+		];
+		const mediaAfter = { ...audioBefore, startTime: 5 };
+		const captionAfterWithStaleTimings = {
+			...captionBefore,
+			startTime: 5,
+			duration: 2,
+			captionWordTimings: [{ word: "move", startTime: 2.0, endTime: 2.4 }],
+		};
+		const afterTracks: TimelineTrack[] = [
+			{
+				id: "audio-track",
+				type: "audio",
+				name: "Audio",
+				muted: false,
+				elements: [mediaAfter],
+			},
+			{
+				id: "text-track",
+				type: "text",
+				name: "Captions",
+				hidden: false,
+				elements: [captionAfterWithStaleTimings],
+			},
+		];
+
+		const result = reconcileLinkedCaptionIntegrityInTracks({
+			beforeTracks,
+			tracks: afterTracks,
+		});
+		expect(result.changed).toBe(true);
+		const textTrack = result.tracks.find((track) => track.id === "text-track");
+		expect(textTrack?.type).toBe("text");
+		if (textTrack?.type !== "text") return;
+		const synced = textTrack.elements[0];
+		expect(synced?.startTime).toBeCloseTo(5, 3);
+		expect(synced?.captionWordTimings?.[0]?.startTime).toBeCloseTo(5, 3);
+		expect(synced?.captionWordTimings?.[0]?.endTime).toBeCloseTo(5.4, 3);
+	});
+
 	test("does not cross-update captions when multiple clips share legacy transcript source id", () => {
 		const leftAudio = createAudioElement({
 			id: "audio-left",

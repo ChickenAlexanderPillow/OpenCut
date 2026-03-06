@@ -13,6 +13,7 @@ import {
 } from "@/lib/timeline/track-utils";
 import { rippleShiftElements } from "@/lib/timeline/ripple-utils";
 import { reconcileLinkedCaptionIntegrityInTracks } from "@/lib/transcript-editor/sync-captions";
+import { isCaptionTimingRelativeToElement } from "@/lib/captions/timing";
 import { normalizeTimelineElementForInvariants } from "@/lib/timeline/element-timing";
 
 export class MoveElementCommand extends Command {
@@ -139,6 +140,46 @@ export class MoveElementCommand extends Command {
 
 			return track;
 		});
+
+		const mediaShift = movedElement.startTime - element.startTime;
+		if (
+			Math.abs(mediaShift) > 1e-6 &&
+			(movedElement.type === "video" || movedElement.type === "audio")
+		) {
+			updatedTracks = updatedTracks.map((track) => {
+				if (track.type !== "text") return track;
+				let changed = false;
+				const nextElements = track.elements.map((trackElement) => {
+					if (trackElement.type !== "text") return trackElement;
+					if (
+						trackElement.captionSourceRef?.mediaElementId !== movedElement.id
+					) {
+						return trackElement;
+					}
+					const nextStartTime = Math.max(0, trackElement.startTime + mediaShift);
+					const currentTimings = trackElement.captionWordTimings ?? [];
+					const timingsAreRelative = isCaptionTimingRelativeToElement({
+						timings: currentTimings,
+						elementDuration: trackElement.duration,
+					});
+					const nextTimings =
+						currentTimings.length === 0 || timingsAreRelative
+							? currentTimings
+							: currentTimings.map((timing) => ({
+									word: timing.word,
+									startTime: timing.startTime + mediaShift,
+									endTime: timing.endTime + mediaShift,
+							  }));
+					changed = true;
+					return {
+						...trackElement,
+						startTime: nextStartTime,
+						captionWordTimings: nextTimings,
+					};
+				});
+				return changed ? ({ ...track, elements: nextElements } as typeof track) : track;
+			});
+		}
 
 		if (!isSameTrack) {
 			const sourceTrackAfterMove = updatedTracks.find(

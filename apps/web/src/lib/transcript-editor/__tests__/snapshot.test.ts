@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
 import {
 	buildTranscriptTimelineSnapshot,
+	clearTranscriptTimelineSnapshotCache,
 	getEffectiveTranscriptCutsForClipWindow,
 	normalizeTranscriptCutsToClipLocalSource,
 	validateCaptionAgainstSnapshot,
@@ -268,5 +269,113 @@ describe("transcript timeline snapshot", () => {
 		expect(healedTrack?.type).toBe("text");
 		if (healedTrack?.type !== "text") return;
 		expect(healedTrack.elements[0]?.content).toBe("hello world");
+	});
+
+	test("rebuilds cached snapshot when media start time moves", () => {
+		clearTranscriptTimelineSnapshotCache();
+		const words = [
+			{ id: "w0", text: "hello", startTime: 0.0, endTime: 0.3, removed: false },
+			{ id: "w1", text: "world", startTime: 0.4, endTime: 0.8, removed: false },
+		];
+		const base = buildTranscriptTimelineSnapshot({
+			mediaElementId: "audio-1",
+			transcriptVersion: 1,
+			updatedAt: "2026-03-05T00:00:00.000Z",
+			words,
+			cuts: [],
+			mediaStartTime: 5,
+			mediaDuration: 2,
+		});
+		const moved = buildTranscriptTimelineSnapshot({
+			mediaElementId: "audio-1",
+			transcriptVersion: 1,
+			updatedAt: "2026-03-05T00:00:00.000Z",
+			words,
+			cuts: [],
+			mediaStartTime: 12,
+			mediaDuration: 2,
+		});
+		expect(base).not.toBe(moved);
+		expect(base.captionPayload?.startTime).toBeCloseTo(5, 6);
+		expect(base.captionPayload?.wordTimings[0]?.startTime).toBeCloseTo(5, 6);
+		expect(moved.captionPayload?.startTime).toBeCloseTo(12, 6);
+		expect(moved.captionPayload?.wordTimings[0]?.startTime).toBeCloseTo(12, 6);
+	});
+
+	test("rebuilds cached snapshot when media duration changes", () => {
+		clearTranscriptTimelineSnapshotCache();
+		const words = [
+			{ id: "w0", text: "alpha", startTime: 0.0, endTime: 0.7, removed: false },
+			{ id: "w1", text: "beta", startTime: 0.8, endTime: 1.3, removed: false },
+		];
+		const longClip = buildTranscriptTimelineSnapshot({
+			mediaElementId: "audio-1",
+			transcriptVersion: 1,
+			updatedAt: "2026-03-05T00:00:00.000Z",
+			words,
+			cuts: [],
+			mediaStartTime: 10,
+			mediaDuration: 2,
+		});
+		const shortClip = buildTranscriptTimelineSnapshot({
+			mediaElementId: "audio-1",
+			transcriptVersion: 1,
+			updatedAt: "2026-03-05T00:00:00.000Z",
+			words,
+			cuts: [],
+			mediaStartTime: 10,
+			mediaDuration: 1,
+		});
+		expect(longClip).not.toBe(shortClip);
+		expect(longClip.captionPayload?.duration).toBeCloseTo(2, 6);
+		expect(shortClip.captionPayload?.duration).toBeCloseTo(1, 6);
+		expect(shortClip.captionPayload?.wordTimings[1]?.endTime).toBeCloseTo(11, 6);
+	});
+
+	test("realigns shifted timeline-like word timings to current media window", () => {
+		clearTranscriptTimelineSnapshotCache();
+		const mediaStart = 41.0333333333;
+		const mediaDuration = 2.4666666667;
+		const snapshot = buildTranscriptTimelineSnapshot({
+			mediaElementId: "audio-shifted",
+			transcriptVersion: 1,
+			updatedAt: "2026-03-05T00:00:00.000Z",
+			words: [
+				{
+					id: "w0",
+					text: "Take",
+					startTime: 48.8666666667,
+					endTime: 49.0916666667,
+					removed: false,
+				},
+				{
+					id: "w1",
+					text: "away",
+					startTime: 49.1326666667,
+					endTime: 49.2756666667,
+					removed: false,
+				},
+				{
+					id: "w2",
+					text: "point",
+					startTime: 51.2246666667,
+					endTime: 51.3333333333,
+					removed: false,
+				},
+			],
+			cuts: [],
+			mediaStartTime: mediaStart,
+			mediaDuration,
+		});
+		const payload = snapshot.captionPayload;
+		expect(payload).not.toBeNull();
+		if (!payload) return;
+		const first = payload.wordTimings[0];
+		const last = payload.wordTimings[payload.wordTimings.length - 1];
+		expect(first?.startTime ?? 0).toBeGreaterThanOrEqual(mediaStart - 0.02);
+		expect(first?.startTime ?? 0).toBeLessThanOrEqual(mediaStart + 0.25);
+		expect(last?.endTime ?? 0).toBeLessThanOrEqual(
+			mediaStart + mediaDuration + 0.02,
+		);
 	});
 });

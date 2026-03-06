@@ -77,10 +77,19 @@ export function resolveLiveCaptionElementFromTranscriptSource({
 	if (!transcriptEdit || transcriptEdit.words.length === 0) {
 		return null;
 	}
+	// Salt snapshot revision with media timing so preview caption timing cannot
+	// reuse a stale cache entry after move/trim while transcript words are unchanged.
+	const timingRevisionSalt = [
+		transcriptEdit.updatedAt,
+		sourceMedia.startTime.toFixed(4),
+		sourceMedia.duration.toFixed(4),
+		sourceMedia.trimStart.toFixed(4),
+		sourceMedia.trimEnd.toFixed(4),
+	].join("|");
 	const snapshot = buildTranscriptTimelineSnapshot({
 		mediaElementId: sourceMedia.id,
 		transcriptVersion: transcriptEdit.version,
-		updatedAt: transcriptEdit.updatedAt,
+		updatedAt: timingRevisionSalt,
 		words: transcriptEdit.words,
 		cuts: transcriptEdit.cuts,
 		mediaStartTime: sourceMedia.startTime,

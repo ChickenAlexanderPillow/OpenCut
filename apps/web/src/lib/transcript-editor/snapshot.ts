@@ -16,6 +16,8 @@ import type {
 
 const MAX_SNAPSHOT_CACHE_ENTRIES = 300;
 const snapshotCache = new Map<string, TranscriptTimelineSnapshot>();
+const CAPTION_TIMING_SHIFT_EPSILON = 0.05;
+const CAPTION_TIMING_SHIFT_SLACK_SECONDS = 0.35;
 
 function isTranscriptAlreadyTimelineAligned({
 	words,
@@ -37,6 +39,40 @@ function isTranscriptAlreadyTimelineAligned({
 		minStart >= mediaStartTime - epsilon &&
 		maxEnd <= mediaStartTime + mediaDuration + durationSlack;
 	return looksTimeline && !looksLocal;
+}
+
+function realignShiftedTimelineWordTimings({
+	timings,
+	mediaStartTime,
+	mediaDuration,
+}: {
+	timings: Array<{ word: string; startTime: number; endTime: number }>;
+	mediaStartTime: number;
+	mediaDuration: number;
+}): Array<{ word: string; startTime: number; endTime: number }> {
+	if (timings.length === 0) return timings;
+	const minStart = Math.min(...timings.map((timing) => timing.startTime));
+	const maxEnd = Math.max(...timings.map((timing) => timing.endTime));
+	const span = Math.max(0, maxEnd - minStart);
+	const windowSlack = Math.max(
+		0.04,
+		mediaDuration + CAPTION_TIMING_SHIFT_SLACK_SECONDS,
+	);
+	const displacedForward =
+		minStart > mediaStartTime + windowSlack + CAPTION_TIMING_SHIFT_EPSILON;
+	const displacedBackward =
+		maxEnd <
+		mediaStartTime - CAPTION_TIMING_SHIFT_EPSILON + CAPTION_TIMING_SHIFT_SLACK_SECONDS;
+	const compactSpan = span <= windowSlack + CAPTION_TIMING_SHIFT_EPSILON;
+	if (!compactSpan || (!displacedForward && !displacedBackward)) {
+		return timings;
+	}
+	const shift = minStart - mediaStartTime;
+	return timings.map((timing) => ({
+		...timing,
+		startTime: timing.startTime - shift,
+		endTime: timing.endTime - shift,
+	}));
 }
 
 export function resolveEffectiveTranscriptCuts({
@@ -163,11 +199,17 @@ export function getEffectiveTranscriptCutsForClipWindow({
 
 function getRevisionKey({
 	mediaElementId,
+	transcriptVersion,
+	mediaStartTime,
+	mediaDuration,
 	updatedAt,
 	words,
 	effectiveCuts,
 }: {
 	mediaElementId: string;
+	transcriptVersion: number;
+	mediaStartTime: number;
+	mediaDuration: number;
 	updatedAt: string;
 	words: TranscriptEditWord[];
 	effectiveCuts: TranscriptEditCutRange[];
@@ -181,6 +223,9 @@ function getRevisionKey({
 	};
 
 	updateHash(mediaElementId);
+	updateHash(String(transcriptVersion));
+	updateHash(mediaStartTime.toFixed(4));
+	updateHash(mediaDuration.toFixed(4));
 	updateHash(updatedAt);
 	updateHash(String(words.length));
 	for (const word of words) {
@@ -267,6 +312,9 @@ export function buildTranscriptTimelineSnapshot({
 	});
 	const revisionKey = getRevisionKey({
 		mediaElementId,
+		transcriptVersion,
+		mediaStartTime,
+		mediaDuration,
 		updatedAt,
 		words: normalizedWords,
 		effectiveCuts,
@@ -294,14 +342,26 @@ export function buildTranscriptTimelineSnapshot({
 	const captionPayload = !compressedPayload
 		? null
 		: (() => {
-				const timelineWordTimings = (isTimelineAligned
+				let timelineWordTimings = (isTimelineAligned
 					? compressedPayload.wordTimings
 					: compressedPayload.wordTimings.map((timing) => ({
 							word: timing.word,
 							startTime: mediaStartTime + timing.startTime,
 							endTime: mediaStartTime + timing.endTime,
-					  }))
-				)
+					  })))
+					.map((timing) => ({
+						word: timing.word,
+						startTime: timing.startTime,
+						endTime: timing.endTime,
+					}));
+				if (!isTimelineAligned) {
+					timelineWordTimings = realignShiftedTimelineWordTimings({
+						timings: timelineWordTimings,
+						mediaStartTime,
+						mediaDuration,
+					});
+				}
+				timelineWordTimings = timelineWordTimings
 					.map((timing) => ({
 						word: timing.word,
 						startTime: Math.max(

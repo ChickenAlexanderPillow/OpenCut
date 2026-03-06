@@ -1,8 +1,10 @@
 import { resolveBlueHighlightCaptionPreset } from "@/constants/caption-presets";
 import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
+import { isCaptionTimingRelativeToElement } from "@/lib/captions/timing";
 import { findCaptionTrackIdInScene } from "@/lib/captions/caption-track";
 import {
 	buildTranscriptTimelineSnapshot,
+	clearTranscriptTimelineSnapshotCache,
 	type TranscriptTimelineSnapshot,
 	validateCaptionAgainstSnapshot,
 } from "@/lib/transcript-editor/snapshot";
@@ -861,16 +863,147 @@ function alignLinkedCaptionBoundsToSourceMedia({
 			) {
 				return element;
 			}
+			const existingTimings = element.captionWordTimings ?? [];
+			const timingsAreRelative = isCaptionTimingRelativeToElement({
+				timings: existingTimings,
+				elementDuration: element.duration,
+			});
+			const startShift = sourceMedia.startTime - element.startTime;
+			const sourceStart = sourceMedia.startTime;
+			const sourceEnd = sourceMedia.startTime + sourceMedia.duration;
+			const shiftedTimings =
+				existingTimings.length === 0 || timingsAreRelative
+					? existingTimings
+					: existingTimings
+							.map((timing) => ({
+								word: timing.word,
+								startTime: timing.startTime + startShift,
+								endTime: timing.endTime + startShift,
+							}))
+							.filter(
+								(timing) => timing.endTime > sourceStart && timing.startTime < sourceEnd,
+							)
+							.map((timing) => ({
+								word: timing.word,
+								startTime: Math.max(sourceStart, timing.startTime),
+								endTime: Math.min(sourceEnd, timing.endTime),
+							}))
+							.filter((timing) => timing.endTime - timing.startTime > 0.001);
 			trackChanged = true;
 			changed = true;
 			return {
 				...element,
 				startTime: sourceMedia.startTime,
 				duration: sourceMedia.duration,
+				captionWordTimings: shiftedTimings,
 			};
 		});
 		return trackChanged ? { ...track, elements: nextElements } : track;
 	});
+	return { tracks: nextTracks, changed };
+}
+
+function shiftStaleAbsoluteCaptionTimingsForMovedLinkedMedia({
+	beforeTracks,
+	tracks,
+	beforeMediaById,
+	afterMediaById,
+}: {
+	beforeTracks: TimelineTrack[];
+	tracks: TimelineTrack[];
+	beforeMediaById: Map<string, VideoElement | AudioElement>;
+	afterMediaById: Map<string, VideoElement | AudioElement>;
+}): { tracks: TimelineTrack[]; changed: boolean } {
+	const beforeCaptionById = new Map<string, TextElement>();
+	for (const track of beforeTracks) {
+		if (track.type !== "text") continue;
+		for (const element of track.elements) {
+			if (element.type !== "text") continue;
+			beforeCaptionById.set(element.id, element);
+		}
+	}
+
+	let changed = false;
+	const nextTracks = tracks.map((track) => {
+		if (track.type !== "text") return track;
+		let trackChanged = false;
+		const nextElements = track.elements.map((element) => {
+			if (element.type !== "text") return element;
+			const sourceMediaId = element.captionSourceRef?.mediaElementId;
+			if (!sourceMediaId) return element;
+
+			const beforeMedia = beforeMediaById.get(sourceMediaId);
+			const afterMedia = afterMediaById.get(sourceMediaId);
+			if (!beforeMedia || !afterMedia) return element;
+			const mediaStartShift = afterMedia.startTime - beforeMedia.startTime;
+			if (Math.abs(mediaStartShift) < 1e-6) return element;
+
+			// Only heal the stale path where caption bounds already moved with media
+			// but absolute word timings remained at pre-move timeline positions.
+			if (
+				Math.abs(element.startTime - afterMedia.startTime) > 1e-6 ||
+				Math.abs(element.duration - afterMedia.duration) > 1e-6
+			) {
+				return element;
+			}
+
+			const currentTimings = element.captionWordTimings ?? [];
+			if (currentTimings.length === 0) return element;
+			const timingsAreRelative = isCaptionTimingRelativeToElement({
+				timings: currentTimings,
+				elementDuration: element.duration,
+			});
+			if (timingsAreRelative) return element;
+
+			const beforeCaption = beforeCaptionById.get(element.id);
+			if (!beforeCaption) return element;
+			const previousTimings = beforeCaption.captionWordTimings ?? [];
+			if (
+				previousTimings.length === 0 ||
+				!areCaptionWordTimingsEqual({
+					previous: previousTimings,
+					next: currentTimings,
+				})
+			) {
+				return element;
+			}
+
+			const sourceStart = afterMedia.startTime;
+			const sourceEnd = afterMedia.startTime + afterMedia.duration;
+			const shiftedTimings = currentTimings
+				.map((timing) => ({
+					word: timing.word,
+					startTime: timing.startTime + mediaStartShift,
+					endTime: timing.endTime + mediaStartShift,
+				}))
+				.filter(
+					(timing) => timing.endTime > sourceStart && timing.startTime < sourceEnd,
+				)
+				.map((timing) => ({
+					word: timing.word,
+					startTime: Math.max(sourceStart, timing.startTime),
+					endTime: Math.min(sourceEnd, timing.endTime),
+				}))
+				.filter((timing) => timing.endTime - timing.startTime > 0.001);
+			if (
+				areCaptionWordTimingsEqual({
+					previous: currentTimings,
+					next: shiftedTimings,
+				})
+			) {
+				return element;
+			}
+
+			trackChanged = true;
+			changed = true;
+			return {
+				...element,
+				captionWordTimings: shiftedTimings,
+			};
+		});
+		return trackChanged ? { ...track, elements: nextElements } : track;
+	});
+
 	return { tracks: nextTracks, changed };
 }
 
@@ -1014,6 +1147,7 @@ export function reconcileLinkedCaptionIntegrityInTracks({
 	}
 
 	const mediaIdsNeedingTranscriptSync = new Set<string>();
+	let hasMediaTimingShift = false;
 	for (const [mediaElementId, beforeMedia] of beforeMediaById.entries()) {
 		const afterMedia = afterMediaById.get(mediaElementId);
 		if (!afterMedia) {
@@ -1029,6 +1163,9 @@ export function reconcileLinkedCaptionIntegrityInTracks({
 			Math.abs(afterMedia.duration - beforeMedia.duration) > 1e-6 ||
 			Math.abs(afterMedia.trimStart - beforeMedia.trimStart) > 1e-6 ||
 			Math.abs(afterMedia.trimEnd - beforeMedia.trimEnd) > 1e-6;
+		if (timingOrTrimChanged) {
+			hasMediaTimingShift = true;
+		}
 		if (timingOrTrimChanged || transcriptUpdatedAt !== beforeTranscriptUpdatedAt) {
 			mediaIdsNeedingTranscriptSync.add(mediaElementId);
 		}
@@ -1038,6 +1175,9 @@ export function reconcileLinkedCaptionIntegrityInTracks({
 		if ((media.transcriptEdit?.words.length ?? 0) > 0) {
 			mediaIdsNeedingTranscriptSync.add(mediaElementId);
 		}
+	}
+	if (hasMediaTimingShift) {
+		clearTranscriptTimelineSnapshotCache();
 	}
 
 	for (const mediaElementId of mediaIdsNeedingTranscriptSync) {
@@ -1049,6 +1189,17 @@ export function reconcileLinkedCaptionIntegrityInTracks({
 			nextTracks = syncResult.tracks;
 			changed = true;
 		}
+	}
+
+	const staleAbsoluteTimingRepair = shiftStaleAbsoluteCaptionTimingsForMovedLinkedMedia({
+		beforeTracks,
+		tracks: nextTracks,
+		beforeMediaById,
+		afterMediaById,
+	});
+	if (staleAbsoluteTimingRepair.changed) {
+		nextTracks = staleAbsoluteTimingRepair.tracks;
+		changed = true;
 	}
 
 	const boundsAligned = alignLinkedCaptionBoundsToSourceMedia({

@@ -205,7 +205,7 @@ export class AudioManager {
 			// Scrub-end restart handles output; skip live seek scheduling while dragging.
 			return;
 		}
-		this.streamingEngine?.seek({ time });
+		this.streamingEngine?.seek({ time, immediate: true });
 	};
 
 	private handlePlaybackUpdate = (event: Event): void => {
@@ -226,7 +226,7 @@ export class AudioManager {
 			return;
 
 		this.lastDriftCorrectionAt = now;
-		this.streamingEngine?.seek({ time: detail.time });
+		this.streamingEngine?.seek({ time: detail.time, immediate: true });
 	};
 
 	private handleTimelineOrMediaChange = (): void => {

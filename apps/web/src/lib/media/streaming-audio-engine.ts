@@ -302,7 +302,7 @@ export class StreamingTimelineAudioEngine {
 			clipIds: structuralChangedClipIds,
 			immediate: true,
 		});
-		this.seek({ time: playhead });
+		this.seek({ time: playhead, immediate: true });
 	}
 
 	async prewarm({

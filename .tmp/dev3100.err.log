@@ -1,0 +1,3 @@
+$ next dev -p "3100"
+⨯ Unable to acquire lock at C:\Coding\opencut\apps\web\.next\dev\lock, is another instance of next dev running?
+error: script "dev" exited with code 1

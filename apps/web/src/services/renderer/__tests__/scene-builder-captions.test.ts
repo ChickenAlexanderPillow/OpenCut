@@ -215,4 +215,49 @@ describe("scene builder live caption source resolution", () => {
 		const thirdStart = resolved.captionWordTimings?.[1]?.startTime ?? 0;
 		expect(Math.abs(thirdStart - firstEnd)).toBeLessThanOrEqual(0.011);
 	});
+
+	test("recomputes caption timing when media moves without transcript edit changes", () => {
+		const transcriptEdit = {
+			version: 1,
+			source: "word-level" as const,
+			words: [
+				{ id: "w0", text: "hello", startTime: 0.0, endTime: 0.3, removed: false },
+				{ id: "w1", text: "world", startTime: 0.35, endTime: 0.7, removed: false },
+			],
+			cuts: [],
+			updatedAt: "2026-03-06T12:00:00.000Z",
+		};
+		const sourceAtTen: AudioElement = {
+			...createAudioElement({
+				id: "audio-1",
+				startTime: 10,
+				duration: 2,
+				words: transcriptEdit.words,
+			}),
+			transcriptEdit,
+		};
+		const sourceAtFourteen: AudioElement = {
+			...sourceAtTen,
+			startTime: 14,
+			transcriptEdit,
+		};
+		const caption = createCaption({ sourceMediaElementId: sourceAtTen.id });
+
+		const first = resolveLiveCaptionElementFromTranscriptSource({
+			element: caption,
+			sourceMedia: sourceAtTen,
+		});
+		const moved = resolveLiveCaptionElementFromTranscriptSource({
+			element: caption,
+			sourceMedia: sourceAtFourteen,
+		});
+
+		expect(first).not.toBeNull();
+		expect(moved).not.toBeNull();
+		if (!first || !moved) return;
+		expect(first.startTime).toBeCloseTo(10, 3);
+		expect(first.captionWordTimings?.[0]?.startTime).toBeCloseTo(10, 3);
+		expect(moved.startTime).toBeCloseTo(14, 3);
+		expect(moved.captionWordTimings?.[0]?.startTime).toBeCloseTo(14, 3);
+	});
 });

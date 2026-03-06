@@ -25,6 +25,7 @@ import { useTimelineStore } from "@/stores/timeline-store";
 import { TracksSnapshotCommand } from "@/lib/commands/timeline";
 import { enforceMainTrackStart } from "@/lib/timeline/track-utils";
 import { reconcileLinkedCaptionIntegrityInTracks } from "@/lib/transcript-editor/sync-captions";
+import { isCaptionTimingRelativeToElement } from "@/lib/captions/timing";
 import type {
 	DropTarget,
 	ElementDragState,
@@ -546,7 +547,33 @@ export function useElementInteraction({
 						if (!perTrack) return track;
 						const nextElements = track.elements.map((element) =>
 							perTrack.has(element.id)
-								? { ...element, startTime: perTrack.get(element.id) ?? element.startTime }
+								? (() => {
+										const nextStartTime = perTrack.get(element.id) ?? element.startTime;
+										if (element.type !== "text") {
+											return { ...element, startTime: nextStartTime };
+										}
+										const existingTimings = element.captionWordTimings ?? [];
+										const timingsAreRelative = isCaptionTimingRelativeToElement({
+											timings: existingTimings,
+											elementDuration: element.duration,
+										});
+										const startDelta = nextStartTime - element.startTime;
+										const nextTimings =
+											existingTimings.length === 0 ||
+											timingsAreRelative ||
+											Math.abs(startDelta) < 1e-6
+												? existingTimings
+												: existingTimings.map((timing) => ({
+														word: timing.word,
+														startTime: timing.startTime + startDelta,
+														endTime: timing.endTime + startDelta,
+												  }));
+										return {
+											...element,
+											startTime: nextStartTime,
+											captionWordTimings: nextTimings,
+										};
+								  })()
 								: element,
 						);
 						return { ...track, elements: nextElements } as TimelineTrack;
