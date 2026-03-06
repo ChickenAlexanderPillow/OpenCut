@@ -10,6 +10,8 @@ import type {
 	TimelineElement,
 	ClipboardItem,
 	TextElement,
+	VideoElement,
+	AudioElement,
 } from "@/types/timeline";
 import { calculateTotalDuration } from "@/lib/timeline";
 import {
@@ -36,9 +38,7 @@ import {
 } from "@/lib/commands/timeline";
 import { BatchCommand, PreviewTracker } from "@/lib/commands";
 import type { InsertElementParams } from "@/lib/commands/timeline/element/insert-element";
-import {
-	applyBlueHighlightCaptionPreset,
-} from "@/constants/caption-presets";
+import { applyBlueHighlightCaptionPreset } from "@/constants/caption-presets";
 
 export class TimelineManager {
 	private listeners = new Set<() => void>();
@@ -92,6 +92,7 @@ export class TimelineManager {
 		duration,
 		pushHistory = true,
 		rippleEnabled = false,
+		transcriptProjectionBase,
 	}: {
 		elementId: string;
 		trimStart: number;
@@ -100,6 +101,12 @@ export class TimelineManager {
 		duration?: number;
 		pushHistory?: boolean;
 		rippleEnabled?: boolean;
+		transcriptProjectionBase?: {
+			transcriptEdit:
+				| VideoElement["transcriptEdit"]
+				| AudioElement["transcriptEdit"];
+			trimStart: number;
+		};
 	}): void {
 		const command = new UpdateElementTrimCommand({
 			elementId,
@@ -108,12 +115,28 @@ export class TimelineManager {
 			startTime,
 			duration,
 			rippleEnabled,
+			transcriptProjectionBase,
 		});
-		if (pushHistory) {
-			this.editor.command.execute({ command });
-		} else {
+		if (!pushHistory) {
+			const currentTracks = this.getTracks();
+			this.previewTracker.begin({ state: currentTracks });
 			command.execute();
+			return;
 		}
+
+		const previewSnapshot = this.previewTracker.end();
+		if (previewSnapshot !== null) {
+			command.execute();
+			const updatedTracks = this.getTracks();
+			const snapshotCommand = new TracksSnapshotCommand(
+				previewSnapshot,
+				updatedTracks,
+			);
+			this.editor.command.push({ command: snapshotCommand });
+			return;
+		}
+
+		this.editor.command.execute({ command });
 	}
 
 	updateElementDuration({
@@ -667,7 +690,9 @@ export class TimelineManager {
 
 		for (const update of updates) {
 			const track = tracks.find((item) => item.id === update.trackId);
-			const element = track?.elements.find((item) => item.id === update.elementId);
+			const element = track?.elements.find(
+				(item) => item.id === update.elementId,
+			);
 			if (!this.isGeneratedCaptionElement(element)) continue;
 			if (
 				!this.shouldSyncCaptionUpdate({
@@ -678,7 +703,9 @@ export class TimelineManager {
 				continue;
 			}
 
-			for (const captionTrack of tracks.filter((item) => item.type === "text")) {
+			for (const captionTrack of tracks.filter(
+				(item) => item.type === "text",
+			)) {
 				for (const captionElement of captionTrack.elements) {
 					if (!this.isGeneratedCaptionElement(captionElement)) continue;
 					if (!this.isCaptionLinked(captionElement)) continue;

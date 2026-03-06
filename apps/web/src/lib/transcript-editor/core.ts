@@ -9,6 +9,20 @@ import type {
 	TranscriptEditWord,
 } from "@/types/transcription";
 
+export type TranscriptEditState = {
+	version: 1;
+	source: "word-level";
+	words: TranscriptEditWord[];
+	cuts: TranscriptEditCutRange[];
+	segmentsUi?: Array<{
+		id: string;
+		wordStartIndex: number;
+		wordEndIndex: number;
+		label?: string;
+	}>;
+	updatedAt: string;
+};
+
 export const DEFAULT_FILLER_TOKENS = new Set([
 	"um",
 	"uh",
@@ -155,14 +169,15 @@ export function applyCutRangesToWords({
 	}
 
 	return normalizedWords.map((word) => {
-		const removedByCuts = mergedCuts.some((cut) =>
-			cut.reason !== "pause" &&
-			rangesOverlap({
-				aStart: word.startTime,
-				aEnd: word.endTime,
-				bStart: cut.start,
-				bEnd: cut.end,
-			}),
+		const removedByCuts = mergedCuts.some(
+			(cut) =>
+				cut.reason !== "pause" &&
+				rangesOverlap({
+					aStart: word.startTime,
+					aEnd: word.endTime,
+					bStart: cut.start,
+					bEnd: cut.end,
+				}),
 		);
 		return {
 			...word,
@@ -220,6 +235,70 @@ export function buildTranscriptCutsFromWords({
 		index = cursor;
 	}
 	return mergeCutRanges({ cuts: rawCuts });
+}
+
+export function projectTranscriptEditToWindow({
+	transcriptEdit,
+	elementId,
+	sourceStart,
+	sourceEnd,
+}: {
+	transcriptEdit: TranscriptEditState;
+	elementId: string;
+	sourceStart: number;
+	sourceEnd: number;
+}): TranscriptEditState {
+	const windowStart = Math.min(sourceStart, sourceEnd);
+	const windowEnd = Math.max(windowStart, Math.max(sourceStart, sourceEnd));
+	const projectedWords = normalizeTranscriptWords({
+		words: transcriptEdit.words
+			.filter(
+				(word) => word.endTime > windowStart && word.startTime < windowEnd,
+			)
+			.map((word) => ({
+				...word,
+				startTime: Math.max(
+					0,
+					Math.min(windowEnd, word.startTime) - windowStart,
+				),
+				endTime: Math.max(0, Math.min(windowEnd, word.endTime) - windowStart),
+			})),
+	});
+	const projectedCuts =
+		transcriptEdit.cuts.length > 0
+			? mergeCutRanges({
+					cuts: transcriptEdit.cuts
+						.map((cut) => ({
+							start: Math.max(windowStart, cut.start),
+							end: Math.min(windowEnd, cut.end),
+							reason: cut.reason,
+						}))
+						.filter((cut) => cut.end - cut.start > 0.01)
+						.map((cut) => ({
+							start: Math.max(0, cut.start - windowStart),
+							end: Math.max(0.01, cut.end - windowStart),
+							reason: cut.reason,
+						})),
+				})
+			: buildTranscriptCutsFromWords({ words: projectedWords });
+	const segmentsUi =
+		projectedWords.length === 0
+			? []
+			: [
+					{
+						id: `${elementId}:seg:0`,
+						wordStartIndex: 0,
+						wordEndIndex: projectedWords.length - 1,
+					},
+				];
+
+	return {
+		...transcriptEdit,
+		words: projectedWords,
+		cuts: projectedCuts,
+		segmentsUi,
+		updatedAt: new Date().toISOString(),
+	};
 }
 
 export function buildPauseCutsFromWords({

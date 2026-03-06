@@ -3,6 +3,110 @@ import type { TimelineTrack } from "@/types/timeline";
 import { EditorCore } from "@/core";
 import { clampAnimationsToDuration } from "@/lib/animation";
 import { rippleShiftElements } from "@/lib/timeline";
+import { projectTranscriptEditToWindow } from "@/lib/transcript-editor/core";
+import { CAPTION_TAIL_PAD_SECONDS } from "@/lib/transcript-editor/constants";
+import { syncCaptionsFromTranscriptEdits } from "@/lib/transcript-editor/sync-captions";
+import type { AudioElement, VideoElement, TextElement } from "@/types/timeline";
+
+function isTranscriptEditableElement(
+	element: unknown,
+): element is VideoElement | AudioElement {
+	if (!element || typeof element !== "object") return false;
+	const candidate = element as { type?: string };
+	return candidate.type === "video" || candidate.type === "audio";
+}
+
+type CaptionTrimOperation = {
+	mediaElementId: string;
+	startTime: number;
+	endTime: number;
+};
+
+function trimLinkedCaptionsForMedia({
+	tracks,
+	operations,
+}: {
+	tracks: TimelineTrack[];
+	operations: CaptionTrimOperation[];
+}): TimelineTrack[] {
+	if (operations.length === 0) return tracks;
+	const operationByMediaId = new Map(
+		operations.map((operation) => [operation.mediaElementId, operation]),
+	);
+
+	const trimTimings = ({
+		timings,
+		startTime,
+		endTime,
+	}: {
+		timings: NonNullable<TextElement["captionWordTimings"]>;
+		startTime: number;
+		endTime: number;
+	}): NonNullable<TextElement["captionWordTimings"]> =>
+		timings
+			.filter(
+				(timing) => timing.endTime > startTime && timing.startTime < endTime,
+			)
+			.map((timing) => ({
+				word: timing.word,
+				startTime: Math.max(startTime, timing.startTime),
+				endTime: Math.min(endTime, timing.endTime),
+			}))
+			.filter((timing) => timing.endTime - timing.startTime > 0.001);
+
+	return tracks.map((track) => {
+		if (track.type !== "text") return track;
+		const nextElements = track.elements.flatMap((element) => {
+			if (element.type !== "text") return [element];
+			const linkedMediaId = element.captionSourceRef?.mediaElementId;
+			if (!linkedMediaId) return [element];
+			const operation = operationByMediaId.get(linkedMediaId);
+			if (!operation) return [element];
+
+			const timings = element.captionWordTimings;
+			if (timings && timings.length > 0) {
+				const trimmedTimings = trimTimings({
+					timings,
+					startTime: operation.startTime,
+					endTime: operation.endTime,
+				});
+				if (trimmedTimings.length === 0) return [];
+				const nextStart = trimmedTimings[0]?.startTime ?? operation.startTime;
+				const nextEnd =
+					trimmedTimings[trimmedTimings.length - 1]?.endTime ?? nextStart;
+				return [
+					{
+						...element,
+						content: trimmedTimings
+							.map((timing) => timing.word)
+							.join(" ")
+							.trim(),
+						startTime: nextStart,
+						duration: Math.max(
+							0.04,
+							nextEnd - nextStart + CAPTION_TAIL_PAD_SECONDS,
+						),
+						captionWordTimings: trimmedTimings,
+					},
+				];
+			}
+
+			const captionStart = element.startTime;
+			const captionEnd = element.startTime + element.duration;
+			const nextStart = Math.max(captionStart, operation.startTime);
+			const nextEnd = Math.min(captionEnd, operation.endTime);
+			if (nextEnd - nextStart <= 0.01) return [];
+			return [
+				{
+					...element,
+					startTime: nextStart,
+					duration: Math.max(0.04, nextEnd - nextStart),
+				},
+			];
+		});
+		return { ...track, elements: nextElements };
+	});
+}
 
 export class UpdateElementTrimCommand extends Command {
 	private savedState: TimelineTrack[] | null = null;
@@ -12,6 +116,14 @@ export class UpdateElementTrimCommand extends Command {
 	private readonly startTime: number | undefined;
 	private readonly duration: number | undefined;
 	private readonly rippleEnabled: boolean;
+	private readonly transcriptProjectionBase:
+		| {
+				transcriptEdit:
+					| VideoElement["transcriptEdit"]
+					| AudioElement["transcriptEdit"];
+				trimStart: number;
+		  }
+		| undefined;
 
 	constructor({
 		elementId,
@@ -20,6 +132,7 @@ export class UpdateElementTrimCommand extends Command {
 		startTime,
 		duration,
 		rippleEnabled = false,
+		transcriptProjectionBase,
 	}: {
 		elementId: string;
 		trimStart: number;
@@ -27,6 +140,12 @@ export class UpdateElementTrimCommand extends Command {
 		startTime?: number;
 		duration?: number;
 		rippleEnabled?: boolean;
+		transcriptProjectionBase?: {
+			transcriptEdit:
+				| VideoElement["transcriptEdit"]
+				| AudioElement["transcriptEdit"];
+			trimStart: number;
+		};
 	}) {
 		super();
 		this.elementId = elementId;
@@ -35,11 +154,14 @@ export class UpdateElementTrimCommand extends Command {
 		this.startTime = startTime;
 		this.duration = duration;
 		this.rippleEnabled = rippleEnabled;
+		this.transcriptProjectionBase = transcriptProjectionBase;
 	}
 
 	execute(): void {
 		const editor = EditorCore.getInstance();
 		this.savedState = editor.timeline.getTracks();
+		const mediaElementIdsForCaptionSync = new Set<string>();
+		const captionTrimOperations: CaptionTrimOperation[] = [];
 
 		const updatedTracks = this.savedState.map((track) => {
 			const targetElement = track.elements.find(
@@ -65,10 +187,45 @@ export class UpdateElementTrimCommand extends Command {
 					duration: nextDuration,
 				}),
 			};
+			const updatedElementWithTranscript =
+				isTranscriptEditableElement(targetElement) &&
+				targetElement.transcriptEdit &&
+				targetElement.transcriptEdit.words.length > 0
+					? (() => {
+							const projectionBase =
+								this.transcriptProjectionBase?.transcriptEdit ??
+								targetElement.transcriptEdit;
+							const projectionBaseTrimStart =
+								this.transcriptProjectionBase?.trimStart ??
+								targetElement.trimStart;
+							mediaElementIdsForCaptionSync.add(targetElement.id);
+							return {
+								...updatedElement,
+								transcriptEdit: projectTranscriptEditToWindow({
+									transcriptEdit: projectionBase,
+									elementId: targetElement.id,
+									sourceStart: this.trimStart - projectionBaseTrimStart,
+									sourceEnd:
+										this.trimStart - projectionBaseTrimStart + nextDuration,
+								}),
+							};
+						})()
+					: (() => {
+							if (isTranscriptEditableElement(targetElement)) {
+								captionTrimOperations.push({
+									mediaElementId: targetElement.id,
+									startTime: nextStartTime,
+									endTime: nextStartTime + nextDuration,
+								});
+							}
+							return updatedElement;
+						})();
 
 			if (this.rippleEnabled && Math.abs(shiftAmount) > 0) {
 				const shiftedOthers = rippleShiftElements({
-					elements: track.elements.filter((element) => element.id !== this.elementId),
+					elements: track.elements.filter(
+						(element) => element.id !== this.elementId,
+					),
 					afterTime: oldEndTime,
 					shiftAmount,
 				});
@@ -76,8 +233,9 @@ export class UpdateElementTrimCommand extends Command {
 					...track,
 					elements: track.elements.map((element) =>
 						element.id === this.elementId
-							? updatedElement
-							: (shiftedOthers.find((shifted) => shifted.id === element.id) ?? element)
+							? updatedElementWithTranscript
+							: (shiftedOthers.find((shifted) => shifted.id === element.id) ??
+								element),
 					),
 				} as typeof track;
 			}
@@ -85,12 +243,28 @@ export class UpdateElementTrimCommand extends Command {
 			return {
 				...track,
 				elements: track.elements.map((element) =>
-					element.id === this.elementId ? updatedElement : element
+					element.id === this.elementId
+						? updatedElementWithTranscript
+						: element,
 				),
 			} as typeof track;
 		});
 
-		editor.timeline.updateTracks(updatedTracks);
+		let syncedTracks = trimLinkedCaptionsForMedia({
+			tracks: updatedTracks,
+			operations: captionTrimOperations,
+		});
+		for (const mediaElementId of mediaElementIdsForCaptionSync) {
+			const syncResult = syncCaptionsFromTranscriptEdits({
+				tracks: syncedTracks,
+				mediaElementId,
+			});
+			if (syncResult.changed) {
+				syncedTracks = syncResult.tracks;
+			}
+		}
+
+		editor.timeline.updateTracks(syncedTracks);
 	}
 
 	undo(): void {

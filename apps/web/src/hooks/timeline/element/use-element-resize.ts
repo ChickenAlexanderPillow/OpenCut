@@ -1,7 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
 import { snapTimeToFrame } from "@/lib/time";
-import type { TimelineElement, TimelineTrack } from "@/types/timeline";
+import type {
+	TimelineElement,
+	TimelineTrack,
+	AudioElement,
+	VideoElement,
+} from "@/types/timeline";
 import { useEditor } from "@/hooks/use-editor";
 import { useShiftKey } from "@/hooks/use-shift-key";
 import {
@@ -19,6 +24,9 @@ export interface ResizeState {
 	initialTrimEnd: number;
 	initialStartTime: number;
 	initialDuration: number;
+	initialTranscriptEdit?:
+		| VideoElement["transcriptEdit"]
+		| AudioElement["transcriptEdit"];
 }
 
 interface UseTimelineElementResizeProps {
@@ -27,6 +35,12 @@ interface UseTimelineElementResizeProps {
 	zoomLevel: number;
 	onSnapPointChange?: (snapPoint: SnapPoint | null) => void;
 	onResizeStateChange?: (params: { isResizing: boolean }) => void;
+}
+
+function isTranscriptEditableElement(
+	element: TimelineElement,
+): element is VideoElement | AudioElement {
+	return element.type === "video" || element.type === "audio";
 }
 
 export function useTimelineElementResize({
@@ -43,7 +57,7 @@ export function useTimelineElementResize({
 	const rippleEditingEnabled = useTimelineStore(
 		(state) => state.rippleEditingEnabled,
 	);
-
+	const isResizableTranscriptElement = isTranscriptEditableElement(element);
 
 	const [resizing, setResizing] = useState<ResizeState | null>(null);
 	const [currentTrimStart, setCurrentTrimStart] = useState(element.trimStart);
@@ -54,6 +68,12 @@ export function useTimelineElementResize({
 	const currentTrimEndRef = useRef(element.trimEnd);
 	const currentStartTimeRef = useRef(element.startTime);
 	const currentDurationRef = useRef(element.duration);
+	const lastPreviewTrimRef = useRef<{
+		trimStart: number;
+		trimEnd: number;
+		startTime: number;
+		duration: number;
+	} | null>(null);
 
 	const handleResizeStart = ({
 		event,
@@ -75,6 +95,9 @@ export function useTimelineElementResize({
 			initialTrimEnd: element.trimEnd,
 			initialStartTime: element.startTime,
 			initialDuration: element.duration,
+			initialTranscriptEdit: isTranscriptEditableElement(element)
+				? element.transcriptEdit
+				: undefined,
 		});
 
 		setCurrentTrimStart(element.trimStart);
@@ -85,6 +108,7 @@ export function useTimelineElementResize({
 		currentTrimEndRef.current = element.trimEnd;
 		currentStartTimeRef.current = element.startTime;
 		currentDurationRef.current = element.duration;
+		lastPreviewTrimRef.current = null;
 		onResizeStateChange?.({ isResizing: true });
 	};
 
@@ -266,6 +290,50 @@ export function useTimelineElementResize({
 					currentDurationRef.current = newDuration;
 				}
 			}
+
+			if (!isResizableTranscriptElement) {
+				return;
+			}
+
+			const preview = {
+				trimStart: currentTrimStartRef.current,
+				trimEnd: currentTrimEndRef.current,
+				startTime: currentStartTimeRef.current,
+				duration: currentDurationRef.current,
+			};
+			const lastPreview = lastPreviewTrimRef.current;
+			if (
+				lastPreview &&
+				lastPreview.trimStart === preview.trimStart &&
+				lastPreview.trimEnd === preview.trimEnd &&
+				lastPreview.startTime === preview.startTime &&
+				lastPreview.duration === preview.duration
+			) {
+				return;
+			}
+
+			editor.timeline.updateElementTrim({
+				elementId: element.id,
+				trimStart: preview.trimStart,
+				trimEnd: preview.trimEnd,
+				startTime:
+					preview.startTime !== resizing.initialStartTime
+						? preview.startTime
+						: undefined,
+				duration:
+					preview.duration !== resizing.initialDuration
+						? preview.duration
+						: undefined,
+				pushHistory: false,
+				rippleEnabled: rippleEditingEnabled,
+				transcriptProjectionBase: resizing.initialTranscriptEdit
+					? {
+							transcriptEdit: resizing.initialTranscriptEdit,
+							trimStart: resizing.initialTrimStart,
+						}
+					: undefined,
+			});
+			lastPreviewTrimRef.current = preview;
 		},
 		[
 			resizing,
@@ -277,6 +345,8 @@ export function useTimelineElementResize({
 			onSnapPointChange,
 			canExtendElementDuration,
 			isShiftHeldRef,
+			isResizableTranscriptElement,
+			rippleEditingEnabled,
 		],
 	);
 
@@ -300,10 +370,17 @@ export function useTimelineElementResize({
 				startTime: startTimeChanged ? finalStartTime : undefined,
 				duration: durationChanged ? finalDuration : undefined,
 				rippleEnabled: rippleEditingEnabled,
+				transcriptProjectionBase: resizing.initialTranscriptEdit
+					? {
+							transcriptEdit: resizing.initialTranscriptEdit,
+							trimStart: resizing.initialTrimStart,
+						}
+					: undefined,
 			});
 		}
 
 		setResizing(null);
+		lastPreviewTrimRef.current = null;
 		onResizeStateChange?.({ isResizing: false });
 		onSnapPointChange?.(null);
 	}, [

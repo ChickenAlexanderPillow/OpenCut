@@ -5,12 +5,11 @@ import { EditorCore } from "@/core";
 import { rippleShiftElements } from "@/lib/timeline";
 import { splitAnimationsAtTime } from "@/lib/animation";
 import {
-	buildTranscriptCutsFromWords,
-	mergeCutRanges,
-	normalizeTranscriptWords,
+	projectTranscriptEditToWindow,
 } from "@/lib/transcript-editor/core";
-import type { TranscriptEditCutRange } from "@/types/transcription";
-import type { AudioElement, VideoElement } from "@/types/timeline";
+import { CAPTION_TAIL_PAD_SECONDS } from "@/lib/transcript-editor/constants";
+import { syncCaptionsFromTranscriptEdits } from "@/lib/transcript-editor/sync-captions";
+import type { AudioElement, VideoElement, TextElement } from "@/types/timeline";
 
 function isTranscriptEditableElement(
 	element: unknown,
@@ -40,94 +39,172 @@ function splitTranscriptEdit({
 		};
 	}
 
-	const leftWords = normalizeTranscriptWords({
-		words: transcriptEdit.words
-			.filter((word) => word.endTime > 0 && word.startTime < leftDuration)
-			.map((word) => ({
-				...word,
-				startTime: Math.max(0, Math.min(leftDuration, word.startTime)),
-				endTime: Math.max(0, Math.min(leftDuration, word.endTime)),
-			})),
-	});
-	const rightWords = normalizeTranscriptWords({
-		words: transcriptEdit.words
-			.filter((word) => word.endTime > leftDuration)
-			.map((word) => ({
-				...word,
-				startTime: Math.max(0, Math.min(rightDuration, word.startTime - leftDuration)),
-				endTime: Math.max(0, Math.min(rightDuration, word.endTime - leftDuration)),
-			})),
-	});
-
-	const buildSegments = (words: typeof leftWords) =>
-		words.length === 0
-			? []
-			: [
-					{
-						id: `${element.id}:seg:0`,
-						wordStartIndex: 0,
-						wordEndIndex: words.length - 1,
-					},
-				];
-
-	const projectCuts = ({
-		cuts,
-		sourceStart,
-		sourceEnd,
-		offset,
-	}: {
-		cuts: TranscriptEditCutRange[];
-		sourceStart: number;
-		sourceEnd: number;
-		offset: number;
-	}): TranscriptEditCutRange[] =>
-		mergeCutRanges({
-			cuts: cuts
-				.map((cut) => ({
-					start: Math.max(sourceStart, cut.start),
-					end: Math.min(sourceEnd, cut.end),
-					reason: cut.reason,
-				}))
-				.filter((cut) => cut.end - cut.start > 0.01)
-				.map((cut) => ({
-					start: Math.max(0, cut.start - offset),
-					end: Math.max(0.01, cut.end - offset),
-					reason: cut.reason,
-				})),
-		});
-
 	return {
-		left: {
-			...transcriptEdit,
-			words: leftWords,
-			cuts:
-				transcriptEdit.cuts && transcriptEdit.cuts.length > 0
-					? projectCuts({
-							cuts: transcriptEdit.cuts,
-							sourceStart: 0,
-							sourceEnd: leftDuration,
-							offset: 0,
-						})
-					: buildTranscriptCutsFromWords({ words: leftWords }),
-			segmentsUi: buildSegments(leftWords),
-			updatedAt: new Date().toISOString(),
-		},
-		right: {
-			...transcriptEdit,
-			words: rightWords,
-			cuts:
-				transcriptEdit.cuts && transcriptEdit.cuts.length > 0
-					? projectCuts({
-							cuts: transcriptEdit.cuts,
-							sourceStart: leftDuration,
-							sourceEnd: leftDuration + rightDuration,
-							offset: leftDuration,
-						})
-					: buildTranscriptCutsFromWords({ words: rightWords }),
-			segmentsUi: buildSegments(rightWords),
-			updatedAt: new Date().toISOString(),
+		left: projectTranscriptEditToWindow({
+			transcriptEdit,
+			elementId: element.id,
+			sourceStart: 0,
+			sourceEnd: leftDuration,
+		}),
+		right: projectTranscriptEditToWindow({
+			transcriptEdit,
+			elementId: element.id,
+			sourceStart: leftDuration,
+			sourceEnd: leftDuration + rightDuration,
+		}),
+	};
+}
+
+type CaptionSplitOperation = {
+	sourceMediaElementId: string;
+	rightMediaElementId?: string;
+	splitTime: number;
+	retainSide: "both" | "left" | "right";
+};
+
+function splitCaptionWordTimings({
+	timings,
+	splitTime,
+}: {
+	timings: NonNullable<TextElement["captionWordTimings"]>;
+	splitTime: number;
+}): {
+	left: NonNullable<TextElement["captionWordTimings"]>;
+	right: NonNullable<TextElement["captionWordTimings"]>;
+} {
+	const left = timings
+		.filter((timing) => timing.endTime > -1e-6 && timing.startTime < splitTime)
+		.map((timing) => ({
+			word: timing.word,
+			startTime: Math.max(0, Math.min(splitTime, timing.startTime)),
+			endTime: Math.max(0.01, Math.min(splitTime, timing.endTime)),
+		}))
+		.filter((timing) => timing.endTime - timing.startTime > 0.001);
+	const right = timings
+		.filter((timing) => timing.endTime > splitTime)
+		.map((timing) => ({
+			word: timing.word,
+			startTime: Math.max(splitTime, timing.startTime),
+			endTime: Math.max(splitTime + 0.01, timing.endTime),
+		}))
+		.filter((timing) => timing.endTime - timing.startTime > 0.001);
+	return { left, right };
+}
+
+function buildCaptionFromTimings({
+	base,
+	timings,
+	id,
+	sourceMediaElementId,
+}: {
+	base: TextElement;
+	timings: NonNullable<TextElement["captionWordTimings"]>;
+	id: string;
+	sourceMediaElementId: string;
+}): TextElement | null {
+	if (timings.length === 0) return null;
+	const startTime = timings[0]?.startTime ?? base.startTime;
+	const endTime = timings[timings.length - 1]?.endTime ?? startTime;
+	return {
+		...base,
+		id,
+		content: timings.map((timing) => timing.word).join(" ").trim(),
+		startTime,
+		duration: Math.max(0.04, endTime - startTime + CAPTION_TAIL_PAD_SECONDS),
+		captionWordTimings: timings,
+		captionSourceRef: {
+			mediaElementId: sourceMediaElementId,
+			transcriptVersion: base.captionSourceRef?.transcriptVersion ?? 1,
 		},
 	};
+}
+
+function splitLinkedCaptionsForMedia({
+	tracks,
+	operations,
+}: {
+	tracks: TimelineTrack[];
+	operations: CaptionSplitOperation[];
+}): TimelineTrack[] {
+	if (operations.length === 0) return tracks;
+	const operationByMediaId = new Map(
+		operations.map((operation) => [operation.sourceMediaElementId, operation]),
+	);
+
+	return tracks.map((track) => {
+		if (track.type !== "text") return track;
+		const nextElements = track.elements.flatMap((element) => {
+			if (element.type !== "text") return [element];
+			const sourceMediaId = element.captionSourceRef?.mediaElementId;
+			if (!sourceMediaId) return [element];
+			const operation = operationByMediaId.get(sourceMediaId);
+			if (!operation) return [element];
+			const timings = element.captionWordTimings;
+			if (!timings || timings.length === 0) {
+				if (operation.retainSide === "right" && operation.rightMediaElementId) {
+					return [
+						{
+							...element,
+							captionSourceRef: {
+								mediaElementId: operation.rightMediaElementId,
+								transcriptVersion: element.captionSourceRef?.transcriptVersion ?? 1,
+							},
+						},
+					];
+				}
+				return [element];
+			}
+
+			const { left, right } = splitCaptionWordTimings({
+				timings,
+				splitTime: operation.splitTime,
+			});
+
+			if (operation.retainSide === "left") {
+				const leftCaption = buildCaptionFromTimings({
+					base: element,
+					timings: left,
+					id: element.id,
+					sourceMediaElementId: operation.sourceMediaElementId,
+				});
+				return leftCaption ? [leftCaption] : [];
+			}
+			if (operation.retainSide === "right") {
+				if (!operation.rightMediaElementId) return [];
+				const rightCaption = buildCaptionFromTimings({
+					base: element,
+					timings: right,
+					id: element.id,
+					sourceMediaElementId: operation.rightMediaElementId,
+				});
+				return rightCaption ? [rightCaption] : [];
+			}
+
+			const leftCaption = buildCaptionFromTimings({
+				base: element,
+				timings: left,
+				id: element.id,
+				sourceMediaElementId: operation.sourceMediaElementId,
+			});
+			const rightCaption = operation.rightMediaElementId
+				? buildCaptionFromTimings({
+						base: element,
+						timings: right,
+						id: generateUUID(),
+						sourceMediaElementId: operation.rightMediaElementId,
+				  })
+				: null;
+
+			return [
+				...(leftCaption ? [leftCaption] : []),
+				...(rightCaption ? [rightCaption] : []),
+			];
+		});
+		return {
+			...track,
+			elements: nextElements,
+		};
+	});
 }
 
 export class SplitElementsCommand extends Command {
@@ -166,6 +243,8 @@ export class SplitElementsCommand extends Command {
 		this.savedState = editor.timeline.getTracks();
 		this.previousSelection = editor.selection.getSelectedElements();
 		this.rightSideElements = [];
+		const mediaElementIdsForCaptionSync = new Set<string>();
+		const captionSplitOperations: CaptionSplitOperation[] = [];
 
 		const updatedTracks = this.savedState.map((track) => {
 			const elementsToSplit = this.elements.filter(
@@ -207,6 +286,16 @@ export class SplitElementsCommand extends Command {
 				});
 
 				if (this.retainSide === "left") {
+					const canSplitLinkedCaptionsWithoutTranscript =
+						isTranscriptEditableElement(element) &&
+						(!element.transcriptEdit || element.transcriptEdit.words.length === 0);
+					if (canSplitLinkedCaptionsWithoutTranscript) {
+						captionSplitOperations.push({
+							sourceMediaElementId: element.id,
+							splitTime: this.splitTime,
+							retainSide: "left",
+						});
+					}
 					const leftTranscriptEdit = isTranscriptEditableElement(element)
 						? splitTranscriptEdit({
 								element,
@@ -214,6 +303,9 @@ export class SplitElementsCommand extends Command {
 								rightDuration: rightVisibleDuration,
 						  }).left
 						: undefined;
+					if (leftTranscriptEdit !== undefined) {
+						mediaElementIdsForCaptionSync.add(element.id);
+					}
 					return [
 						{
 							...element,
@@ -233,6 +325,17 @@ export class SplitElementsCommand extends Command {
 						leftVisibleDurationForRipple = leftVisibleDuration;
 					}
 					const newId = generateUUID();
+					const canSplitLinkedCaptionsWithoutTranscript =
+						isTranscriptEditableElement(element) &&
+						(!element.transcriptEdit || element.transcriptEdit.words.length === 0);
+					if (canSplitLinkedCaptionsWithoutTranscript) {
+						captionSplitOperations.push({
+							sourceMediaElementId: element.id,
+							rightMediaElementId: newId,
+							splitTime: this.splitTime,
+							retainSide: "right",
+						});
+					}
 					this.rightSideElements.push({
 						trackId: track.id,
 						elementId: newId,
@@ -244,6 +347,9 @@ export class SplitElementsCommand extends Command {
 								rightDuration: rightVisibleDuration,
 						  }).right
 						: undefined;
+					if (rightTranscriptEdit !== undefined) {
+						mediaElementIdsForCaptionSync.add(newId);
+					}
 					return [
 						{
 							...element,
@@ -262,6 +368,17 @@ export class SplitElementsCommand extends Command {
 
 				// "both" - split into two pieces
 				const secondElementId = generateUUID();
+				const canSplitLinkedCaptionsWithoutTranscript =
+					isTranscriptEditableElement(element) &&
+					(!element.transcriptEdit || element.transcriptEdit.words.length === 0);
+				if (canSplitLinkedCaptionsWithoutTranscript) {
+					captionSplitOperations.push({
+						sourceMediaElementId: element.id,
+						rightMediaElementId: secondElementId,
+						splitTime: this.splitTime,
+						retainSide: "both",
+					});
+				}
 				this.rightSideElements.push({
 					trackId: track.id,
 					elementId: secondElementId,
@@ -273,6 +390,10 @@ export class SplitElementsCommand extends Command {
 							rightDuration: rightVisibleDuration,
 					  })
 					: null;
+				if (splitTranscript) {
+					mediaElementIdsForCaptionSync.add(element.id);
+					mediaElementIdsForCaptionSync.add(secondElementId);
+				}
 
 				return [
 					{
@@ -307,7 +428,21 @@ export class SplitElementsCommand extends Command {
 			return { ...track, elements } as typeof track;
 		});
 
-		editor.timeline.updateTracks(updatedTracks);
+		let syncedTracks = splitLinkedCaptionsForMedia({
+			tracks: updatedTracks,
+			operations: captionSplitOperations,
+		});
+		for (const mediaElementId of mediaElementIdsForCaptionSync) {
+			const syncResult = syncCaptionsFromTranscriptEdits({
+				tracks: syncedTracks,
+				mediaElementId,
+			});
+			if (syncResult.changed) {
+				syncedTracks = syncResult.tracks;
+			}
+		}
+
+		editor.timeline.updateTracks(syncedTracks);
 
 		if (this.rightSideElements.length > 0) {
 			editor.selection.setSelectedElements({
