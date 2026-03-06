@@ -364,8 +364,10 @@ export function useTimelineElementResize({
 		const trimEndChanged = finalTrimEnd !== resizing.initialTrimEnd;
 		const startTimeChanged = finalStartTime !== resizing.initialStartTime;
 		const durationChanged = finalDuration !== resizing.initialDuration;
+		const hasTimingChange =
+			trimStartChanged || trimEndChanged || startTimeChanged || durationChanged;
 
-		if (trimStartChanged || trimEndChanged) {
+		if (hasTimingChange) {
 			editor.timeline.updateElementTrim({
 				elementId: element.id,
 				trimStart: finalTrimStart,
@@ -380,6 +382,10 @@ export function useTimelineElementResize({
 						}
 					: undefined,
 			});
+		} else if (isResizableTranscriptElement && editor.timeline.isPreviewActive()) {
+			// Always tear down preview mode after transcript resize interactions.
+			// Without this, a trim preview can linger and hide captions until reload.
+			editor.timeline.discardPreview();
 		}
 
 		setResizing(null);
@@ -393,6 +399,7 @@ export function useTimelineElementResize({
 		onResizeStateChange,
 		onSnapPointChange,
 		rippleEditingEnabled,
+		isResizableTranscriptElement,
 	]);
 
 	useEffect(() => {
