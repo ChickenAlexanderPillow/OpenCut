@@ -13,6 +13,7 @@ import {
 } from "@/lib/timeline/track-utils";
 import { rippleShiftElements } from "@/lib/timeline/ripple-utils";
 import { reconcileLinkedCaptionIntegrityInTracks } from "@/lib/transcript-editor/sync-captions";
+import { normalizeTimelineElementForInvariants } from "@/lib/timeline/element-timing";
 
 export class MoveElementCommand extends Command {
 	private savedState: TimelineTrack[] | null = null;
@@ -89,15 +90,19 @@ export class MoveElementCommand extends Command {
 		const adjustedStartTime = enforceMainTrackStart({
 			tracks: tracksToUpdate,
 			targetTrackId: this.targetTrackId,
-			requestedStartTime: this.newStartTime,
+			requestedStartTime: Math.max(0, this.newStartTime),
 			excludeElementId: this.elementId,
 		});
+		const minDuration = 1 / Math.max(1, editor.project.getActive().settings.fps);
 
 		// keyframe times remain clip-local, so moving only changes element startTime.
-		const movedElement: TimelineElement = {
-			...element,
-			startTime: adjustedStartTime,
-		};
+		const movedElement: TimelineElement = normalizeTimelineElementForInvariants({
+			element: {
+				...element,
+				startTime: adjustedStartTime,
+			},
+			minDuration,
+		});
 
 		const isSameTrack = this.sourceTrackId === this.targetTrackId;
 

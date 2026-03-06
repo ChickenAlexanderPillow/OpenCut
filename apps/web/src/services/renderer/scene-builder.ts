@@ -22,6 +22,7 @@ import {
 	buildTranscriptTimelineSnapshot,
 	getEffectiveTranscriptCutsFromTranscriptEdit,
 } from "@/lib/transcript-editor/snapshot";
+import { normalizeTimelineElementForInvariants } from "@/lib/timeline/element-timing";
 
 const PREVIEW_MAX_IMAGE_SIZE = 2048;
 
@@ -140,9 +141,12 @@ export function buildScene(params: BuildSceneParams) {
 	for (const track of tracks) {
 		for (const element of track.elements) {
 			if (!isEditableMediaElement(element)) continue;
-			mediaElementById.set(element.id, element);
-			if ((element.transcriptEdit?.words.length ?? 0) > 0) {
-				transcriptMediaCandidates.push(element);
+			const normalizedElement = normalizeTimelineElementForInvariants({
+				element,
+			});
+			mediaElementById.set(normalizedElement.id, normalizedElement);
+			if ((normalizedElement.transcriptEdit?.words.length ?? 0) > 0) {
+				transcriptMediaCandidates.push(normalizedElement);
 			}
 		}
 	}
@@ -157,8 +161,9 @@ export function buildScene(params: BuildSceneParams) {
 			});
 
 		for (const element of elements) {
-			if (element.type === "video" || element.type === "image") {
-				const mediaAsset = mediaMap.get(element.mediaId);
+			const stableElement = normalizeTimelineElementForInvariants({ element });
+			if (stableElement.type === "video" || stableElement.type === "image") {
+				const mediaAsset = mediaMap.get(stableElement.mediaId);
 				if (!mediaAsset) {
 					continue;
 				}
@@ -173,7 +178,7 @@ export function buildScene(params: BuildSceneParams) {
 				}
 
 				if (mediaAsset.type === "video") {
-					if (element.type !== "video") {
+					if (stableElement.type !== "video") {
 						continue;
 					}
 					contentNodes.push(
@@ -182,17 +187,17 @@ export function buildScene(params: BuildSceneParams) {
 							url: resolvedUrl,
 							file: resolvedFile,
 							videoCache: params.videoCache,
-							duration: element.duration,
-							timeOffset: element.startTime,
-							trimStart: element.trimStart,
-							trimEnd: element.trimEnd,
+							duration: stableElement.duration,
+							timeOffset: stableElement.startTime,
+							trimStart: stableElement.trimStart,
+							trimEnd: stableElement.trimEnd,
 							transcriptCuts: getEffectiveTranscriptCutsFromTranscriptEdit({
-								transcriptEdit: element.transcriptEdit,
+								transcriptEdit: stableElement.transcriptEdit,
 							}),
-							transform: element.transform,
-							opacity: element.opacity,
-							blendMode: element.blendMode,
-							animations: element.animations,
+							transform: stableElement.transform,
+							opacity: stableElement.opacity,
+							blendMode: stableElement.blendMode,
+							animations: stableElement.animations,
 							frameRateCap: params.previewFrameRateCap,
 							...(params.isPreview && {
 								previewProxyScale: params.previewProxyScale,
@@ -204,14 +209,14 @@ export function buildScene(params: BuildSceneParams) {
 					contentNodes.push(
 						new ImageNode({
 							url: resolvedUrl,
-							duration: element.duration,
-							timeOffset: element.startTime,
-							trimStart: element.trimStart,
-							trimEnd: element.trimEnd,
-							transform: element.transform,
-							opacity: element.opacity,
-							blendMode: element.blendMode,
-							animations: element.animations,
+							duration: stableElement.duration,
+							timeOffset: stableElement.startTime,
+							trimStart: stableElement.trimStart,
+							trimEnd: stableElement.trimEnd,
+							transform: stableElement.transform,
+							opacity: stableElement.opacity,
+							blendMode: stableElement.blendMode,
+							animations: stableElement.animations,
 							...(params.isPreview && {
 								maxSourceSize: PREVIEW_MAX_IMAGE_SIZE,
 							}),
@@ -220,8 +225,8 @@ export function buildScene(params: BuildSceneParams) {
 				}
 			}
 
-			if (element.type === "text") {
-				const sourceMediaId = element.captionSourceRef?.mediaElementId;
+			if (stableElement.type === "text") {
+				const sourceMediaId = stableElement.captionSourceRef?.mediaElementId;
 				const sourceMediaFromRef = sourceMediaId
 					? mediaElementById.get(sourceMediaId)
 					: null;
@@ -235,17 +240,17 @@ export function buildScene(params: BuildSceneParams) {
 					// If a caption has an explicit source ref that no longer exists, treat it as stale.
 					(!sourceMediaId
 						? resolveCaptionSourceMediaHeuristically({
-								element,
+								element: stableElement,
 								candidates: transcriptMediaCandidates,
 						  })
 						: null);
 				const resolvedTextElement =
 					sourceMedia && isEditableMediaElement(sourceMedia)
 						? resolveLiveCaptionElementFromTranscriptSource({
-								element,
+								element: stableElement,
 								sourceMedia,
 							})
-						: element;
+						: stableElement;
 				if (!resolvedTextElement) {
 					continue;
 				}
@@ -260,18 +265,18 @@ export function buildScene(params: BuildSceneParams) {
 				);
 			}
 
-			if (element.type === "sticker") {
+			if (stableElement.type === "sticker") {
 				contentNodes.push(
 					new StickerNode({
-						stickerId: element.stickerId,
-						duration: element.duration,
-						timeOffset: element.startTime,
-						trimStart: element.trimStart,
-						trimEnd: element.trimEnd,
-						transform: element.transform,
-						opacity: element.opacity,
-						blendMode: element.blendMode,
-						animations: element.animations,
+						stickerId: stableElement.stickerId,
+						duration: stableElement.duration,
+						timeOffset: stableElement.startTime,
+						trimStart: stableElement.trimStart,
+						trimEnd: stableElement.trimEnd,
+						transform: stableElement.transform,
+						opacity: stableElement.opacity,
+						blendMode: stableElement.blendMode,
+						animations: stableElement.animations,
 					}),
 				);
 			}

@@ -39,6 +39,7 @@ import {
 import { BatchCommand, PreviewTracker } from "@/lib/commands";
 import type { InsertElementParams } from "@/lib/commands/timeline/element/insert-element";
 import { applyBlueHighlightCaptionPreset } from "@/constants/caption-presets";
+import { normalizeTimelineTracksForInvariants } from "@/lib/timeline/element-timing";
 
 export class TimelineManager {
 	private listeners = new Set<() => void>();
@@ -538,8 +539,20 @@ export class TimelineManager {
 	}
 
 	updateTracks(newTracks: TimelineTrack[]): void {
-		if (this.getTracks() === newTracks) return;
-		this.editor.scenes.updateSceneTracks({ tracks: newTracks });
+		const currentTracks = this.getTracks();
+		const projectFps = (() => {
+			try {
+				return this.editor.project.getActive().settings.fps;
+			} catch {
+				return 30;
+			}
+		})();
+		const normalizedTracks = normalizeTimelineTracksForInvariants({
+			tracks: newTracks,
+			fps: projectFps,
+		});
+		if (currentTracks === normalizedTracks) return;
+		this.editor.scenes.updateSceneTracks({ tracks: normalizedTracks });
 		this.notify();
 	}
 

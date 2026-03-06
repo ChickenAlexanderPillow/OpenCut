@@ -10,6 +10,7 @@ import {
 	reconcileLinkedCaptionIntegrityInTracks,
 } from "@/lib/transcript-editor/sync-captions";
 import type { AudioElement, VideoElement, TextElement } from "@/types/timeline";
+import { normalizeElementTiming } from "@/lib/timeline/element-timing";
 
 function isTranscriptEditableElement(
 	element: unknown,
@@ -210,6 +211,8 @@ export class UpdateElementTrimCommand extends Command {
 	execute(): void {
 		const editor = EditorCore.getInstance();
 		this.savedState = editor.timeline.getTracks();
+		const projectFps = editor.project.getActive().settings.fps;
+		const minDuration = 1 / projectFps;
 		const mediaElementIdsForCaptionSync = new Set<string>();
 		const captionTrimOperations: CaptionTrimOperation[] = [];
 		const shouldRunFullCaptionSync = this.captionSyncMode === "full";
@@ -220,8 +223,16 @@ export class UpdateElementTrimCommand extends Command {
 			);
 			if (!targetElement) return track;
 
-			const nextDuration = this.duration ?? targetElement.duration;
-			const nextStartTime = this.startTime ?? targetElement.startTime;
+			const normalizedTiming = normalizeElementTiming({
+				startTime: this.startTime ?? targetElement.startTime,
+				duration: this.duration ?? targetElement.duration,
+				trimStart: this.trimStart,
+				trimEnd: this.trimEnd,
+				minDuration,
+			});
+			const nextTrimStart = normalizedTiming.trimStart;
+			const nextDuration = normalizedTiming.duration;
+			const nextStartTime = normalizedTiming.startTime;
 
 			const oldEndTime = targetElement.startTime + targetElement.duration;
 			const newEndTime = nextStartTime + nextDuration;
@@ -229,8 +240,8 @@ export class UpdateElementTrimCommand extends Command {
 
 			const updatedElement = {
 				...targetElement,
-				trimStart: this.trimStart,
-				trimEnd: this.trimEnd,
+				trimStart: nextTrimStart,
+				trimEnd: normalizedTiming.trimEnd,
 				startTime: nextStartTime,
 				duration: nextDuration,
 				animations: clampAnimationsToDuration({
@@ -268,9 +279,9 @@ export class UpdateElementTrimCommand extends Command {
 						const projectedTranscript = projectTranscriptEditToWindow({
 							transcriptEdit: projectionContext.sourceTranscript,
 							elementId: targetElement.id,
-							sourceStart: this.trimStart - projectionContext.baseTrimStart,
+							sourceStart: nextTrimStart - projectionContext.baseTrimStart,
 							sourceEnd:
-								this.trimStart - projectionContext.baseTrimStart + nextDuration,
+								nextTrimStart - projectionContext.baseTrimStart + nextDuration,
 						});
 						return {
 							...updatedElement,

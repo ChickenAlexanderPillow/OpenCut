@@ -10,6 +10,7 @@ import type { TranscriptEditCutRange } from "@/types/transcription";
 import { canElementHaveAudio } from "@/lib/timeline/element-utils";
 import { canTracktHaveAudio } from "@/lib/timeline";
 import { mediaSupportsAudio } from "@/lib/media/media-utils";
+import { normalizeTimelineElementForInvariants } from "@/lib/timeline/element-timing";
 import { Input, ALL_FORMATS, BlobSource, AudioBufferSink } from "mediabunny";
 import {
 	buildCompressedCutBoundaryTimes,
@@ -184,33 +185,34 @@ export async function collectAudioElements({
 			: 1;
 
 		for (const element of track.elements) {
-			if (!canElementHaveAudio(element)) continue;
-			if (element.duration <= 0) continue;
+			const stableElement = normalizeTimelineElementForInvariants({ element });
+			if (!canElementHaveAudio(stableElement)) continue;
+			if (stableElement.duration <= 0) continue;
 			const effectiveTranscriptCuts =
 				getEffectiveTranscriptCutsForClipWindow({
-					transcriptEdit: element.transcriptEdit,
-					trimStart: element.trimStart,
+					transcriptEdit: stableElement.transcriptEdit,
+					trimStart: stableElement.trimStart,
 				});
 
 			const isTrackMuted = canTracktHaveAudio(track) && track.muted;
 
-			if (element.type === "audio") {
+			if (stableElement.type === "audio") {
 				pendingElements.push(
 					(async () => {
-						const elementGain = trackGain * clampGain(element.volume ?? 1);
-						if (element.sourceType === "upload") {
-							const mediaAsset = mediaMap.get(element.mediaId);
+						const elementGain = trackGain * clampGain(stableElement.volume ?? 1);
+						if (stableElement.sourceType === "upload") {
+							const mediaAsset = mediaMap.get(stableElement.mediaId);
 							if (!mediaAsset) {
 								// Fallback for transient states where media metadata is not yet available.
-								if (element.buffer) {
+								if (stableElement.buffer) {
 									return {
-										buffer: element.buffer,
-										startTime: element.startTime,
-										duration: element.duration,
-										trimStart: element.trimStart,
-										trimEnd: element.trimEnd,
+										buffer: stableElement.buffer,
+										startTime: stableElement.startTime,
+										duration: stableElement.duration,
+										trimStart: stableElement.trimStart,
+										trimEnd: stableElement.trimEnd,
 										transcriptCuts: effectiveTranscriptCuts,
-										muted: element.muted || isTrackMuted,
+										muted: stableElement.muted || isTrackMuted,
 										gain: elementGain,
 									};
 								}
@@ -220,54 +222,54 @@ export async function collectAudioElements({
 								const resolvedAudio = await resolveAudioBufferForVideoElement({
 									mediaAsset,
 									audioContext,
-									trimStart: element.trimStart,
+									trimStart: stableElement.trimStart,
 									trimDuration: resolveSourceWindowDuration({
-										duration: element.duration,
+										duration: stableElement.duration,
 										cuts: effectiveTranscriptCuts,
 									}),
 								});
 								if (!resolvedAudio) return null;
 								return {
 									buffer: resolvedAudio.buffer,
-									startTime: element.startTime,
-									duration: element.duration,
+									startTime: stableElement.startTime,
+									duration: stableElement.duration,
 									// If decode is windowed, trimStart is already baked into the buffer.
 									// For full-file fallback decode, preserve element trimStart.
-									trimStart: resolvedAudio.windowed ? 0 : element.trimStart,
-									trimEnd: element.trimEnd,
+									trimStart: resolvedAudio.windowed ? 0 : stableElement.trimStart,
+									trimEnd: stableElement.trimEnd,
 									transcriptCuts: effectiveTranscriptCuts,
-									muted: element.muted || isTrackMuted,
+									muted: stableElement.muted || isTrackMuted,
 									gain: elementGain,
 								};
 							}
 						}
-						if (element.buffer) {
+						if (stableElement.buffer) {
 							return {
-								buffer: element.buffer,
-								startTime: element.startTime,
-								duration: element.duration,
-								trimStart: element.trimStart,
-								trimEnd: element.trimEnd,
+								buffer: stableElement.buffer,
+								startTime: stableElement.startTime,
+								duration: stableElement.duration,
+								trimStart: stableElement.trimStart,
+								trimEnd: stableElement.trimEnd,
 								transcriptCuts: effectiveTranscriptCuts,
-								muted: element.muted || isTrackMuted,
+								muted: stableElement.muted || isTrackMuted,
 								gain: elementGain,
 							};
 						}
 
 						const audioBuffer = await resolveAudioBufferForElement({
-							element,
+							element: stableElement,
 							mediaMap,
 							audioContext,
 						});
 						if (!audioBuffer) return null;
 						return {
 							buffer: audioBuffer,
-							startTime: element.startTime,
-							duration: element.duration,
-							trimStart: element.trimStart,
-							trimEnd: element.trimEnd,
+							startTime: stableElement.startTime,
+							duration: stableElement.duration,
+							trimStart: stableElement.trimStart,
+							trimEnd: stableElement.trimEnd,
 							transcriptCuts: effectiveTranscriptCuts,
-							muted: element.muted || isTrackMuted,
+							muted: stableElement.muted || isTrackMuted,
 							gain: elementGain,
 						};
 					})(),
@@ -275,30 +277,30 @@ export async function collectAudioElements({
 				continue;
 			}
 
-			if (element.type === "video") {
-				const mediaAsset = mediaMap.get(element.mediaId);
+			if (stableElement.type === "video") {
+				const mediaAsset = mediaMap.get(stableElement.mediaId);
 				if (!mediaAsset || !mediaSupportsAudio({ media: mediaAsset })) continue;
 
 				pendingElements.push(
 					resolveAudioBufferForVideoElement({
 						mediaAsset,
 						audioContext,
-						trimStart: element.trimStart,
+						trimStart: stableElement.trimStart,
 						trimDuration: resolveSourceWindowDuration({
-							duration: element.duration,
+							duration: stableElement.duration,
 							cuts: effectiveTranscriptCuts,
 						}),
 					}).then((resolvedAudio) => {
 						if (!resolvedAudio) return null;
-						const elementMuted = element.muted ?? false;
+						const elementMuted = stableElement.muted ?? false;
 						// If decode is windowed, trimStart is already baked into the buffer.
 						// For full-file fallback decode, preserve element trimStart.
 						return {
 							buffer: resolvedAudio.buffer,
-							startTime: element.startTime,
-							duration: element.duration,
-							trimStart: resolvedAudio.windowed ? 0 : element.trimStart,
-							trimEnd: element.trimEnd,
+							startTime: stableElement.startTime,
+							duration: stableElement.duration,
+							trimStart: resolvedAudio.windowed ? 0 : stableElement.trimStart,
+							trimEnd: stableElement.trimEnd,
 							transcriptCuts: effectiveTranscriptCuts,
 							muted: elementMuted || isTrackMuted,
 							gain: trackGain,
@@ -841,16 +843,17 @@ function collectMediaAudioSource({
 	mediaAsset: MediaAsset;
 	gain: number;
 }): AudioMixSource {
+	const stableElement = normalizeTimelineElementForInvariants({ element });
 	return {
 		file: mediaAsset.file,
-		startTime: element.startTime,
-		duration: element.duration,
-		trimStart: element.trimStart,
-		trimEnd: element.trimEnd,
+		startTime: stableElement.startTime,
+		duration: stableElement.duration,
+		trimStart: stableElement.trimStart,
+		trimEnd: stableElement.trimEnd,
 		gain,
 		transcriptCuts: getEffectiveTranscriptCutsForClipWindow({
-			transcriptEdit: element.transcriptEdit,
-			trimStart: element.trimStart,
+			transcriptEdit: stableElement.transcriptEdit,
+			trimStart: stableElement.trimStart,
 		}),
 	};
 }
@@ -866,8 +869,11 @@ function collectMediaAudioClip({
 	muted: boolean;
 	gain: number;
 }): AudioClipSource {
+	const stableElement = normalizeTimelineElementForInvariants({
+		element,
+	});
 	return {
-		id: element.id,
+		id: stableElement.id,
 		sourceKey: mediaAsset.id,
 		file: mediaAsset.file,
 		mediaIdentity: {
@@ -876,23 +882,23 @@ function collectMediaAudioClip({
 			size: mediaAsset.file.size,
 			lastModified: mediaAsset.file.lastModified,
 		},
-		startTime: element.startTime,
-		duration: element.duration,
-		trimStart: element.trimStart,
-		trimEnd: element.trimEnd,
+		startTime: stableElement.startTime,
+		duration: stableElement.duration,
+		trimStart: stableElement.trimStart,
+		trimEnd: stableElement.trimEnd,
 		muted,
 		gain,
 		transcriptRevision:
-			"transcriptEdit" in element
+			"transcriptEdit" in stableElement
 				? buildTranscriptAudioRevision({
-						transcriptEdit: element.transcriptEdit,
+						transcriptEdit: stableElement.transcriptEdit,
 					})
 				: "",
 		transcriptCuts:
-			"transcriptEdit" in element
+			"transcriptEdit" in stableElement
 				? getEffectiveTranscriptCutsForClipWindow({
-						transcriptEdit: element.transcriptEdit,
-						trimStart: element.trimStart,
+						transcriptEdit: stableElement.transcriptEdit,
+						trimStart: stableElement.trimStart,
 					})
 				: [],
 	};
@@ -981,21 +987,22 @@ export async function collectAudioClips({
 			: 1;
 
 		for (const element of track.elements) {
-			if (!canElementHaveAudio(element)) continue;
+			const stableElement = normalizeTimelineElementForInvariants({ element });
+			if (!canElementHaveAudio(stableElement)) continue;
 
 			const isElementMuted =
-				"muted" in element ? (element.muted ?? false) : false;
+				"muted" in stableElement ? (stableElement.muted ?? false) : false;
 			const muted = isTrackMuted || isElementMuted;
 
-			if (element.type === "audio") {
-				const elementGain = trackGain * clampGain(element.volume ?? 1);
-				if (element.sourceType === "upload") {
-					const mediaAsset = mediaMap.get(element.mediaId);
+			if (stableElement.type === "audio") {
+				const elementGain = trackGain * clampGain(stableElement.volume ?? 1);
+				if (stableElement.sourceType === "upload") {
+					const mediaAsset = mediaMap.get(stableElement.mediaId);
 					if (!mediaAsset) continue;
 
 					clips.push(
 						collectMediaAudioClip({
-							element,
+							element: stableElement,
 							mediaAsset,
 							muted,
 							gain: elementGain,
@@ -1003,20 +1010,24 @@ export async function collectAudioClips({
 					);
 				} else {
 					pendingLibraryClips.push(
-						fetchLibraryAudioClip({ element, muted, gain: elementGain }),
+						fetchLibraryAudioClip({
+							element: stableElement,
+							muted,
+							gain: elementGain,
+						}),
 					);
 				}
 				continue;
 			}
 
-			if (element.type === "video") {
-				const mediaAsset = mediaMap.get(element.mediaId);
+			if (stableElement.type === "video") {
+				const mediaAsset = mediaMap.get(stableElement.mediaId);
 				if (!mediaAsset) continue;
 
 				if (mediaSupportsAudio({ media: mediaAsset })) {
 					clips.push(
 						collectMediaAudioClip({
-							element,
+							element: stableElement,
 							mediaAsset,
 							muted,
 							gain: trackGain,

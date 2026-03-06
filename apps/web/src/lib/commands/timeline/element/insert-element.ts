@@ -21,6 +21,7 @@ import {
 } from "@/lib/timeline/track-utils";
 import type { MediaAsset } from "@/types/assets";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
+import { normalizeTimelineElementForInvariants } from "@/lib/timeline/element-timing";
 
 type InsertElementPlacement =
 	| { mode: "explicit"; trackId: string }
@@ -65,7 +66,10 @@ export class InsertElementCommand extends Command {
 		);
 		const isFirstElement = totalElementsInTimeline === 0;
 
-		const newElement = this.buildElement({ element: this.element });
+		const newElement = this.buildElement({
+			element: this.element,
+			fps: editor.project.getActive().settings.fps,
+		});
 		const updateResult = this.resolveTracksWithElement({
 			tracks: this.savedState,
 			element: newElement,
@@ -109,10 +113,12 @@ export class InsertElementCommand extends Command {
 
 	private buildElement({
 		element,
+		fps,
 	}: {
 		element: CreateTimelineElement;
+		fps: number;
 	}): TimelineElement {
-		return {
+		const base = {
 			...element,
 			id: this.elementId,
 			startTime: element.startTime,
@@ -120,6 +126,10 @@ export class InsertElementCommand extends Command {
 			trimEnd: element.trimEnd ?? 0,
 			duration: element.duration ?? TIMELINE_CONSTANTS.DEFAULT_ELEMENT_DURATION,
 		} as TimelineElement;
+		return normalizeTimelineElementForInvariants({
+			element: base,
+			minDuration: 1 / Math.max(1, fps),
+		});
 	}
 
 	private validateElementBasics({

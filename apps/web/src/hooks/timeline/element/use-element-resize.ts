@@ -185,10 +185,11 @@ export function useTimelineElementResize({
 						fps: projectFps,
 					});
 					const trimDelta = newTrimStart - resizing.initialTrimStart;
-					const newStartTime = snapTimeToFrame({
+					const newStartTimeRaw = snapTimeToFrame({
 						time: resizing.initialStartTime + trimDelta,
 						fps: projectFps,
 					});
+					const newStartTime = Math.max(0, newStartTimeRaw);
 					const newDuration = snapTimeToFrame({
 						time: resizing.initialDuration - trimDelta,
 						fps: projectFps,
@@ -201,16 +202,15 @@ export function useTimelineElementResize({
 					currentStartTimeRef.current = newStartTime;
 					currentDurationRef.current = newDuration;
 				} else if (calculated < 0) {
+					const extensionAmount = Math.abs(calculated);
+					const newStartTime = snapTimeToFrame({
+						time: Math.max(0, resizing.initialStartTime - extensionAmount),
+						fps: projectFps,
+					});
+
 					if (canExtendElementDuration()) {
-						const extensionAmount = Math.abs(calculated);
-						const maxExtension = resizing.initialStartTime;
-						const actualExtension = Math.min(extensionAmount, maxExtension);
-						const newStartTime = snapTimeToFrame({
-							time: resizing.initialStartTime - actualExtension,
-							fps: projectFps,
-						});
 						const newDuration = snapTimeToFrame({
-							time: resizing.initialDuration + actualExtension,
+							time: resizing.initialDuration + extensionAmount,
 							fps: projectFps,
 						});
 
@@ -221,20 +221,25 @@ export function useTimelineElementResize({
 						currentStartTimeRef.current = newStartTime;
 						currentDurationRef.current = newDuration;
 					} else {
-						const trimDelta = 0 - resizing.initialTrimStart;
-						const newStartTime = snapTimeToFrame({
-							time: resizing.initialStartTime + trimDelta,
+						// Source-backed media can only reveal as much as left trim allows.
+						const untrimAmount = Math.min(
+							extensionAmount,
+							resizing.initialTrimStart,
+						);
+						const nextTrimStart = snapTimeToFrame({
+							time: resizing.initialTrimStart - untrimAmount,
 							fps: projectFps,
 						});
+						const revealedSource = resizing.initialTrimStart - nextTrimStart;
 						const newDuration = snapTimeToFrame({
-							time: resizing.initialDuration - trimDelta,
+							time: resizing.initialDuration + revealedSource,
 							fps: projectFps,
 						});
 
-						setCurrentTrimStart(0);
+						setCurrentTrimStart(nextTrimStart);
 						setCurrentStartTime(newStartTime);
 						setCurrentDuration(newDuration);
-						currentTrimStartRef.current = 0;
+						currentTrimStartRef.current = nextTrimStart;
 						currentStartTimeRef.current = newStartTime;
 						currentDurationRef.current = newDuration;
 					}

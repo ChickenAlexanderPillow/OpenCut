@@ -156,6 +156,23 @@ function resolveActiveWordIndex({
 	return -1;
 }
 
+function resolveActiveWordIndices({
+	captionWordTimings,
+	time,
+}: {
+	captionWordTimings: Array<{ startTime: number; endTime: number }>;
+	time: number;
+}): number[] {
+	const indices: number[] = [];
+	for (let i = 0; i < captionWordTimings.length; i++) {
+		const timing = captionWordTimings[i];
+		if (time >= timing.startTime && time < timing.endTime) {
+			indices.push(i);
+		}
+	}
+	return indices;
+}
+
 function resolveNextWordIndex({
 	captionWordTimings,
 	time,
@@ -330,6 +347,10 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			time,
 		});
 		const strictActiveWordIndex = resolveActiveWordIndex({
+			captionWordTimings,
+			time,
+		});
+		const strictActiveWordIndices = resolveActiveWordIndices({
 			captionWordTimings,
 			time,
 		});
@@ -530,6 +551,9 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			: renderContent;
 		const renderActiveWordIndex =
 			activeWordIndex >= 0 ? activeWordIndex - windowed.chunkStart : -1;
+		const renderActiveWordIndices = new Set(
+			strictActiveWordIndices.map((index) => index - windowed.chunkStart),
+		);
 
 		const lines = wrappedContent.split("\n");
 		const baseline = this.params.textBaseline ?? "middle";
@@ -677,15 +701,17 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			}
 			renderer.context.fillText(line, lineX, lineY);
 
-			if (
-				karaokeWordHighlight &&
-				lineWords.length > 0 &&
-				renderActiveWordIndex >= globalWordIndex &&
-				renderActiveWordIndex < globalWordIndex + lineWords.length
-			) {
-				const localWordIndex = renderActiveWordIndex - globalWordIndex;
-				const range = getWordRange({ line, wordIndex: localWordIndex });
-				if (range) {
+			if (karaokeWordHighlight && lineWords.length > 0) {
+				for (let localWordIndex = 0; localWordIndex < lineWords.length; localWordIndex++) {
+					const windowWordIndex = globalWordIndex + localWordIndex;
+					if (
+						!renderActiveWordIndices.has(windowWordIndex) &&
+						windowWordIndex !== renderActiveWordIndex
+					) {
+						continue;
+					}
+					const range = getWordRange({ line, wordIndex: localWordIndex });
+					if (!range) continue;
 					const word = line.slice(range.start, range.end);
 					const prefix = line.slice(0, range.start);
 					const prefixWidth = renderer.context.measureText(prefix).width;
@@ -699,10 +725,15 @@ export class TextNode extends BaseNode<TextNodeParams> {
 					const highlightOpacity = clampOpacity(
 						this.params.captionStyle?.karaokeHighlightOpacity ?? 1,
 					);
+					const absoluteWordIndex = windowWordIndex + windowed.chunkStart;
 					let easeInOutFactor = 1;
 					let motionFactor = 1;
-					if (hasWordTimings && activeWordIndex >= 0 && activeWordIndex < captionWordTimings.length) {
-						const activeTiming = captionWordTimings[activeWordIndex];
+					if (
+						hasWordTimings &&
+						absoluteWordIndex >= 0 &&
+						absoluteWordIndex < captionWordTimings.length
+					) {
+						const activeTiming = captionWordTimings[absoluteWordIndex];
 						const fadeInProgress = Math.max(
 							0,
 							Math.min(1, (time - activeTiming.startTime) / 0.08),
@@ -712,8 +743,8 @@ export class TextNode extends BaseNode<TextNodeParams> {
 					if (
 						this.params.captionStyle?.karaokeHighlightEaseInOnly === true &&
 						hasWordTimings &&
-						activeWordIndex >= 0 &&
-						activeWordIndex < captionWordTimings.length
+						absoluteWordIndex >= 0 &&
+						absoluteWordIndex < captionWordTimings.length
 					) {
 						easeInOutFactor = motionFactor;
 					}
@@ -723,10 +754,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 							: 1;
 					const highlightAlpha =
 						this.params.opacity * highlightOpacity * easeInOutFactor;
-					if (highlightAlpha <= 0) {
-						globalWordIndex += lineWords.length;
-						continue;
-					}
+					if (highlightAlpha <= 0) continue;
 					const highlightColor =
 						this.params.captionStyle?.karaokeHighlightColor ?? "#FDE047";
 					const highlightRoundnessRaw = Math.max(
@@ -768,10 +796,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 							rectHeight = Math.max(0, clampedBottom - rectTop);
 						}
 
-						if (rectWidth <= 0 || rectHeight <= 0) {
-							globalWordIndex += lineWords.length;
-							continue;
-						}
+						if (rectWidth <= 0 || rectHeight <= 0) continue;
 
 						if (highlightedWordScale > 1) {
 							const widthDelta = rectWidth * (highlightedWordScale - 1);
