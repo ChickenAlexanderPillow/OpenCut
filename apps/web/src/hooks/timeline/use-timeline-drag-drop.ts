@@ -24,12 +24,19 @@ interface UseTimelineDragDropProps {
 	zoomLevel: number;
 }
 
+const EDITOR_SUBSCRIBE_DRAG_DROP = [
+	"timeline",
+	"media",
+	"playback",
+	"project",
+] as const;
+
 export function useTimelineDragDrop({
 	containerRef,
 	headerRef,
 	zoomLevel,
 }: UseTimelineDragDropProps) {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_DRAG_DROP });
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
 	const [dragElementType, setElementType] = useState<ElementType | null>(null);

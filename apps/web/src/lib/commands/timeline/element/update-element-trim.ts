@@ -22,6 +22,49 @@ type CaptionTrimOperation = {
 	endTime: number;
 };
 
+function resolveTranscriptProjectionContext({
+	transcriptEdit,
+	defaultBaseTrimStart,
+}: {
+	transcriptEdit: NonNullable<
+		VideoElement["transcriptEdit"] | AudioElement["transcriptEdit"]
+	>;
+	defaultBaseTrimStart: number;
+}): {
+	sourceTranscript: NonNullable<
+		VideoElement["transcriptEdit"] | AudioElement["transcriptEdit"]
+	>;
+	baseTrimStart: number;
+	projectionSource: NonNullable<
+		VideoElement["transcriptEdit"] | AudioElement["transcriptEdit"]
+	>["projectionSource"];
+} {
+	const projectionSource = transcriptEdit.projectionSource;
+	if (!projectionSource) {
+		return {
+			sourceTranscript: transcriptEdit,
+			baseTrimStart: defaultBaseTrimStart,
+			projectionSource: {
+				words: transcriptEdit.words,
+				cuts: transcriptEdit.cuts,
+				updatedAt: transcriptEdit.updatedAt,
+				baseTrimStart: defaultBaseTrimStart,
+			},
+		};
+	}
+
+	return {
+		sourceTranscript: {
+			...transcriptEdit,
+			words: projectionSource.words,
+			cuts: projectionSource.cuts,
+			updatedAt: projectionSource.updatedAt,
+		},
+		baseTrimStart: projectionSource.baseTrimStart,
+		projectionSource,
+	};
+}
+
 function trimLinkedCaptionsForMedia({
 	tracks,
 	operations,
@@ -124,6 +167,7 @@ export class UpdateElementTrimCommand extends Command {
 				trimStart: number;
 		  }
 		| undefined;
+	private readonly captionSyncMode: "full" | "trim-only";
 
 	constructor({
 		elementId,
@@ -133,6 +177,7 @@ export class UpdateElementTrimCommand extends Command {
 		duration,
 		rippleEnabled = false,
 		transcriptProjectionBase,
+		captionSyncMode = "full",
 	}: {
 		elementId: string;
 		trimStart: number;
@@ -146,6 +191,7 @@ export class UpdateElementTrimCommand extends Command {
 				| AudioElement["transcriptEdit"];
 			trimStart: number;
 		};
+		captionSyncMode?: "full" | "trim-only";
 	}) {
 		super();
 		this.elementId = elementId;
@@ -155,6 +201,7 @@ export class UpdateElementTrimCommand extends Command {
 		this.duration = duration;
 		this.rippleEnabled = rippleEnabled;
 		this.transcriptProjectionBase = transcriptProjectionBase;
+		this.captionSyncMode = captionSyncMode;
 	}
 
 	execute(): void {
@@ -162,6 +209,7 @@ export class UpdateElementTrimCommand extends Command {
 		this.savedState = editor.timeline.getTracks();
 		const mediaElementIdsForCaptionSync = new Set<string>();
 		const captionTrimOperations: CaptionTrimOperation[] = [];
+		const shouldRunFullCaptionSync = this.captionSyncMode === "full";
 
 		const updatedTracks = this.savedState.map((track) => {
 			const targetElement = track.elements.find(
@@ -187,39 +235,51 @@ export class UpdateElementTrimCommand extends Command {
 					duration: nextDuration,
 				}),
 			};
-			const updatedElementWithTranscript =
-				isTranscriptEditableElement(targetElement) &&
-				targetElement.transcriptEdit &&
-				targetElement.transcriptEdit.words.length > 0
-					? (() => {
-							const projectionBase =
-								this.transcriptProjectionBase?.transcriptEdit ??
-								targetElement.transcriptEdit;
-							const projectionBaseTrimStart =
-								this.transcriptProjectionBase?.trimStart ??
-								targetElement.trimStart;
-							mediaElementIdsForCaptionSync.add(targetElement.id);
-							return {
-								...updatedElement,
-								transcriptEdit: projectTranscriptEditToWindow({
-									transcriptEdit: projectionBase,
-									elementId: targetElement.id,
-									sourceStart: this.trimStart - projectionBaseTrimStart,
-									sourceEnd:
-										this.trimStart - projectionBaseTrimStart + nextDuration,
-								}),
-							};
-						})()
-					: (() => {
-							if (isTranscriptEditableElement(targetElement)) {
-								captionTrimOperations.push({
-									mediaElementId: targetElement.id,
-									startTime: nextStartTime,
-									endTime: nextStartTime + nextDuration,
-								});
-							}
+			const updatedElementWithTranscript = isTranscriptEditableElement(
+				targetElement,
+			)
+				? (() => {
+						if (
+							!shouldRunFullCaptionSync ||
+							!targetElement.transcriptEdit ||
+							targetElement.transcriptEdit.words.length === 0
+						) {
+							captionTrimOperations.push({
+								mediaElementId: targetElement.id,
+								startTime: nextStartTime,
+								endTime: nextStartTime + nextDuration,
+							});
 							return updatedElement;
-						})();
+						}
+						const projectionBaseTranscript =
+							this.transcriptProjectionBase?.transcriptEdit ??
+							targetElement.transcriptEdit;
+						const projectionBaseTrimStartCandidate =
+							this.transcriptProjectionBase?.trimStart ??
+							targetElement.trimStart;
+						const projectionContext = resolveTranscriptProjectionContext({
+							transcriptEdit: projectionBaseTranscript,
+							defaultBaseTrimStart: projectionBaseTrimStartCandidate,
+						});
+						mediaElementIdsForCaptionSync.add(targetElement.id);
+						const projectedTranscript = projectTranscriptEditToWindow({
+							transcriptEdit: projectionContext.sourceTranscript,
+							elementId: targetElement.id,
+							sourceStart: this.trimStart - projectionContext.baseTrimStart,
+							sourceEnd:
+								this.trimStart - projectionContext.baseTrimStart + nextDuration,
+						});
+						return {
+							...updatedElement,
+							transcriptEdit: {
+								...projectedTranscript,
+								projectionSource: projectionContext.projectionSource,
+							},
+						};
+					})()
+				: (() => {
+						return updatedElement;
+					})();
 
 			if (this.rippleEnabled && Math.abs(shiftAmount) > 0) {
 				const shiftedOthers = rippleShiftElements({

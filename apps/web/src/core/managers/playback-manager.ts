@@ -15,6 +15,7 @@ export class PlaybackManager {
 	constructor(private editor: EditorCore) {}
 
 	play(): void {
+		if (this.isPlaying) return;
 		const duration = this.editor.timeline.getTotalDuration();
 
 		if (duration > 0) {
@@ -30,6 +31,7 @@ export class PlaybackManager {
 	}
 
 	pause(): void {
+		if (!this.isPlaying) return;
 		this.isPlaying = false;
 		this.stopTimer();
 		this.notify();
@@ -46,7 +48,9 @@ export class PlaybackManager {
 
 	seek({ time }: { time: number }): void {
 		const duration = this.editor.timeline.getTotalDuration();
-		this.currentTime = Math.max(0, Math.min(duration, time));
+		const nextTime = Math.max(0, Math.min(duration, time));
+		if (Math.abs(nextTime - this.currentTime) < 1e-6) return;
+		this.currentTime = nextTime;
 		this.notify();
 
 		window.dispatchEvent(
@@ -58,6 +62,9 @@ export class PlaybackManager {
 
 	setVolume({ volume }: { volume: number }): void {
 		const clampedVolume = Math.max(0, Math.min(1, volume));
+		if (clampedVolume === this.volume && this.muted === (clampedVolume === 0)) {
+			return;
+		}
 		this.volume = clampedVolume;
 		this.muted = clampedVolume === 0;
 		if (clampedVolume > 0) {
@@ -67,6 +74,7 @@ export class PlaybackManager {
 	}
 
 	mute(): void {
+		if (this.muted && this.volume === 0) return;
 		if (this.volume > 0) {
 			this.previousVolume = this.volume;
 		}
@@ -76,8 +84,10 @@ export class PlaybackManager {
 	}
 
 	unmute(): void {
+		const nextVolume = this.previousVolume;
+		if (!this.muted && this.volume === nextVolume) return;
 		this.muted = false;
-		this.volume = this.previousVolume;
+		this.volume = nextVolume;
 		this.notify();
 	}
 
@@ -106,6 +116,7 @@ export class PlaybackManager {
 	}
 
 	setScrubbing({ isScrubbing }: { isScrubbing: boolean }): void {
+		if (this.isScrubbing === isScrubbing) return;
 		this.isScrubbing = isScrubbing;
 		this.notify();
 	}
@@ -120,7 +131,9 @@ export class PlaybackManager {
 	}
 
 	private notify(): void {
-		this.listeners.forEach((fn) => fn());
+		this.listeners.forEach((fn) => {
+			fn();
+		});
 	}
 
 	private startTimer(): void {

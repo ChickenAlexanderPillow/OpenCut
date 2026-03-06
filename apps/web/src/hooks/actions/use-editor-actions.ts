@@ -101,6 +101,7 @@ const clipTranscriptInFlight = new Map<
 	string,
 	Promise<Awaited<ReturnType<typeof getOrCreateClipTranscriptForAsset>>>
 >();
+const EDITOR_SUBSCRIBE_PROJECT = ["project"] as const;
 
 function withProjectClipGenerationCache({
 	project,
@@ -1802,7 +1803,7 @@ function computeRemovedTimelineRangesFromTranscriptCuts({
 }
 
 export function useEditorActions() {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PROJECT });
 	const textBasedEditingDisabled =
 		process.env.NEXT_PUBLIC_DISABLE_TEXT_BASED_EDITING !== "false";
 	const activeProject = editor.project.getActive();

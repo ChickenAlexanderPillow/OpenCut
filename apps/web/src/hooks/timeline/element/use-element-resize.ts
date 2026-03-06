@@ -74,6 +74,8 @@ export function useTimelineElementResize({
 		startTime: number;
 		duration: number;
 	} | null>(null);
+	const moveFrameRef = useRef<number | null>(null);
+	const latestPointerXRef = useRef<number | null>(null);
 
 	const handleResizeStart = ({
 		event,
@@ -326,6 +328,7 @@ export function useTimelineElementResize({
 						: undefined,
 				pushHistory: false,
 				rippleEnabled: rippleEditingEnabled,
+				captionSyncMode: "trim-only",
 				transcriptProjectionBase: resizing.initialTranscriptEdit
 					? {
 							transcriptEdit: resizing.initialTranscriptEdit,
@@ -396,7 +399,14 @@ export function useTimelineElementResize({
 		if (!resizing) return;
 
 		const handleDocumentMouseMove = ({ clientX }: MouseEvent) => {
-			updateTrimFromMouseMove({ clientX });
+			latestPointerXRef.current = clientX;
+			if (moveFrameRef.current !== null) return;
+			moveFrameRef.current = window.requestAnimationFrame(() => {
+				moveFrameRef.current = null;
+				const latestClientX = latestPointerXRef.current;
+				if (latestClientX === null) return;
+				updateTrimFromMouseMove({ clientX: latestClientX });
+			});
 		};
 
 		const handleDocumentMouseUp = () => {
@@ -407,6 +417,11 @@ export function useTimelineElementResize({
 		document.addEventListener("mouseup", handleDocumentMouseUp);
 
 		return () => {
+			if (moveFrameRef.current !== null) {
+				window.cancelAnimationFrame(moveFrameRef.current);
+				moveFrameRef.current = null;
+			}
+			latestPointerXRef.current = null;
 			document.removeEventListener("mousemove", handleDocumentMouseMove);
 			document.removeEventListener("mouseup", handleDocumentMouseUp);
 		};

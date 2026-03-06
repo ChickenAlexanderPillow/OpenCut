@@ -14,6 +14,12 @@ export type TranscriptEditState = {
 	source: "word-level";
 	words: TranscriptEditWord[];
 	cuts: TranscriptEditCutRange[];
+	projectionSource?: {
+		words: TranscriptEditWord[];
+		cuts: TranscriptEditCutRange[];
+		updatedAt: string;
+		baseTrimStart: number;
+	};
 	segmentsUi?: Array<{
 		id: string;
 		wordStartIndex: number;

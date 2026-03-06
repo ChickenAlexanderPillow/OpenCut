@@ -38,6 +38,8 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 
+const EDITOR_SUBSCRIBE_PROJECT = ["project"] as const;
+
 export function EditorHeader() {
 	return (
 		<header className="bg-background flex h-[3.4rem] items-center justify-between px-3 pt-0.5">
@@ -75,7 +77,7 @@ function ProjectDropdown() {
 	>(null);
 	const [isExiting, setIsExiting] = useState(false);
 	const router = useRouter();
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PROJECT });
 	const activeProject = editor.project.getActive();
 	const { isOpen, pendingRoute, requestOpen, close, clearPendingRoute } =
 		useProjectExitStore();
@@ -288,7 +290,7 @@ function ProjectDropdown() {
 }
 
 function EditableProjectName() {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PROJECT });
 	const activeProject = editor.project.getActive();
 	const [isEditing, setIsEditing] = useState(false);
 	const inputRef = useRef<HTMLInputElement>(null);

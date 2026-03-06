@@ -91,6 +91,69 @@ function collectEditableMediaElements({
 	);
 }
 
+function findEditableMediaRecord({
+	tracks,
+	mediaElementId,
+}: {
+	tracks: TimelineTrack[];
+	mediaElementId: string;
+}): { track: TimelineTrack; element: VideoElement | AudioElement } | null {
+	for (const track of tracks) {
+		for (const element of track.elements) {
+			if (element.id !== mediaElementId) continue;
+			if (!isEditableMediaElement(element)) continue;
+			return { track, element };
+		}
+	}
+	return null;
+}
+
+function areCaptionWordTimingsEqual({
+	previous,
+	next,
+}: {
+	previous: NonNullable<TextElement["captionWordTimings"]>;
+	next: NonNullable<TextElement["captionWordTimings"]>;
+}): boolean {
+	if (previous === next) return true;
+	if (previous.length !== next.length) return false;
+	for (let index = 0; index < previous.length; index++) {
+		const prev = previous[index];
+		const curr = next[index];
+		if (!prev || !curr) return false;
+		if (prev.word !== curr.word) return false;
+		if (Math.abs(prev.startTime - curr.startTime) > 1e-6) return false;
+		if (Math.abs(prev.endTime - curr.endTime) > 1e-6) return false;
+	}
+	return true;
+}
+
+function isCaptionElementAlreadySynced({
+	element,
+	payload,
+	mediaElementId,
+	sourceVersion,
+}: {
+	element: TextElement;
+	payload: NonNullable<TranscriptTimelineSnapshot["captionPayload"]>;
+	mediaElementId: string;
+	sourceVersion: number;
+}): boolean {
+	const sourceRef = element.captionSourceRef;
+	const currentTimings = element.captionWordTimings ?? [];
+	return (
+		element.content === payload.content &&
+		element.startTime === payload.startTime &&
+		element.duration === payload.duration &&
+		sourceRef?.mediaElementId === mediaElementId &&
+		sourceRef?.transcriptVersion === sourceVersion &&
+		areCaptionWordTimingsEqual({
+			previous: currentTimings,
+			next: payload.wordTimings,
+		})
+	);
+}
+
 function isCompanionAligned({
 	target,
 	candidate,
@@ -341,12 +404,8 @@ export function reconcileCaptionFromSnapshot({
 	changed: boolean;
 	error?: string;
 } {
-	const mediaRecord = tracks
-		.flatMap((track) => track.elements.map((element) => ({ track, element })))
-		.find(
-			(item) => item.element.id === mediaElementId && isEditableMediaElement(item.element),
-		);
-	if (!mediaRecord || !isEditableMediaElement(mediaRecord.element)) {
+	const mediaRecord = findEditableMediaRecord({ tracks, mediaElementId });
+	if (!mediaRecord) {
 		return { tracks, changed: false, error: "media element not found" };
 	}
 	const sourceRefId = resolveTranscriptUnitSourceRefId({
@@ -463,21 +522,30 @@ export function reconcileCaptionFromSnapshot({
 		});
 		changed = true;
 	} else {
-		updatedCaptionElements.push({
-			trackId: primaryCaption.trackId,
-			element: {
-				...primaryCaption.element,
-				content: finalPayload.content,
-				startTime: finalPayload.startTime,
-				duration: finalPayload.duration,
-				captionWordTimings: finalPayload.wordTimings,
-				captionSourceRef: {
-					mediaElementId,
-					transcriptVersion: sourceVersion,
+		if (
+			!isCaptionElementAlreadySynced({
+				element: primaryCaption.element,
+				payload: finalPayload,
+				mediaElementId,
+				sourceVersion,
+			})
+		) {
+			updatedCaptionElements.push({
+				trackId: primaryCaption.trackId,
+				element: {
+					...primaryCaption.element,
+					content: finalPayload.content,
+					startTime: finalPayload.startTime,
+					duration: finalPayload.duration,
+					captionWordTimings: finalPayload.wordTimings,
+					captionSourceRef: {
+						mediaElementId,
+						transcriptVersion: sourceVersion,
+					},
 				},
-			},
-		});
-		changed = true;
+			});
+			changed = true;
+		}
 	}
 
 	if (!changed) {
@@ -534,12 +602,8 @@ export function syncCaptionsFromTranscriptEdits({
 	changed: boolean;
 	error?: string;
 } {
-	const mediaRecord = tracks
-		.flatMap((track) => track.elements.map((element) => ({ track, element })))
-		.find(
-			(item) => item.element.id === mediaElementId && isEditableMediaElement(item.element),
-		);
-	if (!mediaRecord || !isEditableMediaElement(mediaRecord.element)) {
+	const mediaRecord = findEditableMediaRecord({ tracks, mediaElementId });
+	if (!mediaRecord) {
 		return { tracks, changed: false, error: "media element not found" };
 	}
 	const transcriptEdit = mediaRecord.element.transcriptEdit;
@@ -581,12 +645,8 @@ export function rebuildCaptionTrackForMediaElement({
 	changed: boolean;
 	error?: string;
 } {
-	const mediaRecord = tracks
-		.flatMap((track) => track.elements.map((element) => ({ track, element })))
-		.find(
-			(item) => item.element.id === mediaElementId && isEditableMediaElement(item.element),
-		);
-	if (!mediaRecord || !isEditableMediaElement(mediaRecord.element)) {
+	const mediaRecord = findEditableMediaRecord({ tracks, mediaElementId });
+	if (!mediaRecord) {
 		return { tracks, changed: false, error: "media element not found" };
 	}
 	const transcriptEdit = mediaRecord.element.transcriptEdit;
@@ -673,22 +733,23 @@ function buildCaptionRevisionKey({
 }: {
 	element: TextElement;
 }): string {
-	const timings = element.captionWordTimings ?? [];
-	const signature = JSON.stringify({
-		content: element.content,
-		wordTimings: timings.map((timing) => [
-			timing.word,
-			Number(timing.startTime.toFixed(3)),
-			Number(timing.endTime.toFixed(3)),
-		]),
-		source: element.captionSourceRef?.mediaElementId ?? "",
-		version: element.captionSourceRef?.transcriptVersion ?? 0,
-	});
 	let hash = 0x811c9dc5;
-	for (let i = 0; i < signature.length; i++) {
-		hash ^= signature.charCodeAt(i);
-		hash = Math.imul(hash, 0x01000193);
+	const updateHash = (value: string): void => {
+		for (let index = 0; index < value.length; index++) {
+			hash ^= value.charCodeAt(index);
+			hash = Math.imul(hash, 0x01000193);
+		}
+	};
+	updateHash(element.content);
+	const timings = element.captionWordTimings ?? [];
+	updateHash(String(timings.length));
+	for (const timing of timings) {
+		updateHash(timing.word);
+		updateHash(timing.startTime.toFixed(3));
+		updateHash(timing.endTime.toFixed(3));
 	}
+	updateHash(element.captionSourceRef?.mediaElementId ?? "");
+	updateHash(String(element.captionSourceRef?.transcriptVersion ?? 0));
 	return (hash >>> 0).toString(16);
 }
 

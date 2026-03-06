@@ -119,3 +119,17 @@ Each command extends `Command` from `@/lib/commands/base-command` and implements
 - `undo()` - restores the saved state
 
 Actions and commands work together: actions are "what triggered this", commands are "how to do it (and undo it)".
+
+## Playwright Session Policy
+
+Use shared browser storage for any stateful browser validation (auth/session/project-local data).
+
+- Do not rely on MCP Playwright browser state for stateful validation.
+- Use the local shared-profile launcher: `bun run e2e:shared-profile`.
+- Default shared profile path: `C:\playwright-shared-profile`.
+- If launch fails, close Chrome/Chromium windows using that profile and retry.
+- Optional env overrides:
+  - `PLAYWRIGHT_PROFILE_DIR`
+  - `PLAYWRIGHT_EDITOR_URL`
+  - `PLAYWRIGHT_HEADLESS`
+  - `PLAYWRIGHT_AUTO_EXIT_MS`

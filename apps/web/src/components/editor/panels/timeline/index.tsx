@@ -163,6 +163,7 @@ export function Timeline() {
 		shouldIgnoreClick,
 	} = useSelectionBox({
 		containerRef: tracksContainerRef,
+		tracks,
 		onSelectionComplete: (elements) => {
 			setElementSelection({ elements });
 		},

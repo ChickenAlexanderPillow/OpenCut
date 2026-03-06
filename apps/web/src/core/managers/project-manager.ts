@@ -574,6 +574,7 @@ export class ProjectManager {
 	}
 
 	setActiveProject({ project }: { project: TProject }): void {
+		if (this.active === project) return;
 		this.active = project;
 		this.notify();
 	}

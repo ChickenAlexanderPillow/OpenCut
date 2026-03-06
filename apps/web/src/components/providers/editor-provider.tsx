@@ -36,8 +36,10 @@ interface EditorProviderProps {
 	children: React.ReactNode;
 }
 
+const EDITOR_SUBSCRIBE_PROJECT = ["project"] as const;
+
 export function EditorProvider({ projectId, children }: EditorProviderProps) {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PROJECT });
 	const router = useRouter();
 	const [isLoading, setIsLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
@@ -417,7 +419,7 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 }
 
 function EditorRuntimeBindings() {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PROJECT });
 	const pathname = usePathname();
 	const activeProject = editor.project.getActiveOrNull();
 	const processes = useProjectProcessStore((state) => state.processes);

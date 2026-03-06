@@ -25,8 +25,10 @@ import { canDeleteScene, getMainScene } from "@/lib/scenes";
 import { toast } from "sonner";
 import { useEditor } from "@/hooks/use-editor";
 
+const EDITOR_SUBSCRIBE_SCENES_PROJECT = ["scenes", "project"] as const;
+
 export function ScenesView({ children }: { children: React.ReactNode }) {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_SCENES_PROJECT });
 	const scenes = editor.scenes.getScenes();
 	const currentScene = editor.scenes.getActiveScene();
 	const [isSelectMode, setIsSelectMode] = useState(false);

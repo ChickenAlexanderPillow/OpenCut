@@ -93,6 +93,7 @@ export class TimelineManager {
 		pushHistory = true,
 		rippleEnabled = false,
 		transcriptProjectionBase,
+		captionSyncMode = "full",
 	}: {
 		elementId: string;
 		trimStart: number;
@@ -107,6 +108,7 @@ export class TimelineManager {
 				| AudioElement["transcriptEdit"];
 			trimStart: number;
 		};
+		captionSyncMode?: "full" | "trim-only";
 	}): void {
 		const command = new UpdateElementTrimCommand({
 			elementId,
@@ -116,6 +118,7 @@ export class TimelineManager {
 			duration,
 			rippleEnabled,
 			transcriptProjectionBase,
+			captionSyncMode,
 		});
 		if (!pushHistory) {
 			const currentTracks = this.getTracks();
@@ -535,6 +538,7 @@ export class TimelineManager {
 	}
 
 	updateTracks(newTracks: TimelineTrack[]): void {
+		if (this.getTracks() === newTracks) return;
 		this.editor.scenes.updateSceneTracks({ tracks: newTracks });
 		this.notify();
 	}

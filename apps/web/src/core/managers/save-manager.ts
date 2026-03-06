@@ -30,9 +30,6 @@ export class SaveManager {
 			this.editor.scenes.subscribe(() => {
 				this.markDirty();
 			}),
-			this.editor.timeline.subscribe(() => {
-				this.markDirty();
-			}),
 		];
 	}
 

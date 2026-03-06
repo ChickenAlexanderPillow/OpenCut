@@ -1,6 +1,9 @@
 import type { ElementAnimations } from "./animation";
 import type { BlendMode, Transform } from "./rendering";
-import type { TranscriptEditCutRange, TranscriptEditWord } from "./transcription";
+import type {
+	TranscriptEditCutRange,
+	TranscriptEditWord,
+} from "./transcription";
 
 export interface Bookmark {
 	time: number;
@@ -68,6 +71,12 @@ interface BaseAudioElement extends BaseTimelineElement {
 		source: "word-level";
 		words: TranscriptEditWord[];
 		cuts: TranscriptEditCutRange[];
+		projectionSource?: {
+			words: TranscriptEditWord[];
+			cuts: TranscriptEditCutRange[];
+			updatedAt: string;
+			baseTrimStart: number;
+		};
 		segmentsUi?: Array<{
 			id: string;
 			wordStartIndex: number;
@@ -110,6 +119,12 @@ export interface VideoElement extends BaseTimelineElement {
 		source: "word-level";
 		words: TranscriptEditWord[];
 		cuts: TranscriptEditCutRange[];
+		projectionSource?: {
+			words: TranscriptEditWord[];
+			cuts: TranscriptEditCutRange[];
+			updatedAt: string;
+			baseTrimStart: number;
+		};
 		segmentsUi?: Array<{
 			id: string;
 			wordStartIndex: number;

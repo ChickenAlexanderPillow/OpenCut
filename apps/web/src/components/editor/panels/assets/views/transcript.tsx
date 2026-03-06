@@ -53,6 +53,13 @@ type MediaRef = {
 	element: VideoElement | AudioElement;
 };
 
+const EDITOR_SUBSCRIBE_TRANSCRIPT_VIEW = [
+	"timeline",
+	"playback",
+	"media",
+	"project",
+] as const;
+
 function formatTime(time: number): string {
 	const total = Math.max(0, Math.floor(time));
 	const mins = Math.floor(total / 60)
@@ -260,7 +267,7 @@ export function TranscriptView() {
 		);
 	}
 
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_TRANSCRIPT_VIEW });
 	const { selectedElements } = useElementSelection();
 	const transcriptionStatus = useTranscriptionStatusStore();
 	const { registerProcess, updateProcessLabel, removeProcess } =

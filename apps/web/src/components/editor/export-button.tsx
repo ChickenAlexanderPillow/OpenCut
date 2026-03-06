@@ -32,9 +32,11 @@ import { useEditor } from "@/hooks/use-editor";
 import { DEFAULT_EXPORT_OPTIONS } from "@/constants/export-constants";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 
+const EDITOR_SUBSCRIBE_PROJECT = ["project"] as const;
+
 export function ExportButton() {
 	const [isExportPopoverOpen, setIsExportPopoverOpen] = useState(false);
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PROJECT });
 
 	const handleExport = () => {
 		setIsExportPopoverOpen(true);
@@ -79,7 +81,7 @@ function ExportPopover({
 }: {
 	onOpenChange: (open: boolean) => void;
 }) {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PROJECT });
 	const activeProject = editor.project.getActive();
 	const [format, setFormat] = useState<ExportFormat>(
 		DEFAULT_EXPORT_OPTIONS.format,

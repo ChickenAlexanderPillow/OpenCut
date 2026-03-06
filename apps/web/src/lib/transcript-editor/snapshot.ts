@@ -13,15 +13,6 @@ import type { TranscriptEditCutRange, TranscriptEditWord } from "@/types/transcr
 const MAX_SNAPSHOT_CACHE_ENTRIES = 300;
 const snapshotCache = new Map<string, TranscriptTimelineSnapshot>();
 
-function hashString({ value }: { value: string }): string {
-	let hash = 0x811c9dc5;
-	for (let index = 0; index < value.length; index++) {
-		hash ^= value.charCodeAt(index);
-		hash = Math.imul(hash, 0x01000193);
-	}
-	return (hash >>> 0).toString(16);
-}
-
 function isTranscriptAlreadyTimelineAligned({
 	words,
 	mediaStartTime,
@@ -90,23 +81,31 @@ function getRevisionKey({
 	words: TranscriptEditWord[];
 	effectiveCuts: TranscriptEditCutRange[];
 }): string {
-	const signature = JSON.stringify({
-		mediaElementId,
-		updatedAt,
-		words: words.map((word) => [
-			word.id,
-			word.text,
-			Number(word.startTime.toFixed(4)),
-			Number(word.endTime.toFixed(4)),
-			Boolean(word.removed),
-		]),
-		cuts: effectiveCuts.map((cut) => [
-			Number(cut.start.toFixed(4)),
-			Number(cut.end.toFixed(4)),
-			cut.reason,
-		]),
-	});
-	return `${mediaElementId}:${hashString({ value: signature })}`;
+	let hash = 0x811c9dc5;
+	const updateHash = (value: string): void => {
+		for (let index = 0; index < value.length; index++) {
+			hash ^= value.charCodeAt(index);
+			hash = Math.imul(hash, 0x01000193);
+		}
+	};
+
+	updateHash(mediaElementId);
+	updateHash(updatedAt);
+	updateHash(String(words.length));
+	for (const word of words) {
+		updateHash(word.id);
+		updateHash(word.text);
+		updateHash(word.startTime.toFixed(4));
+		updateHash(word.endTime.toFixed(4));
+		updateHash(word.removed ? "1" : "0");
+	}
+	updateHash(String(effectiveCuts.length));
+	for (const cut of effectiveCuts) {
+		updateHash(cut.start.toFixed(4));
+		updateHash(cut.end.toFixed(4));
+		updateHash(cut.reason);
+	}
+	return `${mediaElementId}:${(hash >>> 0).toString(16)}`;
 }
 
 function upsertSnapshotCache({

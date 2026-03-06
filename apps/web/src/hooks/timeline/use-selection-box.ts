@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
 import { getCumulativeHeightBefore, getTrackHeight } from "@/lib/timeline";
-import { useEditor } from "../use-editor";
+import type { TimelineTrack } from "@/types/timeline";
 
 interface UseSelectionBoxProps {
 	containerRef: React.RefObject<HTMLElement | null>;
+	tracks: TimelineTrack[];
 	onSelectionComplete: (
 		elements: { trackId: string; elementId: string }[],
 	) => void;
@@ -88,13 +89,12 @@ function isRectangleIntersecting({
 
 export function useSelectionBox({
 	containerRef,
+	tracks,
 	onSelectionComplete,
 	isEnabled = true,
 	tracksScrollRef,
 	zoomLevel,
 }: UseSelectionBoxProps) {
-	const editor = useEditor();
-	const tracks = editor.timeline.getTracks();
 	const [selectionBox, setSelectionBox] = useState<SelectionBoxState | null>(
 		null,
 	);

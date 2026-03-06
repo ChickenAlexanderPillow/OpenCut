@@ -36,13 +36,15 @@ interface UseBookmarkDragProps {
 	onSnapPointChange?: (snapPoint: SnapPoint | null) => void;
 }
 
+const EDITOR_SUBSCRIBE_NONE = [] as const;
+
 export function useBookmarkDrag({
 	zoomLevel,
 	scrollRef,
 	snappingEnabled,
 	onSnapPointChange,
 }: UseBookmarkDragProps) {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_NONE });
 	const isShiftHeldRef = useShiftKey();
 	const tracks = editor.timeline.getTracks();
 	const activeScene = editor.scenes.getActiveScene();

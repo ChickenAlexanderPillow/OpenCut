@@ -54,6 +54,8 @@ function setMouseTracking({
 	};
 }
 
+const EDITOR_SUBSCRIBE_NONE = [] as const;
+
 export function useTimelineSeek({
 	playheadRef,
 	trackLabelsRef,
@@ -65,8 +67,7 @@ export function useTimelineSeek({
 	clearSelectedElements,
 	seek,
 }: UseTimelineSeekProps) {
-	const editor = useEditor();
-	const activeProject = editor.project.getActive();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_NONE });
 
 	const mouseTrackingRef = useRef({
 		isMouseDown: false,
@@ -136,7 +137,7 @@ export function useTimelineSeek({
 				),
 			);
 
-			const projectFps = activeProject?.settings.fps || 30;
+			const projectFps = editor.project.getActiveOrNull()?.settings.fps ?? 30;
 			const time = getSnappedSeekTime({
 				rawTime,
 				duration,
@@ -158,7 +159,6 @@ export function useTimelineSeek({
 			tracksScrollRef,
 			seek,
 			editor,
-			activeProject?.settings.fps,
 		],
 	);
 

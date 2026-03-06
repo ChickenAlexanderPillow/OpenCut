@@ -48,6 +48,13 @@ interface RotationState {
 	initialBoundsCy: number;
 }
 
+const EDITOR_SUBSCRIBE_TRANSFORM_HANDLES = [
+	"timeline",
+	"media",
+	"project",
+	"playback",
+] as const;
+
 function areSnapLinesEqual({
 	previousLines,
 	nextLines,
@@ -105,7 +112,7 @@ export function useTransformHandles({
 	canvasRef: React.RefObject<HTMLCanvasElement | null>;
 }) {
 	const editor = useEditor({
-		subscribeTo: ["selection", "timeline", "media", "project", "playback"],
+		subscribeTo: EDITOR_SUBSCRIBE_TRANSFORM_HANDLES,
 	});
 	const { previewFormatVariant } = usePreviewStore();
 	const isShiftHeldRef = useShiftKey();

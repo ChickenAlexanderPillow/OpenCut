@@ -487,79 +487,86 @@ export class AudioManager {
 		const mediaById = new Map(mediaAssets.map((asset) => [asset.id, asset]));
 		if (tracks.length === 0) return "tracks:empty";
 
+		let hash = 5381;
+		const updateHash = (value: string): void => {
+			for (let index = 0; index < value.length; index++) {
+				hash = (hash * 33) ^ value.charCodeAt(index);
+			}
+			hash = (hash * 33) ^ 124;
+		};
 		const referencedMediaIds = new Set<string>();
-		const trackParts: string[] = [];
-
+		updateHash(String(tracks.length));
 		for (const track of tracks) {
 			const muted = "muted" in track ? String(Boolean(track.muted)) : "0";
 			const volume =
 				"volume" in track
 					? String((track as { volume?: number }).volume ?? 1)
 					: "1";
-			const elementParts: string[] = [];
+			updateHash(track.id);
+			updateHash(track.type);
+			updateHash(muted);
+			updateHash(volume);
+			updateHash(String(track.elements.length));
 			for (const element of track.elements) {
 				if (element.type === "audio") {
 					if (element.sourceType === "upload")
 						referencedMediaIds.add(element.mediaId);
-					elementParts.push(
-						[
-							element.type,
-							element.id,
-							element.sourceType,
-							element.sourceType === "upload"
-								? element.mediaId
-								: element.sourceUrl,
-							element.startTime,
-							element.duration,
-							element.trimStart,
-							element.trimEnd,
-							element.volume,
-							element.muted ? 1 : 0,
-							buildTranscriptAudioRevision({
-								transcriptEdit: element.transcriptEdit,
-							}),
-						].join(":"),
+					updateHash(element.type);
+					updateHash(element.id);
+					updateHash(element.sourceType);
+					updateHash(
+						element.sourceType === "upload"
+							? element.mediaId
+							: element.sourceUrl,
+					);
+					updateHash(String(element.startTime));
+					updateHash(String(element.duration));
+					updateHash(String(element.trimStart));
+					updateHash(String(element.trimEnd));
+					updateHash(String(element.volume));
+					updateHash(element.muted ? "1" : "0");
+					updateHash(
+						buildTranscriptAudioRevision({
+							transcriptEdit: element.transcriptEdit,
+						}),
 					);
 					continue;
 				}
 				if (element.type === "video") {
 					referencedMediaIds.add(element.mediaId);
-					elementParts.push(
-						[
-							element.type,
-							element.id,
-							element.mediaId,
-							element.startTime,
-							element.duration,
-							element.trimStart,
-							element.trimEnd,
-							element.muted ? 1 : 0,
-							buildTranscriptAudioRevision({
-								transcriptEdit: element.transcriptEdit,
-							}),
-						].join(":"),
+					updateHash(element.type);
+					updateHash(element.id);
+					updateHash(element.mediaId);
+					updateHash(String(element.startTime));
+					updateHash(String(element.duration));
+					updateHash(String(element.trimStart));
+					updateHash(String(element.trimEnd));
+					updateHash(element.muted ? "1" : "0");
+					updateHash(
+						buildTranscriptAudioRevision({
+							transcriptEdit: element.transcriptEdit,
+						}),
 					);
 				}
 			}
-			trackParts.push(
-				[track.id, track.type, muted, volume, elementParts.join("|")].join("#"),
-			);
 		}
 
-		const mediaParts = Array.from(referencedMediaIds)
-			.sort()
-			.map((mediaId) => {
-				const media = mediaById.get(mediaId);
-				if (!media) return `${mediaId}:missing`;
-				return [
-					media.id,
-					media.type,
-					media.file.size,
-					media.file.lastModified,
-					media.duration ?? "",
-				].join(":");
-			});
+		const sortedMediaIds = Array.from(referencedMediaIds).sort();
+		updateHash(String(sortedMediaIds.length));
+		for (const mediaId of sortedMediaIds) {
+			const media = mediaById.get(mediaId);
+			if (!media) {
+				updateHash(mediaId);
+				updateHash("missing");
+				continue;
+			}
+			updateHash(media.id);
+			updateHash(media.type);
+			updateHash(String(media.file.size));
+			updateHash(String(media.file.lastModified));
+			updateHash(String(media.duration ?? ""));
+		}
 
-		return `${trackParts.join("||")}@@${mediaParts.join("||")}`;
+		return `${tracks.length}:${sortedMediaIds.length}:${(hash >>> 0).toString(36)}`;
 	}
 }

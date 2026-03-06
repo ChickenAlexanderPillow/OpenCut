@@ -317,7 +317,7 @@ function RenderTreeController() {
 		editor.renderer.setPreviewRendererMode({ mode: previewRendererMode });
 	}, [editor.renderer, previewRendererMode]);
 
-	useDeepCompareEffect(() => {
+	useEffect(() => {
 		if (!activeProject) return;
 		const driftHeal = validateAndHealCaptionDriftInTracks({
 			tracks,
@@ -325,8 +325,11 @@ function RenderTreeController() {
 		});
 		if (driftHeal.changed) {
 			editor.timeline.updateTracks(driftHeal.tracks);
-			return;
 		}
+	}, [activeProject, editor.timeline, tracks]);
+
+	useDeepCompareEffect(() => {
+		if (!activeProject) return;
 
 		const duration = editor.timeline.getTotalDuration();
 		const projectWidth = activeProject.settings.canvasSize.width;

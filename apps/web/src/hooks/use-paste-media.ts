@@ -11,6 +11,7 @@ import { isTypableDOMElement } from "@/utils/browser";
 import type { MediaType } from "@/types/assets";
 
 const MEDIA_MIME_PREFIXES: MediaType[] = ["image", "video", "audio"];
+const EDITOR_SUBSCRIBE_NONE = [] as const;
 
 function isMediaMimeType({ type }: { type: string }): boolean {
 	return MEDIA_MIME_PREFIXES.some((prefix) => type.startsWith(`${prefix}/`));
@@ -35,7 +36,7 @@ function extractMediaFilesFromClipboard({
 }
 
 export function usePasteMedia() {
-	const editor = useEditor();
+	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_NONE });
 
 	useEffect(() => {
 		const handlePaste = async (event: ClipboardEvent) => {
