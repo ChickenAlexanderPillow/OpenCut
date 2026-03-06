@@ -221,6 +221,7 @@ export function Timeline() {
 			scrollElement.scrollLeft = 0;
 			editor.project.setTimelineViewState({
 				viewState: {
+					...editor.project.getTimelineViewState(),
 					zoomLevel: minZoomLevel,
 					scrollLeft: 0,
 					playheadTime: editor.playback.getCurrentTime(),

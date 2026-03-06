@@ -2059,12 +2059,21 @@ export function useEditorActions() {
 	);
 
 	useActionHandler(
+		"toggle-loop-playback",
+		() => {
+			editor.playback.toggleLoopEnabled();
+		},
+		undefined,
+	);
+
+	useActionHandler(
 		"stop-playback",
 		() => {
 			if (editor.playback.getIsPlaying()) {
 				editor.playback.toggle();
 			}
-			editor.playback.seek({ time: 0 });
+			const { start } = editor.playback.getPlaybackBounds();
+			editor.playback.seek({ time: start });
 		},
 		undefined,
 	);
@@ -2073,11 +2082,9 @@ export function useEditorActions() {
 		"seek-forward",
 		(args) => {
 			const seconds = args?.seconds ?? 1;
+			const { end } = editor.playback.getPlaybackBounds();
 			editor.playback.seek({
-				time: Math.min(
-					editor.timeline.getTotalDuration(),
-					editor.playback.getCurrentTime() + seconds,
-				),
+				time: Math.min(end, editor.playback.getCurrentTime() + seconds),
 			});
 		},
 		undefined,
@@ -2087,8 +2094,9 @@ export function useEditorActions() {
 		"seek-backward",
 		(args) => {
 			const seconds = args?.seconds ?? 1;
+			const { start } = editor.playback.getPlaybackBounds();
 			editor.playback.seek({
-				time: Math.max(0, editor.playback.getCurrentTime() - seconds),
+				time: Math.max(start, editor.playback.getCurrentTime() - seconds),
 			});
 		},
 		undefined,
@@ -2098,11 +2106,9 @@ export function useEditorActions() {
 		"frame-step-forward",
 		() => {
 			const fps = activeProject.settings.fps;
+			const { end } = editor.playback.getPlaybackBounds();
 			editor.playback.seek({
-				time: Math.min(
-					editor.timeline.getTotalDuration(),
-					editor.playback.getCurrentTime() + 1 / fps,
-				),
+				time: Math.min(end, editor.playback.getCurrentTime() + 1 / fps),
 			});
 		},
 		undefined,
@@ -2112,8 +2118,9 @@ export function useEditorActions() {
 		"frame-step-backward",
 		() => {
 			const fps = activeProject.settings.fps;
+			const { start } = editor.playback.getPlaybackBounds();
 			editor.playback.seek({
-				time: Math.max(0, editor.playback.getCurrentTime() - 1 / fps),
+				time: Math.max(start, editor.playback.getCurrentTime() - 1 / fps),
 			});
 		},
 		undefined,
@@ -2123,11 +2130,9 @@ export function useEditorActions() {
 		"jump-forward",
 		(args) => {
 			const seconds = args?.seconds ?? 5;
+			const { end } = editor.playback.getPlaybackBounds();
 			editor.playback.seek({
-				time: Math.min(
-					editor.timeline.getTotalDuration(),
-					editor.playback.getCurrentTime() + seconds,
-				),
+				time: Math.min(end, editor.playback.getCurrentTime() + seconds),
 			});
 		},
 		undefined,
@@ -2137,8 +2142,9 @@ export function useEditorActions() {
 		"jump-backward",
 		(args) => {
 			const seconds = args?.seconds ?? 5;
+			const { start } = editor.playback.getPlaybackBounds();
 			editor.playback.seek({
-				time: Math.max(0, editor.playback.getCurrentTime() - seconds),
+				time: Math.max(start, editor.playback.getCurrentTime() - seconds),
 			});
 		},
 		undefined,
@@ -2147,7 +2153,8 @@ export function useEditorActions() {
 	useActionHandler(
 		"goto-start",
 		() => {
-			editor.playback.seek({ time: 0 });
+			const { start } = editor.playback.getPlaybackBounds();
+			editor.playback.seek({ time: start });
 		},
 		undefined,
 	);
@@ -2155,7 +2162,8 @@ export function useEditorActions() {
 	useActionHandler(
 		"goto-end",
 		() => {
-			editor.playback.seek({ time: editor.timeline.getTotalDuration() });
+			const { end } = editor.playback.getPlaybackBounds();
+			editor.playback.seek({ time: end });
 		},
 		undefined,
 	);
@@ -2244,106 +2252,16 @@ export function useEditorActions() {
 				const mediaAssets = editor.media.getAssets();
 				const currentProject = editor.project.getActive();
 				const mediaById = new Map(mediaAssets.map((asset) => [asset.id, asset]));
-				let transcriptionCache = findLatestValidTranscriptionCacheEntry({
+				const transcriptionCache = findLatestValidTranscriptionCacheEntry({
 					project: currentProject,
 					tracks,
 					mediaAssets,
 				});
 
 				if (!transcriptionCache) {
-					let transcriptionOperationId: string | undefined;
-					let projectProcessId: string | undefined;
-					try {
-						toast.info("No transcript cache found. Generating transcript...");
-						transcriptionOperationId = transcriptionStatus.start(
-							"Extracting audio...",
-						);
-						projectProcessId = registerProcess({
-							projectId: currentProject.metadata.id,
-							kind: "transcription",
-							label: "Generating transcript...",
-							cancel: () => transcriptionService.cancel(),
-						});
-						const audioBlob = await extractTimelineAudio({
-							tracks,
-							mediaAssets,
-							totalDuration: editor.timeline.getTotalDuration(),
-						});
-						const { samples, sampleRate } = await decodeAudioToFloat32({
-							audioBlob,
-						});
-						transcriptionStatus.update({
-							operationId: transcriptionOperationId,
-							message: "Transcribing...",
-							progress: null,
-						});
-						const result = await transcriptionService.transcribe({
-							audioData: samples,
-							sampleRate,
-							language: undefined,
-							modelId: DEFAULT_TRANSCRIPTION_MODEL,
-							onProgress: (progress) => {
-								if (projectProcessId) {
-									updateProcessLabel({
-										id: projectProcessId,
-										label:
-											progress.message ??
-											`Transcription ${Math.round(progress.progress)}%`,
-									});
-								}
-								transcriptionStatus.update({
-									operationId: transcriptionOperationId,
-									message: progress.message ?? "Generating transcript...",
-									progress: progress.progress,
-								});
-							},
-						});
-
-						const language = "auto";
-						const fingerprint = buildTranscriptionFingerprint({
-							tracks,
-							mediaAssets,
-							modelId: DEFAULT_TRANSCRIPTION_MODEL,
-							language,
-						});
-						const cacheKey = getTranscriptionCacheKey({
-							modelId: DEFAULT_TRANSCRIPTION_MODEL,
-							language,
-						});
-						const updatedProject = {
-							...currentProject,
-							transcriptionCache: {
-								...(currentProject.transcriptionCache ?? {}),
-								[cacheKey]: {
-									cacheVersion: TRANSCRIPT_CACHE_VERSION,
-									fingerprint,
-									language,
-									modelId: DEFAULT_TRANSCRIPTION_MODEL,
-									text: result.text,
-									segments: result.segments,
-									updatedAt: new Date().toISOString(),
-								},
-							},
-						};
-						editor.project.setActiveProject({ project: updatedProject });
-						editor.save.markDirty();
-						transcriptionCache = updatedProject.transcriptionCache?.[cacheKey] ?? null;
-					} catch (error) {
-						console.error("Auto transcript generation failed:", error);
-						toast.error(
-							"Smart Cut needs a transcript. Auto-generation failed; generate transcript from Captions panel and retry.",
-						);
-						return;
-					} finally {
-						transcriptionStatus.stop(transcriptionOperationId);
-						if (projectProcessId) {
-							removeProcess({ id: projectProcessId });
-						}
-					}
-				}
-
-				if (!transcriptionCache) {
-					toast.error("Smart Cut needs transcript data but none is available.");
+					toast.error(
+						"Smart Cut needs transcript data. Generate transcript from the Captions panel first.",
+					);
 					return;
 				}
 				const selectedWithElements = editor.timeline.getElementsWithTracks({
@@ -3752,6 +3670,30 @@ export function useEditorActions() {
 		"toggle-bookmark",
 		() => {
 			editor.scenes.toggleBookmark({ time: editor.playback.getCurrentTime() });
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"set-in-point",
+		() => {
+			editor.playback.setInPointAtCurrentTime();
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"set-out-point",
+		() => {
+			editor.playback.setOutPointAtCurrentTime();
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"clear-in-out-points",
+		() => {
+			editor.playback.clearInOutPoints();
 		},
 		undefined,
 	);

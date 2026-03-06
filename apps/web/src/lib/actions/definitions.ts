@@ -22,6 +22,10 @@ export const ACTIONS = {
 		category: "playback",
 		defaultShortcuts: ["space", "k"],
 	},
+	"toggle-loop-playback": {
+		description: "Toggle playback loop",
+		category: "playback",
+	},
 	"stop-playback": {
 		description: "Stop playback",
 		category: "playback",
@@ -211,6 +215,20 @@ export const ACTIONS = {
 	},
 	"toggle-bookmark": {
 		description: "Toggle bookmark at playhead",
+		category: "timeline",
+	},
+	"set-in-point": {
+		description: "Set in point at playhead",
+		category: "timeline",
+		defaultShortcuts: ["i"],
+	},
+	"set-out-point": {
+		description: "Set out point at playhead",
+		category: "timeline",
+		defaultShortcuts: ["o"],
+	},
+	"clear-in-out-points": {
+		description: "Clear in/out points",
 		category: "timeline",
 	},
 	undo: {

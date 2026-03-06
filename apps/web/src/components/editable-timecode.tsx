@@ -11,6 +11,7 @@ interface EditableTimecodeProps {
 	format?: TTimeCode;
 	fps: number;
 	onTimeChange?: ({ time }: { time: number }) => void;
+	enableScrub?: boolean;
 	className?: string;
 	disabled?: boolean;
 }
@@ -21,6 +22,7 @@ export function EditableTimecode({
 	format = "HH:MM:SS:FF",
 	fps,
 	onTimeChange,
+	enableScrub = false,
 	className,
 	disabled = false,
 }: EditableTimecodeProps) {
@@ -29,7 +31,16 @@ export function EditableTimecode({
 	const [hasError, setHasError] = useState(false);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const enterPressedRef = useRef(false);
+	const displayRef = useRef<HTMLButtonElement>(null);
+	const scrubStartTimeRef = useRef(0);
+	const scrubStartClientXRef = useRef(0);
+	const scrubDeltaXRef = useRef(0);
+	const scrubDraggedRef = useRef(false);
+	const pointerLockActiveRef = useRef(false);
+	const ignoreFirstLockedMoveRef = useRef(false);
+	const scrubAnimationFrameRef = useRef<number | null>(null);
 	const formattedTime = formatTimeCode({ timeInSeconds: time, format, fps });
+	const secondsPerPixel = 1 / Math.max(1, fps * 2);
 
 	const startEditing = () => {
 		if (disabled) return;
@@ -37,6 +48,14 @@ export function EditableTimecode({
 		setInputValue(formattedTime);
 		setHasError(false);
 		enterPressedRef.current = false;
+	};
+
+	const handleDisplayClick = () => {
+		if (enableScrub && scrubDraggedRef.current) {
+			scrubDraggedRef.current = false;
+			return;
+		}
+		startEditing();
 	};
 
 	const cancelEditing = () => {
@@ -105,12 +124,91 @@ export function EditableTimecode({
 		}
 	};
 
+	const commitScrub = ({ deltaX }: { deltaX: number }) => {
+		const rawTime = scrubStartTimeRef.current + deltaX * secondsPerPixel;
+		const clampedTime = Math.max(0, Math.min(duration, rawTime));
+		onTimeChange?.({ time: clampedTime });
+	};
+
+	const stopScrub = () => {
+		if (
+			typeof document !== "undefined" &&
+			document.pointerLockElement &&
+			typeof document.exitPointerLock === "function"
+		) {
+			try {
+				document.exitPointerLock();
+			} catch {}
+		}
+		pointerLockActiveRef.current = false;
+		if (scrubAnimationFrameRef.current !== null) {
+			window.cancelAnimationFrame(scrubAnimationFrameRef.current);
+			scrubAnimationFrameRef.current = null;
+		}
+		document.removeEventListener("pointermove", handleScrubPointerMove);
+		document.removeEventListener("pointerup", stopScrub);
+		document.removeEventListener("pointercancel", stopScrub);
+		document.removeEventListener("pointerlockchange", handlePointerLockChange);
+	};
+
+	const handlePointerLockChange = () => {
+		pointerLockActiveRef.current = document.pointerLockElement === displayRef.current;
+	};
+
+	const handleScrubPointerMove = (event: PointerEvent) => {
+		if (pointerLockActiveRef.current) {
+			if (ignoreFirstLockedMoveRef.current) {
+				ignoreFirstLockedMoveRef.current = false;
+				return;
+			}
+			scrubDeltaXRef.current += event.movementX;
+		} else {
+			scrubDeltaXRef.current = event.clientX - scrubStartClientXRef.current;
+		}
+		if (!scrubDraggedRef.current && Math.abs(scrubDeltaXRef.current) >= 2) {
+			scrubDraggedRef.current = true;
+		}
+		if (!scrubDraggedRef.current) return;
+		if (scrubAnimationFrameRef.current !== null) return;
+		scrubAnimationFrameRef.current = window.requestAnimationFrame(() => {
+			scrubAnimationFrameRef.current = null;
+			commitScrub({ deltaX: scrubDeltaXRef.current });
+		});
+	};
+
+	const handleDisplayPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
+		if (!enableScrub || disabled || isEditing || event.button !== 0) return;
+		event.preventDefault();
+		event.stopPropagation();
+		scrubStartTimeRef.current = time;
+		scrubStartClientXRef.current = event.clientX;
+		scrubDeltaXRef.current = 0;
+		scrubDraggedRef.current = false;
+		ignoreFirstLockedMoveRef.current = true;
+		const target = event.currentTarget;
+		if (typeof target.requestPointerLock === "function") {
+			try {
+				target.requestPointerLock();
+			} catch {}
+		}
+		document.addEventListener("pointerlockchange", handlePointerLockChange);
+		document.addEventListener("pointermove", handleScrubPointerMove);
+		document.addEventListener("pointerup", stopScrub, { once: true });
+		document.addEventListener("pointercancel", stopScrub, { once: true });
+	};
+
 	useEffect(() => {
 		if (isEditing && inputRef.current) {
 			inputRef.current.focus();
 			inputRef.current.select();
 		}
 	}, [isEditing]);
+
+	useEffect(() => {
+		return () => {
+			stopScrub();
+		};
+	}, []);
 
 	if (isEditing) {
 		return (
@@ -136,17 +234,26 @@ export function EditableTimecode({
 
 	return (
 		<button
+			ref={displayRef}
 			type="button"
-			onClick={startEditing}
+			onClick={handleDisplayClick}
 			onKeyDown={handleDisplayKeyDown}
+			onPointerDown={handleDisplayPointerDown}
 			disabled={disabled}
 			className={cn(
 				"text-primary cursor-pointer font-mono text-xs tabular-nums",
 				"hover:bg-muted/50 -mx-1 px-1 hover:rounded",
+				enableScrub && "cursor-ew-resize",
 				disabled && "cursor-default hover:bg-transparent",
 				className,
 			)}
-			title={disabled ? undefined : "Click to edit time"}
+			title={
+				disabled
+					? undefined
+					: enableScrub
+						? "Drag left/right to scrub, click to edit time"
+						: "Click to edit time"
+			}
 		>
 			{formattedTime}
 		</button>

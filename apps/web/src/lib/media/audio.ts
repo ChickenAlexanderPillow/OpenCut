@@ -1050,12 +1050,14 @@ export async function createTimelineAudioBuffer({
 	tracks,
 	mediaAssets,
 	duration,
+	startTime = 0,
 	sampleRate = EXPORT_SAMPLE_RATE,
 	audioContext,
 }: {
 	tracks: TimelineTrack[];
 	mediaAssets: MediaAsset[];
 	duration: number;
+	startTime?: number;
 	sampleRate?: number;
 	audioContext?: AudioContext;
 }): Promise<AudioBuffer | null> {
@@ -1086,6 +1088,7 @@ export async function createTimelineAudioBuffer({
 				outputBuffer,
 				outputLength,
 				sampleRate,
+				outputStartTime: startTime,
 			});
 		}
 
@@ -1102,11 +1105,13 @@ function mixAudioChannels({
 	outputBuffer,
 	outputLength,
 	sampleRate,
+	outputStartTime,
 }: {
 	element: CollectedAudioElement;
 	outputBuffer: AudioBuffer;
 	outputLength: number;
 	sampleRate: number;
+	outputStartTime: number;
 }): void {
 	const { buffer, startTime, trimStart, duration: elementDuration } = element;
 	const gain = clampGain(element.gain);
@@ -1117,7 +1122,7 @@ function mixAudioChannels({
 			: [];
 
 	const sourceStartSample = Math.floor(trimStart * buffer.sampleRate);
-	const outputStartSample = Math.floor(startTime * sampleRate);
+	const outputStartSample = Math.floor((startTime - outputStartTime) * sampleRate);
 	const resampledLength = Math.floor(elementDuration * sampleRate);
 
 	const outputChannels = 2;
@@ -1129,6 +1134,7 @@ function mixAudioChannels({
 
 		for (let i = 0; i < resampledLength; i++) {
 			const outputIndex = outputStartSample + i;
+			if (outputIndex < 0) continue;
 			if (outputIndex >= outputLength) break;
 
 			const elapsedInTimelineSeconds = i / sampleRate;

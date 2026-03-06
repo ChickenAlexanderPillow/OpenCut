@@ -45,6 +45,8 @@ export interface TTimelineViewState {
 	zoomLevel: number;
 	scrollLeft: number;
 	playheadTime: number;
+	inPoint?: number | null;
+	outPoint?: number | null;
 }
 
 export type TBrandLogoOverlayPreset =

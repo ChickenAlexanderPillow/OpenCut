@@ -1,15 +1,24 @@
-import { type JSX, useLayoutEffect, useRef } from "react";
+import {
+	type JSX,
+	useLayoutEffect,
+	useRef,
+	useState,
+	useEffect,
+	useCallback,
+} from "react";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
 import { DEFAULT_FPS } from "@/constants/project-constants";
 import { useEditor } from "@/hooks/use-editor";
 import { getRulerConfig, shouldShowLabel } from "@/lib/timeline/ruler-utils";
 import { useScrollPosition } from "@/hooks/timeline/use-scroll-position";
 import { TimelineTick } from "./timeline-tick";
+import { invokeAction } from "@/lib/actions";
+import { cn } from "@/utils/ui";
 
 interface TimelineRulerProps {
 	zoomLevel: number;
 	dynamicTimelineWidth: number;
-	rulerRef: React.Ref<HTMLDivElement>;
+	rulerRef: React.RefObject<HTMLDivElement | null>;
 	tracksScrollRef: React.RefObject<HTMLElement | null>;
 	handleWheel: (e: React.WheelEvent) => void;
 	handleTimelineContentClick: (e: React.MouseEvent) => void;
@@ -32,6 +41,21 @@ export function TimelineRuler({
 	const pixelsPerSecond = TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
 	const visibleDuration = dynamicTimelineWidth / pixelsPerSecond;
 	const effectiveDuration = Math.max(duration, visibleDuration);
+	const timelineViewState = editor.project.getTimelineViewState();
+	const inPoint =
+		typeof timelineViewState.inPoint === "number"
+			? Math.max(0, Math.min(effectiveDuration, timelineViewState.inPoint))
+			: null;
+	const outPoint =
+		typeof timelineViewState.outPoint === "number"
+			? Math.max(0, Math.min(effectiveDuration, timelineViewState.outPoint))
+			: null;
+	const regionStart = inPoint ?? 0;
+	const regionEnd = outPoint ?? effectiveDuration;
+	const hasValidRange =
+		inPoint !== null && outPoint !== null && regionEnd > regionStart + 1e-6;
+	const startPx = regionStart * pixelsPerSecond;
+	const endPx = regionEnd * pixelsPerSecond;
 	const project = editor.project.getActive();
 	const fps = project?.settings.fps ?? DEFAULT_FPS;
 	const { labelIntervalSeconds, tickIntervalSeconds } = getRulerConfig({
@@ -39,6 +63,17 @@ export function TimelineRuler({
 		fps,
 	});
 	const tickCount = Math.ceil(effectiveDuration / tickIntervalSeconds) + 1;
+	const dragTypeRef = useRef<"in" | "out" | null>(null);
+	const contextMenuRef = useRef<HTMLDivElement | null>(null);
+	const [contextMenu, setContextMenu] = useState<{
+		open: boolean;
+		x: number;
+		y: number;
+	}>({
+		open: false,
+		x: 0,
+		y: 0,
+	});
 
 	const { scrollLeft, viewportWidth } = useScrollPosition({
 		scrollRef: tracksScrollRef,
@@ -96,6 +131,103 @@ export function TimelineRuler({
 		);
 	}
 
+	const isPointerWithinRangeTarget = useCallback(
+		({ clientX }: { clientX: number }) => {
+			if (inPoint === null && outPoint === null) return false;
+			const rulerNode = rulerRef.current;
+			if (!rulerNode) return false;
+			const rect = rulerNode.getBoundingClientRect();
+			const x = clientX - rect.left;
+			const markerHitThreshold = 8;
+			const hitInMarker =
+				inPoint !== null && Math.abs(x - startPx) <= markerHitThreshold;
+			const hitOutMarker =
+				outPoint !== null && Math.abs(x - endPx) <= markerHitThreshold;
+			const hitRegion = hasValidRange && x >= startPx && x <= endPx;
+			return hitInMarker || hitOutMarker || hitRegion;
+		},
+		[inPoint, outPoint, hasValidRange, startPx, endPx, rulerRef],
+	);
+
+	const getTimeFromClientX = useCallback(
+		({ clientX }: { clientX: number }) => {
+			const rulerNode = rulerRef.current;
+			if (!rulerNode) return null;
+			const rect = rulerNode.getBoundingClientRect();
+			const relativeX = clientX - rect.left;
+			const clampedX = Math.max(0, Math.min(dynamicTimelineWidth, relativeX));
+			return clampedX / pixelsPerSecond;
+		},
+		[rulerRef, dynamicTimelineWidth, pixelsPerSecond],
+	);
+
+	const handleMarkerMouseDown = ({
+		event,
+		type,
+	}: {
+		event: React.MouseEvent;
+		type: "in" | "out";
+	}) => {
+		if (event.button !== 0) return;
+		event.preventDefault();
+		event.stopPropagation();
+		dragTypeRef.current = type;
+	};
+
+	useEffect(() => {
+		const onMouseMove = (event: MouseEvent) => {
+			const dragType = dragTypeRef.current;
+			if (!dragType) return;
+			const time = getTimeFromClientX({ clientX: event.clientX });
+			if (time === null) return;
+			if (dragType === "in") {
+				editor.playback.setInPoint({ time });
+			} else {
+				editor.playback.setOutPoint({ time });
+			}
+		};
+
+		const onMouseUp = () => {
+			dragTypeRef.current = null;
+		};
+
+		window.addEventListener("mousemove", onMouseMove);
+		window.addEventListener("mouseup", onMouseUp);
+		return () => {
+			window.removeEventListener("mousemove", onMouseMove);
+			window.removeEventListener("mouseup", onMouseUp);
+		};
+	}, [editor.playback, getTimeFromClientX]);
+
+	useEffect(() => {
+		if (!contextMenu.open) return;
+		const handleOutsideClick = (event: MouseEvent) => {
+			if (contextMenuRef.current?.contains(event.target as Node)) return;
+			setContextMenu((prev) => ({ ...prev, open: false }));
+		};
+		const closeMenu = () => {
+			setContextMenu((prev) => ({ ...prev, open: false }));
+		};
+		window.addEventListener("mousedown", handleOutsideClick);
+		window.addEventListener("blur", closeMenu);
+		return () => {
+			window.removeEventListener("mousedown", handleOutsideClick);
+			window.removeEventListener("blur", closeMenu);
+		};
+	}, [contextMenu.open]);
+
+	const handleRangeContextMenu = (event: React.MouseEvent) => {
+		if (inPoint === null && outPoint === null) return;
+		if (!isPointerWithinRangeTarget({ clientX: event.clientX })) return;
+		event.preventDefault();
+		event.stopPropagation();
+		setContextMenu({
+			open: true,
+			x: event.clientX,
+			y: event.clientY,
+		});
+	};
+
 	return (
 		<div
 			role="slider"
@@ -118,9 +250,78 @@ export function TimelineRuler({
 					width: `${dynamicTimelineWidth}px`,
 				}}
 				onMouseDown={handleRulerMouseDown}
+				onContextMenu={handleRangeContextMenu}
 			>
+				{hasValidRange && (
+					<div
+						className="pointer-events-none absolute top-0 h-full border-y border-cyan-500/70 bg-cyan-400/30"
+						style={{
+							left: `${startPx}px`,
+							width: `${Math.max(0, endPx - startPx)}px`,
+						}}
+					/>
+				)}
+				{inPoint !== null && (
+					<button
+						type="button"
+						aria-label="In point marker"
+						className={cn(
+							"absolute top-0 h-full w-2 -translate-x-1/2 cursor-ew-resize",
+							"hover:bg-emerald-500/15",
+						)}
+						style={{ left: `${startPx}px` }}
+						onMouseDown={(event) =>
+							handleMarkerMouseDown({ event, type: "in" })
+						}
+					>
+						<span className="pointer-events-none absolute left-1/2 h-full w-0.5 -translate-x-1/2 bg-emerald-500" />
+						<span className="pointer-events-none absolute -top-3 -left-1 rounded bg-emerald-500 px-1 text-[9px] font-semibold text-white">
+							I
+						</span>
+					</button>
+				)}
+				{outPoint !== null && (
+					<button
+						type="button"
+						aria-label="Out point marker"
+						className={cn(
+							"absolute top-0 h-full w-2 -translate-x-1/2 cursor-ew-resize",
+							"hover:bg-rose-500/15",
+						)}
+						style={{ left: `${endPx}px` }}
+						onMouseDown={(event) =>
+							handleMarkerMouseDown({ event, type: "out" })
+						}
+					>
+						<span className="pointer-events-none absolute left-1/2 h-full w-0.5 -translate-x-1/2 bg-rose-500" />
+						<span className="pointer-events-none absolute -top-3 -left-1 rounded bg-rose-500 px-1 text-[9px] font-semibold text-white">
+							O
+						</span>
+					</button>
+				)}
 				{timelineTicks}
 			</div>
+			{contextMenu.open && (
+				<div
+					ref={contextMenuRef}
+					className="bg-popover text-popover-foreground fixed z-50 min-w-40 rounded-lg border py-1.5 shadow-xl"
+					style={{
+						left: `${contextMenu.x}px`,
+						top: `${contextMenu.y}px`,
+					}}
+				>
+					<button
+						type="button"
+						className="hover:bg-accent w-full px-4 py-1.5 text-left text-sm"
+						onClick={() => {
+							invokeAction("clear-in-out-points", undefined, "mouseclick");
+							setContextMenu((prev) => ({ ...prev, open: false }));
+						}}
+					>
+						Clear In/Out Points
+					</button>
+				</div>
+			)}
 		</div>
 	);
 }

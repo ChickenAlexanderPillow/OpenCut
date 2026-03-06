@@ -22,6 +22,8 @@ type ExportParams = {
 	fps: number;
 	format: ExportFormat;
 	quality: ExportQuality;
+	startTime?: number;
+	duration?: number;
 	shouldIncludeAudio?: boolean;
 	audioBuffer?: AudioBuffer;
 };
@@ -44,6 +46,8 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 	private renderer: CanvasRenderer;
 	private format: ExportFormat;
 	private quality: ExportQuality;
+	private startTime: number;
+	private duration: number | null;
 	private shouldIncludeAudio: boolean;
 	private audioBuffer?: AudioBuffer;
 
@@ -55,6 +59,8 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		fps,
 		format,
 		quality,
+		startTime,
+		duration,
 		shouldIncludeAudio,
 		audioBuffer,
 	}: ExportParams) {
@@ -67,6 +73,8 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 
 		this.format = format;
 		this.quality = quality;
+		this.startTime = Math.max(0, startTime ?? 0);
+		this.duration = duration ?? null;
 		this.shouldIncludeAudio = shouldIncludeAudio ?? false;
 		this.audioBuffer = audioBuffer;
 	}
@@ -81,7 +89,8 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		rootNode: RootNode;
 	}): Promise<ArrayBuffer | null> {
 		const { fps } = this.renderer;
-		const frameCount = Math.ceil(rootNode.duration * fps);
+		const sceneDuration = Math.max(0, this.duration ?? rootNode.duration);
+		const frameCount = Math.max(1, Math.ceil(sceneDuration * fps));
 
 		const outputFormat =
 			this.format === "webm" ? new WebMOutputFormat() : new Mp4OutputFormat();
@@ -121,9 +130,9 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 				return null;
 			}
 
-			const time = i / fps;
+			const time = this.startTime + i / fps;
 			await this.renderer.render({ node: rootNode, time });
-			await videoSource.add(time, 1 / fps);
+			await videoSource.add(i / fps, 1 / fps);
 
 			this.emit("progress", i / frameCount);
 		}

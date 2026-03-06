@@ -59,6 +59,8 @@ export const DEFAULT_TIMELINE_VIEW_STATE: TTimelineViewState = {
 	zoomLevel: 1,
 	scrollLeft: 0,
 	playheadTime: 0,
+	inPoint: null,
+	outPoint: null,
 };
 
 export const TRACK_ICONS: Record<TrackType, React.ReactNode> = {

@@ -188,6 +188,7 @@ export function useTimelinePlayhead({
 				seek({ time: scrubTime });
 				editor.project.setTimelineViewState({
 					viewState: {
+						...editor.project.getTimelineViewState(),
 						zoomLevel,
 						scrollLeft: tracksScrollRef.current?.scrollLeft ?? 0,
 						playheadTime: scrubTime,
@@ -234,7 +235,6 @@ export function useTimelinePlayhead({
 		editor,
 		tracksScrollRef,
 		zoomLevel,
-		scrubResumeDelayMs,
 	]);
 
 	useEffect(() => {

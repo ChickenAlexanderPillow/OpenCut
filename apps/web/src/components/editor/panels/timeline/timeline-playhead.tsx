@@ -55,9 +55,10 @@ export function TimelinePlayhead({
 		event.preventDefault();
 		const step = 1 / Math.max(1, editor.project.getActive().settings.fps);
 		const direction = event.key === "ArrowRight" ? 1 : -1;
+		const { start, end } = editor.playback.getPlaybackBounds();
 		const nextTime = Math.max(
-			0,
-			Math.min(duration, playheadPosition + direction * step),
+			start,
+			Math.min(end, playheadPosition + direction * step),
 		);
 
 		editor.playback.seek({ time: nextTime });

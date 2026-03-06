@@ -195,6 +195,7 @@ export function useTimelineZoom({
 
 		editor.project.setTimelineViewState({
 			viewState: {
+				...editor.project.getTimelineViewState(),
 				zoomLevel,
 				scrollLeft: scrollElement.scrollLeft,
 				playheadTime,
@@ -212,6 +213,7 @@ export function useTimelineZoom({
 			if (scrollElement) {
 				editor.project.setTimelineViewState({
 					viewState: {
+						...editor.project.getTimelineViewState(),
 						zoomLevel,
 						scrollLeft: scrollElement.scrollLeft,
 						playheadTime: editor.playback.getCurrentTime(),

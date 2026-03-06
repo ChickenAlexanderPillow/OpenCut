@@ -13,8 +13,96 @@ import type {
 	RendererCapabilities,
 } from "@/services/renderer/webgpu-types";
 import { getRendererCapabilities } from "@/services/renderer/scene-partition";
+import type { TimelineTrack } from "@/types/timeline";
 
 const EXPORT_AUDIO_BUILD_TIMEOUT_MS = 20_000;
+
+function rangesOverlap({
+	startA,
+	endA,
+	startB,
+	endB,
+}: {
+	startA: number;
+	endA: number;
+	startB: number;
+	endB: number;
+}): boolean {
+	return Math.max(startA, startB) < Math.min(endA, endB);
+}
+
+function filterTracksByExportRegion({
+	tracks,
+	startTime,
+	endTime,
+}: {
+	tracks: TimelineTrack[];
+	startTime: number;
+	endTime: number;
+}): TimelineTrack[] {
+	const filteredTracks: TimelineTrack[] = [];
+
+	for (const track of tracks) {
+		if (track.type === "video") {
+			const elements = track.elements.filter((element) =>
+				rangesOverlap({
+					startA: element.startTime,
+					endA: element.startTime + element.duration,
+					startB: startTime,
+					endB: endTime,
+				}),
+			);
+			if (elements.length > 0) {
+				filteredTracks.push({ ...track, elements });
+			}
+			continue;
+		}
+
+		if (track.type === "text") {
+			const elements = track.elements.filter((element) =>
+				rangesOverlap({
+					startA: element.startTime,
+					endA: element.startTime + element.duration,
+					startB: startTime,
+					endB: endTime,
+				}),
+			);
+			if (elements.length > 0) {
+				filteredTracks.push({ ...track, elements });
+			}
+			continue;
+		}
+
+		if (track.type === "audio") {
+			const elements = track.elements.filter((element) =>
+				rangesOverlap({
+					startA: element.startTime,
+					endA: element.startTime + element.duration,
+					startB: startTime,
+					endB: endTime,
+				}),
+			);
+			if (elements.length > 0) {
+				filteredTracks.push({ ...track, elements });
+			}
+			continue;
+		}
+
+		const elements = track.elements.filter((element) =>
+			rangesOverlap({
+				startA: element.startTime,
+				endA: element.startTime + element.duration,
+				startB: startTime,
+				endB: endTime,
+			}),
+		);
+		if (elements.length > 0) {
+			filteredTracks.push({ ...track, elements });
+		}
+	}
+
+	return filteredTracks;
+}
 
 export class RendererManager {
 	private renderTree: RootNode | null = null;
@@ -118,7 +206,7 @@ export class RendererManager {
 
 		const exportVideoCache = new VideoCache();
 		try {
-			const tracks = this.editor.timeline.getTracks();
+			const timelineTracks = this.editor.timeline.getTracks();
 			const mediaAssets = this.editor.media.getAssets();
 			const activeProject = this.editor.project.getActive();
 
@@ -126,10 +214,26 @@ export class RendererManager {
 				return { success: false, error: "No active project" };
 			}
 
-			const duration = this.editor.timeline.getTotalDuration();
-			if (duration === 0) {
+			const timelineDuration = this.editor.timeline.getTotalDuration();
+			if (timelineDuration === 0) {
 				return { success: false, error: "Project is empty" };
 			}
+			const requestedStart = Math.max(0, options.startTime ?? 0);
+			const requestedEnd = Math.min(
+				timelineDuration,
+				options.endTime ?? timelineDuration,
+			);
+			const startTime = Math.min(requestedStart, requestedEnd);
+			const endTime = Math.max(startTime, requestedEnd);
+			const duration = Math.max(0, endTime - startTime);
+			if (duration <= 0) {
+				return { success: false, error: "Export range is empty" };
+			}
+			const tracks = filterTracksByExportRegion({
+				tracks: timelineTracks,
+				startTime,
+				endTime,
+			});
 
 			const exportFps = fps || activeProject.settings.fps;
 			const canvasSize = activeProject.settings.canvasSize;
@@ -143,6 +247,7 @@ export class RendererManager {
 							tracks,
 							mediaAssets,
 							duration,
+							startTime,
 						}),
 						new Promise<null>((_, reject) => {
 							setTimeout(() => {
@@ -166,7 +271,7 @@ export class RendererManager {
 			const scene = buildScene({
 				tracks,
 				mediaAssets,
-				duration,
+				duration: endTime,
 				canvasSize,
 				background: activeProject.settings.background,
 				brandOverlays: activeProject.brandOverlays,
@@ -179,6 +284,8 @@ export class RendererManager {
 				fps: exportFps,
 				format,
 				quality,
+				startTime,
+				duration,
 				shouldIncludeAudio: !!includeAudio,
 				audioBuffer: audioBuffer || undefined,
 			});

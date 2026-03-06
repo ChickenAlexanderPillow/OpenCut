@@ -24,7 +24,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
 	Bookmark02Icon,
 	Delete02Icon,
-	SnowIcon,
 	ScissorIcon,
 	MagnetIcon,
 	Link04Icon,
@@ -36,6 +35,21 @@ import {
 	Layers01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+
+function InOutPointIcon({ type }: { type: "in" | "out" }) {
+	const colorClass = type === "in" ? "bg-emerald-500" : "bg-rose-500";
+	const label = type === "in" ? "I" : "O";
+	return (
+		<span className="relative inline-flex h-4 w-3 items-center justify-center">
+			<span className={`h-4 w-0.5 rounded-full ${colorClass}`} />
+			<span
+				className={`absolute -top-1.5 rounded px-0.5 text-[8px] font-semibold text-white ${colorClass}`}
+			>
+				{label}
+			</span>
+		</span>
+	);
+}
 
 export function TimelineToolbar({
 	zoomLevel,
@@ -82,6 +96,9 @@ function ToolbarLeftSection() {
 	const editor = useEditor();
 	const currentTime = editor.playback.getCurrentTime();
 	const currentBookmarked = editor.scenes.isBookmarked({ time: currentTime });
+	const timelineViewState = editor.project.getTimelineViewState();
+	const hasInPoint = typeof timelineViewState.inPoint === "number";
+	const hasOutPoint = typeof timelineViewState.outPoint === "number";
 
 	const handleAction = ({
 		action,
@@ -141,13 +158,6 @@ function ToolbarLeftSection() {
 				/>
 
 				<ToolbarButton
-					icon={<HugeiconsIcon icon={SnowIcon} />}
-					tooltip="Coming soon" /* freeze frame */
-					disabled={true}
-					onClick={({ event: _event }) => {}}
-				/>
-
-				<ToolbarButton
 					icon={<HugeiconsIcon icon={Delete02Icon} />}
 					tooltip="Delete element"
 					onClick={({ event }) =>
@@ -167,6 +177,20 @@ function ToolbarLeftSection() {
 						}
 					/>
 				</Tooltip>
+
+				<ToolbarButton
+					icon={<InOutPointIcon type="in" />}
+					isActive={hasInPoint}
+					tooltip="Set in point"
+					onClick={({ event }) => handleAction({ action: "set-in-point", event })}
+				/>
+
+				<ToolbarButton
+					icon={<InOutPointIcon type="out" />}
+					isActive={hasOutPoint}
+					tooltip="Set out point"
+					onClick={({ event }) => handleAction({ action: "set-out-point", event })}
+				/>
 			</TooltipProvider>
 		</div>
 	);
@@ -289,6 +313,7 @@ function ToolbarButton({
 				<Button
 					variant={isActive ? "secondary" : "text"}
 					size="icon"
+					disabled={disabled}
 					onClick={(event) => onClick({ event })}
 					className={cn(
 						"rounded-sm",

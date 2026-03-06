@@ -146,6 +146,7 @@ export function useTimelineSeek({
 			seek(time);
 			editor.project.setTimelineViewState({
 				viewState: {
+					...editor.project.getTimelineViewState(),
 					zoomLevel,
 					scrollLeft: scrollContainer.scrollLeft,
 					playheadTime: time,

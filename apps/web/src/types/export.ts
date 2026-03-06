@@ -15,6 +15,8 @@ export interface ExportOptions {
 	quality: ExportQuality;
 	fps?: number;
 	includeAudio?: boolean;
+	startTime?: number;
+	endTime?: number;
 	onProgress?: ({ progress }: { progress: number }) => void;
 	onCancel?: () => boolean;
 }

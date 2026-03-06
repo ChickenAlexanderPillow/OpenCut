@@ -11,6 +11,7 @@ import {
 	PlayIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { Repeat } from "lucide-react";
 
 export function PreviewToolbar({
 	isFullscreen,
@@ -19,11 +20,16 @@ export function PreviewToolbar({
 	isFullscreen: boolean;
 	onToggleFullscreen: () => void;
 }) {
-	const editor = useEditor({ subscribeTo: ["playback", "timeline", "project"] });
+	const editor = useEditor({
+		subscribeTo: ["playback", "timeline", "project"],
+	});
 	const isPlaying = editor.playback.getIsPlaying();
+	const isLoopEnabled = editor.playback.getIsLoopEnabled();
 	const currentTime = editor.playback.getCurrentTime();
 	const totalDuration = editor.timeline.getTotalDuration();
 	const fps = editor.project.getActive().settings.fps;
+	const { start: playbackStart, end: playbackEnd } =
+		editor.playback.getPlaybackBounds();
 
 	return (
 		<div className="grid grid-cols-[1fr_auto_1fr] items-center pb-3 pt-5 px-5">
@@ -33,7 +39,12 @@ export function PreviewToolbar({
 					duration={totalDuration}
 					format="HH:MM:SS:FF"
 					fps={fps}
-					onTimeChange={({ time }) => editor.playback.seek({ time })}
+					enableScrub={true}
+					onTimeChange={({ time }) =>
+						editor.playback.seek({
+							time: Math.max(playbackStart, Math.min(playbackEnd, time)),
+						})
+					}
 					className="text-center"
 				/>
 				<span className="text-muted-foreground px-2 font-mono text-xs">/</span>
@@ -46,14 +57,25 @@ export function PreviewToolbar({
 				</span>
 			</div>
 
-			<Button
-				variant="text"
-				size="sm"
-				className="h-8 w-8 p-0"
-				onClick={() => invokeAction("toggle-play")}
-			>
-				<HugeiconsIcon icon={isPlaying ? PauseIcon : PlayIcon} />
-			</Button>
+			<div className="flex items-center gap-1 px-1">
+				<Button
+					variant="text"
+					size="sm"
+					className="h-9 w-9 min-w-9 overflow-visible p-0"
+					onClick={() => invokeAction("toggle-play")}
+				>
+					<HugeiconsIcon icon={isPlaying ? PauseIcon : PlayIcon} />
+				</Button>
+				<Button
+					variant={isLoopEnabled ? "secondary" : "text"}
+					size="sm"
+					className="h-9 w-9 min-w-9 p-0"
+					onClick={() => invokeAction("toggle-loop-playback")}
+					title={isLoopEnabled ? "Disable loop" : "Enable loop"}
+				>
+					<Repeat className="size-4" />
+				</Button>
+			</div>
 
 			<div className="justify-self-end flex items-center">
 				<Button

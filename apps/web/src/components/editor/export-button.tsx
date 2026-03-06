@@ -32,7 +32,7 @@ import { useEditor } from "@/hooks/use-editor";
 import { DEFAULT_EXPORT_OPTIONS } from "@/constants/export-constants";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 
-const EDITOR_SUBSCRIBE_PROJECT = ["project"] as const;
+const EDITOR_SUBSCRIBE_PROJECT = ["project", "timeline"] as const;
 
 export function ExportButton() {
 	const [isExportPopoverOpen, setIsExportPopoverOpen] = useState(false);
@@ -83,6 +83,7 @@ function ExportPopover({
 }) {
 	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PROJECT });
 	const activeProject = editor.project.getActive();
+	const timelineViewState = editor.project.getTimelineViewState();
 	const [format, setFormat] = useState<ExportFormat>(
 		DEFAULT_EXPORT_OPTIONS.format,
 	);
@@ -99,6 +100,19 @@ function ExportPopover({
 	const processIdRef = useRef<string | null>(null);
 	const { registerProcess, updateProcessLabel, removeProcess } =
 		useProjectProcessStore();
+	const timelineDuration = editor.timeline.getTotalDuration();
+	const inPoint =
+		typeof timelineViewState.inPoint === "number"
+			? Math.max(0, Math.min(timelineDuration, timelineViewState.inPoint))
+			: null;
+	const outPoint =
+		typeof timelineViewState.outPoint === "number"
+			? Math.max(0, Math.min(timelineDuration, timelineViewState.outPoint))
+			: null;
+	const exportStartTime = inPoint ?? 0;
+	const exportEndTime = outPoint ?? timelineDuration;
+	const hasRangeExport =
+		(inPoint !== null || outPoint !== null) && exportEndTime > exportStartTime;
 
 	const handleExport = async () => {
 		if (!activeProject) return;
@@ -128,6 +142,8 @@ function ExportPopover({
 					quality,
 					fps: activeProject.settings.fps,
 					includeAudio,
+					startTime: hasRangeExport ? exportStartTime : 0,
+					endTime: hasRangeExport ? exportEndTime : timelineDuration,
 					onProgress: ({ progress }) => {
 						setProgress(progress);
 						if (processIdRef.current) {
@@ -281,6 +297,17 @@ function ExportPopover({
 													Include audio in export
 												</Label>
 											</div>
+										</SectionContent>
+									</Section>
+
+									<Section collapsible defaultOpen={false}>
+										<SectionHeader title="Range" />
+										<SectionContent>
+											<p className="text-muted-foreground text-xs">
+												{hasRangeExport
+													? `In/Out region (${exportStartTime.toFixed(2)}s - ${exportEndTime.toFixed(2)}s)`
+													: "Full timeline"}
+											</p>
 										</SectionContent>
 									</Section>
 								</div>
