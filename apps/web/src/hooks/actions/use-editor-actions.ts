@@ -8,6 +8,7 @@ import { Command } from "@/lib/commands/base-command";
 import { EditorCore } from "@/core";
 import { getElementsAtTime } from "@/lib/timeline";
 import { toast } from "sonner";
+import { generateUUID } from "@/utils/id";
 import { TracksSnapshotCommand } from "@/lib/commands/timeline";
 import {
 	applySmartCutsToTracks,
@@ -165,6 +166,179 @@ function buildClipWordTranscriptionCacheKey({
 		startTime.toFixed(3),
 		endTime.toFixed(3),
 	].join(":");
+}
+
+function resolveMediaDurationForClipCandidates({
+	assetDuration,
+	segments,
+}: {
+	assetDuration: number | undefined;
+	segments: TranscriptionSegment[];
+}): number {
+	if (
+		typeof assetDuration === "number" &&
+		Number.isFinite(assetDuration) &&
+		assetDuration > 0
+	) {
+		return assetDuration;
+	}
+	const inferredFromTranscript = segments[segments.length - 1]?.end ?? 0;
+	return Number.isFinite(inferredFromTranscript) && inferredFromTranscript > 0
+		? inferredFromTranscript
+		: 0;
+}
+
+function overlapRatio({
+	aStart,
+	aEnd,
+	bStart,
+	bEnd,
+}: {
+	aStart: number;
+	aEnd: number;
+	bStart: number;
+	bEnd: number;
+}): number {
+	const intersection = Math.max(
+		0,
+		Math.min(aEnd, bEnd) - Math.max(aStart, bStart),
+	);
+	const union = Math.max(aEnd, bEnd) - Math.min(aStart, bStart);
+	if (union <= 0) return 0;
+	return intersection / union;
+}
+
+function roundToHundredth(value: number): number {
+	return Math.round(value * 100) / 100;
+}
+
+function isLikelyWordLevelTranscript({
+	segments,
+}: {
+	segments: TranscriptionSegment[];
+}): boolean {
+	if (segments.length < 80) return false;
+	const sample = segments.slice(0, Math.min(250, segments.length));
+	if (sample.length === 0) return false;
+	let shortSegmentCount = 0;
+	let charCount = 0;
+	for (const segment of sample) {
+		const text = segment.text.trim();
+		const tokenCount = text.length > 0 ? (text.match(/\S+/g)?.length ?? 0) : 0;
+		if (tokenCount > 0 && tokenCount <= 3) shortSegmentCount += 1;
+		charCount += text.length;
+	}
+	const shortRatio = shortSegmentCount / sample.length;
+	const avgChars = charCount / sample.length;
+	return shortRatio >= 0.68 && avgChars <= 18;
+}
+
+function truncateCandidateSnippet({ text }: { text: string }): string {
+	if (text.length <= 1200) return text;
+	const prefix = text.slice(0, 1200).trim();
+	const lastWhitespace = prefix.lastIndexOf(" ");
+	return lastWhitespace > 0 ? prefix.slice(0, lastWhitespace).trim() : prefix;
+}
+
+function buildCoarseFallbackClipCandidatesFromSegments({
+	segments,
+	mediaDuration,
+	minClipSeconds,
+	targetClipSeconds,
+	maxClipSeconds,
+	maxOutput = 12,
+}: {
+	segments: TranscriptionSegment[];
+	mediaDuration: number;
+	minClipSeconds: number;
+	targetClipSeconds: number;
+	maxClipSeconds: number;
+	maxOutput?: number;
+}): Array<{
+	id: string;
+	startTime: number;
+	endTime: number;
+	duration: number;
+	transcriptSnippet: string;
+	localScore: number;
+}> {
+	if (!Number.isFinite(mediaDuration) || mediaDuration <= 0) return [];
+	const normalized = [...segments]
+		.filter(
+			(segment) =>
+				Number.isFinite(segment.start) &&
+				Number.isFinite(segment.end) &&
+				segment.end > segment.start &&
+				segment.text.trim().length > 0,
+		)
+		.sort((a, b) => a.start - b.start);
+	if (normalized.length === 0) return [];
+
+	const candidates: Array<{
+		id: string;
+		startTime: number;
+		endTime: number;
+		duration: number;
+		transcriptSnippet: string;
+		localScore: number;
+	}> = [];
+
+	for (let i = 0; i < normalized.length; i++) {
+		const start = Math.max(0, normalized[i]?.start ?? 0);
+		if (start >= mediaDuration - minClipSeconds) break;
+
+		let bestEndIndex = -1;
+		let bestTargetDiff = Number.POSITIVE_INFINITY;
+		for (let j = i; j < normalized.length; j++) {
+			const end = Math.min(mediaDuration, normalized[j]?.end ?? start);
+			const duration = Math.max(0, end - start);
+			if (duration < minClipSeconds) continue;
+			if (duration > maxClipSeconds) break;
+			const targetDiff = Math.abs(duration - targetClipSeconds);
+			if (targetDiff < bestTargetDiff) {
+				bestTargetDiff = targetDiff;
+				bestEndIndex = j;
+			}
+		}
+		if (bestEndIndex < 0) continue;
+
+		const end = Math.min(mediaDuration, normalized[bestEndIndex]?.end ?? start);
+		const duration = Math.max(0, end - start);
+		if (duration < minClipSeconds || duration > maxClipSeconds) continue;
+
+		const rawSnippet = normalized
+			.slice(i, bestEndIndex + 1)
+			.map((segment) => segment.text.trim())
+			.join(" ")
+			.replace(/\s+/g, " ")
+			.trim();
+		const snippet = truncateCandidateSnippet({ text: rawSnippet });
+		const wordCount = snippet.match(/\S+/g)?.length ?? 0;
+		if (wordCount < 8) continue;
+
+		const duplicate = candidates.some(
+			(existing) =>
+				overlapRatio({
+					aStart: start,
+					aEnd: end,
+					bStart: existing.startTime,
+					bEnd: existing.endTime,
+				}) > 0.92,
+		);
+		if (duplicate) continue;
+
+		candidates.push({
+			id: generateUUID(),
+			startTime: roundToHundredth(start),
+			endTime: roundToHundredth(end),
+			duration: roundToHundredth(duration),
+			transcriptSnippet: snippet,
+			localScore: Math.max(18, Math.round(42 - Math.min(18, bestTargetDiff))),
+		});
+		if (candidates.length >= maxOutput) break;
+	}
+
+	return candidates;
 }
 
 function resolveClipScoringApiCandidates(): string[] {
@@ -2864,12 +3038,10 @@ export function useEditorActions() {
 
 					const candidateDraftsV2 = buildClipCandidatesFromTranscriptV2({
 						segments: transcriptResult.transcript.segments,
-						mediaDuration:
-							mediaAsset.duration ??
-							transcriptResult.transcript.segments[
-								transcriptResult.transcript.segments.length - 1
-							]?.end ??
-							0,
+						mediaDuration: resolveMediaDurationForClipCandidates({
+							assetDuration: mediaAsset.duration,
+							segments: transcriptResult.transcript.segments,
+						}),
 						minClipSeconds: VIRAL_CLIP_MIN_SECONDS,
 						targetClipSeconds: VIRAL_CLIP_TARGET_SECONDS,
 						maxClipSeconds: VIRAL_CLIP_MAX_SECONDS,
@@ -2879,18 +3051,45 @@ export function useEditorActions() {
 							? candidateDraftsV2
 							: buildClipCandidatesFromTranscript({
 									segments: transcriptResult.transcript.segments,
-									mediaDuration:
-										mediaAsset.duration ??
-										transcriptResult.transcript.segments[
-											transcriptResult.transcript.segments.length - 1
-										]?.end ??
-										0,
+									mediaDuration: resolveMediaDurationForClipCandidates({
+										assetDuration: mediaAsset.duration,
+										segments: transcriptResult.transcript.segments,
+									}),
 									minClipSeconds: VIRAL_CLIP_MIN_SECONDS,
 									targetClipSeconds: VIRAL_CLIP_TARGET_SECONDS,
 									maxClipSeconds: VIRAL_CLIP_MAX_SECONDS,
 							  });
+					const mediaDurationForCandidates = resolveMediaDurationForClipCandidates({
+						assetDuration: mediaAsset.duration,
+						segments: transcriptResult.transcript.segments,
+					});
+					const likelyWordLevelTranscript = isLikelyWordLevelTranscript({
+						segments: transcriptResult.transcript.segments,
+					});
+					const fallbackCandidateDrafts =
+						candidateDrafts.length === 0 && likelyWordLevelTranscript
+							? buildCoarseFallbackClipCandidatesFromSegments({
+									segments: transcriptResult.transcript.segments,
+									mediaDuration: mediaDurationForCandidates,
+									minClipSeconds: VIRAL_CLIP_MIN_SECONDS,
+									targetClipSeconds: VIRAL_CLIP_TARGET_SECONDS,
+									maxClipSeconds: VIRAL_CLIP_MAX_SECONDS,
+							  })
+							: [];
+					const candidateDraftsResolved =
+						candidateDrafts.length > 0
+							? candidateDrafts
+							: fallbackCandidateDrafts;
 
-					if (candidateDrafts.length === 0) {
+					if (candidateDraftsResolved.length === 0) {
+						console.warn("Clip candidate derivation failed", {
+							sourceMediaId: mediaAsset.id,
+							transcriptSource: transcriptResult.source,
+							segmentCount: transcriptResult.transcript.segments.length,
+							transcriptChars: transcriptResult.transcript.text.length,
+							mediaDurationForCandidates,
+							likelyWordLevelTranscript,
+						});
 						setError({ error: "No candidate windows found for this transcript" });
 						toast.error("Could not derive clip candidates from transcript");
 						return;
@@ -2905,24 +3104,24 @@ export function useEditorActions() {
 					if (projectProcessId) {
 						updateProcessLabel({
 							id: projectProcessId,
-							label: `Scoring clip virality (0/${candidateDrafts.length})...`,
+							label: `Scoring clip virality (0/${candidateDraftsResolved.length})...`,
 						});
 					}
 					const scoredResponse = await fetchScoredCandidates({
 						transcript: transcriptResult.transcript.text,
-						candidates: candidateDrafts,
+						candidates: candidateDraftsResolved,
 					});
 					const scoredCandidates = scoredResponse.candidates ?? [];
 					if (projectProcessId) {
 						updateProcessLabel({
 							id: projectProcessId,
-							label: `Scoring clip virality (${scoredCandidates.length}/${candidateDrafts.length})...`,
+							label: `Scoring clip virality (${scoredCandidates.length}/${candidateDraftsResolved.length})...`,
 						});
 					}
 					setProgress({
 						sourceMediaId: mediaAsset.id,
 						progress: 99,
-						progressMessage: `Scoring clip candidates (${scoredCandidates.length}/${candidateDrafts.length})...`,
+						progressMessage: `Scoring clip candidates (${scoredCandidates.length}/${candidateDraftsResolved.length})...`,
 					});
 					const strictCandidates = selectTopCandidatesWithQualityGate({
 						candidates: scoredCandidates,

@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { useEditor } from "@/hooks/use-editor";
 import {
 	TooltipProvider,
@@ -229,8 +228,6 @@ function ToolbarRightSection({
 					onClick={() => toggleRippleEditing()}
 				/>
 			</TooltipProvider>
-			<AudioGraphStaleIndicator />
-
 			<div className="bg-border mx-1 h-6 w-px" />
 
 			<div className="flex items-center gap-1">
@@ -270,41 +267,6 @@ function ToolbarRightSection({
 				</TooltipProvider>
 			</div>
 		</div>
-	);
-}
-
-function AudioGraphStaleIndicator() {
-	const editor = useEditor({ subscribeTo: [] });
-	const [audioGraphState, setAudioGraphState] = useState(() =>
-		editor.audio.getAudioGraphState(),
-	);
-
-	useEffect(() => {
-		if (typeof window === "undefined") return;
-		const sync = () => setAudioGraphState(editor.audio.getAudioGraphState());
-		sync();
-		const listener = () => sync();
-		window.addEventListener("opencut:audio-graph-state", listener);
-		return () => window.removeEventListener("opencut:audio-graph-state", listener);
-	}, [editor]);
-
-	if (!audioGraphState.isDirty) return null;
-	const label = audioGraphState.pendingRebuild ? "Audio rebuilding" : "Audio stale";
-	const staleSeconds = (audioGraphState.staleForMs / 1000).toFixed(2);
-	return (
-		<TooltipProvider delayDuration={200}>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<div className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-700">
-						{label}
-					</div>
-				</TooltipTrigger>
-				<TooltipContent>
-					<div>Timeline audio stream is stale and syncing.</div>
-					<div>{`Stale for ${staleSeconds}s`}</div>
-				</TooltipContent>
-			</Tooltip>
-		</TooltipProvider>
 	);
 }
 

@@ -138,15 +138,7 @@ export class AudioManager {
 			this.streamingEngine.dispose();
 			this.streamingEngine = null;
 		}
-		if (this.audioContext) {
-			void this.audioContext.close();
-			this.audioContext = null;
-			this.masterGain = null;
-			this.outputCompressor = null;
-			this.outputAnalyser = null;
-			this.outputMeterData = null;
-		}
-		this.stopOutputMetering();
+		void this.resetAudioContext();
 	}
 
 	private handlePlaybackChange = (): void => {
@@ -173,7 +165,7 @@ export class AudioManager {
 				this.stopPlaybackOutputs();
 				this.streamingEngine?.dispose();
 				this.streamingEngine = null;
-				void this.suspendContext();
+				void this.resetAudioContext();
 			}
 		}
 
@@ -412,6 +404,22 @@ export class AudioManager {
 
 	private stopPlaybackOutputs(): void {
 		this.streamingEngine?.stop();
+	}
+
+	private async resetAudioContext(): Promise<void> {
+		if (!this.audioContext) return;
+		const context = this.audioContext;
+		this.audioContext = null;
+		this.masterGain = null;
+		this.outputCompressor = null;
+		this.outputAnalyser = null;
+		this.outputMeterData = null;
+		this.stopOutputMetering();
+		try {
+			await context.close();
+		} catch (error) {
+			console.warn("Failed to close audio context:", error);
+		}
 	}
 
 	private startOutputMetering(): void {
