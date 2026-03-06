@@ -4,9 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const profileDir = process.env.PLAYWRIGHT_PROFILE_DIR ?? "C:\\playwright-shared-profile";
-const editorUrl =
-	process.env.PLAYWRIGHT_EDITOR_URL ??
-	"http://127.0.0.1:3000/editor/c0275627-2b24-40a1-9d10-a4f7a7248ef3";
+const editorUrl = process.env.PLAYWRIGHT_EDITOR_URL?.trim() ?? "";
 const preferHeadless =
 	process.env.PLAYWRIGHT_HEADLESS === "1" ||
 	process.env.PLAYWRIGHT_HEADLESS === "true";
@@ -82,11 +80,20 @@ async function main() {
 
 	const { context, launcher } = await launchWithFallback({ chromium });
 
-	const page = context.pages()[0] ?? (await context.newPage());
+	const existingEditorPage = context
+		.pages()
+		.find((candidate) => candidate.url().includes("/editor/"));
+	const page = existingEditorPage ?? context.pages()[0] ?? (await context.newPage());
 	console.log(`Using profile: ${profileDir}`);
 	console.log(`Browser launcher: ${launcher}`);
-	console.log(`Opening: ${editorUrl}`);
-	await page.goto(editorUrl, { waitUntil: "domcontentloaded" });
+	if (editorUrl.length > 0) {
+		console.log(`Opening: ${editorUrl}`);
+		await page.goto(editorUrl, { waitUntil: "domcontentloaded" });
+	} else if (page.url().includes("/editor/")) {
+		console.log(`Reusing editor tab: ${page.url()}`);
+	} else {
+		console.log("No PLAYWRIGHT_EDITOR_URL provided; browser opened without navigation.");
+	}
 
 	console.log("Browser is open with shared storage profile.");
 	if (autoExitMs > 0) {

@@ -5,6 +5,8 @@ interface MediaDragOverlayProps {
 	isVisible: boolean;
 	isProcessing?: boolean;
 	progress?: number;
+	step?: string;
+	stepProgress?: number;
 	onClick?: () => void;
 }
 
@@ -12,6 +14,8 @@ export function MediaDragOverlay({
 	isVisible,
 	isProcessing = false,
 	progress = 0,
+	step,
+	stepProgress,
 	onClick,
 }: MediaDragOverlayProps) {
 	if (!isVisible) return null;
@@ -39,11 +43,21 @@ export function MediaDragOverlay({
 			</div>
 
 			<div className="space-y-2">
-				<p className="text-muted-foreground max-w-sm text-xs">
-					{isProcessing
-						? `Processing your files (${progress}%)`
-						: "Drag and drop videos, photos, and audio files here"}
-				</p>
+				{!isProcessing ? (
+					<p className="text-muted-foreground max-w-sm text-xs font-medium">
+						Drag and drop videos, photos, and audio files here
+					</p>
+				) : null}
+				{isProcessing && step ? (
+					<div className="mx-auto max-w-sm rounded-md border bg-background/60 px-2.5 py-1.5 text-[11px]">
+						<div className="text-foreground/90 truncate">{step}</div>
+						{typeof stepProgress === "number" ? (
+							<div className="text-muted-foreground">
+								Step progress: {Math.max(0, Math.min(100, Math.round(stepProgress)))}%
+							</div>
+						) : null}
+					</div>
+				) : null}
 			</div>
 
 			{isProcessing && (

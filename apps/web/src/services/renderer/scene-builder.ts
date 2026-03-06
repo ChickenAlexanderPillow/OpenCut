@@ -231,10 +231,14 @@ export function buildScene(params: BuildSceneParams) {
 					(sourceMediaFromRef.transcriptEdit?.words.length ?? 0) > 0
 						? sourceMediaFromRef
 						: null) ??
-					resolveCaptionSourceMediaHeuristically({
-						element,
-						candidates: transcriptMediaCandidates,
-					});
+					// Heuristic source resolution is only for legacy/unbound caption elements.
+					// If a caption has an explicit source ref that no longer exists, treat it as stale.
+					(!sourceMediaId
+						? resolveCaptionSourceMediaHeuristically({
+								element,
+								candidates: transcriptMediaCandidates,
+						  })
+						: null);
 				const resolvedTextElement =
 					sourceMedia && isEditableMediaElement(sourceMedia)
 						? resolveLiveCaptionElementFromTranscriptSource({

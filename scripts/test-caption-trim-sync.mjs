@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 
 const profileDir = process.env.PLAYWRIGHT_PROFILE_DIR ?? "C:\\playwright-shared-profile";
-const editorUrl =
-	process.env.PLAYWRIGHT_EDITOR_URL ??
-	"http://127.0.0.1:3000/editor/c0275627-2b24-40a1-9d10-a4f7a7248ef3";
+const editorUrl = process.env.PLAYWRIGHT_EDITOR_URL?.trim() ?? "";
 const preferHeadless =
 	process.env.PLAYWRIGHT_HEADLESS === "1" ||
 	process.env.PLAYWRIGHT_HEADLESS === "true";
@@ -62,11 +60,22 @@ async function main() {
 	}
 
 	const { context, launcher } = await launchWithFallback({ chromium });
-	const page = context.pages()[0] ?? (await context.newPage());
+	const existingEditorPage = context
+		.pages()
+		.find((candidate) => candidate.url().includes("/editor/"));
+	const page = existingEditorPage ?? context.pages()[0] ?? (await context.newPage());
 	console.log(`Using launcher: ${launcher}`);
 	console.log(`Using profile: ${profileDir}`);
-	console.log(`Opening: ${editorUrl}`);
-	await page.goto(editorUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+	if (editorUrl.length > 0) {
+		console.log(`Opening: ${editorUrl}`);
+		await page.goto(editorUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+	} else if (!page.url().includes("/editor/")) {
+		throw new Error(
+			"No editor tab found in shared profile. Open your target editor project first or set PLAYWRIGHT_EDITOR_URL.",
+		);
+	} else {
+		console.log(`Reusing editor tab: ${page.url()}`);
+	}
 
 	await page.waitForFunction(() => {
 		const editor = globalThis.__opencut_editor_core_singleton__;

@@ -8,7 +8,11 @@ import {
 	normalizeTranscriptWords,
 } from "@/lib/transcript-editor/core";
 import type { TextElement } from "@/types/timeline";
-import type { TranscriptEditCutRange, TranscriptEditWord } from "@/types/transcription";
+import type {
+	TranscriptCutTimeDomain,
+	TranscriptEditCutRange,
+	TranscriptEditWord,
+} from "@/types/transcription";
 
 const MAX_SNAPSHOT_CACHE_ENTRIES = 300;
 const snapshotCache = new Map<string, TranscriptTimelineSnapshot>();
@@ -67,6 +71,93 @@ export function getEffectiveTranscriptCutsFromTranscriptEdit({
 	return resolveEffectiveTranscriptCuts({
 		words: transcriptEdit.words,
 		cuts: transcriptEdit.cuts,
+	});
+}
+
+export function normalizeTranscriptCutsToClipLocalSource({
+	cuts,
+	trimStart,
+	cutTimeDomain,
+	words,
+}: {
+	cuts: TranscriptEditCutRange[];
+	trimStart: number;
+	cutTimeDomain?: TranscriptCutTimeDomain;
+	words?: TranscriptEditWord[];
+}): TranscriptEditCutRange[] {
+	if (!cuts.length) return [];
+	const normalized = mergeCutRanges({ cuts });
+	if (normalized.length === 0) return [];
+
+	const safeTrimStart = Math.max(0, trimStart);
+	const inferredDomain: TranscriptCutTimeDomain = (() => {
+		if (cutTimeDomain) return cutTimeDomain;
+		// Legacy fallback only: source-absolute domain is inferred only when both
+		// cuts and transcript words are clearly aligned to source-absolute time.
+		const wordsLookSourceAbsolute =
+			safeTrimStart > 0.001 &&
+			(words?.length ?? 0) > 0 &&
+			Math.min(...(words ?? []).map((word) => word.startTime)) >=
+				safeTrimStart - 0.05;
+		const cutsLookSourceAbsolute =
+			safeTrimStart > 0.001 &&
+			normalized.every(
+				(cut) =>
+					Number.isFinite(cut.start) &&
+					Number.isFinite(cut.end) &&
+					cut.start >= safeTrimStart - 0.05 &&
+					cut.end >= safeTrimStart - 0.05,
+			);
+		return wordsLookSourceAbsolute && cutsLookSourceAbsolute
+			? "source-absolute"
+			: "clip-local-source";
+	})();
+
+	if (inferredDomain === "clip-local-source") {
+		return normalized
+			.map((cut) => ({
+				start: Math.max(0, cut.start),
+				end: Math.max(0, cut.end),
+				reason: cut.reason,
+			}))
+			.filter((cut) => cut.end > cut.start);
+	}
+
+	return normalized
+		.map((cut) => ({
+			start: cut.start - safeTrimStart,
+			end: cut.end - safeTrimStart,
+			reason: cut.reason,
+		}))
+		.filter((cut) => cut.end > 0)
+		.map((cut) => ({
+			start: Math.max(0, cut.start),
+			end: Math.max(0.01, cut.end),
+			reason: cut.reason,
+		}));
+}
+
+export function getEffectiveTranscriptCutsForClipWindow({
+	transcriptEdit,
+	trimStart,
+}: {
+	transcriptEdit?:
+		| {
+				words: TranscriptEditWord[];
+				cuts: TranscriptEditCutRange[];
+				cutTimeDomain?: TranscriptCutTimeDomain;
+		  }
+		| null;
+	trimStart: number;
+}): TranscriptEditCutRange[] {
+	const effective = getEffectiveTranscriptCutsFromTranscriptEdit({
+		transcriptEdit,
+	});
+	return normalizeTranscriptCutsToClipLocalSource({
+		cuts: effective,
+		trimStart,
+		cutTimeDomain: transcriptEdit?.cutTimeDomain,
+		words: transcriptEdit?.words,
 	});
 }
 
@@ -202,18 +293,36 @@ export function buildTranscriptTimelineSnapshot({
 	});
 	const captionPayload = !compressedPayload
 		? null
-		: isTimelineAligned
-			? compressedPayload
-			: {
-					content: compressedPayload.content,
-					startTime: mediaStartTime + compressedPayload.startTime,
-					duration: compressedPayload.duration,
-					wordTimings: compressedPayload.wordTimings.map((timing) => ({
+		: (() => {
+				const timelineWordTimings = (isTimelineAligned
+					? compressedPayload.wordTimings
+					: compressedPayload.wordTimings.map((timing) => ({
+							word: timing.word,
+							startTime: mediaStartTime + timing.startTime,
+							endTime: mediaStartTime + timing.endTime,
+					  }))
+				)
+					.map((timing) => ({
 						word: timing.word,
-						startTime: mediaStartTime + timing.startTime,
-						endTime: mediaStartTime + timing.endTime,
-					})),
+						startTime: Math.max(
+							mediaStartTime,
+							Math.min(mediaStartTime + mediaDuration, timing.startTime),
+						),
+						endTime: Math.max(
+							mediaStartTime + 0.01,
+							Math.min(mediaStartTime + mediaDuration, timing.endTime),
+						),
+					}))
+					.filter((timing) => timing.endTime - timing.startTime > 0.001);
+				if (timelineWordTimings.length === 0) return null;
+				return {
+					content: compressedPayload.content,
+					// Keep generated caption element bounds clip-linked for consistency.
+					startTime: mediaStartTime,
+					duration: Math.max(0.04, mediaDuration),
+					wordTimings: timelineWordTimings,
 				};
+		  })();
 
 	const snapshot: TranscriptTimelineSnapshot = {
 		mediaElementId,

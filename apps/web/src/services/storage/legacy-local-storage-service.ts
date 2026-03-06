@@ -147,6 +147,7 @@ class LegacyLocalStorageService {
 			timelineViewState: project.timelineViewState,
 			transcriptionCache: project.transcriptionCache,
 			clipTranscriptCache: project.clipTranscriptCache,
+			mediaTranscriptLinks: project.mediaTranscriptLinks,
 			clipWordTranscriptionCache: project.clipWordTranscriptionCache,
 			clipGenerationCache: project.clipGenerationCache,
 			externalProjectLink: project.externalProjectLink,
@@ -210,6 +211,7 @@ class LegacyLocalStorageService {
 			timelineViewState: serializedProject.timelineViewState,
 			transcriptionCache: serializedProject.transcriptionCache,
 			clipTranscriptCache: serializedProject.clipTranscriptCache,
+			mediaTranscriptLinks: serializedProject.mediaTranscriptLinks,
 			clipWordTranscriptionCache: serializedProject.clipWordTranscriptionCache,
 			clipGenerationCache: serializedProject.clipGenerationCache,
 			externalProjectLink: serializedProject.externalProjectLink,
@@ -303,6 +305,8 @@ class LegacyLocalStorageService {
 			importVideoBitrate: mediaAsset.importVideoBitrate,
 			importAudioBitrate: mediaAsset.importAudioBitrate,
 			importTargetFps: mediaAsset.importTargetFps,
+			transcriptLinkKey: mediaAsset.transcriptLinkKey,
+			transcriptCacheKey: mediaAsset.transcriptCacheKey,
 		};
 
 		await mediaMetadataAdapter.set(mediaAsset.id, metadata);
@@ -376,6 +380,8 @@ class LegacyLocalStorageService {
 			importVideoBitrate: metadata.importVideoBitrate,
 			importAudioBitrate: metadata.importAudioBitrate,
 			importTargetFps: metadata.importTargetFps,
+			transcriptLinkKey: metadata.transcriptLinkKey,
+			transcriptCacheKey: metadata.transcriptCacheKey,
 		};
 	}
 

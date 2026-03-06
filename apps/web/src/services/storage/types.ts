@@ -36,6 +36,8 @@ export interface MediaAssetData {
 	importVideoBitrate?: number;
 	importAudioBitrate?: number;
 	importTargetFps?: number;
+	transcriptLinkKey?: string;
+	transcriptCacheKey?: string;
 }
 
 export type SerializedScene = Omit<TScene, "createdAt" | "updatedAt"> & {

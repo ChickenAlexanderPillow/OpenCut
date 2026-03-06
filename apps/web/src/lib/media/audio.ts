@@ -16,7 +16,7 @@ import {
 	mapCompressedTimeToSourceTime,
 } from "@/lib/transcript-editor/core";
 import { TRANSCRIPT_CUT_AUDIO_SMOOTHING_SECONDS } from "@/lib/transcript-editor/constants";
-import { getEffectiveTranscriptCutsFromTranscriptEdit } from "@/lib/transcript-editor/snapshot";
+import { getEffectiveTranscriptCutsForClipWindow } from "@/lib/transcript-editor/snapshot";
 
 const MAX_AUDIO_CHANNELS = 2;
 const EXPORT_SAMPLE_RATE = 44100;
@@ -187,8 +187,9 @@ export async function collectAudioElements({
 			if (!canElementHaveAudio(element)) continue;
 			if (element.duration <= 0) continue;
 			const effectiveTranscriptCuts =
-				getEffectiveTranscriptCutsFromTranscriptEdit({
+				getEffectiveTranscriptCutsForClipWindow({
 					transcriptEdit: element.transcriptEdit,
+					trimStart: element.trimStart,
 				});
 
 			const isTrackMuted = canTracktHaveAudio(track) && track.muted;
@@ -325,12 +326,13 @@ async function resolveAudioBufferForElement({
 	mediaMap: Map<string, MediaAsset>;
 	audioContext: AudioContext;
 }): Promise<AudioBuffer | null> {
-	try {
-		if (element.buffer) return element.buffer;
-		const effectiveTranscriptCuts =
-			getEffectiveTranscriptCutsFromTranscriptEdit({
-				transcriptEdit: element.transcriptEdit,
-			});
+		try {
+			if (element.buffer) return element.buffer;
+			const effectiveTranscriptCuts =
+				getEffectiveTranscriptCutsForClipWindow({
+					transcriptEdit: element.transcriptEdit,
+					trimStart: element.trimStart,
+				});
 
 		if (element.sourceType === "upload") {
 			const asset = mediaMap.get(element.mediaId);
@@ -819,8 +821,9 @@ async function fetchLibraryAudioClip({
 			transcriptRevision: buildTranscriptAudioRevision({
 				transcriptEdit: element.transcriptEdit,
 			}),
-			transcriptCuts: getEffectiveTranscriptCutsFromTranscriptEdit({
+			transcriptCuts: getEffectiveTranscriptCutsForClipWindow({
 				transcriptEdit: element.transcriptEdit,
+				trimStart: element.trimStart,
 			}),
 		};
 	} catch (error) {
@@ -845,8 +848,9 @@ function collectMediaAudioSource({
 		trimStart: element.trimStart,
 		trimEnd: element.trimEnd,
 		gain,
-		transcriptCuts: getEffectiveTranscriptCutsFromTranscriptEdit({
+		transcriptCuts: getEffectiveTranscriptCutsForClipWindow({
 			transcriptEdit: element.transcriptEdit,
+			trimStart: element.trimStart,
 		}),
 	};
 }
@@ -886,8 +890,9 @@ function collectMediaAudioClip({
 				: "",
 		transcriptCuts:
 			"transcriptEdit" in element
-				? getEffectiveTranscriptCutsFromTranscriptEdit({
+				? getEffectiveTranscriptCutsForClipWindow({
 						transcriptEdit: element.transcriptEdit,
+						trimStart: element.trimStart,
 					})
 				: [],
 	};

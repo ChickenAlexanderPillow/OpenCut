@@ -24,6 +24,7 @@ import {
 import { useTimelineStore } from "@/stores/timeline-store";
 import { TracksSnapshotCommand } from "@/lib/commands/timeline";
 import { enforceMainTrackStart } from "@/lib/timeline/track-utils";
+import { reconcileLinkedCaptionIntegrityInTracks } from "@/lib/transcript-editor/sync-captions";
 import type {
 	DropTarget,
 	ElementDragState,
@@ -550,8 +551,12 @@ export function useElementInteraction({
 						);
 						return { ...track, elements: nextElements } as TimelineTrack;
 					});
+					const reconciled = reconcileLinkedCaptionIntegrityInTracks({
+						beforeTracks: tracks,
+						tracks: nextTracks,
+					});
 					editor.command.execute({
-						command: new TracksSnapshotCommand(tracks, nextTracks),
+						command: new TracksSnapshotCommand(tracks, reconciled.tracks),
 					});
 				}
 				endDrag();

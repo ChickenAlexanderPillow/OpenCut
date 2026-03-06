@@ -5,6 +5,7 @@ import {
 	buildCompressedCutBoundaryTimes,
 	mapCompressedTimeToSourceTime,
 } from "@/lib/transcript-editor/core";
+import { normalizeTranscriptCutsToClipLocalSource } from "@/lib/transcript-editor/snapshot";
 import {
 	collectAudioClips,
 	decodeMediaFileToAudioBuffer,
@@ -142,7 +143,10 @@ export class StreamingTimelineAudioEngine {
 	private schedulerTimer: number | null = null;
 	private schedulerBusy = false;
 	private pendingTick = false;
-	private decodeInFlightByKey = new Map<string, Promise<DecodedClipWindow | null>>();
+	private decodeInFlightByKey = new Map<
+		string,
+		Promise<DecodedClipWindow | null>
+	>();
 	private decodedWindowByKey = new Map<string, DecodedClipWindow>();
 	private lastDecodedWindowByClipId = new Map<string, DecodedClipWindow>();
 	private isPlaying = false;
@@ -255,10 +259,16 @@ export class StreamingTimelineAudioEngine {
 		this.startScheduler();
 	}
 
-	seek({ time }: { time: number }): void {
+	seek({
+		time,
+		immediate = false,
+	}: {
+		time: number;
+		immediate?: boolean;
+	}): void {
 		this.timelineAnchorTime = clampTime(time);
 		this.contextAnchorTime = this.audioContext.currentTime;
-		this.clearScheduledNodes();
+		this.clearScheduledNodes({ immediate });
 		void this.tick();
 	}
 
@@ -286,7 +296,12 @@ export class StreamingTimelineAudioEngine {
 		}
 		if (structuralChangedClipIds.size === 0) return;
 		this.reschedules += 1;
-		this.unscheduleClipIds({ clipIds: structuralChangedClipIds });
+		// Only hard-unschedule clips that structurally changed to prevent old/new overlap
+		// (doubling) without flushing unrelated already-stable audio.
+		this.unscheduleClipIds({
+			clipIds: structuralChangedClipIds,
+			immediate: true,
+		});
 		this.seek({ time: playhead });
 	}
 
@@ -382,20 +397,36 @@ export class StreamingTimelineAudioEngine {
 		}
 	}
 
-	private clearScheduledNodes(): void {
+	private clearScheduledNodes({
+		immediate = false,
+	}: {
+		immediate?: boolean;
+	} = {}): void {
 		for (const node of this.scheduledByKey.values()) {
-			this.unscheduleNode({ node, softStop: this.isPlaying });
+			this.unscheduleNode({
+				node,
+				softStop: this.isPlaying && !immediate,
+			});
 		}
 		this.scheduledByKey.clear();
 		this.scheduledUntilByClipId.clear();
 		this.lastScheduledEndAtContextByClipId.clear();
 	}
 
-	private unscheduleClipIds({ clipIds }: { clipIds: Set<string> }): void {
+	private unscheduleClipIds({
+		clipIds,
+		immediate = false,
+	}: {
+		clipIds: Set<string>;
+		immediate?: boolean;
+	}): void {
 		if (clipIds.size === 0) return;
 		for (const [key, node] of this.scheduledByKey.entries()) {
 			if (!clipIds.has(node.clipId)) continue;
-			this.unscheduleNode({ node, softStop: this.isPlaying });
+			this.unscheduleNode({
+				node,
+				softStop: this.isPlaying && !immediate,
+			});
 			this.scheduledByKey.delete(key);
 		}
 		for (const clipId of clipIds) {
@@ -982,10 +1013,7 @@ export class StreamingTimelineAudioEngine {
 			source.stop(contextStart + boundedPlaybackDuration + 0.01);
 			const scheduledTimelineEnd =
 				timelinePlaybackStart +
-				Math.max(
-					0,
-					Math.min(playbackDuration, boundedPlaybackDuration),
-				);
+				Math.max(0, Math.min(playbackDuration, boundedPlaybackDuration));
 			this.scheduledUntilByClipId.set(
 				clip.id,
 				Math.max(
@@ -1094,19 +1122,9 @@ export class StreamingTimelineAudioEngine {
 		clip: StreamingClip;
 	}): TranscriptEditCutRange[] {
 		if (!clip.transcriptCuts || clip.transcriptCuts.length === 0) return [];
-		const trimStart = Math.max(0, clip.trimStart);
-		const localCuts: TranscriptEditCutRange[] = [];
-		for (const cut of clip.transcriptCuts) {
-			const start = cut.start - trimStart;
-			const end = cut.end - trimStart;
-			if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
-			if (end <= 0) continue;
-			localCuts.push({
-				start: Math.max(0, start),
-				end: Math.max(0, end),
-				reason: cut.reason,
-			});
-		}
-		return localCuts;
+		return normalizeTranscriptCutsToClipLocalSource({
+			cuts: clip.transcriptCuts,
+			trimStart: clip.trimStart,
+		});
 	}
 }

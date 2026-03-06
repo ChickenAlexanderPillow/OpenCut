@@ -14,6 +14,7 @@ import {
 	enforceMainTrackStart,
 } from "@/lib/timeline/track-utils";
 import { cloneAnimations } from "@/lib/animation";
+import { remapLinkedReferencesForClonedElement } from "@/lib/transcript-editor/linkage";
 
 export class PasteCommand extends Command {
 	private savedState: TimelineTrack[] | null = null;
@@ -167,15 +168,39 @@ function buildPastedElements({
 	time: number;
 }): TimelineElement[] {
 	const elementsToAdd: TimelineElement[] = [];
+	const clonedIdMap = new Map<string, string>();
+
+	for (const item of items) {
+		const existingId = item.sourceElementId
+			? item.sourceElementId
+			: typeof (item.element as { id?: unknown }).id === "string"
+				? ((item.element as { id?: string }).id ?? "")
+				: "";
+		if (!existingId) continue;
+		clonedIdMap.set(existingId, generateUUID());
+	}
 
 	for (const item of items) {
 		const relativeOffset = item.element.startTime - minStart;
 		const startTime = Math.max(0, time + relativeOffset);
-		const newElementId = generateUUID();
+		const existingId = item.sourceElementId
+			? item.sourceElementId
+			: typeof (item.element as { id?: unknown }).id === "string"
+				? ((item.element as { id?: string }).id ?? "")
+				: "";
+		const newElementId =
+			(existingId ? clonedIdMap.get(existingId) : undefined) ?? generateUUID();
 
+		const clonedElement = remapLinkedReferencesForClonedElement({
+			element: {
+				...(item.element as TimelineElement),
+				id: existingId || newElementId,
+			},
+			newElementId,
+			clonedIdMap,
+		});
 		elementsToAdd.push({
-			...item.element,
-			id: newElementId,
+			...clonedElement,
 			startTime,
 			animations: cloneAnimations({
 				animations: item.element.animations,

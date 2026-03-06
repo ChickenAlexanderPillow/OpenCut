@@ -838,6 +838,235 @@ export function validateAndHealCaptionDriftInTracks({
 	return { tracks: nextTracks, changed };
 }
 
+function alignLinkedCaptionBoundsToSourceMedia({
+	tracks,
+	sourceMediaById,
+}: {
+	tracks: TimelineTrack[];
+	sourceMediaById: Map<string, VideoElement | AudioElement>;
+}): { tracks: TimelineTrack[]; changed: boolean } {
+	let changed = false;
+	const nextTracks = tracks.map((track) => {
+		if (track.type !== "text") return track;
+		let trackChanged = false;
+		const nextElements = track.elements.map((element) => {
+			if (element.type !== "text") return element;
+			const sourceMediaId = element.captionSourceRef?.mediaElementId;
+			if (!sourceMediaId) return element;
+			const sourceMedia = sourceMediaById.get(sourceMediaId);
+			if (!sourceMedia) return element;
+			if (
+				Math.abs(element.startTime - sourceMedia.startTime) < 1e-6 &&
+				Math.abs(element.duration - sourceMedia.duration) < 1e-6
+			) {
+				return element;
+			}
+			trackChanged = true;
+			changed = true;
+			return {
+				...element,
+				startTime: sourceMedia.startTime,
+				duration: sourceMedia.duration,
+			};
+		});
+		return trackChanged ? { ...track, elements: nextElements } : track;
+	});
+	return { tracks: nextTracks, changed };
+}
+
+function removeCaptionsLinkedToMissingMedia({
+	tracks,
+	existingMediaIds,
+}: {
+	tracks: TimelineTrack[];
+	existingMediaIds: Set<string>;
+}): { tracks: TimelineTrack[]; changed: boolean } {
+	let changed = false;
+	const nextTracks = tracks.map((track) => {
+		if (track.type !== "text") return track;
+		const nextElements = track.elements.filter((element) => {
+			if (element.type !== "text") return true;
+			const mediaElementId = element.captionSourceRef?.mediaElementId;
+			if (!mediaElementId) return true;
+			if (existingMediaIds.has(mediaElementId)) return true;
+			changed = true;
+			return false;
+		});
+		if (nextElements.length === track.elements.length) return track;
+		return { ...track, elements: nextElements };
+	});
+	return { tracks: nextTracks, changed };
+}
+
+type LinkedCaptionInvariantViolation =
+	| {
+			type: "missing-source-media";
+			captionElementId: string;
+			mediaElementId: string;
+	  }
+	| {
+			type: "bounds-mismatch";
+			captionElementId: string;
+			mediaElementId: string;
+			captionStartTime: number;
+			captionDuration: number;
+			mediaStartTime: number;
+			mediaDuration: number;
+	  };
+
+function collectLinkedCaptionInvariantViolations({
+	tracks,
+}: {
+	tracks: TimelineTrack[];
+}): LinkedCaptionInvariantViolation[] {
+	const mediaById = new Map<string, VideoElement | AudioElement>();
+	for (const track of tracks) {
+		for (const element of track.elements) {
+			if (!isEditableMediaElement(element)) continue;
+			mediaById.set(element.id, element);
+		}
+	}
+
+	const violations: LinkedCaptionInvariantViolation[] = [];
+	for (const track of tracks) {
+		if (track.type !== "text") continue;
+		for (const element of track.elements) {
+			if (element.type !== "text") continue;
+			const mediaElementId = element.captionSourceRef?.mediaElementId;
+			if (!mediaElementId) continue;
+			const sourceMedia = mediaById.get(mediaElementId);
+			if (!sourceMedia) {
+				violations.push({
+					type: "missing-source-media",
+					captionElementId: element.id,
+					mediaElementId,
+				});
+				continue;
+			}
+			if (
+				Math.abs(element.startTime - sourceMedia.startTime) > 1e-6 ||
+				Math.abs(element.duration - sourceMedia.duration) > 1e-6
+			) {
+				violations.push({
+					type: "bounds-mismatch",
+					captionElementId: element.id,
+					mediaElementId,
+					captionStartTime: element.startTime,
+					captionDuration: element.duration,
+					mediaStartTime: sourceMedia.startTime,
+					mediaDuration: sourceMedia.duration,
+				});
+			}
+		}
+	}
+	return violations;
+}
+
+function reportLinkedCaptionInvariantViolations({
+	tracks,
+	context,
+}: {
+	tracks: TimelineTrack[];
+	context: string;
+}): void {
+	if (process.env.NODE_ENV === "production") return;
+	const violations = collectLinkedCaptionInvariantViolations({ tracks });
+	if (violations.length === 0) return;
+	console.warn("[caption-invariant]", {
+		context,
+		count: violations.length,
+		sample: violations.slice(0, 5),
+	});
+}
+
+export function reconcileLinkedCaptionIntegrityInTracks({
+	beforeTracks,
+	tracks,
+}: {
+	beforeTracks: TimelineTrack[];
+	tracks: TimelineTrack[];
+}): { tracks: TimelineTrack[]; changed: boolean } {
+	const beforeMediaById = new Map<string, VideoElement | AudioElement>();
+	for (const track of beforeTracks) {
+		for (const element of track.elements) {
+			if (!isEditableMediaElement(element)) continue;
+			beforeMediaById.set(element.id, element);
+		}
+	}
+	const afterMediaById = new Map<string, VideoElement | AudioElement>();
+	for (const track of tracks) {
+		for (const element of track.elements) {
+			if (!isEditableMediaElement(element)) continue;
+			afterMediaById.set(element.id, element);
+		}
+	}
+
+	let nextTracks = tracks;
+	let changed = false;
+
+	const orphanCleanup = removeCaptionsLinkedToMissingMedia({
+		tracks: nextTracks,
+		existingMediaIds: new Set(afterMediaById.keys()),
+	});
+	if (orphanCleanup.changed) {
+		nextTracks = orphanCleanup.tracks;
+		changed = true;
+	}
+
+	const mediaIdsNeedingTranscriptSync = new Set<string>();
+	for (const [mediaElementId, beforeMedia] of beforeMediaById.entries()) {
+		const afterMedia = afterMediaById.get(mediaElementId);
+		if (!afterMedia) {
+			// Removed media are already handled by orphan cleanup above.
+			continue;
+		}
+		const transcriptWords = afterMedia.transcriptEdit?.words.length ?? 0;
+		if (transcriptWords === 0) continue;
+		const transcriptUpdatedAt = afterMedia.transcriptEdit?.updatedAt ?? "";
+		const beforeTranscriptUpdatedAt = beforeMedia.transcriptEdit?.updatedAt ?? "";
+		const timingOrTrimChanged =
+			Math.abs(afterMedia.startTime - beforeMedia.startTime) > 1e-6 ||
+			Math.abs(afterMedia.duration - beforeMedia.duration) > 1e-6 ||
+			Math.abs(afterMedia.trimStart - beforeMedia.trimStart) > 1e-6 ||
+			Math.abs(afterMedia.trimEnd - beforeMedia.trimEnd) > 1e-6;
+		if (timingOrTrimChanged || transcriptUpdatedAt !== beforeTranscriptUpdatedAt) {
+			mediaIdsNeedingTranscriptSync.add(mediaElementId);
+		}
+	}
+	for (const [mediaElementId, media] of afterMediaById.entries()) {
+		if (beforeMediaById.has(mediaElementId)) continue;
+		if ((media.transcriptEdit?.words.length ?? 0) > 0) {
+			mediaIdsNeedingTranscriptSync.add(mediaElementId);
+		}
+	}
+
+	for (const mediaElementId of mediaIdsNeedingTranscriptSync) {
+		const syncResult = syncCaptionsFromTranscriptEdits({
+			tracks: nextTracks,
+			mediaElementId,
+		});
+		if (syncResult.changed) {
+			nextTracks = syncResult.tracks;
+			changed = true;
+		}
+	}
+
+	const boundsAligned = alignLinkedCaptionBoundsToSourceMedia({
+		tracks: nextTracks,
+		sourceMediaById: afterMediaById,
+	});
+	if (boundsAligned.changed) {
+		nextTracks = boundsAligned.tracks;
+		changed = true;
+	}
+	reportLinkedCaptionInvariantViolations({
+		tracks: nextTracks,
+		context: "reconcile-linked-caption-integrity",
+	});
+
+	return { tracks: nextTracks, changed };
+}
+
 export function syncAllCaptionsFromTranscriptEditsInTracks({
 	tracks,
 }: {
@@ -860,6 +1089,25 @@ export function syncAllCaptionsFromTranscriptEditsInTracks({
 			changed = true;
 		}
 	}
+	const mediaById = new Map<string, VideoElement | AudioElement>();
+	for (const track of nextTracks) {
+		for (const element of track.elements) {
+			if (!isEditableMediaElement(element)) continue;
+			mediaById.set(element.id, element);
+		}
+	}
+	const boundsAligned = alignLinkedCaptionBoundsToSourceMedia({
+		tracks: nextTracks,
+		sourceMediaById: mediaById,
+	});
+	if (boundsAligned.changed) {
+		nextTracks = boundsAligned.tracks;
+		changed = true;
+	}
+	reportLinkedCaptionInvariantViolations({
+		tracks: nextTracks,
+		context: "sync-all-captions-from-transcript",
+	});
 	return { tracks: nextTracks, changed };
 }
 

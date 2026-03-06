@@ -447,6 +447,19 @@ function initializeTranscriptEditFromExistingCaption({
 	tracks: TimelineTrack[];
 	mediaElementId: string;
 }): NonNullable<VideoElement["transcriptEdit"]> | null {
+	let sourceMediaElement: TimelineElement | null = null;
+	for (const track of tracks) {
+		if (track.type !== "video" && track.type !== "audio") continue;
+		for (const element of track.elements) {
+			if (element.id !== mediaElementId) continue;
+			sourceMediaElement = element;
+			break;
+		}
+		if (sourceMediaElement) break;
+	}
+	if (!sourceMediaElement || !canElementHaveAudio(sourceMediaElement)) {
+		return null;
+	}
 	const sourceCaption = tracks
 		.flatMap((track) => (track.type === "text" ? track.elements : []))
 		.find((element) => {
@@ -464,8 +477,9 @@ function initializeTranscriptEditFromExistingCaption({
 		words: (sourceCaption.captionWordTimings ?? []).map((timing, index) => ({
 			id: `${mediaElementId}:word:${index}:${timing.startTime.toFixed(3)}`,
 			text: timing.word,
-			startTime: timing.startTime,
-			endTime: timing.endTime,
+			// Caption timings are timeline absolute; transcript edit words are clip-local.
+			startTime: Math.max(0, timing.startTime - sourceMediaElement.startTime),
+			endTime: Math.max(0.01, timing.endTime - sourceMediaElement.startTime),
 			removed: false,
 		})),
 	});
@@ -475,6 +489,7 @@ function initializeTranscriptEditFromExistingCaption({
 		source: "word-level" as const,
 		words,
 		cuts,
+		cutTimeDomain: "clip-local-source",
 		segmentsUi: buildDefaultTranscriptSegmentsUi({
 			elementId: mediaElementId,
 			words,
@@ -941,6 +956,7 @@ function applyTranscriptEditMutation({
 		source: "word-level" as const,
 		words: nextWords,
 		cuts,
+		cutTimeDomain: "clip-local-source" as const,
 		segmentsUi: nextSegmentsUi,
 		updatedAt: new Date().toISOString(),
 	};
@@ -2748,7 +2764,7 @@ export function useEditorActions() {
 						}
 						const derived = buildClipTranscriptEntryFromLinkedExternalTranscript({
 							asset: mediaAsset,
-							modelId: "whisper-tiny",
+							modelId: DEFAULT_TRANSCRIPTION_MODEL,
 							language: "auto",
 							externalTranscript: linkedTranscript,
 							requireSuitability: false,
@@ -2763,7 +2779,7 @@ export function useEditorActions() {
 							cacheKey: derived.cacheKey,
 							transcriptRef: {
 								cacheKey: derived.cacheKey,
-								modelId: "whisper-tiny",
+								modelId: DEFAULT_TRANSCRIPTION_MODEL,
 								language: "auto",
 								updatedAt: derived.transcript.updatedAt,
 							},
@@ -2774,7 +2790,7 @@ export function useEditorActions() {
 						transcriptResult = await getOrCreateClipTranscriptWithReuse({
 							project: projectForTranscript,
 							asset: mediaAsset,
-							modelId: "whisper-tiny",
+							modelId: DEFAULT_TRANSCRIPTION_MODEL,
 							onProgress: (progress) => {
 								hasTranscriptionProgress = true;
 								setStatus({
@@ -3293,6 +3309,7 @@ export function useEditorActions() {
 														cuts: buildTranscriptCutsFromWords({
 															words: transcriptWords,
 														}),
+														cutTimeDomain: "clip-local-source",
 														updatedAt: new Date().toISOString(),
 													},
 												},
@@ -3548,14 +3565,15 @@ export function useEditorActions() {
 			const results = editor.timeline.getElementsWithTracks({
 				elements: selectedElements,
 			});
-			const items = results.map(({ track, element }) => {
-				const { ...elementWithoutId } = element;
-				return {
-					trackId: track.id,
-					trackType: track.type,
-					element: elementWithoutId,
-				};
-			});
+				const items = results.map(({ track, element }) => {
+					const { ...elementWithoutId } = element;
+					return {
+						trackId: track.id,
+						trackType: track.type,
+						element: elementWithoutId,
+						sourceElementId: element.id,
+					};
+				});
 
 			setClipboard({ items });
 		},

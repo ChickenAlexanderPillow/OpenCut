@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
 import {
 	dedupeTranscriptEditsInTracks,
+	reconcileLinkedCaptionIntegrityInTracks,
 	rebuildCaptionTrackForMediaElement,
 	syncCaptionsFromTranscriptEdits,
 } from "@/lib/transcript-editor/sync-captions";
@@ -122,6 +123,145 @@ function createVideoElement({
 }
 
 describe("sync captions from transcript edits", () => {
+	test("reconcile removes orphan linked captions when source media is deleted", () => {
+		const audio = createAudioElement({
+			id: "audio-1",
+			startTime: 0,
+			duration: 2,
+			words: [
+				{
+					id: "audio-1:word:0",
+					text: "hello",
+					startTime: 0,
+					endTime: 0.4,
+				},
+			],
+		});
+		const caption = createCaption({
+			id: "caption-1",
+			sourceMediaElementId: "audio-1",
+			startTime: 0,
+			duration: 0.4,
+			content: "hello",
+			wordTimings: [{ word: "hello", startTime: 0, endTime: 0.4 }],
+		});
+		const beforeTracks: TimelineTrack[] = [
+			{
+				id: "audio-track",
+				type: "audio",
+				name: "Audio",
+				muted: false,
+				elements: [audio],
+			},
+			{
+				id: "text-track",
+				type: "text",
+				name: "Captions",
+				hidden: false,
+				elements: [caption],
+			},
+		];
+		const afterTracks: TimelineTrack[] = [
+			{
+				id: "audio-track",
+				type: "audio",
+				name: "Audio",
+				muted: false,
+				elements: [],
+			},
+			{
+				id: "text-track",
+				type: "text",
+				name: "Captions",
+				hidden: false,
+				elements: [caption],
+			},
+		];
+
+		const result = reconcileLinkedCaptionIntegrityInTracks({
+			beforeTracks,
+			tracks: afterTracks,
+		});
+		expect(result.changed).toBe(true);
+		const textTrack = result.tracks.find((track) => track.id === "text-track");
+		expect(textTrack?.type).toBe("text");
+		if (textTrack?.type !== "text") return;
+		expect(textTrack.elements).toHaveLength(0);
+	});
+
+	test("reconcile keeps captions in lockstep when transcript media moves", () => {
+		const audioBefore = createAudioElement({
+			id: "audio-1",
+			startTime: 2,
+			duration: 2,
+			words: [
+				{
+					id: "audio-1:word:0",
+					text: "move",
+					startTime: 0,
+					endTime: 0.4,
+				},
+			],
+		});
+		const caption = createCaption({
+			id: "caption-1",
+			sourceMediaElementId: "audio-1",
+			startTime: 2.0,
+			duration: 0.4,
+			content: "move",
+			wordTimings: [{ word: "move", startTime: 2.0, endTime: 2.4 }],
+		});
+		const beforeTracks: TimelineTrack[] = [
+			{
+				id: "audio-track",
+				type: "audio",
+				name: "Audio",
+				muted: false,
+				elements: [audioBefore],
+			},
+			{
+				id: "text-track",
+				type: "text",
+				name: "Captions",
+				hidden: false,
+				elements: [caption],
+			},
+		];
+		const audioAfter = { ...audioBefore, startTime: 5 };
+		const staleAfterCaption = {
+			...caption,
+			startTime: 2,
+		};
+		const afterTracks: TimelineTrack[] = [
+			{
+				id: "audio-track",
+				type: "audio",
+				name: "Audio",
+				muted: false,
+				elements: [audioAfter],
+			},
+			{
+				id: "text-track",
+				type: "text",
+				name: "Captions",
+				hidden: false,
+				elements: [staleAfterCaption],
+			},
+		];
+
+		const result = reconcileLinkedCaptionIntegrityInTracks({
+			beforeTracks,
+			tracks: afterTracks,
+		});
+		expect(result.changed).toBe(true);
+		const textTrack = result.tracks.find((track) => track.id === "text-track");
+		expect(textTrack?.type).toBe("text");
+		if (textTrack?.type !== "text") return;
+		const syncedCaption = textTrack.elements[0];
+		expect(syncedCaption?.startTime).toBeCloseTo(5.0, 3);
+		expect(syncedCaption?.captionWordTimings?.[0]?.startTime).toBeCloseTo(5.0, 3);
+	});
+
 	test("does not cross-update captions when multiple clips share legacy transcript source id", () => {
 		const leftAudio = createAudioElement({
 			id: "audio-left",
@@ -425,7 +565,7 @@ describe("sync captions from transcript edits", () => {
 		const caption = textTrack.elements[0];
 		expect(caption.content).toBe("go");
 		expect(caption.startTime).toBeCloseTo(10.0, 3);
-		expect(caption.duration).toBeCloseTo(0.433, 2);
+		expect(caption.duration).toBeCloseTo(2.0, 3);
 		expect(caption.captionWordTimings?.[0]?.word).toBe("go");
 		expect(caption.captionWordTimings?.[0]?.startTime).toBeCloseTo(10.0, 3);
 		expect(caption.captionWordTimings?.[0]?.endTime).toBeCloseTo(10.4, 3);
@@ -555,7 +695,7 @@ describe("sync captions from transcript edits", () => {
 		expect(textTrack.hidden).toBe(false);
 		expect(textTrack.elements).toHaveLength(1);
 		const rebuilt = textTrack.elements[0];
-		expect(rebuilt.startTime).toBeCloseTo(12.2, 3);
+		expect(rebuilt.startTime).toBeCloseTo(12.0, 3);
 		expect(rebuilt.captionWordTimings?.[0]?.startTime).toBeCloseTo(12.2, 3);
 	});
 
@@ -642,7 +782,7 @@ describe("sync captions from transcript edits", () => {
 		const rebuilt = rebuiltTrack.elements[0];
 		expect(rebuilt.content).toBe("fresh caption");
 		expect(rebuilt.captionSourceRef?.mediaElementId).toBe("audio-1");
-		expect(rebuilt.startTime).toBeCloseTo(3.2, 3);
+		expect(rebuilt.startTime).toBeCloseTo(3.0, 3);
 	});
 
 	test("dedupe transcript edits keeps only caption-linked transcript per shared source", () => {

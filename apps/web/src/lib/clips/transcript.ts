@@ -1,7 +1,7 @@
 import { DEFAULT_TRANSCRIPTION_MODEL } from "@/constants/transcription-constants";
 import { decodeAudioToFloat32 } from "@/lib/media/audio";
 import type { MediaAsset } from "@/types/assets";
-import type { TProject } from "@/types/project";
+import type { TMediaTranscriptLinkEntry, TProject } from "@/types/project";
 import { ALL_FORMATS, AudioBufferSink, BlobSource, Input } from "mediabunny";
 import type {
 	ClipTranscriptCacheEntry,
@@ -20,6 +20,9 @@ import {
 import type { ExternalProjectTranscriptCacheEntry } from "@/types/external-projects";
 
 export const CLIP_TRANSCRIPT_CACHE_VERSION = 1;
+export const PROJECT_MEDIA_TRANSCRIPT_MODEL: TranscriptionModelId =
+	DEFAULT_TRANSCRIPTION_MODEL;
+export const PROJECT_MEDIA_TRANSCRIPT_LANGUAGE: TranscriptionLanguage = "auto";
 const CHUNKED_TRANSCRIPTION_DURATION_THRESHOLD_SECONDS = 4 * 60;
 const CHUNKED_TRANSCRIPTION_FILE_SIZE_THRESHOLD_BYTES = 180 * 1024 * 1024;
 const CHUNKED_TRANSCRIPTION_MIN_WINDOW_SECONDS = 60;
@@ -33,7 +36,10 @@ const CLIP_TRANSCRIPTION_API_TIMEOUT_MS = 120000;
 const CLIP_TRANSCRIPTION_TARGET_SAMPLE_RATE = 16000;
 
 function nowMs(): number {
-	if (typeof performance !== "undefined" && typeof performance.now === "function") {
+	if (
+		typeof performance !== "undefined" &&
+		typeof performance.now === "function"
+	) {
 		return performance.now();
 	}
 	return Date.now();
@@ -88,6 +94,25 @@ function buildClipTranscriptFingerprint({
 	});
 }
 
+export function buildProjectMediaTranscriptLinkKey({
+	asset,
+}: {
+	asset: Pick<
+		MediaAsset,
+		"name" | "type" | "file" | "duration" | "width" | "height" | "fps"
+	>;
+}): string {
+	return JSON.stringify({
+		type: asset.type,
+		name: asset.name,
+		fileSize: asset.file.size,
+		duration: normalizeDurationForFingerprint({ duration: asset.duration }),
+		width: asset.width ?? 0,
+		height: asset.height ?? 0,
+		fps: asset.fps ?? 0,
+	});
+}
+
 function getClipTranscriptCacheKey({
 	mediaId,
 	modelId,
@@ -98,6 +123,58 @@ function getClipTranscriptCacheKey({
 	language: string;
 }): string {
 	return `${mediaId}:${modelId}:${language}`;
+}
+
+export function buildClipTranscriptCacheEntryForAsset({
+	asset,
+	modelId,
+	language,
+	text,
+	segments,
+	updatedAt = new Date().toISOString(),
+}: {
+	asset: MediaAsset;
+	modelId: TranscriptionModelId;
+	language: TranscriptionLanguage;
+	text: string;
+	segments: TranscriptionSegment[];
+	updatedAt?: string;
+}): {
+	transcript: ClipTranscriptCacheEntry;
+	cacheKey: string;
+	transcriptRef: ClipTranscriptRef;
+} {
+	const resolvedLanguage = language ?? "auto";
+	const fingerprint = buildClipTranscriptFingerprint({
+		asset,
+		modelId,
+		language: resolvedLanguage,
+	});
+	const cacheKey = getClipTranscriptCacheKey({
+		mediaId: asset.id,
+		modelId,
+		language: resolvedLanguage,
+	});
+	const transcript: ClipTranscriptCacheEntry = {
+		cacheVersion: CLIP_TRANSCRIPT_CACHE_VERSION,
+		mediaId: asset.id,
+		fingerprint,
+		language: resolvedLanguage,
+		modelId,
+		text,
+		segments: normalizeTranscriptionSegments({ segments }),
+		updatedAt,
+	};
+	return {
+		transcript,
+		cacheKey,
+		transcriptRef: {
+			cacheKey,
+			modelId,
+			language: resolvedLanguage,
+			updatedAt,
+		},
+	};
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -202,12 +279,16 @@ function resolveClipTranscriptionApiCandidates(): string[] {
 		}
 		candidates.push("/api/clips/transcribe");
 		if (fallbackBase) {
-			candidates.push(`${fallbackBase.replace(/\/$/, "")}/api/clips/transcribe`);
+			candidates.push(
+				`${fallbackBase.replace(/\/$/, "")}/api/clips/transcribe`,
+			);
 		}
 	} else {
 		candidates.push("/api/clips/transcribe");
 		if (fallbackBase) {
-			candidates.push(`${fallbackBase.replace(/\/$/, "")}/api/clips/transcribe`);
+			candidates.push(
+				`${fallbackBase.replace(/\/$/, "")}/api/clips/transcribe`,
+			);
 		}
 	}
 
@@ -260,8 +341,12 @@ async function transcribeWavBlobWithClipApi({
 	const requestStartedAt = nowMs();
 	const approxAudioDurationSeconds = Math.max(
 		0,
-		Math.round((Math.max(0, wavBlob.size - 44) / 2 / CLIP_TRANSCRIPTION_TARGET_SAMPLE_RATE) * 1000) /
-			1000,
+		Math.round(
+			(Math.max(0, wavBlob.size - 44) /
+				2 /
+				CLIP_TRANSCRIPTION_TARGET_SAMPLE_RATE) *
+				1000,
+		) / 1000,
 	);
 
 	const endpoints = resolveClipTranscriptionApiCandidates();
@@ -297,7 +382,9 @@ async function transcribeWavBlobWithClipApi({
 
 			if (!response.ok) {
 				const body = await response.text();
-				throw new Error(`Clip transcription failed (${response.status}): ${body}`);
+				throw new Error(
+					`Clip transcription failed (${response.status}): ${body}`,
+				);
 			}
 
 			const payload = (await response.json()) as {
@@ -340,13 +427,18 @@ async function transcribeWavBlobWithClipApi({
 				timingsMs: payload.timingsMs ?? null,
 			});
 			return {
-				text: segments.map((segment) => segment.text).join(" ").trim(),
+				text: segments
+					.map((segment) => segment.text)
+					.join(" ")
+					.trim(),
 				segments,
 			};
 		} catch (error) {
 			window.clearTimeout(timeoutId);
 			lastError =
-				error instanceof Error ? error : new Error("Failed to reach clip transcription API");
+				error instanceof Error
+					? error
+					: new Error("Failed to reach clip transcription API");
 		}
 	}
 
@@ -368,21 +460,126 @@ function normalizeTranscriptionSegments({
 		.sort((a, b) => a.start - b.start);
 }
 
-function shouldUseChunkedTranscription({ asset }: { asset: MediaAsset }): boolean {
+function shouldUseChunkedTranscription({
+	asset,
+}: {
+	asset: MediaAsset;
+}): boolean {
 	if (asset.file.size >= CHUNKED_TRANSCRIPTION_FILE_SIZE_THRESHOLD_BYTES) {
 		return true;
 	}
-	if ((asset.duration ?? 0) >= CHUNKED_TRANSCRIPTION_DURATION_THRESHOLD_SECONDS) {
+	if (
+		(asset.duration ?? 0) >= CHUNKED_TRANSCRIPTION_DURATION_THRESHOLD_SECONDS
+	) {
 		return true;
 	}
 	return false;
 }
 
-function resolveChunkWindowSeconds({
-	duration,
+export async function transcribeClipTranscriptLocallyForAsset({
+	asset,
+	modelId = PROJECT_MEDIA_TRANSCRIPT_MODEL,
+	language = PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
+	onProgress,
 }: {
-	duration: number;
-}): number {
+	asset: MediaAsset;
+	modelId?: TranscriptionModelId;
+	language?: TranscriptionLanguage;
+	onProgress?: (progress: TranscriptionProgress) => void;
+}): Promise<{ text: string; segments: TranscriptionSegment[] }> {
+	const resolvedLanguage = language ?? "auto";
+	const emitProgress = ({
+		progress,
+		message,
+	}: {
+		progress: number;
+		message?: string;
+	}) => {
+		onProgress?.({
+			status: "transcribing",
+			progress: Math.round(clamp(progress, 0, 100)),
+			message,
+		});
+	};
+	return shouldUseChunkedTranscription({ asset })
+		? await transcribeAssetInChunks({
+				asset,
+				modelId,
+				language: resolvedLanguage,
+				onProgress,
+			})
+		: await (async () => {
+				emitProgress({ progress: 0, message: "Preparing audio..." });
+				const decodeStartedAt = nowMs();
+				let decodeSoftProgress = 0;
+				const decodeHeartbeatId = window.setInterval(() => {
+					const elapsedSeconds = Math.max(
+						0,
+						(nowMs() - decodeStartedAt) / 1000,
+					);
+					decodeSoftProgress = Math.min(
+						30,
+						decodeSoftProgress + Math.max(0.6, elapsedSeconds * 0.08),
+					);
+					emitProgress({
+						progress: decodeSoftProgress,
+						message: "Preparing audio...",
+					});
+				}, CHUNK_PROGRESS_HEARTBEAT_MS);
+				let decoded: { samples: Float32Array; sampleRate: number };
+				try {
+					decoded = await decodeAudioToFloat32({
+						audioBlob: asset.file,
+						fallbackUrl: asset.url,
+					});
+				} finally {
+					window.clearInterval(decodeHeartbeatId);
+				}
+				emitProgress({ progress: 35, message: "Transcribing..." });
+				const transcribeStartedAt = nowMs();
+				let transcribeSoftProgress = 35;
+				const durationSeconds =
+					decoded.sampleRate > 0
+						? decoded.samples.length / decoded.sampleRate
+						: (asset.duration ?? 0);
+				const expectedTranscribeSeconds = Math.max(
+					8,
+					Math.min(120, durationSeconds * 1.35),
+				);
+				const transcribeHeartbeatId = window.setInterval(() => {
+					const elapsedSeconds = Math.max(
+						0,
+						(nowMs() - transcribeStartedAt) / 1000,
+					);
+					const progressByTime =
+						35 + (elapsedSeconds / expectedTranscribeSeconds) * 62;
+					transcribeSoftProgress = Math.max(
+						transcribeSoftProgress,
+						Math.min(97, progressByTime),
+					);
+					emitProgress({
+						progress: transcribeSoftProgress,
+						message: "Transcribing...",
+					});
+				}, CHUNK_PROGRESS_HEARTBEAT_MS);
+				let result: { text: string; segments: TranscriptionSegment[] };
+				try {
+					result = await transcribeWithClipApi({
+						samples: decoded.samples,
+						sampleRate: decoded.sampleRate,
+						language: resolvedLanguage,
+						modelId,
+						cacheKey: `${asset.id}:${modelId}:${resolvedLanguage}:single`,
+					});
+				} finally {
+					window.clearInterval(transcribeHeartbeatId);
+				}
+				emitProgress({ progress: 100, message: "Transcribing..." });
+				return result;
+			})();
+}
+
+function resolveChunkWindowSeconds({ duration }: { duration: number }): number {
 	if (!Number.isFinite(duration) || duration <= 0) {
 		return CHUNKED_TRANSCRIPTION_MIN_WINDOW_SECONDS;
 	}
@@ -400,7 +597,9 @@ function resolveChunkWindowSeconds({
 		maxWindowByUploadSize,
 	);
 
-	const desiredWindow = Math.ceil(duration / CHUNKED_TRANSCRIPTION_TARGET_CHUNK_COUNT);
+	const desiredWindow = Math.ceil(
+		duration / CHUNKED_TRANSCRIPTION_TARGET_CHUNK_COUNT,
+	);
 	return clamp(
 		desiredWindow,
 		CHUNKED_TRANSCRIPTION_MIN_WINDOW_SECONDS,
@@ -427,16 +626,23 @@ function buildChunkDecodePlans({
 	duration: number;
 	windowSeconds: number;
 }): ChunkDecodePlan[] {
-	const chunkCount = Math.max(1, Math.ceil(duration / Math.max(1, windowSeconds)));
+	const chunkCount = Math.max(
+		1,
+		Math.ceil(duration / Math.max(1, windowSeconds)),
+	);
 	const plans: ChunkDecodePlan[] = [];
 	for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++) {
 		const logicalStart = chunkIndex * windowSeconds;
 		const logicalEnd = Math.min(duration, logicalStart + windowSeconds);
 		const decodeStart = Math.max(
 			0,
-			logicalStart - (chunkIndex === 0 ? 0 : CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS),
+			logicalStart -
+				(chunkIndex === 0 ? 0 : CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS),
 		);
-		const decodeEnd = Math.min(duration, logicalEnd + CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS);
+		const decodeEnd = Math.min(
+			duration,
+			logicalEnd + CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS,
+		);
 		plans.push({
 			chunkIndex,
 			logicalStart,
@@ -502,7 +708,8 @@ async function prepareChunkAudioForTranscription({
 		const sink = new AudioBufferSink(audioTrack);
 
 		for (const plan of plans) {
-			const prepBaseProgress = (plan.chunkIndex / chunkCount) * preparationScale;
+			const prepBaseProgress =
+				(plan.chunkIndex / chunkCount) * preparationScale;
 			const prepMaxSoftProgress =
 				((plan.chunkIndex + 0.92) / chunkCount) * preparationScale;
 			onProgress?.({
@@ -525,7 +732,10 @@ async function prepareChunkAudioForTranscription({
 			}, CHUNK_PROGRESS_HEARTBEAT_MS);
 
 			const chunks: AudioBuffer[] = [];
-			for await (const { buffer } of sink.buffers(plan.decodeStart, plan.decodeEnd)) {
+			for await (const { buffer } of sink.buffers(
+				plan.decodeStart,
+				plan.decodeEnd,
+			)) {
 				chunks.push(buffer);
 			}
 			window.clearInterval(decodeHeartbeatId);
@@ -633,11 +843,15 @@ async function transcribeAssetInChunks({
 		message: `Transcribing chunks (0/${chunkCount})...`,
 	});
 	const transcribeHeartbeatId = window.setInterval(() => {
-		const elapsedSeconds = Math.max(0, (nowMs() - transcriptionStartedAt) / 1000);
+		const elapsedSeconds = Math.max(
+			0,
+			(nowMs() - transcriptionStartedAt) / 1000,
+		);
 		const completedProgress = 50 + (completedChunks / chunkCount) * 50;
 		const softProgress = Math.min(
 			99,
-			completedProgress + Math.min(8, elapsedSeconds * Math.max(0.15, 1 / chunkCount)),
+			completedProgress +
+				Math.min(8, elapsedSeconds * Math.max(0.15, 1 / chunkCount)),
 		);
 		onProgress?.({
 			status: "transcribing",
@@ -649,73 +863,79 @@ async function transcribeAssetInChunks({
 		await Promise.all(
 			Array.from({ length: workerCount }, async () => {
 				while (true) {
-				const index = nextChunkIndex;
-				nextChunkIndex += 1;
-				if (index >= plans.length) {
-					return;
-				}
-				const plan = plans[index];
-				if (!plan) {
-					return;
-				}
-				const chunkStartedAt = nowMs();
-				activeChunks += 1;
-				try {
-					const prepared = preparedByIndex.get(plan.chunkIndex);
-					const chunkResult =
-						!prepared || prepared.wavBlob.size <= 0
-							? { text: "", segments: [] }
-							: await transcribeWavBlobWithClipApi({
-									wavBlob: prepared.wavBlob,
-									language,
-									modelId,
-									cacheKey: `${asset.id}:${modelId}:${language}:chunk:${plan.chunkIndex}:${plan.decodeStart.toFixed(3)}:${plan.decodeEnd.toFixed(3)}`,
-								});
+					const index = nextChunkIndex;
+					nextChunkIndex += 1;
+					if (index >= plans.length) {
+						return;
+					}
+					const plan = plans[index];
+					if (!plan) {
+						return;
+					}
+					const chunkStartedAt = nowMs();
+					activeChunks += 1;
+					try {
+						const prepared = preparedByIndex.get(plan.chunkIndex);
+						const chunkResult =
+							!prepared || prepared.wavBlob.size <= 0
+								? { text: "", segments: [] }
+								: await transcribeWavBlobWithClipApi({
+										wavBlob: prepared.wavBlob,
+										language,
+										modelId,
+										cacheKey: `${asset.id}:${modelId}:${language}:chunk:${plan.chunkIndex}:${plan.decodeStart.toFixed(3)}:${plan.decodeEnd.toFixed(3)}`,
+									});
 
-					const adjustedSegments = chunkResult.segments
-						.map((segment) => ({
-							text: segment.text,
-							start: segment.start + plan.decodeStart,
-							end: segment.end + plan.decodeStart,
-						}))
-						.filter(
-							(segment) =>
-								segment.end > plan.logicalStart && segment.start < plan.logicalEnd,
-						)
-						.map((segment) => ({
-							text: segment.text,
-							start: clamp(segment.start, plan.logicalStart, plan.logicalEnd),
-							end: clamp(segment.end, plan.logicalStart, plan.logicalEnd),
-						}))
-						.filter((segment) => segment.end > segment.start);
+						const adjustedSegments = chunkResult.segments
+							.map((segment) => ({
+								text: segment.text,
+								start: segment.start + plan.decodeStart,
+								end: segment.end + plan.decodeStart,
+							}))
+							.filter(
+								(segment) =>
+									segment.end > plan.logicalStart &&
+									segment.start < plan.logicalEnd,
+							)
+							.map((segment) => ({
+								text: segment.text,
+								start: clamp(segment.start, plan.logicalStart, plan.logicalEnd),
+								end: clamp(segment.end, plan.logicalStart, plan.logicalEnd),
+							}))
+							.filter((segment) => segment.end > segment.start);
 
-					adjustedByChunk.set(plan.chunkIndex, {
-						segments: adjustedSegments,
-						textPart: chunkResult.text.trim(),
-					});
-					completedChunks += 1;
-					const progress = 50 + (completedChunks / chunkCount) * 50;
-					onProgress?.({
-						status: "transcribing",
-						progress: Math.round(progress),
-						message: `Transcribing chunks (${completedChunks}/${chunkCount})...`,
-					});
-					const chunkDurationMs = Math.round(nowMs() - chunkStartedAt);
-					const chunkAudioSeconds = Math.max(0.01, plan.decodeEnd - plan.decodeStart);
-					console.info("Chunk transcription metrics", {
-						assetId: asset.id,
-						chunkIndex: plan.chunkIndex,
-						chunkCount,
-						chunkDurationMs,
-						chunkAudioSeconds: Number(chunkAudioSeconds.toFixed(3)),
-						realtimeFactor: Number((chunkDurationMs / 1000 / chunkAudioSeconds).toFixed(3)),
-						wordCount: adjustedSegments.length,
-						activeChunks,
-					});
-				} finally {
-					activeChunks = Math.max(0, activeChunks - 1);
+						adjustedByChunk.set(plan.chunkIndex, {
+							segments: adjustedSegments,
+							textPart: chunkResult.text.trim(),
+						});
+						completedChunks += 1;
+						const progress = 50 + (completedChunks / chunkCount) * 50;
+						onProgress?.({
+							status: "transcribing",
+							progress: Math.round(progress),
+							message: `Transcribing chunks (${completedChunks}/${chunkCount})...`,
+						});
+						const chunkDurationMs = Math.round(nowMs() - chunkStartedAt);
+						const chunkAudioSeconds = Math.max(
+							0.01,
+							plan.decodeEnd - plan.decodeStart,
+						);
+						console.info("Chunk transcription metrics", {
+							assetId: asset.id,
+							chunkIndex: plan.chunkIndex,
+							chunkCount,
+							chunkDurationMs,
+							chunkAudioSeconds: Number(chunkAudioSeconds.toFixed(3)),
+							realtimeFactor: Number(
+								(chunkDurationMs / 1000 / chunkAudioSeconds).toFixed(3),
+							),
+							wordCount: adjustedSegments.length,
+							activeChunks,
+						});
+					} finally {
+						activeChunks = Math.max(0, activeChunks - 1);
+					}
 				}
-			}
 			}),
 		);
 	} finally {
@@ -745,14 +965,18 @@ async function transcribeAssetInChunks({
 		transcriptionDurationMs,
 		totalDurationMs,
 		audioDurationSeconds: Number(duration.toFixed(3)),
-		realtimeFactor: Number((totalDurationMs / 1000 / Math.max(0.01, duration)).toFixed(3)),
+		realtimeFactor: Number(
+			(totalDurationMs / 1000 / Math.max(0.01, duration)).toFixed(3),
+		),
 		wordCount: normalizedSegments.length,
 	});
 
 	return {
 		text:
-			normalizedSegments.map((segment) => segment.text).join(" ").trim() ||
-			mergedTextParts.join(" ").trim(),
+			normalizedSegments
+				.map((segment) => segment.text)
+				.join(" ")
+				.trim() || mergedTextParts.join(" ").trim(),
 		segments: normalizedSegments,
 	};
 }
@@ -833,6 +1057,26 @@ function getLinkedExternalTranscriptForMedia({
 		audioDurationSeconds: entry.audioDurationSeconds,
 	});
 	return suitability.isSuitable ? entry : null;
+}
+
+function getLinkedProjectTranscriptForMedia({
+	project,
+	asset,
+	modelId,
+	language,
+}: {
+	project: TProject;
+	asset: MediaAsset;
+	modelId: TranscriptionModelId;
+	language: TranscriptionLanguage;
+}): { linkKey: string; entry: TMediaTranscriptLinkEntry } | null {
+	const linkKey =
+		asset.transcriptLinkKey ?? buildProjectMediaTranscriptLinkKey({ asset });
+	const entry = project.mediaTranscriptLinks?.[linkKey];
+	if (!entry) return null;
+	if (entry.modelId !== modelId) return null;
+	if ((entry.language ?? "auto") !== (language ?? "auto")) return null;
+	return { linkKey, entry };
 }
 
 function normalizeLinkedSegments({
@@ -918,7 +1162,12 @@ export async function getOrCreateClipTranscriptForAsset({
 	cacheKey: string;
 	transcriptRef: ClipTranscriptRef;
 	fromCache: boolean;
-	source: "media-linked" | "cache" | "global-linked" | "local-transcription";
+	source:
+		| "media-linked"
+		| "cache"
+		| "global-linked"
+		| "project-media-link"
+		| "local-backfill";
 }> {
 	const resolvedLanguage = language ?? "auto";
 	const linkedTranscriptForMedia = getLinkedExternalTranscriptForMedia({
@@ -970,6 +1219,30 @@ export async function getOrCreateClipTranscriptForAsset({
 		};
 	}
 
+	const linkedProjectTranscript = getLinkedProjectTranscriptForMedia({
+		project,
+		asset,
+		modelId,
+		language: resolvedLanguage,
+	});
+	if (linkedProjectTranscript) {
+		const derived = buildClipTranscriptCacheEntryForAsset({
+			asset,
+			modelId,
+			language: resolvedLanguage,
+			text: linkedProjectTranscript.entry.text,
+			segments: linkedProjectTranscript.entry.segments,
+			updatedAt: linkedProjectTranscript.entry.updatedAt,
+		});
+		return {
+			transcript: derived.transcript,
+			cacheKey: derived.cacheKey,
+			transcriptRef: derived.transcriptRef,
+			fromCache: true,
+			source: "project-media-link",
+		};
+	}
+
 	const linkedExternalTranscript = getBestLinkedExternalTranscript({ project });
 	if (linkedExternalTranscript) {
 		const derived = buildClipTranscriptEntryFromLinkedExternalTranscript({
@@ -994,59 +1267,25 @@ export async function getOrCreateClipTranscriptForAsset({
 		}
 	}
 
-	const result = shouldUseChunkedTranscription({ asset })
-		? await transcribeAssetInChunks({
-				asset,
-				modelId,
-				language: resolvedLanguage,
-				onProgress,
-			})
-		: await (async () => {
-				const { samples, sampleRate } = await decodeAudioToFloat32({
-					audioBlob: asset.file,
-					fallbackUrl: asset.url,
-				});
-				return await transcribeWithClipApi({
-					samples,
-					sampleRate,
-					language: resolvedLanguage,
-					modelId,
-					cacheKey: `${asset.id}:${modelId}:${resolvedLanguage}:single`,
-				});
-			})();
-
-	const fingerprint = buildClipTranscriptFingerprint({
+	const result = await transcribeClipTranscriptLocallyForAsset({
 		asset,
 		modelId,
 		language: resolvedLanguage,
+		onProgress,
 	});
-	const cacheKey = getClipTranscriptCacheKey({
-		mediaId: asset.id,
+	const derived = buildClipTranscriptCacheEntryForAsset({
+		asset,
 		modelId,
 		language: resolvedLanguage,
-	});
-	const updatedAt = new Date().toISOString();
-	const transcript: ClipTranscriptCacheEntry = {
-		cacheVersion: CLIP_TRANSCRIPT_CACHE_VERSION,
-		mediaId: asset.id,
-		fingerprint,
-		language: resolvedLanguage,
-		modelId,
 		text: result.text,
 		segments: result.segments,
-		updatedAt,
-	};
+	});
 	return {
-		transcript,
-		cacheKey,
-		transcriptRef: {
-			cacheKey,
-			modelId,
-			language: resolvedLanguage,
-			updatedAt,
-		},
+		transcript: derived.transcript,
+		cacheKey: derived.cacheKey,
+		transcriptRef: derived.transcriptRef,
 		fromCache: false,
-		source: "local-transcription",
+		source: "local-backfill",
 	};
 }
 
@@ -1110,17 +1349,23 @@ export function clipTranscriptSegmentsForWindow({
 		if (overlapping.length > 0) return overlapping;
 
 		const midpoint = (overlapStart + overlapEnd) / 2;
-		const nearest = timedWords.reduce((closest, candidate) => {
-			const candidateDistance = Math.abs(
-				(candidate.start + candidate.end) / 2 - midpoint,
-			);
-			if (!closest) {
-				return { item: candidate, distance: candidateDistance };
-			}
-			return candidateDistance < closest.distance
-				? { item: candidate, distance: candidateDistance }
-				: closest;
-		}, null as { item: { word: string; start: number; end: number }; distance: number } | null);
+		const nearest = timedWords.reduce(
+			(closest, candidate) => {
+				const candidateDistance = Math.abs(
+					(candidate.start + candidate.end) / 2 - midpoint,
+				);
+				if (!closest) {
+					return { item: candidate, distance: candidateDistance };
+				}
+				return candidateDistance < closest.distance
+					? { item: candidate, distance: candidateDistance }
+					: closest;
+			},
+			null as {
+				item: { word: string; start: number; end: number };
+				distance: number;
+			} | null,
+		);
 		return nearest ? [nearest.item] : [];
 	};
 
@@ -1149,7 +1394,10 @@ export function clipTranscriptSegmentsForWindow({
 				) - startTime,
 			);
 			return {
-				text: overlappingWords.map((word) => word.word).join(" ").trim(),
+				text: overlappingWords
+					.map((word) => word.word)
+					.join(" ")
+					.trim(),
 				start: rebasedStart,
 				end: rebasedEnd,
 			};

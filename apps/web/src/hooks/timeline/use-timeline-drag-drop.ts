@@ -1,6 +1,10 @@
 import { useState, useCallback, type RefObject } from "react";
 import { useEditor } from "@/hooks/use-editor";
 import { processMediaAssets } from "@/lib/media/processing";
+import {
+	autoLinkTranscriptAndCaptionsForMediaElement,
+	prepareImportedAssetWithTranscript,
+} from "@/lib/media/transcript-import";
 import { toast } from "sonner";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
 import { snapTimeToFrame } from "@/lib/time";
@@ -288,12 +292,20 @@ export function useTimelineDragDrop({
 				startTime: target.xPosition,
 			});
 
-			editor.timeline.insertElement({
+			const insertCmd = new InsertElementCommand({
 				placement: { mode: "explicit", trackId },
 				element,
 			});
+			editor.command.execute({ command: insertCmd });
+			if (dragData.mediaType === "video" || dragData.mediaType === "audio") {
+				void autoLinkTranscriptAndCaptionsForMediaElement({
+					editor,
+					trackId,
+					elementId: insertCmd.getElementId(),
+				});
+			}
 		},
-		[editor.timeline, mediaAssets, tracks],
+		[editor.command, editor, mediaAssets, tracks],
 	);
 
 	const executeFileDrop = useCallback(
@@ -329,6 +341,14 @@ export function useTimelineDragDrop({
 
 				const trackType: TrackType = asset.type === "audio" ? "audio" : "video";
 				const addMediaCmd = new AddMediaAssetCommand(projectId, asset);
+				const prepared = await prepareImportedAssetWithTranscript({
+					project: editor.project.getActive(),
+					asset,
+					assetId: addMediaCmd.getAssetId(),
+				});
+				editor.project.setActiveProject({ project: prepared.project });
+				editor.save.markDirty();
+				addMediaCmd.setAsset({ asset: prepared.asset });
 				const assetId = addMediaCmd.getAssetId();
 
 				const commands: Command[] = [addMediaCmd];
@@ -367,9 +387,16 @@ export function useTimelineDragDrop({
 
 				const batchCmd = new BatchCommand(commands);
 				editor.command.execute({ command: batchCmd });
+				if (asset.type === "video" || asset.type === "audio") {
+					void autoLinkTranscriptAndCaptionsForMediaElement({
+						editor,
+						trackId,
+						elementId: insertCmd.getElementId(),
+					});
+				}
 			}
 		},
-		[activeProject, editor.command, editor.timeline, currentTime, zoomLevel],
+		[activeProject, editor, editor.command, editor.timeline, currentTime, zoomLevel],
 	);
 
 	const handleDrop = useCallback(

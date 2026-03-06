@@ -5,11 +5,6 @@ import { PanelView } from "@/components/editor/panels/assets/views/base-view";
 import { useEditor } from "@/hooks/use-editor";
 import { useElementSelection } from "@/hooks/timeline/element/use-element-selection";
 import { invokeAction } from "@/lib/actions";
-import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
-import {
-	BLUE_HIGHLIGHT_CAPTION_STYLE,
-	BLUE_HIGHLIGHT_CAPTION_TEXT_PROPS,
-} from "@/constants/caption-presets";
 import { DEFAULT_TRANSCRIPTION_MODEL } from "@/constants/transcription-constants";
 import {
 	applyCutRangesToWords,
@@ -20,11 +15,6 @@ import {
 import { getEffectiveTranscriptCutsFromTranscriptEdit } from "@/lib/transcript-editor/snapshot";
 import { DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import { toElementLocalCaptionTime } from "@/lib/captions/timing";
-import { findCaptionTrackIdInScene } from "@/lib/captions/caption-track";
-import {
-	buildCaptionChunks,
-	type CaptionGenerationMode,
-} from "@/lib/transcription/caption";
 import {
 	clipTranscriptSegmentsForWindow,
 	getOrCreateClipTranscriptForAsset,
@@ -726,65 +716,10 @@ export function TranscriptView() {
 			});
 
 			setGenerateStep("Generating captions...");
-			const timelineSegments = sourceWindowSegments.map((segment) => ({
-				text: segment.text,
-				start: activeMedia.element.startTime + segment.start,
-				end: activeMedia.element.startTime + segment.end,
-			}));
-			const linkedCaptionElements = editor.timeline.getTracks().flatMap((track) =>
-				track.type !== "text"
-					? []
-					: track.elements
-							.filter(
-								(element) =>
-									element.type === "text" &&
-									element.captionSourceRef?.mediaElementId === activeMedia.element.id,
-							)
-							.map((element) => ({
-								trackId: track.id,
-								elementId: element.id,
-							})),
-			);
-			if (linkedCaptionElements.length > 0) {
-				editor.timeline.deleteElements({ elements: linkedCaptionElements });
-			}
-			const captionChunks = buildCaptionChunks({
-				segments: timelineSegments,
-				mode: "segment" satisfies CaptionGenerationMode,
+			invokeAction("rebuild-captions-for-clip", {
+				trackId: activeMedia.trackId,
+				elementId: activeMedia.element.id,
 			});
-			const existingCaptionTrackId = findCaptionTrackIdInScene({
-				tracks: editor.timeline.getTracks(),
-			});
-			const captionTrackId =
-				existingCaptionTrackId ??
-				editor.timeline.addTrack({
-					type: "text",
-					index: 0,
-				});
-			for (let i = 0; i < captionChunks.length; i++) {
-				const caption = captionChunks[i];
-				editor.timeline.insertElement({
-					placement: { mode: "explicit", trackId: captionTrackId },
-					element: {
-						...DEFAULT_TEXT_ELEMENT,
-						name: `Caption ${i + 1}`,
-						content: caption.text,
-						duration: caption.duration,
-						startTime: caption.startTime,
-						captionWordTimings: caption.wordTimings,
-						...BLUE_HIGHLIGHT_CAPTION_TEXT_PROPS,
-						captionStyle: {
-							...BLUE_HIGHLIGHT_CAPTION_STYLE,
-							fitInCanvas: true,
-							karaokeWordHighlight: true,
-						},
-						captionSourceRef: {
-							mediaElementId: activeMedia.element.id,
-							transcriptVersion,
-						},
-					},
-				});
-			}
 		} catch (error) {
 			setGenerateError(
 				error instanceof Error ? error.message : "Failed to generate captions.",

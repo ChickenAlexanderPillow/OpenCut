@@ -2,6 +2,10 @@ import { useEffect } from "react";
 import { toast } from "sonner";
 import { useEditor } from "@/hooks/use-editor";
 import { processMediaAssets } from "@/lib/media/processing";
+import {
+	autoLinkTranscriptAndCaptionsForMediaElement,
+	prepareImportedAssetWithTranscript,
+} from "@/lib/media/transcript-import";
 import { buildElementFromMedia } from "@/lib/timeline/element-utils";
 import { AddMediaAssetCommand } from "@/lib/commands/media";
 import { InsertElementCommand } from "@/lib/commands/timeline";
@@ -64,6 +68,14 @@ export function usePasteMedia() {
 						activeProject.metadata.id,
 						asset,
 					);
+					const prepared = await prepareImportedAssetWithTranscript({
+						project: editor.project.getActive(),
+						asset,
+						assetId: addMediaCmd.getAssetId(),
+					});
+					editor.project.setActiveProject({ project: prepared.project });
+					editor.save.markDirty();
+					addMediaCmd.setAsset({ asset: prepared.asset });
 					const assetId = addMediaCmd.getAssetId();
 					const duration =
 						asset.duration ?? TIMELINE_CONSTANTS.DEFAULT_ELEMENT_DURATION;
@@ -87,6 +99,14 @@ export function usePasteMedia() {
 					});
 					const batchCmd = new BatchCommand([addMediaCmd, insertCmd]);
 					editor.command.execute({ command: batchCmd });
+					const insertedTrackId = insertCmd.getTrackId();
+					if (insertedTrackId && (asset.type === "video" || asset.type === "audio")) {
+						void autoLinkTranscriptAndCaptionsForMediaElement({
+							editor,
+							trackId: insertedTrackId,
+							elementId: insertCmd.getElementId(),
+						});
+					}
 				}
 			} catch (error) {
 				console.error("Failed to paste media:", error);

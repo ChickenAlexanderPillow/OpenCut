@@ -7,6 +7,7 @@ import {
 	getHighestInsertIndexForTrack,
 } from "@/lib/timeline/track-utils";
 import { cloneAnimations } from "@/lib/animation";
+import { remapLinkedReferencesForClonedElement } from "@/lib/transcript-editor/linkage";
 
 interface DuplicateElementsParams {
 	elements: { trackId: string; elementId: string }[];
@@ -30,6 +31,18 @@ export class DuplicateElementsCommand extends Command {
 		this.duplicatedElements = [];
 
 		const updatedTracks = [...this.savedState];
+		const clonedIdMap = new Map<string, string>();
+
+		for (const track of this.savedState) {
+			for (const element of track.elements) {
+				const shouldDuplicate = this.elements.some(
+					(target) =>
+						target.trackId === track.id && target.elementId === element.id,
+				);
+				if (!shouldDuplicate) continue;
+				clonedIdMap.set(element.id, generateUUID());
+			}
+		}
 
 		for (const track of this.savedState) {
 			const elementsToDuplicate = this.elements.filter(
@@ -56,7 +69,7 @@ export class DuplicateElementsCommand extends Command {
 					continue;
 				}
 
-				const newId = generateUUID();
+				const newId = clonedIdMap.get(element.id) ?? generateUUID();
 				this.duplicatedElements.push({
 					trackId: newTrackId,
 					elementId: newId,
@@ -66,6 +79,7 @@ export class DuplicateElementsCommand extends Command {
 						element,
 						id: newId,
 						startTime: element.startTime,
+						clonedIdMap,
 					}),
 				);
 			}
@@ -110,14 +124,20 @@ function buildDuplicateElement({
 	element,
 	id,
 	startTime,
+	clonedIdMap,
 }: {
 	element: TimelineElement;
 	id: string;
 	startTime: number;
+	clonedIdMap: Map<string, string>;
 }): TimelineElement {
+	const remapped = remapLinkedReferencesForClonedElement({
+		element,
+		newElementId: id,
+		clonedIdMap,
+	});
 	return {
-		...element,
-		id,
+		...remapped,
 		name: `${element.name} (copy)`,
 		startTime,
 		animations: cloneAnimations({

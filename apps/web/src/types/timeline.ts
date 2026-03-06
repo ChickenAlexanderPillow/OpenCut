@@ -2,6 +2,7 @@ import type { ElementAnimations } from "./animation";
 import type { BlendMode, Transform } from "./rendering";
 import type {
 	TranscriptEditCutRange,
+	TranscriptCutTimeDomain,
 	TranscriptEditWord,
 } from "./transcription";
 
@@ -71,6 +72,7 @@ interface BaseAudioElement extends BaseTimelineElement {
 		source: "word-level";
 		words: TranscriptEditWord[];
 		cuts: TranscriptEditCutRange[];
+		cutTimeDomain?: TranscriptCutTimeDomain;
 		projectionSource?: {
 			words: TranscriptEditWord[];
 			cuts: TranscriptEditCutRange[];
@@ -119,6 +121,7 @@ export interface VideoElement extends BaseTimelineElement {
 		source: "word-level";
 		words: TranscriptEditWord[];
 		cuts: TranscriptEditCutRange[];
+		cutTimeDomain?: TranscriptCutTimeDomain;
 		projectionSource?: {
 			words: TranscriptEditWord[];
 			cuts: TranscriptEditCutRange[];
@@ -285,4 +288,5 @@ export interface ClipboardItem {
 	trackId: string;
 	trackType: TrackType;
 	element: CreateTimelineElement;
+	sourceElementId?: string;
 }

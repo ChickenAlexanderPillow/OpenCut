@@ -23,6 +23,8 @@ export interface TranscriptEditCutRange {
 	reason: "manual" | "filler" | "pause";
 }
 
+export type TranscriptCutTimeDomain = "clip-local-source" | "source-absolute";
+
 export interface TranscriptionResult {
 	text: string;
 	segments: TranscriptionSegment[];

@@ -23,13 +23,16 @@ import { CURRENT_PROJECT_VERSION } from "@/services/storage/migrations";
 import { DEFAULT_BRAND_OVERLAYS } from "@/constants/brand-overlay-constants";
 import type { TProject } from "@/types/project";
 import { processMediaAssets } from "@/lib/media/processing";
+import { AddMediaAssetCommand } from "@/lib/commands/media";
 import { buildClipTranscriptEntryFromLinkedExternalTranscript } from "@/lib/clips/transcript";
+import { prepareImportedAssetWithTranscript } from "@/lib/media/transcript-import";
 import { normalizeGeneratedCaptionsInProject } from "@/lib/captions/generated-caption-normalizer";
 import {
 	dedupeTranscriptEditsInTracks,
 	syncAllCaptionsFromTranscriptEditsInTracks,
 } from "@/lib/transcript-editor/sync-captions";
 import { clearRuntimeCaches } from "@/lib/editor/runtime-cache-policy";
+import { DEFAULT_TRANSCRIPTION_MODEL } from "@/constants/transcription-constants";
 
 interface EditorProviderProps {
 	projectId: string;
@@ -200,10 +203,19 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 							files: [mediaFile],
 						});
 						for (const asset of processedAssets) {
-							await editor.media.addMediaAsset({
-								projectId: externalProjectId,
+							const addMediaCmd = new AddMediaAssetCommand(
+								externalProjectId,
 								asset,
+							);
+							const prepared = await prepareImportedAssetWithTranscript({
+								project: editor.project.getActive(),
+								asset,
+								assetId: addMediaCmd.getAssetId(),
 							});
+							editor.project.setActiveProject({ project: prepared.project });
+							editor.save.markDirty();
+							addMediaCmd.setAsset({ asset: prepared.asset });
+							editor.command.execute({ command: addMediaCmd });
 						}
 						sourceAsset =
 							editor.media
@@ -223,7 +235,7 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 			}
 
 			if (!sourceAsset) return;
-			const clipCacheKey = `${sourceAsset.id}:whisper-tiny:auto`;
+			const clipCacheKey = `${sourceAsset.id}:${DEFAULT_TRANSCRIPTION_MODEL}:auto`;
 			const currentProject = editor.project.getActive();
 			if (currentProject.clipTranscriptCache?.[clipCacheKey]) {
 				return;
@@ -255,7 +267,7 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 				const transcriptEntry =
 					buildClipTranscriptEntryFromLinkedExternalTranscript({
 						asset: sourceAsset,
-						modelId: "whisper-tiny",
+						modelId: DEFAULT_TRANSCRIPTION_MODEL,
 						language: "auto",
 						externalTranscript: {
 							sourceSystem: applyPayload.sourceSystem,

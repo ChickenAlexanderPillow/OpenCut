@@ -146,6 +146,45 @@ describe("scene builder live caption source resolution", () => {
 		expect(textNode?.params?.content).toBe("alpha");
 	});
 
+	test("does not heuristically relink caption when explicit source ref is missing", () => {
+		const transcriptCarrier = createAudioElement({
+			id: "audio-2",
+			startTime: 10,
+			duration: 2,
+			words: [{ id: "shared:word:0", text: "beta", startTime: 0, endTime: 0.5 }],
+		});
+		const caption = createCaption({ sourceMediaElementId: "audio-missing" });
+
+		const scene = buildScene({
+			tracks: [
+				{
+					id: "audio-track",
+					type: "audio",
+					name: "Audio",
+					muted: false,
+					elements: [transcriptCarrier],
+				},
+				{
+					id: "text-track",
+					type: "text",
+					name: "Captions",
+					hidden: false,
+					elements: [caption],
+				},
+			],
+			mediaAssets: [],
+			duration: 20,
+			canvasSize: { width: 1280, height: 720 },
+			background: { type: "color", color: "#000000" },
+		});
+
+		const textNode = scene.children.find(
+			(node) => node.constructor.name === "TextNode",
+		) as { params?: { content?: string; startTime?: number } } | undefined;
+		expect(textNode?.params?.content).toBe("stale content");
+		expect(textNode?.params?.startTime).toBe(99);
+	});
+
 	test("muted middle word compresses timeline so caption does not wait for removed span", () => {
 		const source = createAudioElement({
 			id: "audio-1",

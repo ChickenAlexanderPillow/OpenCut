@@ -5,6 +5,7 @@ import {
 	PAUSE_REMOVAL_CUT_START_PADDING_SECONDS,
 } from "@/lib/transcript-editor/constants";
 import type {
+	TranscriptCutTimeDomain,
 	TranscriptEditCutRange,
 	TranscriptEditWord,
 } from "@/types/transcription";
@@ -14,6 +15,7 @@ export type TranscriptEditState = {
 	source: "word-level";
 	words: TranscriptEditWord[];
 	cuts: TranscriptEditCutRange[];
+	cutTimeDomain?: TranscriptCutTimeDomain;
 	projectionSource?: {
 		words: TranscriptEditWord[];
 		cuts: TranscriptEditCutRange[];
@@ -302,6 +304,7 @@ export function projectTranscriptEditToWindow({
 		...transcriptEdit,
 		words: projectedWords,
 		cuts: projectedCuts,
+		cutTimeDomain: "clip-local-source",
 		segmentsUi,
 		updatedAt: new Date().toISOString(),
 	};

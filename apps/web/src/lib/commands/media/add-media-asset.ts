@@ -58,4 +58,8 @@ export class AddMediaAssetCommand extends Command {
 	getAssetId(): string {
 		return this.assetId;
 	}
+
+	setAsset({ asset }: { asset: Omit<MediaAsset, "id"> }): void {
+		this.asset = asset;
+	}
 }

@@ -12,6 +12,7 @@ import {
 	enforceMainTrackStart,
 } from "@/lib/timeline/track-utils";
 import { rippleShiftElements } from "@/lib/timeline/ripple-utils";
+import { reconcileLinkedCaptionIntegrityInTracks } from "@/lib/transcript-editor/sync-captions";
 
 export class MoveElementCommand extends Command {
 	private savedState: TimelineTrack[] | null = null;
@@ -149,7 +150,11 @@ export class MoveElementCommand extends Command {
 			}
 		}
 
-		editor.timeline.updateTracks(updatedTracks);
+		const reconciled = reconcileLinkedCaptionIntegrityInTracks({
+			beforeTracks: this.savedState,
+			tracks: updatedTracks,
+		});
+		editor.timeline.updateTracks(reconciled.tracks);
 	}
 
 	undo(): void {

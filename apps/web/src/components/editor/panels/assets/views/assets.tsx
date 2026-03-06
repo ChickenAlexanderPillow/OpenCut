@@ -30,7 +30,13 @@ import { useEditor } from "@/hooks/use-editor";
 import { useFileUpload } from "@/hooks/use-file-upload";
 import { useRevealItem } from "@/hooks/use-reveal-item";
 import { invokeAction } from "@/lib/actions";
+import { AddMediaAssetCommand } from "@/lib/commands/media";
+import { InsertElementCommand } from "@/lib/commands/timeline";
 import { processMediaAssets } from "@/lib/media/processing";
+import {
+	autoLinkTranscriptAndCaptionsForMediaElement,
+	prepareImportedAssetWithTranscript,
+} from "@/lib/media/transcript-import";
 import { buildElementFromMedia } from "@/lib/timeline/element-utils";
 import { useAssetsPanelStore } from "@/stores/assets-panel-store";
 import type { MediaAsset } from "@/types/assets";
@@ -65,6 +71,10 @@ export function MediaView() {
 
 	const [isProcessing, setIsProcessing] = useState(false);
 	const [progress, setProgress] = useState(0);
+	const [processingStep, setProcessingStep] = useState("");
+	const [processingStepProgress, setProcessingStepProgress] = useState<number | undefined>(
+		undefined,
+	);
 	const [sortBy, setSortBy] = useState<"name" | "type" | "duration" | "size">(
 		"name",
 	);
@@ -79,17 +89,48 @@ export function MediaView() {
 
 		setIsProcessing(true);
 		setProgress(0);
+		setProcessingStep("Starting import");
+		setProcessingStepProgress(0);
 		try {
 			const processedAssets = await processMediaAssets({
 				files,
-				onProgress: (progress: { progress: number }) =>
-					setProgress(progress.progress),
+				onProgress: ({
+					progress,
+					step,
+					stepProgress,
+				}: {
+					progress: number;
+					step?: string;
+					stepProgress?: number;
+				}) => {
+					setProgress(progress);
+					if (step) setProcessingStep(step);
+					if (typeof stepProgress === "number") {
+						setProcessingStepProgress(stepProgress);
+					}
+				},
 			});
 			for (const asset of processedAssets) {
-				await editor.media.addMediaAsset({
-					projectId: activeProject.metadata.id,
+				const addMediaCmd = new AddMediaAssetCommand(
+					activeProject.metadata.id,
 					asset,
+				);
+				const prepared = await prepareImportedAssetWithTranscript({
+					project: editor.project.getActive(),
+					asset,
+					assetId: addMediaCmd.getAssetId(),
+					onProgress: ({ progress, step, stepProgress }) => {
+						setProgress(Math.max(progress, 75));
+						if (step) setProcessingStep(step);
+						if (typeof stepProgress === "number") {
+							setProcessingStepProgress(stepProgress);
+						}
+					},
 				});
+				editor.project.setActiveProject({ project: prepared.project });
+				addMediaCmd.setAsset({ asset: prepared.asset });
+				editor.command.execute({ command: addMediaCmd });
+				editor.save.markDirty();
 			}
 		} catch (error) {
 			console.error("Error processing files:", error);
@@ -97,6 +138,8 @@ export function MediaView() {
 		} finally {
 			setIsProcessing(false);
 			setProgress(0);
+			setProcessingStep("");
+			setProcessingStepProgress(undefined);
 		}
 	};
 
@@ -146,6 +189,7 @@ export function MediaView() {
 		asset: MediaAsset;
 		startTime: number;
 	}): boolean => {
+		const trackType = asset.type === "audio" ? "audio" : "video";
 		const duration =
 			asset.duration ?? TIMELINE_CONSTANTS.DEFAULT_ELEMENT_DURATION;
 		const element = buildElementFromMedia({
@@ -155,10 +199,19 @@ export function MediaView() {
 			duration,
 			startTime,
 		});
-		editor.timeline.insertElement({
+		const insertCommand = new InsertElementCommand({
 			element,
-			placement: { mode: "auto" },
+			placement: { mode: "auto", trackType },
 		});
+		editor.command.execute({ command: insertCommand });
+		const insertedTrackId = insertCommand.getTrackId();
+		if (insertedTrackId && (asset.type === "video" || asset.type === "audio")) {
+			void autoLinkTranscriptAndCaptionsForMediaElement({
+				editor,
+				trackId: insertedTrackId,
+				elementId: insertCommand.getElementId(),
+			});
+		}
 		return true;
 	};
 
@@ -491,6 +544,8 @@ export function MediaView() {
 						isVisible={true}
 						isProcessing={isProcessing}
 						progress={progress}
+						step={processingStep}
+						stepProgress={processingStepProgress}
 						onClick={openFilePicker}
 					/>
 				) : mediaViewMode === "grid" ? (

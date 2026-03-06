@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
 import {
 	buildTranscriptTimelineSnapshot,
+	getEffectiveTranscriptCutsForClipWindow,
+	normalizeTranscriptCutsToClipLocalSource,
 	validateCaptionAgainstSnapshot,
 } from "@/lib/transcript-editor/snapshot";
 import { syncCaptionsFromTranscriptEdits, validateAndHealCaptionDriftInTracks } from "@/lib/transcript-editor/sync-captions";
@@ -76,6 +78,56 @@ function createCaption({
 }
 
 describe("transcript timeline snapshot", () => {
+	test("normalizes source-absolute cuts to clip-local source time", () => {
+		const cuts = normalizeTranscriptCutsToClipLocalSource({
+			trimStart: 12,
+			cutTimeDomain: "source-absolute",
+			cuts: [
+				{ start: 12.6, end: 13.1, reason: "manual" },
+				{ start: 14.2, end: 14.6, reason: "pause" },
+			],
+		});
+		expect(cuts).toHaveLength(2);
+		expect(cuts[0]?.start).toBeCloseTo(0.6, 6);
+		expect(cuts[0]?.end).toBeCloseTo(1.1, 6);
+		expect(cuts[1]?.start).toBeCloseTo(2.2, 6);
+		expect(cuts[1]?.end).toBeCloseTo(2.6, 6);
+	});
+
+	test("keeps clip-local cuts unchanged during normalization", () => {
+		const cuts = normalizeTranscriptCutsToClipLocalSource({
+			trimStart: 12,
+			cuts: [
+				{ start: 0.6, end: 1.1, reason: "manual" },
+				{ start: 2.2, end: 2.6, reason: "pause" },
+			],
+		});
+		expect(cuts).toEqual([
+			{ start: 0.6, end: 1.1, reason: "manual" },
+			{ start: 2.2, end: 2.6, reason: "pause" },
+		]);
+	});
+
+	test("effective clip-window cuts normalize transcript edits with trim", () => {
+		const cuts = getEffectiveTranscriptCutsForClipWindow({
+			trimStart: 8,
+			transcriptEdit: {
+				words: [
+					{ id: "w0", text: "hello", startTime: 8.0, endTime: 8.3, removed: false },
+					{ id: "w1", text: "uh", startTime: 8.35, endTime: 8.5, removed: true },
+					{ id: "w2", text: "world", startTime: 8.9, endTime: 9.2, removed: false },
+				],
+				cuts: [],
+			},
+		});
+		expect(cuts.length).toBeGreaterThan(0);
+		const firstCut = cuts[0];
+		if (!firstCut) throw new Error("Expected normalized cut");
+		expect(firstCut.start).toBeGreaterThanOrEqual(0);
+		expect(firstCut.end).toBeGreaterThan(firstCut.start);
+		expect(firstCut.end).toBeLessThan(2);
+	});
+
 	test("builds effective cuts from removed words and preserves pause cuts", () => {
 		const snapshot = buildTranscriptTimelineSnapshot({
 			mediaElementId: "audio-1",

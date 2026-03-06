@@ -2,6 +2,7 @@ import { Command } from "@/lib/commands/base-command";
 import type { TimelineTrack } from "@/types/timeline";
 import { EditorCore } from "@/core";
 import { isMainTrack, rippleShiftElements } from "@/lib/timeline";
+import { reconcileLinkedCaptionIntegrityInTracks } from "@/lib/transcript-editor/sync-captions";
 
 export class DeleteElementsCommand extends Command {
 	private savedState: TimelineTrack[] | null = null;
@@ -66,8 +67,12 @@ export class DeleteElementsCommand extends Command {
 				return { ...track, elements } as typeof track;
 			})
 			.filter((track) => track.elements.length > 0 || isMainTrack(track));
+		const reconciled = reconcileLinkedCaptionIntegrityInTracks({
+			beforeTracks: this.savedState,
+			tracks: updatedTracks,
+		});
 
-		editor.timeline.updateTracks(updatedTracks);
+		editor.timeline.updateTracks(reconciled.tracks);
 	}
 
 	undo(): void {

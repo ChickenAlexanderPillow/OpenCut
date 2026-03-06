@@ -70,6 +70,7 @@ export class AudioManager {
 	private lastAudioFingerprint = "";
 	private rebuildDebounceTimer: number | null = null;
 	private streamingEngine: StreamingTimelineAudioEngine | null = null;
+	private prepareGraphSequence = 0;
 
 	constructor(private editor: EditorCore) {
 		const globalScope = globalThis as GlobalWithAudioManager;
@@ -358,12 +359,14 @@ export class AudioManager {
 		playhead: number;
 		prewarm?: boolean;
 	}): Promise<void> {
+		const prepareSequence = ++this.prepareGraphSequence;
 		const engine = this.ensureStreamingEngine();
 		if (!engine) return;
 		const tracks = this.editor.timeline.getTracks();
 		const mediaAssets = this.editor.media.getAssets();
 		try {
 			const result = await engine.prepare({ tracks, mediaAssets, playhead });
+			if (prepareSequence !== this.prepareGraphSequence) return;
 			engine.updateGraph({
 				diff: result.diff,
 				playhead,
@@ -372,6 +375,7 @@ export class AudioManager {
 				void engine.prewarm({ playhead, horizonSeconds: 12 });
 			}
 		} catch (error) {
+			if (prepareSequence !== this.prepareGraphSequence) return;
 			console.warn("Streaming audio engine prepare failed:", error);
 		}
 	}

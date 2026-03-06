@@ -10,6 +10,7 @@
 		"dev:web:low-mem": "node scripts/dev-web-low-mem.mjs",
 		"e2e:shared-profile": "node scripts/e2e-shared-profile.mjs",
 		"e2e:test:caption-trim-sync": "node scripts/test-caption-trim-sync.mjs",
+		"e2e:test:caption-edit-playback-integrity": "node scripts/test-caption-edit-playback-integrity.mjs",
 		"mem:audit": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/memory-doctor.ps1 -Mode audit",
 		"mem:reduce": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/memory-doctor.ps1 -Mode reduce",
 		"mem:reduce:aggressive": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/memory-doctor.ps1 -Mode reduce -Aggressive",

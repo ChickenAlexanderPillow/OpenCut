@@ -8,4 +8,6 @@ export interface MediaAsset
 	url?: string;
 	previewFile?: File;
 	previewUrl?: string;
+	transcriptLinkKey?: string;
+	transcriptCacheKey?: string;
 }

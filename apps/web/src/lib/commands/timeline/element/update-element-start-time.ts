@@ -2,6 +2,7 @@ import { Command } from "@/lib/commands/base-command";
 import type { TimelineTrack } from "@/types/timeline";
 import { EditorCore } from "@/core";
 import { enforceMainTrackStart } from "@/lib/timeline/track-utils";
+import { reconcileLinkedCaptionIntegrityInTracks } from "@/lib/transcript-editor/sync-captions";
 
 export class UpdateElementStartTimeCommand extends Command {
 	private savedState: TimelineTrack[] | null = null;
@@ -47,8 +48,11 @@ export class UpdateElementStartTimeCommand extends Command {
 			});
 			return { ...track, elements: newElements } as typeof track;
 		});
-
-		editor.timeline.updateTracks(updatedTracks);
+		const reconciled = reconcileLinkedCaptionIntegrityInTracks({
+			beforeTracks: this.savedState,
+			tracks: updatedTracks,
+		});
+		editor.timeline.updateTracks(reconciled.tracks);
 	}
 
 	undo(): void {

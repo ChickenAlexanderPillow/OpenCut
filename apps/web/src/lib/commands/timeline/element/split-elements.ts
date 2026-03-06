@@ -8,7 +8,10 @@ import {
 	projectTranscriptEditToWindow,
 } from "@/lib/transcript-editor/core";
 import { CAPTION_TAIL_PAD_SECONDS } from "@/lib/transcript-editor/constants";
-import { syncCaptionsFromTranscriptEdits } from "@/lib/transcript-editor/sync-captions";
+import {
+	syncCaptionsFromTranscriptEdits,
+	reconcileLinkedCaptionIntegrityInTracks,
+} from "@/lib/transcript-editor/sync-captions";
 import type { AudioElement, VideoElement, TextElement } from "@/types/timeline";
 
 function isTranscriptEditableElement(
@@ -441,8 +444,12 @@ export class SplitElementsCommand extends Command {
 				syncedTracks = syncResult.tracks;
 			}
 		}
+		const reconciled = reconcileLinkedCaptionIntegrityInTracks({
+			beforeTracks: this.savedState,
+			tracks: syncedTracks,
+		});
 
-		editor.timeline.updateTracks(syncedTracks);
+		editor.timeline.updateTracks(reconciled.tracks);
 
 		if (this.rightSideElements.length > 0) {
 			editor.selection.setSelectedElements({

@@ -6,6 +6,7 @@ import {
 	mapSourceTimeToCompressedTime,
 } from "@/lib/transcript-editor/core";
 import { TRANSCRIPT_CUT_AUDIO_SMOOTHING_SECONDS } from "@/lib/transcript-editor/constants";
+import { normalizeTranscriptCutsToClipLocalSource } from "@/lib/transcript-editor/snapshot";
 import type { TimelineTrack } from "@/types/timeline";
 import type { MediaAsset } from "@/types/assets";
 import type { TranscriptEditCutRange } from "@/types/transcription";
@@ -151,15 +152,22 @@ async function decodeAndMixAudioSource({
 		if (!audioTrack) return;
 
 		const sink = new AudioBufferSink(audioTrack);
-		const sourceWindowDuration = source.transcriptCuts?.length
+		const normalizedCuts =
+			source.transcriptCuts && source.transcriptCuts.length > 0
+				? normalizeTranscriptCutsToClipLocalSource({
+						cuts: source.transcriptCuts,
+						trimStart: source.trimStart,
+					})
+				: [];
+		const sourceWindowDuration = normalizedCuts.length
 			? mapCompressedTimeToSourceTime({
 					compressedTime: source.duration,
-					cuts: source.transcriptCuts,
+					cuts: normalizedCuts,
 				})
 			: source.duration;
 		const cutBoundaries =
-			source.transcriptCuts && source.transcriptCuts.length > 0
-				? buildCompressedCutBoundaryTimes({ cuts: source.transcriptCuts })
+			normalizedCuts.length > 0
+				? buildCompressedCutBoundaryTimes({ cuts: normalizedCuts })
 				: [];
 		const boundaryIndexes = new Array(NUM_CHANNELS).fill(0);
 		const trimEnd = source.trimStart + sourceWindowDuration;
@@ -169,10 +177,10 @@ async function decodeAndMixAudioSource({
 			trimEnd,
 		)) {
 			const relativeTime = timestamp - source.trimStart;
-			const mappedStart = source.transcriptCuts?.length
+			const mappedStart = normalizedCuts.length
 				? mapSourceTimeToCompressedTime({
 						sourceTime: Math.max(0, relativeTime),
-						cuts: source.transcriptCuts,
+						cuts: normalizedCuts,
 					})
 				: relativeTime;
 			const outputStartSample = Math.floor(

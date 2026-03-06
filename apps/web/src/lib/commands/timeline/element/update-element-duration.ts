@@ -2,6 +2,7 @@ import { Command } from "@/lib/commands/base-command";
 import type { TimelineTrack } from "@/types/timeline";
 import { EditorCore } from "@/core";
 import { clampAnimationsToDuration } from "@/lib/animation";
+import { reconcileLinkedCaptionIntegrityInTracks } from "@/lib/transcript-editor/sync-captions";
 
 export class UpdateElementDurationCommand extends Command {
 	private savedState: TimelineTrack[] | null = null;
@@ -35,7 +36,11 @@ export class UpdateElementDurationCommand extends Command {
 			return { ...t, elements: newElements } as typeof t;
 		});
 
-		editor.timeline.updateTracks(updatedTracks);
+		const reconciled = reconcileLinkedCaptionIntegrityInTracks({
+			beforeTracks: this.savedState,
+			tracks: updatedTracks,
+		});
+		editor.timeline.updateTracks(reconciled.tracks);
 	}
 
 	undo(): void {

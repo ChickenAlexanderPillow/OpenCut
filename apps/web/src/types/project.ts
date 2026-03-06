@@ -90,12 +90,21 @@ export interface TProject {
 	timelineViewState?: TTimelineViewState;
 	transcriptionCache?: Record<string, TTranscriptionCacheEntry>;
 	clipTranscriptCache?: Record<string, ClipTranscriptCacheEntry>;
+	mediaTranscriptLinks?: Record<string, TMediaTranscriptLinkEntry>;
 	clipWordTranscriptionCache?: Record<string, TClipWordTranscriptionCacheEntry>;
 	clipGenerationCache?: Record<string, ClipGenerationProjectCacheEntry>;
 	externalProjectLink?: ExternalProjectLink;
 	externalMediaLinks?: Record<string, ExternalProjectLink>;
 	externalTranscriptCache?: Record<string, ExternalProjectTranscriptCacheEntry>;
 	waveformPeaksCache?: Record<string, TWaveformPeaksCacheEntry>;
+}
+
+export interface TMediaTranscriptLinkEntry {
+	modelId: string;
+	language: string;
+	text: string;
+	segments: TranscriptionSegment[];
+	updatedAt: string;
 }
 
 export interface TWaveformPeaksCacheEntry {
