@@ -37,6 +37,7 @@ import {
 	autoLinkTranscriptAndCaptionsForMediaElement,
 	prepareImportedAssetWithTranscript,
 } from "@/lib/media/transcript-import";
+import { getMediaTypeFromFile } from "@/lib/media/media-utils";
 import { buildElementFromMedia } from "@/lib/timeline/element-utils";
 import { useAssetsPanelStore } from "@/stores/assets-panel-store";
 import type { MediaAsset } from "@/types/assets";
@@ -72,9 +73,9 @@ export function MediaView() {
 	const [isProcessing, setIsProcessing] = useState(false);
 	const [progress, setProgress] = useState(0);
 	const [processingStep, setProcessingStep] = useState("");
-	const [processingStepProgress, setProcessingStepProgress] = useState<number | undefined>(
-		undefined,
-	);
+	const [processingStepProgress, setProcessingStepProgress] = useState<
+		number | undefined
+	>(undefined);
 	const [sortBy, setSortBy] = useState<"name" | "type" | "duration" | "size">(
 		"name",
 	);
@@ -86,6 +87,16 @@ export function MediaView() {
 			toast.error("No active project");
 			return;
 		}
+		const videoImageFiles = Array.from(files).filter((file) => {
+			const mediaType = getMediaTypeFromFile({ file });
+			return mediaType === "image" || mediaType === "video";
+		});
+		if (videoImageFiles.length === 0) {
+			toast.error(
+				"Assets tab supports image/video only. Use Music tab for audio.",
+			);
+			return;
+		}
 
 		setIsProcessing(true);
 		setProgress(0);
@@ -93,7 +104,7 @@ export function MediaView() {
 		setProcessingStepProgress(0);
 		try {
 			const processedAssets = await processMediaAssets({
-				files,
+				files: videoImageFiles,
 				onProgress: ({
 					progress,
 					step,
@@ -145,7 +156,7 @@ export function MediaView() {
 
 	const { isDragOver, dragProps, openFilePicker, fileInputProps } =
 		useFileUpload({
-			accept: "image/*,video/*,audio/*",
+			accept: "image/*,video/*",
 			multiple: true,
 			onFilesSelected: (files) => processFiles({ files }),
 		});
@@ -216,7 +227,9 @@ export function MediaView() {
 	};
 
 	const filteredMediaItems = useMemo(() => {
-		const filtered = mediaFiles.filter((item) => !item.ephemeral);
+		const filtered = mediaFiles.filter(
+			(item) => !item.ephemeral && item.type !== "audio",
+		);
 
 		filtered.sort((a, b) => {
 			let valueA: string | number;
@@ -419,15 +432,18 @@ export function MediaView() {
 		if (!externalProjectId) return;
 
 		try {
-			const linkResponse = await fetch("/api/external-projects/link-thumbnail", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					opencutProjectId: activeProject.metadata.id,
-					sourceSystem: "thumbnail_decoupled" as const,
-					externalProjectId,
-				}),
-			});
+			const linkResponse = await fetch(
+				"/api/external-projects/link-thumbnail",
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						opencutProjectId: activeProject.metadata.id,
+						sourceSystem: "thumbnail_decoupled" as const,
+						externalProjectId,
+					}),
+				},
+			);
 			const linkJson = (await linkResponse.json()) as { error?: string };
 			if (!linkResponse.ok || linkJson.error) {
 				throw new Error(linkJson.error || "Failed to link thumbnail project");
@@ -458,7 +474,9 @@ export function MediaView() {
 				  }
 				| { error: string };
 			if (!applyResponse.ok || "error" in applyJson) {
-				throw new Error(applyJson.error || "Failed to hydrate linked transcript");
+				throw new Error(
+					applyJson.error || "Failed to hydrate linked transcript",
+				);
 			}
 
 			const cacheKey = `${applyJson.sourceSystem}:${applyJson.externalProjectId}`;
@@ -595,7 +613,7 @@ function GenerateClipsIconButton({
 	onGenerate: ({ mediaId }: { mediaId: string }) => void;
 	clipCount: number;
 }) {
-	if (item.type !== "video" && item.type !== "audio") return null;
+	if (item.type !== "video") return null;
 
 	return (
 		<TooltipProvider>
@@ -646,7 +664,7 @@ function MediaItemWithContextMenu({
 			<ContextMenuTrigger>{children}</ContextMenuTrigger>
 			<ContextMenuContent>
 				<ContextMenuItem>Export clips</ContextMenuItem>
-				{item.type === "video" || item.type === "audio" ? (
+				{item.type === "video" ? (
 					<ContextMenuItem
 						onClick={() => onLinkThumbnailProject({ mediaId: item.id })}
 					>
@@ -702,7 +720,10 @@ function GridView({
 	clipCountsBySource: Map<string, number>;
 	onLinkThumbnailProject: ({ mediaId }: { mediaId: string }) => void;
 	onUnlinkThumbnailProject: ({ mediaId }: { mediaId: string }) => void;
-	linkedExternalProjectIdsByMedia: Record<string, { externalProjectId: string }>;
+	linkedExternalProjectIdsByMedia: Record<
+		string,
+		{ externalProjectId: string }
+	>;
 }) {
 	return (
 		<div
@@ -782,7 +803,10 @@ function ListView({
 	clipCountsBySource: Map<string, number>;
 	onLinkThumbnailProject: ({ mediaId }: { mediaId: string }) => void;
 	onUnlinkThumbnailProject: ({ mediaId }: { mediaId: string }) => void;
-	linkedExternalProjectIdsByMedia: Record<string, { externalProjectId: string }>;
+	linkedExternalProjectIdsByMedia: Record<
+		string,
+		{ externalProjectId: string }
+	>;
 }) {
 	return (
 		<div className="space-y-1">

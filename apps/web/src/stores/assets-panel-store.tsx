@@ -8,6 +8,7 @@ import {
 	Image02Icon,
 	Video01Icon,
 	MagicWand05Icon,
+	MusicNote03Icon,
 	TextIcon,
 	Settings01Icon,
 } from "@hugeicons/core-free-icons";
@@ -15,6 +16,7 @@ import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
 
 export const TAB_KEYS = [
 	"media",
+	"music",
 	"clips",
 	"transcript",
 	"text",
@@ -36,6 +38,10 @@ export const tabs = {
 	media: {
 		icon: createHugeiconsIcon({ icon: Folder03Icon }),
 		label: "Media",
+	},
+	music: {
+		icon: createHugeiconsIcon({ icon: MusicNote03Icon }),
+		label: "Music",
 	},
 	clips: {
 		icon: createHugeiconsIcon({ icon: Video01Icon }),

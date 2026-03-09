@@ -76,6 +76,7 @@ export function useTimelineElementResize({
 	} | null>(null);
 	const moveFrameRef = useRef<number | null>(null);
 	const latestPointerXRef = useRef<number | null>(null);
+	const previousPointerXRef = useRef<number | null>(null);
 
 	const handleResizeStart = ({
 		event,
@@ -111,6 +112,7 @@ export function useTimelineElementResize({
 		currentStartTimeRef.current = element.startTime;
 		currentDurationRef.current = element.duration;
 		lastPreviewTrimRef.current = null;
+		previousPointerXRef.current = null;
 		onResizeStateChange?.({ isResizing: true });
 	};
 
@@ -125,6 +127,12 @@ export function useTimelineElementResize({
 	const updateTrimFromMouseMove = useCallback(
 		({ clientX }: { clientX: number }) => {
 			if (!resizing) return;
+			const previousPointerX = previousPointerXRef.current;
+			const isDraggingFurtherLeft =
+				previousPointerX === null
+					? clientX < resizing.startX
+					: clientX < previousPointerX;
+			previousPointerXRef.current = clientX;
 
 			const deltaX = clientX - resizing.startX;
 			let deltaTime =
@@ -171,6 +179,37 @@ export function useTimelineElementResize({
 			onSnapPointChange?.(resizeSnapPoint);
 
 			if (resizing.side === "left") {
+				const applyLeftPreview = ({
+					trimStart,
+					startTime,
+					duration,
+				}: {
+					trimStart: number;
+					startTime: number;
+					duration: number;
+				}) => {
+					let nextTrimStart = trimStart;
+					let nextStartTime = startTime;
+					let nextDuration = duration;
+					// Once the clip edge is pinned at timeline start, keep leftward drag
+					// monotonic so pointer movement outside timeline UI cannot snap back.
+					if (
+						isDraggingFurtherLeft &&
+						currentStartTimeRef.current <= minDurationSeconds
+					) {
+						nextStartTime = Math.min(nextStartTime, currentStartTimeRef.current);
+						nextTrimStart = Math.min(nextTrimStart, currentTrimStartRef.current);
+						nextDuration = Math.max(nextDuration, currentDurationRef.current);
+					}
+
+					setCurrentTrimStart(nextTrimStart);
+					setCurrentStartTime(nextStartTime);
+					setCurrentDuration(nextDuration);
+					currentTrimStartRef.current = nextTrimStart;
+					currentStartTimeRef.current = nextStartTime;
+					currentDurationRef.current = nextDuration;
+				};
+
 				const sourceDuration =
 					resizing.initialTrimStart +
 					resizing.initialDuration +
@@ -195,53 +234,63 @@ export function useTimelineElementResize({
 						fps: projectFps,
 					});
 
-					setCurrentTrimStart(newTrimStart);
-					setCurrentStartTime(newStartTime);
-					setCurrentDuration(newDuration);
-					currentTrimStartRef.current = newTrimStart;
-					currentStartTimeRef.current = newStartTime;
-					currentDurationRef.current = newDuration;
+					applyLeftPreview({
+						trimStart: newTrimStart,
+						startTime: newStartTime,
+						duration: newDuration,
+					});
 				} else if (calculated < 0) {
 					const extensionAmount = Math.abs(calculated);
-					const newStartTime = snapTimeToFrame({
-						time: Math.max(0, resizing.initialStartTime - extensionAmount),
-						fps: projectFps,
-					});
 
 					if (canExtendElementDuration()) {
+						const newStartTime = snapTimeToFrame({
+							time: Math.max(0, resizing.initialStartTime - extensionAmount),
+							fps: projectFps,
+						});
 						const newDuration = snapTimeToFrame({
 							time: resizing.initialDuration + extensionAmount,
 							fps: projectFps,
 						});
 
-						setCurrentTrimStart(0);
-						setCurrentStartTime(newStartTime);
-						setCurrentDuration(newDuration);
-						currentTrimStartRef.current = 0;
-						currentStartTimeRef.current = newStartTime;
-						currentDurationRef.current = newDuration;
+						applyLeftPreview({
+							trimStart: 0,
+							startTime: newStartTime,
+							duration: newDuration,
+						});
 					} else {
 						// Source-backed media can only reveal as much as left trim allows.
 						const untrimAmount = Math.min(
 							extensionAmount,
 							resizing.initialTrimStart,
 						);
-						const nextTrimStart = snapTimeToFrame({
+						const nextTrimStartRaw = snapTimeToFrame({
 							time: resizing.initialTrimStart - untrimAmount,
 							fps: projectFps,
 						});
-						const revealedSource = resizing.initialTrimStart - nextTrimStart;
+						const nextTrimStart = Math.min(
+							resizing.initialTrimStart,
+							Math.max(0, nextTrimStartRaw),
+						);
+						const revealedSource = Math.max(
+							0,
+							resizing.initialTrimStart - nextTrimStart,
+						);
+						// Once left trim is fully consumed, additional drag should not shift
+						// source-backed media further left (there is no extra source to reveal).
+						const newStartTime = snapTimeToFrame({
+							time: Math.max(0, resizing.initialStartTime - revealedSource),
+							fps: projectFps,
+						});
 						const newDuration = snapTimeToFrame({
 							time: resizing.initialDuration + revealedSource,
 							fps: projectFps,
 						});
 
-						setCurrentTrimStart(nextTrimStart);
-						setCurrentStartTime(newStartTime);
-						setCurrentDuration(newDuration);
-						currentTrimStartRef.current = nextTrimStart;
-						currentStartTimeRef.current = newStartTime;
-						currentDurationRef.current = newDuration;
+						applyLeftPreview({
+							trimStart: nextTrimStart,
+							startTime: newStartTime,
+							duration: newDuration,
+						});
 					}
 				}
 			} else {
@@ -395,6 +444,7 @@ export function useTimelineElementResize({
 
 		setResizing(null);
 		lastPreviewTrimRef.current = null;
+		previousPointerXRef.current = null;
 		onResizeStateChange?.({ isResizing: false });
 		onSnapPointChange?.(null);
 	}, [
@@ -434,6 +484,7 @@ export function useTimelineElementResize({
 				moveFrameRef.current = null;
 			}
 			latestPointerXRef.current = null;
+			previousPointerXRef.current = null;
 			document.removeEventListener("mousemove", handleDocumentMouseMove);
 			document.removeEventListener("mouseup", handleDocumentMouseUp);
 		};

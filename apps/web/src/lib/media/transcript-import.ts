@@ -122,7 +122,9 @@ export async function prepareImportedAssetWithTranscript({
 		stepProgress?: number;
 	}) => void;
 }): Promise<{ project: TProject; asset: Omit<MediaAsset, "id"> }> {
-	if (asset.type !== "video" && asset.type !== "audio") {
+	// Only precompute transcript metadata for video imports.
+	// Audio imports should not trigger transcription during ingest.
+	if (asset.type !== "video") {
 		return { project, asset };
 	}
 
@@ -234,10 +236,7 @@ export async function autoLinkTranscriptAndCaptionsForMediaElement({
 	const mediaAsset = editor.media
 		.getAssets()
 		.find((item) => item.id === mediaId);
-	if (
-		!mediaAsset ||
-		(mediaAsset.type !== "video" && mediaAsset.type !== "audio")
-	) {
+	if (!mediaAsset || mediaAsset.type !== "video") {
 		return;
 	}
 

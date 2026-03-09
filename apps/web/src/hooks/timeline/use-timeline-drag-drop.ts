@@ -44,6 +44,9 @@ export function useTimelineDragDrop({
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
 	const [dragElementType, setElementType] = useState<ElementType | null>(null);
+	const [dragElementDuration, setDragElementDuration] = useState<number | null>(
+		null,
+	);
 
 	const tracks = editor.timeline.getTracks();
 	const currentTime = editor.playback.getCurrentTime();
@@ -119,6 +122,7 @@ export function useTimelineDragDrop({
 			if (!elementType && hasFiles && isExternal) {
 				setDropTarget(null);
 				setElementType(null);
+				setDragElementDuration(null);
 				return;
 			}
 
@@ -131,6 +135,11 @@ export function useTimelineDragDrop({
 				elementType,
 				mediaId: dragData?.type === "media" ? dragData.id : undefined,
 			});
+			if (dragData?.type === "media") {
+				setDragElementDuration((prev) => (prev === duration ? prev : duration));
+			} else {
+				setDragElementDuration((prev) => (prev === null ? prev : null));
+			}
 
 			const mouseX = e.clientX - rect.left;
 			const mouseY = Math.max(0, e.clientY - rect.top - headerHeight);
@@ -179,6 +188,7 @@ export function useTimelineDragDrop({
 					setIsDragOver(false);
 					setDropTarget(null);
 					setElementType(null);
+					setDragElementDuration(null);
 				}
 			}
 		},
@@ -396,7 +406,14 @@ export function useTimelineDragDrop({
 				}
 			}
 		},
-		[activeProject, editor, editor.command, editor.timeline, currentTime, zoomLevel],
+		[
+			activeProject,
+			editor,
+			editor.command,
+			editor.timeline,
+			currentTime,
+			zoomLevel,
+		],
 	);
 
 	const handleDrop = useCallback(
@@ -412,6 +429,7 @@ export function useTimelineDragDrop({
 			setIsDragOver(false);
 			setDropTarget(null);
 			setElementType(null);
+			setDragElementDuration(null);
 
 			try {
 				if (hasAsset) {
@@ -459,6 +477,7 @@ export function useTimelineDragDrop({
 		isDragOver,
 		dropTarget,
 		dragElementType,
+		dragElementDuration,
 		dragProps: {
 			onDragEnter: handleDragEnter,
 			onDragOver: handleDragOver,

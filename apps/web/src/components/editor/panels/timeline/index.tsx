@@ -150,7 +150,13 @@ export function Timeline() {
 			playheadRef,
 		});
 
-	const { isDragOver, dropTarget, dragProps } = useTimelineDragDrop({
+	const {
+		isDragOver,
+		dropTarget,
+		dragElementType,
+		dragElementDuration,
+		dragProps,
+	} = useTimelineDragDrop({
 		containerRef: tracksContainerRef,
 		headerRef: timelineHeaderRef,
 		zoomLevel,
@@ -382,6 +388,9 @@ export function Timeline() {
 							dropTarget={dropTarget}
 							tracks={timeline.getTracks()}
 							isVisible={isDragOver}
+							zoomLevel={zoomLevel}
+							dragElementType={dragElementType}
+							dragElementDuration={dragElementDuration}
 							headerHeight={timelineHeaderHeight}
 						/>
 						<DragLine
