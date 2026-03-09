@@ -19,4 +19,13 @@ export interface StickerDragData extends BaseDragData {
 	stickerId: string;
 }
 
-export type TimelineDragData = MediaDragData | TextDragData | StickerDragData;
+export interface TransitionDragData extends BaseDragData {
+	type: "transition";
+	presetId: string;
+}
+
+export type TimelineDragData =
+	| MediaDragData
+	| TextDragData
+	| StickerDragData
+	| TransitionDragData;

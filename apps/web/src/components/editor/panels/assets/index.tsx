@@ -10,6 +10,7 @@ import {
 import { TabBar } from "./tabbar";
 import { Clips } from "./views/clips";
 import { EffectsView } from "./views/effects";
+import { TransitionsView } from "./views/transitions";
 import { MediaView } from "./views/assets";
 import { SettingsView } from "./views/settings";
 import { StickersView } from "./views/stickers";
@@ -37,6 +38,7 @@ export function AssetsPanel() {
 		text: <TextView />,
 		stickers: <StickersView />,
 		effects: <EffectsView />,
+		transitions: <TransitionsView />,
 		overlay: <OverlayView />,
 		settings: <SettingsView />,
 	};

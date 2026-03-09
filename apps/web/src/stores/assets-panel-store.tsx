@@ -22,6 +22,7 @@ export const TAB_KEYS = [
 	"text",
 	"stickers",
 	"effects",
+	"transitions",
 	"overlay",
 	"settings",
 ] as const;
@@ -62,6 +63,10 @@ export const tabs = {
 	effects: {
 		icon: createHugeiconsIcon({ icon: MagicWand05Icon }),
 		label: "Effects",
+	},
+	transitions: {
+		icon: createHugeiconsIcon({ icon: MagicWand05Icon }),
+		label: "Transitions",
 	},
 	overlay: {
 		icon: createHugeiconsIcon({ icon: Image02Icon }),

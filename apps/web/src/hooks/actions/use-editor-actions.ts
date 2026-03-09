@@ -32,12 +32,14 @@ import type {
 	TimelineElement,
 	TimelineTrack,
 	VideoElement,
+	VisualElement,
 } from "@/types/timeline";
 import type {
 	TranscriptEditCutRange,
 	TranscriptionModelId,
 	TranscriptionSegment,
 } from "@/types/transcription";
+import type { AnimationPropertyPath } from "@/types/animation";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 import { useClipGenerationStore } from "@/stores/clip-generation-store";
@@ -55,7 +57,12 @@ import {
 import { findCaptionTrackIdInScene } from "@/lib/captions/caption-track";
 import { normalizeGeneratedCaptionsInProject } from "@/lib/captions/generated-caption-normalizer";
 import { getMainTrack } from "@/lib/timeline/track-utils";
-import { canElementHaveAudio } from "@/lib/timeline/element-utils";
+import { canElementHaveAudio, isVisualElement } from "@/lib/timeline/element-utils";
+import {
+	buildTransitionKeyframeSpecs,
+	getTransitionPreset,
+	type TransitionSide,
+} from "@/lib/transitions/presets";
 import type { MediaAsset } from "@/types/assets";
 import type { TProject } from "@/types/project";
 import type { ClipCandidate } from "@/types/clip-generation";
@@ -104,6 +111,14 @@ const clipTranscriptInFlight = new Map<
 	Promise<Awaited<ReturnType<typeof getOrCreateClipTranscriptForAsset>>>
 >();
 const EDITOR_SUBSCRIBE_PROJECT = ["project"] as const;
+
+function asVisualTargetElement({
+	element,
+}: {
+	element: TimelineElement;
+}): VisualElement | null {
+	return isVisualElement(element) ? element : null;
+}
 
 function withProjectClipGenerationCache({
 	project,
@@ -2180,6 +2195,200 @@ export function useEditorActions() {
 		return Math.max(1, coverScale / containScale);
 	}
 
+	const resolveTransitionTargets = ({
+		trackId,
+		elementId,
+	}: {
+		trackId?: string;
+		elementId?: string;
+	}): Array<{ trackId: string; elementId: string }> => {
+		if (trackId && elementId) {
+			return [{ trackId, elementId }];
+		}
+		return selectedElements;
+	};
+
+	const applyTransition = ({
+		side,
+		presetId,
+		durationSeconds,
+		trackId,
+		elementId,
+	}: {
+		side: TransitionSide;
+		presetId?: string;
+		durationSeconds?: number;
+		trackId?: string;
+		elementId?: string;
+	}) => {
+		if (!presetId) {
+			toast.error("Transition preset is required");
+			return;
+		}
+		const preset = getTransitionPreset({ presetId });
+		if (!preset) {
+			toast.error("Transition preset not found");
+			return;
+		}
+
+		const targets = resolveTransitionTargets({ trackId, elementId });
+		if (targets.length === 0) {
+			toast.error("Select one or more visual clips first");
+			return;
+		}
+
+		const elementsWithTracks = editor.timeline.getElementsWithTracks({
+			elements: targets,
+		});
+		const visualTargets = elementsWithTracks
+			.map(({ track, element }) => ({
+				track,
+				element: asVisualTargetElement({ element }),
+			}))
+			.filter(
+				(item): item is { track: TimelineTrack; element: VisualElement } =>
+					item.element !== null,
+			);
+
+		if (visualTargets.length === 0) {
+			toast.error("Transitions are supported on visual clips only");
+			return;
+		}
+
+		const keyframesToRemove = visualTargets.flatMap(({ track, element }) =>
+			(element.transitions?.[side]?.ownedKeyframes ?? []).map((owned) => ({
+				trackId: track.id,
+				elementId: element.id,
+				propertyPath: owned.propertyPath,
+				keyframeId: owned.keyframeId,
+			})),
+		);
+		if (keyframesToRemove.length > 0) {
+			editor.timeline.removeKeyframes({ keyframes: keyframesToRemove });
+		}
+
+		const transitionTime = new Date().toISOString();
+		const keyframesToInsert: Array<{
+			trackId: string;
+			elementId: string;
+			propertyPath: AnimationPropertyPath;
+			time: number;
+			value: number;
+			keyframeId: string;
+		}> = [];
+		const metadataUpdates: Array<{
+			trackId: string;
+			elementId: string;
+			updates: Partial<Record<string, unknown>>;
+		}> = [];
+
+		for (const { track, element } of visualTargets) {
+			const resolvedDuration = Math.max(
+				0.04,
+				Math.min(durationSeconds ?? preset.defaultDuration, element.duration),
+			);
+			const specs = buildTransitionKeyframeSpecs({
+				element,
+				preset,
+				side,
+				duration: resolvedDuration,
+			});
+			const ownedKeyframes = specs.map((spec) => ({
+				propertyPath: spec.propertyPath,
+				keyframeId: generateUUID(),
+			}));
+			for (let index = 0; index < specs.length; index++) {
+				const spec = specs[index];
+				const keyframeId = ownedKeyframes[index]?.keyframeId;
+				if (!keyframeId) continue;
+				keyframesToInsert.push({
+					trackId: track.id,
+					elementId: element.id,
+					propertyPath: spec.propertyPath,
+					time: spec.time,
+					value: spec.value,
+					keyframeId,
+				});
+			}
+
+			metadataUpdates.push({
+				trackId: track.id,
+				elementId: element.id,
+				updates: {
+					transitions: {
+						...(element.transitions ?? {}),
+						[side]: {
+							presetId: preset.id,
+							duration: resolvedDuration,
+							ownedKeyframes,
+							appliedAt: transitionTime,
+						},
+					},
+				},
+			});
+		}
+
+		if (keyframesToInsert.length > 0) {
+			editor.timeline.upsertKeyframes({ keyframes: keyframesToInsert });
+		}
+		if (metadataUpdates.length > 0) {
+			editor.timeline.updateElements({ updates: metadataUpdates });
+		}
+	};
+
+	const removeTransition = ({
+		side,
+		trackId,
+		elementId,
+	}: {
+		side: TransitionSide;
+		trackId?: string;
+		elementId?: string;
+	}) => {
+		const targets = resolveTransitionTargets({ trackId, elementId });
+		if (targets.length === 0) return;
+
+		const elementsWithTracks = editor.timeline.getElementsWithTracks({
+			elements: targets,
+		});
+		const visualTargets = elementsWithTracks
+			.map(({ track, element }) => ({
+				track,
+				element: asVisualTargetElement({ element }),
+			}))
+			.filter(
+				(item): item is { track: TimelineTrack; element: VisualElement } =>
+					item.element !== null,
+			);
+		if (visualTargets.length === 0) return;
+
+		const keyframesToRemove = visualTargets.flatMap(({ track, element }) =>
+			(element.transitions?.[side]?.ownedKeyframes ?? []).map((owned) => ({
+				trackId: track.id,
+				elementId: element.id,
+				propertyPath: owned.propertyPath,
+				keyframeId: owned.keyframeId,
+			})),
+		);
+		if (keyframesToRemove.length > 0) {
+			editor.timeline.removeKeyframes({ keyframes: keyframesToRemove });
+		}
+
+		editor.timeline.updateElements({
+			updates: visualTargets.map(({ track, element }) => {
+				const nextTransitions = {
+					...(element.transitions ?? {}),
+				};
+				delete nextTransitions[side];
+				return {
+					trackId: track.id,
+					elementId: element.id,
+					updates: { transitions: nextTransitions },
+				};
+			}),
+		});
+	};
+
 	useActionHandler(
 		"toggle-play",
 		() => {
@@ -3852,6 +4061,58 @@ export function useEditorActions() {
 		"clear-in-out-points",
 		() => {
 			editor.playback.clearInOutPoints();
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"apply-transition-in",
+		(args) => {
+			applyTransition({
+				side: "in",
+				presetId: args?.presetId,
+				durationSeconds: args?.durationSeconds,
+				trackId: args?.trackId,
+				elementId: args?.elementId,
+			});
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"apply-transition-out",
+		(args) => {
+			applyTransition({
+				side: "out",
+				presetId: args?.presetId,
+				durationSeconds: args?.durationSeconds,
+				trackId: args?.trackId,
+				elementId: args?.elementId,
+			});
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"remove-transition-in",
+		(args) => {
+			removeTransition({
+				side: "in",
+				trackId: args?.trackId,
+				elementId: args?.elementId,
+			});
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"remove-transition-out",
+		(args) => {
+			removeTransition({
+				side: "out",
+				trackId: args?.trackId,
+				elementId: args?.elementId,
+			});
 		},
 		undefined,
 	);

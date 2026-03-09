@@ -162,6 +162,36 @@ export const ACTIONS = {
 		category: "editing",
 		args: { trackId: "string", elementId: "string" },
 	},
+	"apply-transition-in": {
+		description: "Apply an in transition preset to selected or targeted clips",
+		category: "editing",
+		args: {
+			presetId: "string",
+			durationSeconds: "number",
+			trackId: "string",
+			elementId: "string",
+		},
+	},
+	"apply-transition-out": {
+		description: "Apply an out transition preset to selected or targeted clips",
+		category: "editing",
+		args: {
+			presetId: "string",
+			durationSeconds: "number",
+			trackId: "string",
+			elementId: "string",
+		},
+	},
+	"remove-transition-in": {
+		description: "Remove in transition from selected or targeted clips",
+		category: "editing",
+		args: { trackId: "string", elementId: "string" },
+	},
+	"remove-transition-out": {
+		description: "Remove out transition from selected or targeted clips",
+		category: "editing",
+		args: { trackId: "string", elementId: "string" },
+	},
 	"caption-run-drift-check": {
 		description: "Run caption drift check and auto-heal stale captions",
 		category: "editing",

@@ -42,6 +42,34 @@ export type TActionArgsMap = {
 	"rebuild-captions-for-clip":
 		| { trackId: string; elementId: string }
 		| undefined;
+	"apply-transition-in":
+		| {
+				presetId: string;
+				durationSeconds?: number;
+				trackId?: string;
+				elementId?: string;
+		  }
+		| undefined;
+	"apply-transition-out":
+		| {
+				presetId: string;
+				durationSeconds?: number;
+				trackId?: string;
+				elementId?: string;
+		  }
+		| undefined;
+	"remove-transition-in":
+		| {
+				trackId?: string;
+				elementId?: string;
+		  }
+		| undefined;
+	"remove-transition-out":
+		| {
+				trackId?: string;
+				elementId?: string;
+		  }
+		| undefined;
 	"caption-run-drift-check": undefined;
 	"select-all-captions": { trackId?: string } | undefined;
 	"clear-viral-clips-session": undefined;

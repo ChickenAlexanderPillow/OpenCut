@@ -1,4 +1,4 @@
-import type { ElementAnimations } from "./animation";
+import type { AnimationPropertyPath, ElementAnimations } from "./animation";
 import type { BlendMode, Transform } from "./rendering";
 import type {
 	TranscriptEditCutRange,
@@ -139,6 +139,7 @@ export interface VideoElement extends BaseTimelineElement {
 	transform: Transform;
 	opacity: number;
 	blendMode?: BlendMode;
+	transitions?: ElementTransitions;
 }
 
 export interface ImageElement extends BaseTimelineElement {
@@ -148,6 +149,7 @@ export interface ImageElement extends BaseTimelineElement {
 	transform: Transform;
 	opacity: number;
 	blendMode?: BlendMode;
+	transitions?: ElementTransitions;
 }
 
 export interface TextElement extends BaseTimelineElement {
@@ -176,6 +178,7 @@ export interface TextElement extends BaseTimelineElement {
 	transform: Transform;
 	opacity: number;
 	blendMode?: BlendMode;
+	transitions?: ElementTransitions;
 	captionStyle?: {
 		fitInCanvas?: boolean;
 		neverShrinkFont?: boolean;
@@ -217,6 +220,24 @@ export interface StickerElement extends BaseTimelineElement {
 	transform: Transform;
 	opacity: number;
 	blendMode?: BlendMode;
+	transitions?: ElementTransitions;
+}
+
+export interface TransitionOwnedKeyframeRef {
+	propertyPath: AnimationPropertyPath;
+	keyframeId: string;
+}
+
+export interface AppliedTransition {
+	presetId: string;
+	duration: number;
+	ownedKeyframes: TransitionOwnedKeyframeRef[];
+	appliedAt: string;
+}
+
+export interface ElementTransitions {
+	in?: AppliedTransition;
+	out?: AppliedTransition;
 }
 
 export type VisualElement =

@@ -19,8 +19,12 @@ import { AddTrackCommand, InsertElementCommand } from "@/lib/commands/timeline";
 import { BatchCommand } from "@/lib/commands";
 import { computeDropTarget } from "@/lib/timeline/drop-utils";
 import { getDragData, hasDragData } from "@/lib/drag-data";
+import { invokeAction } from "@/lib/actions";
 import type { TrackType, DropTarget, ElementType } from "@/types/timeline";
-import type { MediaDragData, StickerDragData } from "@/types/drag";
+import type {
+	MediaDragData,
+	StickerDragData,
+} from "@/types/drag";
 
 interface UseTimelineDragDropProps {
 	containerRef: RefObject<HTMLDivElement | null>;
@@ -47,6 +51,11 @@ export function useTimelineDragDrop({
 	const [dragElementDuration, setDragElementDuration] = useState<number | null>(
 		null,
 	);
+	const [transitionDropTarget, setTransitionDropTarget] = useState<{
+		trackId: string;
+		elementId: string;
+		side: "in" | "out";
+	} | null>(null);
 
 	const tracks = editor.timeline.getTracks();
 	const currentTime = editor.playback.getCurrentTime();
@@ -117,6 +126,48 @@ export function useTimelineDragDrop({
 			const isExternal =
 				hasFiles && !hasDragData({ dataTransfer: e.dataTransfer });
 
+			const dragData = getDragData({ dataTransfer: e.dataTransfer });
+			if (dragData?.type === "transition") {
+				const domTarget = (e.target as HTMLElement | null)?.closest<HTMLElement>(
+					"[data-timeline-element-id][data-timeline-track-id]",
+				);
+				if (domTarget) {
+					const elementRect = domTarget.getBoundingClientRect();
+					const edgeThreshold = Math.max(
+						8,
+						Math.min(18, elementRect.width * 0.25),
+					);
+					const side =
+						e.clientX - elementRect.left <= edgeThreshold
+							? "in"
+							: elementRect.right - e.clientX <= edgeThreshold
+								? "out"
+								: null;
+					const elementType = domTarget.dataset.timelineElementType;
+					const isVisual =
+						elementType === "video" ||
+						elementType === "image" ||
+						elementType === "text" ||
+						elementType === "sticker";
+					if (side && isVisual) {
+						setTransitionDropTarget({
+							trackId: domTarget.dataset.timelineTrackId ?? "",
+							elementId: domTarget.dataset.timelineElementId ?? "",
+							side,
+						});
+					} else {
+						setTransitionDropTarget(null);
+					}
+				} else {
+					setTransitionDropTarget(null);
+				}
+				setDropTarget(null);
+				setElementType(null);
+				setDragElementDuration(null);
+				return;
+			}
+
+			setTransitionDropTarget(null);
 			const elementType = getElementType({ dataTransfer: e.dataTransfer });
 
 			if (!elementType && hasFiles && isExternal) {
@@ -130,7 +181,6 @@ export function useTimelineDragDrop({
 
 			setElementType(elementType);
 
-			const dragData = getDragData({ dataTransfer: e.dataTransfer });
 			const duration = getElementDuration({
 				elementType,
 				mediaId: dragData?.type === "media" ? dragData.id : undefined,
@@ -189,6 +239,7 @@ export function useTimelineDragDrop({
 					setDropTarget(null);
 					setElementType(null);
 					setDragElementDuration(null);
+					setTransitionDropTarget(null);
 				}
 			}
 		},
@@ -430,18 +481,36 @@ export function useTimelineDragDrop({
 			setDropTarget(null);
 			setElementType(null);
 			setDragElementDuration(null);
+			setTransitionDropTarget(null);
 
 			try {
 				if (hasAsset) {
-					if (!currentTarget) return;
 					const dragData = getDragData({ dataTransfer: e.dataTransfer });
 					if (!dragData) return;
 
-					if (dragData.type === "text") {
+					if (dragData.type === "transition") {
+						const transitionTarget = transitionDropTarget;
+						if (!transitionTarget?.trackId || !transitionTarget.elementId) {
+							return;
+						}
+						invokeAction(
+							transitionTarget.side === "in"
+								? "apply-transition-in"
+								: "apply-transition-out",
+							{
+								presetId: dragData.presetId,
+								trackId: transitionTarget.trackId,
+								elementId: transitionTarget.elementId,
+							},
+						);
+					} else if (dragData.type === "text") {
+						if (!currentTarget) return;
 						executeTextDrop({ target: currentTarget, dragData });
 					} else if (dragData.type === "sticker") {
+						if (!currentTarget) return;
 						executeStickerDrop({ target: currentTarget, dragData });
 					} else {
+						if (!currentTarget) return;
 						executeMediaDrop({ target: currentTarget, dragData });
 					}
 				} else if (hasFiles) {
@@ -468,6 +537,7 @@ export function useTimelineDragDrop({
 			executeStickerDrop,
 			executeMediaDrop,
 			executeFileDrop,
+			transitionDropTarget,
 			containerRef,
 			headerRef,
 		],
@@ -476,6 +546,7 @@ export function useTimelineDragDrop({
 	return {
 		isDragOver,
 		dropTarget,
+		transitionDropTarget,
 		dragElementType,
 		dragElementDuration,
 		dragProps: {

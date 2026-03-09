@@ -1,11 +1,19 @@
 "use client";
 
+import { useEffect, useMemo, useState, type ComponentProps } from "react";
 import { useEditor } from "@/hooks/use-editor";
 import { useAssetsPanelStore } from "@/stores/assets-panel-store";
+import { useTimelineStore } from "@/stores/timeline-store";
 import AudioWaveform from "./audio-waveform";
 import { useTimelineElementResize } from "@/hooks/timeline/element/use-element-resize";
 import type { SnapPoint } from "@/lib/timeline/snap-utils";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
+import { snapTimeToFrame } from "@/lib/time";
+import {
+	getElementBaseValueForProperty,
+	getElementKeyframes,
+	resolveNumberAtTime,
+} from "@/lib/animation";
 import {
 	getTrackClasses,
 	getTrackHeight,
@@ -20,6 +28,10 @@ import {
 	ContextMenuSeparator,
 	ContextMenuTrigger,
 } from "../../../ui/context-menu";
+import type {
+	AnimationPropertyPath,
+	ElementKeyframe,
+} from "@/types/animation";
 import type {
 	TimelineElement as TimelineElementType,
 	TimelineTrack,
@@ -45,7 +57,6 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { uppercase } from "@/utils/string";
-import type { ComponentProps } from "react";
 
 const MAX_PERSISTED_WAVEFORM_ENTRIES = 200;
 const MAX_PERSISTED_PEAKS = 768;
@@ -109,6 +120,67 @@ function getVisibleTranscriptCutOverlays({
 	return overlays;
 }
 
+const TIMELINE_KEYFRAME_PATHS: AnimationPropertyPath[] = [
+	"opacity",
+	"transform.scale",
+	"transform.position.x",
+	"transform.position.y",
+	"transform.rotate",
+];
+
+function isVisualTimelineElement(
+	element: TimelineElementType,
+): element is Extract<
+	TimelineElementType,
+	{ type: "video" | "image" | "text" | "sticker" }
+> {
+	return (
+		element.type === "video" ||
+		element.type === "image" ||
+		element.type === "text" ||
+		element.type === "sticker"
+	);
+}
+
+function toLocalTimeFromClientX({
+	clientX,
+	containerRect,
+	duration,
+}: {
+	clientX: number;
+	containerRect: DOMRect;
+	duration: number;
+}): number {
+	if (containerRect.width <= 0 || duration <= 0) return 0;
+	const normalized = Math.max(
+		0,
+		Math.min(1, (clientX - containerRect.left) / containerRect.width),
+	);
+	return normalized * duration;
+}
+
+function resolveNumericValueAtLocalTime({
+	element,
+	propertyPath,
+	localTime,
+}: {
+	element: Extract<
+		TimelineElementType,
+		{ type: "video" | "image" | "text" | "sticker" }
+	>;
+	propertyPath: AnimationPropertyPath;
+	localTime: number;
+}): number | null {
+	const baseValue = getElementBaseValueForProperty({ element, propertyPath });
+	if (typeof baseValue !== "number") return null;
+	return resolveNumberAtTime({
+		baseValue,
+		animations: element.animations,
+		propertyPath,
+		localTime,
+	});
+}
+
 interface TimelineElementProps {
 	element: TimelineElementType;
 	track: TimelineTrack;
@@ -137,6 +209,7 @@ export function TimelineElement({
 }: TimelineElementProps) {
 	const editor = useEditor({ subscribeTo: ["media", "project"] });
 	const { selectedElements } = useElementSelection();
+	const snappingEnabled = useTimelineStore((state) => state.snappingEnabled);
 	const { requestRevealMedia } = useAssetsPanelStore();
 	const activeProject = editor.project.getActive();
 
@@ -264,9 +337,12 @@ export function TimelineElement({
 					}}
 				>
 					<ElementInner
+						editor={editor}
 						element={element}
 						track={track}
 						isSelected={isSelected}
+						projectFps={activeProject.settings.fps}
+						snappingEnabled={snappingEnabled}
 						hasAudio={hasAudio}
 						isMuted={isMuted}
 						mediaAssets={mediaAssets}
@@ -342,6 +418,34 @@ export function TimelineElement({
 						</ContextMenuItem>
 					</>
 				)}
+				{isVisualTimelineElement(element) && element.transitions?.in && (
+					<ContextMenuItem
+						onSelect={(event) => {
+							event.preventDefault();
+							event.stopPropagation();
+							invokeAction("remove-transition-in", {
+								trackId: track.id,
+								elementId: element.id,
+							});
+						}}
+					>
+						Remove In Transition
+					</ContextMenuItem>
+				)}
+				{isVisualTimelineElement(element) && element.transitions?.out && (
+					<ContextMenuItem
+						onSelect={(event) => {
+							event.preventDefault();
+							event.stopPropagation();
+							invokeAction("remove-transition-out", {
+								trackId: track.id,
+								elementId: element.id,
+							});
+						}}
+					>
+						Remove Out Transition
+					</ContextMenuItem>
+				)}
 				<ContextMenuSeparator />
 				<DeleteMenuItem
 					isMultipleSelected={selectedElements.length > 1}
@@ -355,9 +459,12 @@ export function TimelineElement({
 }
 
 function ElementInner({
+	editor,
 	element,
 	track,
 	isSelected,
+	projectFps,
+	snappingEnabled,
 	hasAudio,
 	isMuted,
 	mediaAssets,
@@ -367,9 +474,12 @@ function ElementInner({
 	onElementMouseDown,
 	handleResizeStart,
 }: {
+	editor: ReturnType<typeof useEditor>;
 	element: TimelineElementType;
 	track: TimelineTrack;
 	isSelected: boolean;
+	projectFps: number;
+	snappingEnabled: boolean;
 	hasAudio: boolean;
 	isMuted: boolean;
 	mediaAssets: MediaAsset[];
@@ -395,9 +505,228 @@ function ElementInner({
 	const showMutedOverlay = element.type === "audio" && hasAudio && isMuted;
 	const showHiddenOverlay = canElementBeHidden(element) && element.hidden;
 	const transcriptCutOverlays = getVisibleTranscriptCutOverlays({ element });
+	const isVisual = isVisualTimelineElement(element);
+	const elementKeyframes = useMemo(
+		() =>
+			isVisual ? getElementKeyframes({ animations: element.animations }) : [],
+		[isVisual, element.animations],
+	);
+	const hasAnyKeyframes = isVisual
+		? getElementKeyframes({ animations: element.animations }).length > 0
+		: false;
+	const [selectedKeyframe, setSelectedKeyframe] = useState<{
+		propertyPath: AnimationPropertyPath;
+		keyframeId: string;
+	} | null>(null);
+	const [draggingKeyframe, setDraggingKeyframe] = useState<{
+		propertyPath: AnimationPropertyPath;
+		keyframeId: string;
+		time: number;
+	} | null>(null);
+	const [containerElement, setContainerElement] = useState<HTMLDivElement | null>(
+		null,
+	);
+	const laneKeyframes = useMemo(() => {
+		const laneMap = new Map<AnimationPropertyPath, ElementKeyframe[]>();
+		for (const path of TIMELINE_KEYFRAME_PATHS) {
+			laneMap.set(path, []);
+		}
+		for (const keyframe of elementKeyframes) {
+			const path = keyframe.propertyPath;
+			if (!laneMap.has(path)) continue;
+			laneMap.set(path, [...(laneMap.get(path) ?? []), keyframe]);
+		}
+		for (const [path, keyframes] of laneMap.entries()) {
+			laneMap.set(
+				path,
+				[...keyframes].sort((left, right) => left.time - right.time),
+			);
+		}
+		return laneMap;
+	}, [elementKeyframes]);
+
+	useEffect(() => {
+		if (isSelected) return;
+		setSelectedKeyframe(null);
+		setDraggingKeyframe(null);
+	}, [isSelected]);
+
+	useEffect(() => {
+		if (!selectedKeyframe || !isSelected) return;
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key !== "Delete" && event.key !== "Backspace") return;
+			event.preventDefault();
+			editor.timeline.removeKeyframes({
+				keyframes: [
+					{
+						trackId: track.id,
+						elementId: element.id,
+						propertyPath: selectedKeyframe.propertyPath,
+						keyframeId: selectedKeyframe.keyframeId,
+					},
+				],
+			});
+			setSelectedKeyframe(null);
+		};
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [editor.timeline, track.id, element.id, selectedKeyframe, isSelected]);
+
+	useEffect(() => {
+		if (!draggingKeyframe || !containerElement || !isVisual) return;
+
+		const findKeyframeByRef = ({
+			keyframeId,
+			propertyPath,
+		}: {
+			keyframeId: string;
+			propertyPath: AnimationPropertyPath;
+		}) =>
+			(laneKeyframes.get(propertyPath) ?? []).find(
+				(candidate) => candidate.id === keyframeId,
+			);
+
+		const onMouseMove = (event: MouseEvent) => {
+			const rect = containerElement.getBoundingClientRect();
+			let nextTime = toLocalTimeFromClientX({
+				clientX: event.clientX,
+				containerRect: rect,
+				duration: element.duration,
+			});
+			nextTime = snapTimeToFrame({ time: nextTime, fps: projectFps });
+
+			if (snappingEnabled) {
+				const thresholdTime =
+					rect.width > 0 ? (6 / rect.width) * element.duration : 0;
+				const nearbyTimes = elementKeyframes
+					.filter(
+						(keyframe) =>
+							!(
+								keyframe.id === draggingKeyframe.keyframeId &&
+								keyframe.propertyPath === draggingKeyframe.propertyPath
+							),
+					)
+					.map((keyframe) => keyframe.time);
+				let best = nextTime;
+				let bestDistance = Number.POSITIVE_INFINITY;
+				for (const candidate of nearbyTimes) {
+					const distance = Math.abs(candidate - nextTime);
+					if (distance <= thresholdTime && distance < bestDistance) {
+						best = candidate;
+						bestDistance = distance;
+					}
+				}
+				nextTime = best;
+			}
+
+			setDraggingKeyframe((prev) =>
+				prev
+					? {
+							...prev,
+							time: Math.max(0, Math.min(element.duration, nextTime)),
+					  }
+					: prev,
+			);
+		};
+
+		const onMouseUp = () => {
+			const current = draggingKeyframe;
+			const original = findKeyframeByRef({
+				keyframeId: current.keyframeId,
+				propertyPath: current.propertyPath,
+			});
+			if (original && Math.abs(original.time - current.time) > 0.0001) {
+				editor.timeline.retimeKeyframe({
+					trackId: track.id,
+					elementId: element.id,
+					propertyPath: current.propertyPath,
+					keyframeId: current.keyframeId,
+					time: current.time,
+				});
+			}
+			setDraggingKeyframe(null);
+		};
+
+		window.addEventListener("mousemove", onMouseMove);
+		window.addEventListener("mouseup", onMouseUp);
+		return () => {
+			window.removeEventListener("mousemove", onMouseMove);
+			window.removeEventListener("mouseup", onMouseUp);
+		};
+	}, [
+		draggingKeyframe,
+		containerElement,
+		isVisual,
+		laneKeyframes,
+		projectFps,
+		snappingEnabled,
+		element.duration,
+		elementKeyframes,
+		editor.timeline,
+		track.id,
+		element.id,
+	]);
+
+	const onLaneMouseDown = ({
+		event,
+		propertyPath,
+	}: {
+		event: React.MouseEvent;
+		propertyPath: AnimationPropertyPath;
+	}) => {
+		if (!isSelected) return;
+		event.preventDefault();
+		event.stopPropagation();
+		if (!isVisual || !containerElement) return;
+		const rawTime = toLocalTimeFromClientX({
+			clientX: event.clientX,
+			containerRect: containerElement.getBoundingClientRect(),
+			duration: element.duration,
+		});
+		const localTime = snapTimeToFrame({ time: rawTime, fps: projectFps });
+		const value = resolveNumericValueAtLocalTime({
+			element,
+			propertyPath,
+			localTime,
+		});
+		if (value === null) return;
+		editor.timeline.upsertKeyframes({
+			keyframes: [
+				{
+					trackId: track.id,
+					elementId: element.id,
+					propertyPath,
+					time: localTime,
+					value,
+				},
+			],
+		});
+	};
+
+	const onKeyframeMouseDown = ({
+		event,
+		propertyPath,
+		keyframeId,
+		time,
+	}: {
+		event: React.MouseEvent;
+		propertyPath: AnimationPropertyPath;
+		keyframeId: string;
+		time: number;
+	}) => {
+		event.preventDefault();
+		event.stopPropagation();
+		setSelectedKeyframe({ propertyPath, keyframeId });
+		setDraggingKeyframe({
+			propertyPath,
+			keyframeId,
+			time,
+		});
+	};
 
 	return (
 		<div
+			ref={setContainerElement}
 			className={`relative h-full cursor-pointer overflow-hidden rounded-[0.5rem] ${getTrackClasses(
 				{
 					type: track.type,
@@ -449,6 +778,72 @@ function ElementInner({
 					</div>
 				)}
 			</button>
+
+			{isVisual && hasAnyKeyframes && (
+				<div className="pointer-events-none absolute inset-x-1 bottom-0 top-0 z-[2] flex flex-col justify-end gap-0.5 pb-1">
+					{TIMELINE_KEYFRAME_PATHS.map((propertyPath) => {
+						const keyframes = laneKeyframes.get(propertyPath) ?? [];
+						const label =
+							propertyPath === "opacity"
+								? "Op"
+								: propertyPath === "transform.scale"
+									? "Sc"
+									: propertyPath === "transform.position.x"
+										? "X"
+										: propertyPath === "transform.position.y"
+											? "Y"
+											: "R";
+						return (
+							<div
+								key={propertyPath}
+								className="pointer-events-none flex h-2.5 items-center gap-1"
+							>
+								<div className="pointer-events-none w-3 text-[8px] leading-none text-white/70">
+									{label}
+								</div>
+								<button
+									type="button"
+									className={`relative h-1.5 flex-1 rounded ${isSelected ? "pointer-events-auto bg-black/35" : "pointer-events-none bg-black/25"}`}
+									onMouseDown={(event) =>
+										onLaneMouseDown({ event, propertyPath })
+									}
+									title={`Add keyframe on ${propertyPath}`}
+								>
+									{keyframes.map((keyframe) => {
+										const activeDrag =
+											draggingKeyframe?.keyframeId === keyframe.id &&
+											draggingKeyframe.propertyPath === propertyPath;
+										const time = activeDrag ? draggingKeyframe.time : keyframe.time;
+										const left = `${
+											element.duration > 0 ? (time / element.duration) * 100 : 0
+										}%`;
+										const isActive =
+											selectedKeyframe?.keyframeId === keyframe.id &&
+											selectedKeyframe.propertyPath === propertyPath;
+										return (
+											<button
+												key={keyframe.id}
+												type="button"
+												className={`pointer-events-auto absolute top-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] border ${isActive ? "border-white bg-primary" : "border-white/70 bg-white/70"}`}
+												style={{ left }}
+												onMouseDown={(event) =>
+													onKeyframeMouseDown({
+														event,
+														propertyPath,
+														keyframeId: keyframe.id,
+														time: keyframe.time,
+													})
+												}
+												title={`Keyframe ${propertyPath}`}
+											/>
+										);
+									})}
+								</button>
+							</div>
+						);
+					})}
+				</div>
+			)}
 
 			{isSelected && (
 				<>
