@@ -2,6 +2,7 @@ import type { CanvasRenderer } from "../canvas-renderer";
 import { BaseNode } from "./base-node";
 import type { BlendMode } from "@/types/rendering";
 import type { Transform } from "@/types/timeline";
+import type { ElementTransitions } from "@/types/timeline";
 import type { ElementAnimations } from "@/types/animation";
 import { resolveOpacityAtTime, resolveTransformAtTime } from "@/lib/animation";
 import { mapCompressedTimeToSourceTime } from "@/lib/transcript-editor/core";
@@ -19,6 +20,7 @@ export interface VisualNodeParams {
 	opacity: number;
 	blendMode?: BlendMode;
 	animations?: ElementAnimations;
+	transitions?: ElementTransitions;
 }
 
 export interface VisualPlacement {
@@ -31,6 +33,155 @@ export interface VisualPlacement {
 export abstract class VisualNode<
 	Params extends VisualNodeParams = VisualNodeParams,
 > extends BaseNode<Params> {
+	private static readonly MOTION_BLUR_FRAME_WINDOW_SECONDS = 1 / 18;
+	private static readonly MOTION_BLUR_SAMPLES = 16;
+	private static readonly MOTION_BLUR_TRAIL_OPACITY_FACTOR = 0.52;
+	private static readonly MOTION_BLUR_MAX_FILTER_PX = 18;
+
+	private static clamp01(value: number): number {
+		return Math.max(0, Math.min(1, value));
+	}
+
+	private static smoothstep(value: number): number {
+		const t = VisualNode.clamp01(value);
+		return t * t * (3 - 2 * t);
+	}
+
+	protected getClipElapsedTime(time: number): number {
+		return Math.max(0, Math.min(this.params.duration, time - this.params.timeOffset));
+	}
+
+	private getActiveMotionBlurSide({
+		elapsed,
+	}: {
+		elapsed: number;
+	}): "in" | "out" | null {
+		const inTransition = this.params.transitions?.in;
+		if (
+			inTransition &&
+			inTransition.presetId.includes("motion-blur") &&
+			elapsed <= inTransition.duration
+		) {
+			return "in";
+		}
+		const outTransition = this.params.transitions?.out;
+		if (
+			outTransition &&
+			outTransition.presetId.includes("motion-blur") &&
+			elapsed >= Math.max(0, this.params.duration - outTransition.duration)
+		) {
+			return "out";
+		}
+		return null;
+	}
+
+	protected getMotionBlurForDraw({
+		time,
+		rendererWidth,
+		rendererHeight,
+		sourceWidth,
+		sourceHeight,
+	}: {
+		time: number;
+		rendererWidth: number;
+		rendererHeight: number;
+		sourceWidth: number;
+		sourceHeight: number;
+	}): {
+		deltaX: number;
+		deltaY: number;
+		deltaRotation: number;
+		deltaScaleRatio: number;
+		samples: number;
+	} | null {
+		const elapsed = this.getClipElapsedTime(time);
+		const blurSide = this.getActiveMotionBlurSide({ elapsed });
+		if (!blurSide) return null;
+
+		const localNow = this.getLocalTime(time);
+		const prevTime = Math.max(
+			this.params.timeOffset,
+			time - VisualNode.MOTION_BLUR_FRAME_WINDOW_SECONDS,
+		);
+		const localPrev = this.getLocalTime(prevTime);
+		let localA = localPrev;
+		let localB = localNow;
+		if (Math.abs(localNow - localPrev) <= VISUAL_EPSILON) {
+			if (blurSide === "in") {
+				// At the very first frame we have no previous sample yet.
+				// Use a forward sample so blur is visible from frame 1.
+				const nextTime = Math.min(
+					this.params.timeOffset + this.params.duration,
+					time + VisualNode.MOTION_BLUR_FRAME_WINDOW_SECONDS,
+				);
+				const localNext = this.getLocalTime(nextTime);
+				if (Math.abs(localNext - localNow) <= VISUAL_EPSILON) {
+					return null;
+				}
+				localA = localNow;
+				localB = localNext;
+			} else {
+				return null;
+			}
+		}
+
+		const transformA = resolveTransformAtTime({
+			baseTransform: this.params.transform,
+			animations: this.params.animations,
+			localTime: localA,
+		});
+		const transformB = resolveTransformAtTime({
+			baseTransform: this.params.transform,
+			animations: this.params.animations,
+			localTime: localB,
+		});
+		const placementA = this.getVisualPlacement({
+			rendererWidth,
+			rendererHeight,
+			sourceWidth,
+			sourceHeight,
+			transform: transformA,
+		});
+		const placementB = this.getVisualPlacement({
+			rendererWidth,
+			rendererHeight,
+			sourceWidth,
+			sourceHeight,
+			transform: transformB,
+		});
+		let strength = 1;
+		if (blurSide === "in") {
+			const inDuration = Math.max(
+				VISUAL_EPSILON,
+				this.params.transitions?.in?.duration ?? VISUAL_EPSILON,
+			);
+			const inProgress = VisualNode.clamp01(elapsed / inDuration);
+			// Reverse smoothstep so blur falls off smoothly toward transition end.
+			strength = VisualNode.smoothstep(1 - inProgress);
+		} else {
+			const outDuration = Math.max(
+				VISUAL_EPSILON,
+				this.params.transitions?.out?.duration ?? VISUAL_EPSILON,
+			);
+			const outStart = Math.max(0, this.params.duration - outDuration);
+			const outProgress = VisualNode.clamp01((elapsed - outStart) / outDuration);
+			// Ease blur up smoothly near transition-out instead of abrupt full strength.
+			strength = VisualNode.smoothstep(outProgress);
+		}
+		if (strength <= VISUAL_EPSILON) return null;
+
+		return {
+			deltaX: (placementB.x - placementA.x) * strength,
+			deltaY: (placementB.y - placementA.y) * strength,
+			deltaRotation: (transformB.rotate - transformA.rotate) * strength,
+			deltaScaleRatio:
+				((transformB.scale - transformA.scale) /
+					Math.max(VISUAL_EPSILON, transformB.scale)) *
+				strength,
+			samples: VisualNode.MOTION_BLUR_SAMPLES,
+		};
+	}
+
 	protected getLocalTime(time: number): number {
 		const elapsed = Math.max(0, time - this.params.timeOffset);
 		const mappedElapsed =
@@ -88,22 +239,135 @@ export abstract class VisualNode<
 				: "source-over"
 		) as GlobalCompositeOperation;
 		renderer.context.globalAlpha = opacity;
+		const motionBlur = this.getMotionBlurForDraw({
+			time,
+			rendererWidth: renderer.width,
+			rendererHeight: renderer.height,
+			sourceWidth,
+			sourceHeight,
+		});
+		if (!motionBlur || motionBlur.samples <= 1) {
+			if (transform.rotate !== 0) {
+				const centerX = placement.x + placement.width / 2;
+				const centerY = placement.y + placement.height / 2;
+				renderer.context.translate(centerX, centerY);
+				renderer.context.rotate((transform.rotate * Math.PI) / 180);
+				renderer.context.translate(-centerX, -centerY);
+			}
+
+			renderer.context.drawImage(
+				source,
+				placement.x,
+				placement.y,
+				placement.width,
+				placement.height,
+			);
+			renderer.context.restore();
+			return;
+		}
+
+		const sampleCount = Math.max(2, motionBlur.samples);
+		const trailSampleCount = Math.max(1, sampleCount - 1);
+		const trailOpacity =
+			opacity * VisualNode.MOTION_BLUR_TRAIL_OPACITY_FACTOR;
+		const baseCompositeOperation = renderer.context.globalCompositeOperation;
+		const baseFilter = renderer.context.filter;
+		const trailWeights = Array.from({ length: trailSampleCount }, (_, index) => {
+			const progress = (index + 1) / (trailSampleCount + 1);
+			return (1 - progress) ** 1.15;
+		});
+		const totalTrailWeight = Math.max(
+			VISUAL_EPSILON,
+			trailWeights.reduce((sum, weight) => sum + weight, 0),
+		);
+		renderer.context.globalCompositeOperation = "lighter";
+
+		// Draw trails first; render the current frame last at full opacity.
+		for (let sampleIndex = 0; sampleIndex < trailSampleCount; sampleIndex++) {
+			const progress = (sampleIndex + 1) / (trailSampleCount + 1);
+			const trailFactor = 1 - progress;
+			const scaleRatio = Math.max(
+				VISUAL_EPSILON,
+				1 - motionBlur.deltaScaleRatio * trailFactor,
+			);
+			const sampleWidth = placement.width * scaleRatio;
+			const sampleHeight = placement.height * scaleRatio;
+			const sampleCenterX =
+				placement.x + placement.width / 2 - motionBlur.deltaX * trailFactor;
+			const sampleCenterY =
+				placement.y + placement.height / 2 - motionBlur.deltaY * trailFactor;
+			const sampleX = sampleCenterX - sampleWidth / 2;
+			const sampleY = sampleCenterY - sampleHeight / 2;
+			const sampleRotation =
+				transform.rotate - motionBlur.deltaRotation * trailFactor;
+			const sampleWeight = trailWeights[sampleIndex] ?? 0;
+			const blurStrengthPx = Math.min(
+				VisualNode.MOTION_BLUR_MAX_FILTER_PX,
+				Math.max(
+					0.6,
+					Math.abs(motionBlur.deltaScaleRatio) *
+						Math.max(placement.width, placement.height) *
+						0.035 *
+						(0.35 + trailFactor),
+				),
+			);
+			renderer.context.globalAlpha =
+				trailOpacity * (sampleWeight / totalTrailWeight);
+			renderer.context.filter = `blur(${blurStrengthPx.toFixed(2)}px)`;
+			if (sampleRotation !== 0) {
+				const centerX = sampleX + placement.width / 2;
+				const centerY = sampleY + placement.height / 2;
+				renderer.context.save();
+				renderer.context.translate(centerX, centerY);
+				renderer.context.rotate((sampleRotation * Math.PI) / 180);
+				renderer.context.translate(-centerX, -centerY);
+				renderer.context.drawImage(
+					source,
+					sampleX,
+					sampleY,
+					sampleWidth,
+					sampleHeight,
+				);
+				renderer.context.restore();
+				continue;
+			}
+			renderer.context.drawImage(
+				source,
+				sampleX,
+				sampleY,
+				sampleWidth,
+				sampleHeight,
+			);
+		}
+		renderer.context.globalCompositeOperation = baseCompositeOperation;
+		renderer.context.filter = baseFilter;
 
 		if (transform.rotate !== 0) {
 			const centerX = placement.x + placement.width / 2;
 			const centerY = placement.y + placement.height / 2;
+			renderer.context.save();
 			renderer.context.translate(centerX, centerY);
 			renderer.context.rotate((transform.rotate * Math.PI) / 180);
 			renderer.context.translate(-centerX, -centerY);
+			renderer.context.globalAlpha = opacity;
+			renderer.context.drawImage(
+				source,
+				placement.x,
+				placement.y,
+				placement.width,
+				placement.height,
+			);
+			renderer.context.restore();
+		} else {
+			renderer.context.globalAlpha = opacity;
+			renderer.context.drawImage(
+				source,
+				placement.x,
+				placement.y,
+				placement.width,
+				placement.height,
+			);
 		}
-
-		renderer.context.drawImage(
-			source,
-			placement.x,
-			placement.y,
-			placement.width,
-			placement.height,
-		);
 		renderer.context.restore();
 	}
 

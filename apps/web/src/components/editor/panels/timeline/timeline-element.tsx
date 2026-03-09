@@ -29,6 +29,7 @@ import {
 	ContextMenuTrigger,
 } from "../../../ui/context-menu";
 import type {
+	AnimationInterpolation,
 	AnimationPropertyPath,
 	ElementKeyframe,
 } from "@/types/animation";
@@ -180,6 +181,17 @@ function resolveNumericValueAtLocalTime({
 		localTime,
 	});
 }
+
+const KEYFRAME_EASING_OPTIONS: Array<{
+	label: string;
+	value: AnimationInterpolation;
+}> = [
+	{ label: "Linear", value: "linear" },
+	{ label: "Ease In", value: "ease-in" },
+	{ label: "Ease Out", value: "ease-out" },
+	{ label: "Ease In Out", value: "ease-in-out" },
+	{ label: "Hold", value: "hold" },
+];
 
 interface TimelineElementProps {
 	element: TimelineElementType;
@@ -514,10 +526,12 @@ function ElementInner({
 	const hasAnyKeyframes = isVisual
 		? getElementKeyframes({ animations: element.animations }).length > 0
 		: false;
-	const [selectedKeyframe, setSelectedKeyframe] = useState<{
-		propertyPath: AnimationPropertyPath;
-		keyframeId: string;
-	} | null>(null);
+	const [selectedKeyframes, setSelectedKeyframes] = useState<
+		Array<{
+			propertyPath: AnimationPropertyPath;
+			keyframeId: string;
+		}>
+	>([]);
 	const [draggingKeyframe, setDraggingKeyframe] = useState<{
 		propertyPath: AnimationPropertyPath;
 		keyframeId: string;
@@ -526,6 +540,12 @@ function ElementInner({
 	const [containerElement, setContainerElement] = useState<HTMLDivElement | null>(
 		null,
 	);
+	const [easingMenu, setEasingMenu] = useState<{
+		x: number;
+		y: number;
+		propertyPath: AnimationPropertyPath;
+		keyframeId?: string;
+	} | null>(null);
 	const laneKeyframes = useMemo(() => {
 		const laneMap = new Map<AnimationPropertyPath, ElementKeyframe[]>();
 		for (const path of TIMELINE_KEYFRAME_PATHS) {
@@ -544,33 +564,51 @@ function ElementInner({
 		}
 		return laneMap;
 	}, [elementKeyframes]);
+	const visibleLanePaths = useMemo(
+		() =>
+			TIMELINE_KEYFRAME_PATHS.filter(
+				(path) => (laneKeyframes.get(path)?.length ?? 0) > 0,
+			),
+		[laneKeyframes],
+	);
+	const isKeyframeSelected = ({
+		propertyPath,
+		keyframeId,
+	}: {
+		propertyPath: AnimationPropertyPath;
+		keyframeId: string;
+	}) =>
+		selectedKeyframes.some(
+			(selected) =>
+				selected.propertyPath === propertyPath &&
+				selected.keyframeId === keyframeId,
+		);
 
 	useEffect(() => {
-		if (isSelected) return;
-		setSelectedKeyframe(null);
-		setDraggingKeyframe(null);
-	}, [isSelected]);
+		if (!easingMenu) return;
+		const handleWindowClick = () => setEasingMenu(null);
+		window.addEventListener("click", handleWindowClick);
+		return () => window.removeEventListener("click", handleWindowClick);
+	}, [easingMenu]);
 
 	useEffect(() => {
-		if (!selectedKeyframe || !isSelected) return;
+		if (selectedKeyframes.length === 0) return;
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (event.key !== "Delete" && event.key !== "Backspace") return;
 			event.preventDefault();
 			editor.timeline.removeKeyframes({
-				keyframes: [
-					{
+				keyframes: selectedKeyframes.map((selected) => ({
 						trackId: track.id,
 						elementId: element.id,
-						propertyPath: selectedKeyframe.propertyPath,
-						keyframeId: selectedKeyframe.keyframeId,
-					},
-				],
+						propertyPath: selected.propertyPath,
+						keyframeId: selected.keyframeId,
+					})),
 			});
-			setSelectedKeyframe(null);
+			setSelectedKeyframes([]);
 		};
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
-	}, [editor.timeline, track.id, element.id, selectedKeyframe, isSelected]);
+	}, [editor.timeline, track.id, element.id, selectedKeyframes]);
 
 	useEffect(() => {
 		if (!draggingKeyframe || !containerElement || !isVisual) return;
@@ -716,12 +754,137 @@ function ElementInner({
 	}) => {
 		event.preventDefault();
 		event.stopPropagation();
-		setSelectedKeyframe({ propertyPath, keyframeId });
+		if (event.shiftKey) {
+			setSelectedKeyframes((previous) => {
+				const exists = previous.some(
+					(candidate) =>
+						candidate.propertyPath === propertyPath &&
+						candidate.keyframeId === keyframeId,
+				);
+				if (exists) {
+					return previous.filter(
+						(candidate) =>
+							!(
+								candidate.propertyPath === propertyPath &&
+								candidate.keyframeId === keyframeId
+							),
+					);
+				}
+				return [...previous, { propertyPath, keyframeId }];
+			});
+			setDraggingKeyframe(null);
+			return;
+		}
+		setSelectedKeyframes([{ propertyPath, keyframeId }]);
 		setDraggingKeyframe({
 			propertyPath,
 			keyframeId,
 			time,
 		});
+	};
+
+	const onKeyframeContextMenu = ({
+		event,
+		propertyPath,
+		keyframeId,
+	}: {
+		event: React.MouseEvent;
+		propertyPath: AnimationPropertyPath;
+		keyframeId: string;
+	}) => {
+		event.preventDefault();
+		event.stopPropagation();
+		if (!isKeyframeSelected({ propertyPath, keyframeId })) {
+			setSelectedKeyframes([{ propertyPath, keyframeId }]);
+		}
+		setEasingMenu({
+			x: event.clientX,
+			y: event.clientY,
+			propertyPath,
+			keyframeId,
+		});
+	};
+
+	const onLaneContextMenu = ({
+		event,
+		propertyPath,
+	}: {
+		event: React.MouseEvent;
+		propertyPath: AnimationPropertyPath;
+	}) => {
+		event.preventDefault();
+		event.stopPropagation();
+		setEasingMenu({
+			x: event.clientX,
+			y: event.clientY,
+			propertyPath,
+		});
+	};
+
+	const applyEasingToMenuTarget = ({
+		interpolation,
+	}: {
+		interpolation: AnimationInterpolation;
+	}) => {
+		if (!easingMenu) return;
+		const lane = laneKeyframes.get(easingMenu.propertyPath) ?? [];
+		const targetKeyframes = easingMenu.keyframeId
+			? lane.filter((keyframe) => keyframe.id === easingMenu.keyframeId)
+			: lane;
+		if (targetKeyframes.length === 0) {
+			setEasingMenu(null);
+			return;
+		}
+		editor.timeline.upsertKeyframes({
+			keyframes: targetKeyframes.map((keyframe) => ({
+				trackId: track.id,
+				elementId: element.id,
+				propertyPath: easingMenu.propertyPath,
+				time: keyframe.time,
+				value: keyframe.value,
+				interpolation,
+				keyframeId: keyframe.id,
+			})),
+		});
+		setEasingMenu(null);
+	};
+
+	const clearMenuTargetKeyframes = () => {
+		if (!easingMenu) return;
+		const lane = laneKeyframes.get(easingMenu.propertyPath) ?? [];
+		const targetKeyframes = easingMenu.keyframeId
+			? lane.filter((keyframe) => keyframe.id === easingMenu.keyframeId)
+			: lane;
+		if (targetKeyframes.length === 0) {
+			setEasingMenu(null);
+			return;
+		}
+		editor.timeline.removeKeyframes({
+			keyframes: targetKeyframes.map((keyframe) => ({
+				trackId: track.id,
+				elementId: element.id,
+				propertyPath: easingMenu.propertyPath,
+				keyframeId: keyframe.id,
+			})),
+		});
+		if (
+			selectedKeyframes.length > 0 &&
+			targetKeyframes.some((keyframe) =>
+				selectedKeyframes.some((selected) => selected.keyframeId === keyframe.id),
+			)
+		) {
+			setSelectedKeyframes((previous) =>
+				previous.filter(
+					(selected) =>
+						!targetKeyframes.some(
+							(keyframe) =>
+								keyframe.id === selected.keyframeId &&
+								easingMenu.propertyPath === selected.propertyPath,
+						),
+				),
+			);
+		}
+		setEasingMenu(null);
 	};
 
 	return (
@@ -781,7 +944,7 @@ function ElementInner({
 
 			{isVisual && hasAnyKeyframes && (
 				<div className="pointer-events-none absolute inset-x-1 bottom-0 top-0 z-[2] flex flex-col justify-end gap-0.5 pb-1">
-					{TIMELINE_KEYFRAME_PATHS.map((propertyPath) => {
+					{visibleLanePaths.map((propertyPath) => {
 						const keyframes = laneKeyframes.get(propertyPath) ?? [];
 						const label =
 							propertyPath === "opacity"
@@ -803,9 +966,12 @@ function ElementInner({
 								</div>
 								<button
 									type="button"
-									className={`relative h-1.5 flex-1 rounded ${isSelected ? "pointer-events-auto bg-black/35" : "pointer-events-none bg-black/25"}`}
+									className={`pointer-events-auto relative h-1.5 flex-1 rounded ${isSelected ? "bg-black/35" : "bg-black/25"}`}
 									onMouseDown={(event) =>
 										onLaneMouseDown({ event, propertyPath })
+									}
+									onContextMenu={(event) =>
+										onLaneContextMenu({ event, propertyPath })
 									}
 									title={`Add keyframe on ${propertyPath}`}
 								>
@@ -818,8 +984,10 @@ function ElementInner({
 											element.duration > 0 ? (time / element.duration) * 100 : 0
 										}%`;
 										const isActive =
-											selectedKeyframe?.keyframeId === keyframe.id &&
-											selectedKeyframe.propertyPath === propertyPath;
+											isKeyframeSelected({
+												propertyPath,
+												keyframeId: keyframe.id,
+											});
 										return (
 											<button
 												key={keyframe.id}
@@ -834,6 +1002,13 @@ function ElementInner({
 														time: keyframe.time,
 													})
 												}
+												onContextMenu={(event) =>
+													onKeyframeContextMenu({
+														event,
+														propertyPath,
+														keyframeId: keyframe.id,
+													})
+												}
 												title={`Keyframe ${propertyPath}`}
 											/>
 										);
@@ -842,6 +1017,50 @@ function ElementInner({
 							</div>
 						);
 					})}
+				</div>
+			)}
+
+			{easingMenu && (
+				<div
+					className="fixed z-[120] min-w-32 rounded-md border bg-popover p-1 shadow-lg"
+					style={{
+						left: easingMenu.x + 6,
+						top: easingMenu.y + 6,
+					}}
+					onMouseDown={(event) => {
+						event.preventDefault();
+						event.stopPropagation();
+					}}
+					onContextMenu={(event) => {
+						event.preventDefault();
+						event.stopPropagation();
+					}}
+				>
+					<div className="px-2 py-1 text-[10px] text-muted-foreground">
+						{easingMenu.keyframeId
+							? "Apply easing to keyframe"
+							: "Apply easing to property lane"}
+					</div>
+					{KEYFRAME_EASING_OPTIONS.map((option) => (
+						<button
+							key={option.value}
+							type="button"
+							className="hover:bg-accent flex w-full items-center rounded px-2 py-1 text-left text-xs"
+							onClick={() =>
+								applyEasingToMenuTarget({ interpolation: option.value })
+							}
+						>
+							{option.label}
+						</button>
+					))}
+					<div className="my-1 h-px bg-border" />
+					<button
+						type="button"
+						className="hover:bg-accent text-destructive flex w-full items-center rounded px-2 py-1 text-left text-xs"
+						onClick={clearMenuTargetKeyframes}
+					>
+						{easingMenu.keyframeId ? "Clear keyframe" : "Clear keyframes"}
+					</button>
 				</div>
 			)}
 

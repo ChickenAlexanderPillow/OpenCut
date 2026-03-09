@@ -1,4 +1,4 @@
-import type { AnimationPropertyPath } from "@/types/animation";
+import type { AnimationInterpolation, AnimationPropertyPath } from "@/types/animation";
 import type { VisualElement } from "@/types/timeline";
 
 export type TransitionSide = "in" | "out";
@@ -93,18 +93,14 @@ export const TRANSITION_PRESETS: TransitionPreset[] = [
 	{
 		id: "motion-blur-zoom",
 		name: "Motion Blur Zoom",
-		description: "Motion-blur style zoom (blur pipeline pending).",
-		defaultDuration: 0.45,
+		description: "Fast zoom with motion blur trail.",
+		defaultDuration: 0.2,
 		category: "zoom",
 		motionBlurHint: true,
 		channels: {
 			"transform.scale": {
-				in: { from: 1.18, to: 1 },
-				out: { from: 1, to: 1.18 },
-			},
-			opacity: {
-				in: { from: 0.92, to: 1 },
-				out: { from: 1, to: 0.92 },
+				in: { from: 1.5, to: 1 },
+				out: { from: 1, to: 1.5 },
 			},
 		},
 	},
@@ -151,15 +147,21 @@ export function buildTransitionKeyframeSpecs({
 	preset,
 	side,
 	duration,
+	getBaseValueForPath,
 }: {
 	element: VisualElement;
 	preset: TransitionPreset;
 	side: TransitionSide;
 	duration: number;
+	getBaseValueForPath?: (params: {
+		propertyPath: NumericTransitionPath;
+		time: number;
+	}) => number | null;
 }): Array<{
 	propertyPath: AnimationPropertyPath;
 	time: number;
 	value: number;
+	interpolation: AnimationInterpolation;
 }> {
 	const clampedDuration = Math.max(0.04, Math.min(duration, element.duration));
 	const startTime = side === "in" ? 0 : Math.max(0, element.duration - clampedDuration);
@@ -168,7 +170,9 @@ export function buildTransitionKeyframeSpecs({
 		propertyPath: AnimationPropertyPath;
 		time: number;
 		value: number;
+		interpolation: AnimationInterpolation;
 	}> = [];
+	const anchorTime = side === "in" ? endTime : startTime;
 
 	for (const [path, sideSpec] of Object.entries(preset.channels) as Array<
 		[
@@ -179,9 +183,68 @@ export function buildTransitionKeyframeSpecs({
 			},
 		]
 	>) {
+		// Motion blur zoom should be transform-only; never generate opacity keyframes.
+		if (preset.id === "motion-blur-zoom" && path === "opacity") {
+			continue;
+		}
 		const channelSpec = sideSpec[side];
 		if (!channelSpec) continue;
-		const base = getBaseNumericValueForPath({ element, propertyPath: path });
+		const resolvedBase =
+			getBaseValueForPath?.({ propertyPath: path, time: anchorTime }) ?? null;
+		const base =
+			typeof resolvedBase === "number"
+				? resolvedBase
+				: getBaseNumericValueForPath({ element, propertyPath: path });
+		if (preset.id === "motion-blur-zoom" && path === "transform.scale") {
+			if (side === "in") {
+				const midTime = startTime + clampedDuration * 0.72;
+				result.push({
+					propertyPath: path,
+					time: startTime,
+					value: base * 1.5,
+					interpolation: "ease-out",
+				});
+				result.push({
+					propertyPath: path,
+					time: midTime,
+					value: base * 0.94,
+					interpolation: "ease-in-out",
+				});
+				result.push({
+					propertyPath: path,
+					time: endTime,
+					value: base,
+					interpolation: "ease-in-out",
+				});
+				continue;
+			}
+			const slingshotPullTime = startTime + clampedDuration * 0.2;
+			result.push({
+				propertyPath: path,
+				time: startTime,
+				value: base,
+				interpolation: "ease-in-out",
+			});
+			result.push({
+				propertyPath: path,
+				time: slingshotPullTime,
+				value: base * 0.93,
+				interpolation: "ease-in",
+			});
+			result.push({
+				propertyPath: path,
+				time: endTime,
+				value: base * 1.5,
+				interpolation: "ease-in",
+			});
+			continue;
+		}
+		const interpolation: AnimationInterpolation =
+			preset.motionBlurHint && path === "transform.scale"
+				? "ease-in-out"
+				: side === "in"
+					? "ease-out"
+					: "ease-in";
 		result.push({
 			propertyPath: path,
 			time: startTime,
@@ -190,6 +253,7 @@ export function buildTransitionKeyframeSpecs({
 				normalized: channelSpec.from,
 				propertyPath: path,
 			}),
+			interpolation,
 		});
 		result.push({
 			propertyPath: path,
@@ -199,6 +263,7 @@ export function buildTransitionKeyframeSpecs({
 				normalized: channelSpec.to,
 				propertyPath: path,
 			}),
+			interpolation,
 		});
 	}
 

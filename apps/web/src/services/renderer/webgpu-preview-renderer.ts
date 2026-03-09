@@ -19,7 +19,9 @@ type GPUState = {
 	configuredCanvas: HTMLCanvasElement | null;
 	format: GPUTextureFormat;
 	pipeline: GPURenderPipeline;
+	pipelinePlus: GPURenderPipeline;
 	externalPipeline: GPURenderPipeline;
+	externalPipelinePlus: GPURenderPipeline;
 	sampler: GPUSampler;
 };
 
@@ -84,6 +86,7 @@ export class WebGPUPreviewRenderer {
 	private static readonly MAX_TEXTURE_CACHE = 10;
 	private static readonly MAX_TEXTURE_CACHE_BYTES = 96 * 1024 * 1024; // 96MB
 	private static readonly TEXTURE_IDLE_TTL_MS = 10_000;
+	private static readonly MOTION_BLUR_TRAIL_OPACITY_FACTOR = 0.52;
 
 	constructor({
 		width,
@@ -364,6 +367,35 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 						topology: "triangle-list",
 					},
 				});
+				const pipelinePlus = device.createRenderPipeline({
+					layout: "auto",
+					vertex: {
+						module: shader,
+						entryPoint: "vs",
+						buffers: [
+							{
+								arrayStride: 16,
+								attributes: [
+									{ shaderLocation: 0, offset: 0, format: "float32x2" },
+									{ shaderLocation: 1, offset: 8, format: "float32x2" },
+								],
+							},
+						],
+					},
+					fragment: {
+						module: shader,
+						entryPoint: "fs",
+						targets: [
+							{
+								format,
+								blend: mapBlendMode("plus-lighter"),
+							},
+						],
+					},
+					primitive: {
+						topology: "triangle-list",
+					},
+				});
 				const externalShader = device.createShaderModule({
 					code: `
 struct VertexOut {
@@ -423,6 +455,35 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 						topology: "triangle-list",
 					},
 				});
+				const externalPipelinePlus = device.createRenderPipeline({
+					layout: "auto",
+					vertex: {
+						module: externalShader,
+						entryPoint: "vs",
+						buffers: [
+							{
+								arrayStride: 16,
+								attributes: [
+									{ shaderLocation: 0, offset: 0, format: "float32x2" },
+									{ shaderLocation: 1, offset: 8, format: "float32x2" },
+								],
+							},
+						],
+					},
+					fragment: {
+						module: externalShader,
+						entryPoint: "fs",
+						targets: [
+							{
+								format,
+								blend: mapBlendMode("plus-lighter"),
+							},
+						],
+					},
+					primitive: {
+						topology: "triangle-list",
+					},
+				});
 
 				const sampler = device.createSampler({
 					magFilter: "linear",
@@ -443,7 +504,9 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 					configuredCanvas: null,
 					format,
 					pipeline,
+					pipelinePlus,
 					externalPipeline,
+					externalPipelinePlus,
 					sampler,
 				};
 			})();
@@ -589,6 +652,65 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 			data.push(c.x, c.y, c.u, c.v);
 		}
 		return new Float32Array(data);
+	}
+
+	private expandDrawListWithMotionBlur({
+		drawList,
+	}: {
+		drawList: WebGPUVisualDrawData[];
+	}): WebGPUVisualDrawData[] {
+		const expanded: WebGPUVisualDrawData[] = [];
+		for (const draw of drawList) {
+			const blur = draw.motionBlur;
+			if (!blur || blur.samples <= 1) {
+				expanded.push(draw);
+				continue;
+			}
+
+			const sampleCount = Math.max(2, blur.samples);
+			const trailSampleCount = Math.max(1, sampleCount - 1);
+			const trailOpacity =
+				draw.opacity * WebGPUPreviewRenderer.MOTION_BLUR_TRAIL_OPACITY_FACTOR;
+			const trailWeights = Array.from({ length: trailSampleCount }, (_, index) => {
+				const progress = (index + 1) / (trailSampleCount + 1);
+				return (1 - progress) ** 1.15;
+			});
+			const totalTrailWeight = Math.max(
+				1e-6,
+				trailWeights.reduce((sum, weight) => sum + weight, 0),
+			);
+
+			// Draw trails first so the current frame can remain full-opacity on top.
+			for (let sampleIndex = 0; sampleIndex < trailSampleCount; sampleIndex++) {
+				const progress = (sampleIndex + 1) / (trailSampleCount + 1);
+				const trail = 1 - progress;
+				const sampleWeight = trailWeights[sampleIndex] ?? 0;
+				const sampleScale = Math.max(
+					1e-6,
+					1 - blur.deltaScaleRatio * trail,
+				);
+				const sampleWidth = draw.width * sampleScale;
+				const sampleHeight = draw.height * sampleScale;
+				const sampleCenterX = draw.x + draw.width / 2 - blur.deltaX * trail;
+				const sampleCenterY = draw.y + draw.height / 2 - blur.deltaY * trail;
+				expanded.push({
+					...draw,
+					x: sampleCenterX - sampleWidth / 2,
+					y: sampleCenterY - sampleHeight / 2,
+					width: sampleWidth,
+					height: sampleHeight,
+					rotation: draw.rotation - blur.deltaRotation * trail,
+					opacity: trailOpacity * (sampleWeight / totalTrailWeight),
+					blendMode: "plus-lighter",
+				});
+			}
+
+			expanded.push({
+				...draw,
+				opacity: draw.opacity,
+			});
+		}
+		return expanded;
 	}
 
 	private getOrCreateTexture({
@@ -741,7 +863,15 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 			};
 		}
 
-		const { device, context, pipeline, externalPipeline, sampler } = this.state;
+		const {
+			device,
+			context,
+			pipeline,
+			pipelinePlus,
+			externalPipeline,
+			externalPipelinePlus,
+			sampler,
+		} = this.state;
 		if (!context) {
 			return {
 				usedWebGPU: false,
@@ -789,14 +919,16 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 			});
 		}
 		drawList.push(...draws);
+		const effectiveDrawList = this.expandDrawListWithMotionBlur({ drawList });
 		let externalVideoFrames = 0;
 		let copiedTextureUploads = 0;
 		const videoFramesToClose: VideoFrame[] = [];
-		this.ensureBufferPool({ device, drawCount: drawList.length });
+		this.ensureBufferPool({ device, drawCount: effectiveDrawList.length });
 
-		for (const [index, draw] of drawList.entries()) {
+		for (const [index, draw] of effectiveDrawList.entries()) {
 			const isVideoFrameSource =
 				typeof VideoFrame !== "undefined" && draw.source instanceof VideoFrame;
+			const usePlusBlend = draw.blendMode === "plus-lighter";
 
 			const uniformBuffer = this.uniformBufferPool[index];
 			device.queue.writeBuffer(
@@ -807,6 +939,9 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 
 			let bindGroup: GPUBindGroup;
 			if (isVideoFrameSource) {
+				const selectedExternalPipeline = usePlusBlend
+					? externalPipelinePlus
+					: externalPipeline;
 				const videoFrameSource = draw.source as VideoFrame;
 				const externalTexture = device.importExternalTexture({
 					source: videoFrameSource,
@@ -814,7 +949,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				externalVideoFrames += 1;
 				videoFramesToClose.push(videoFrameSource);
 				bindGroup = device.createBindGroup({
-					layout: externalPipeline.getBindGroupLayout(0),
+					layout: selectedExternalPipeline.getBindGroupLayout(0),
 					entries: [
 						{ binding: 0, resource: sampler },
 						{ binding: 1, resource: externalTexture },
@@ -822,6 +957,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 					],
 				});
 			} else {
+				const selectedPipeline = usePlusBlend ? pipelinePlus : pipeline;
 				const textureEntry = this.getOrCreateTexture({
 					source: draw.source,
 					sourceWidth: draw.sourceWidth,
@@ -846,7 +982,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 					copiedTextureUploads += 1;
 				}
 				bindGroup = device.createBindGroup({
-					layout: pipeline.getBindGroupLayout(0),
+					layout: selectedPipeline.getBindGroupLayout(0),
 					entries: [
 						{ binding: 0, resource: textureEntry.view },
 						{ binding: 1, resource: sampler },
@@ -859,7 +995,15 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 			const vertexBuffer = this.vertexBufferPool[index];
 			device.queue.writeBuffer(vertexBuffer, 0, vertices);
 
-			pass.setPipeline(isVideoFrameSource ? externalPipeline : pipeline);
+			pass.setPipeline(
+				isVideoFrameSource
+					? usePlusBlend
+						? externalPipelinePlus
+						: externalPipeline
+					: usePlusBlend
+						? pipelinePlus
+						: pipeline,
+			);
 			pass.setBindGroup(0, bindGroup);
 			pass.setVertexBuffer(0, vertexBuffer);
 			pass.draw(6);
@@ -903,7 +1047,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 			stats: {
 				externalVideoFrames,
 				copiedTextureUploads,
-				totalDraws: drawList.length,
+				totalDraws: effectiveDrawList.length,
 			},
 		};
 	}

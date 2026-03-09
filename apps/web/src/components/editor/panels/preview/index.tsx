@@ -156,6 +156,34 @@ function remapLandscapeVideoScalesForSquarePreview({
 	});
 }
 
+function hasMotionBlurTransitionInTracks({
+	tracks,
+}: {
+	tracks: TimelineTrack[];
+}): boolean {
+	for (const track of tracks) {
+		for (const element of track.elements) {
+			if (
+				element.type !== "video" &&
+				element.type !== "image" &&
+				element.type !== "text" &&
+				element.type !== "sticker"
+			) {
+				continue;
+			}
+			const inPresetId = element.transitions?.in?.presetId ?? "";
+			const outPresetId = element.transitions?.out?.presetId ?? "";
+			if (
+				inPresetId.includes("motion-blur") ||
+				outPresetId.includes("motion-blur")
+			) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 const EDITOR_SUBSCRIBE_PROJECT = ["project"] as const;
 const EDITOR_SUBSCRIBE_RENDER_TREE = ["timeline", "media", "project"] as const;
 const EDITOR_SUBSCRIBE_PREVIEW_CANVAS = ["project", "renderer"] as const;
@@ -287,7 +315,13 @@ function RenderTreeController() {
 	const previewProfile = PREVIEW_PROFILES[playbackQuality];
 	const projectFps = Math.max(1, activeProject.settings.fps);
 	const previewVideoFrameRateCap = projectFps;
-	const previewVideoProxyScale = previewProfile.videoProxyScale;
+	const hasMotionBlurTransition = useMemo(
+		() => hasMotionBlurTransitionInTracks({ tracks }),
+		[tracks],
+	);
+	const previewVideoProxyScale = hasMotionBlurTransition
+		? 1
+		: previewProfile.videoProxyScale;
 	const hasLandscapeVideoSource = useMemo(() => {
 		const mediaById = new Map(mediaAssets.map((asset) => [asset.id, asset]));
 		for (const track of tracks) {

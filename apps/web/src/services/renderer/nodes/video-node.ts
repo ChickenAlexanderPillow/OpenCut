@@ -118,6 +118,13 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 				rotation: resolved.transform.rotate,
 				opacity: resolved.opacity,
 				blendMode: this.params.blendMode,
+				motionBlur: this.getMotionBlurForDraw({
+					time,
+					rendererWidth,
+					rendererHeight,
+					sourceWidth,
+					sourceHeight,
+				}) ?? undefined,
 			};
 		}
 
@@ -143,6 +150,13 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 			rotation: resolved.transform.rotate,
 			opacity: resolved.opacity,
 			blendMode: this.params.blendMode,
+			motionBlur: this.getMotionBlurForDraw({
+				time,
+				rendererWidth,
+				rendererHeight,
+				sourceWidth,
+				sourceHeight,
+			}) ?? undefined,
 		};
 	}
 }

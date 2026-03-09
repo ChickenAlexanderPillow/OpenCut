@@ -23,7 +23,7 @@ import { DEFAULT_TRANSFORM } from "@/constants/timeline-constants";
 import { KeyframeToggle } from "../keyframe-toggle";
 import { useKeyframedNumberProperty } from "../hooks/use-keyframed-number-property";
 import { useElementPlayhead } from "../hooks/use-element-playhead";
-import { resolveTransformAtTime } from "@/lib/animation";
+import { getElementKeyframes, resolveTransformAtTime } from "@/lib/animation";
 import { Checkbox } from "@/components/ui/checkbox";
 
 export function parseNumericInput({ input }: { input: string }): number | null {
@@ -271,6 +271,72 @@ export function TransformSection({
 
 	const isGeneratedCaptionText =
 		element.type === "text" && (element.captionWordTimings?.length ?? 0) > 0;
+	const commitScaleFromFit = ({ value }: { value: number }) => {
+		const previousBaseScale = element.transform.scale;
+		if (
+			previousBaseScale <= 0 ||
+			!Number.isFinite(previousBaseScale) ||
+			!Number.isFinite(value)
+		) {
+			scale.commitValue({ value });
+			return;
+		}
+
+		const ownedScaleKeyframeIds = new Set(
+			[
+				...(element.transitions?.in?.ownedKeyframes ?? []),
+				...(element.transitions?.out?.ownedKeyframes ?? []),
+			]
+				.filter((owned) => owned.propertyPath === "transform.scale")
+				.map((owned) => owned.keyframeId),
+		);
+		if (ownedScaleKeyframeIds.size === 0) {
+			scale.commitValue({ value });
+			return;
+		}
+
+		const ratio = value / previousBaseScale;
+		const transitionScaleKeyframes = getElementKeyframes({
+			animations: element.animations,
+		}).filter(
+			(keyframe) =>
+				keyframe.propertyPath === "transform.scale" &&
+				ownedScaleKeyframeIds.has(keyframe.id) &&
+				typeof keyframe.value === "number",
+		);
+		if (transitionScaleKeyframes.length === 0) {
+			scale.commitValue({ value });
+			return;
+		}
+
+		// Rebase transition-owned scale keyframes with the same factor as base scale
+		// so fit toggles don't collapse motion-blur-zoom to a different fit mode.
+		editor.timeline.updateElements({
+			updates: [
+				{
+					trackId,
+					elementId: element.id,
+					updates: {
+						transform: {
+							...element.transform,
+							scale: value,
+						},
+					},
+				},
+			],
+		});
+		editor.timeline.upsertKeyframes({
+			keyframes: transitionScaleKeyframes.map((keyframe) => ({
+				trackId,
+				elementId: element.id,
+				propertyPath: "transform.scale" as const,
+				time: keyframe.time,
+				value: (keyframe.value as number) * ratio,
+				interpolation: keyframe.interpolation,
+				keyframeId: keyframe.id,
+			})),
+		});
+	};
 
 	return (
 		<Section collapsible sectionKey={`${element.type}:transform`}>
@@ -324,7 +390,7 @@ export function TransformSection({
 											: "Fit media to full height"
 									}
 									onClick={() =>
-										scale.commitValue({
+										commitScaleFromFit({
 											value:
 												fitMode === "height"
 													? fitScales.width

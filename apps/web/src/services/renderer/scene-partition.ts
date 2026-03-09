@@ -17,6 +17,18 @@ export interface HybridScenePartition {
 
 const SUPPORTED_GPU_BLEND_MODES = new Set(["normal", "source-over", undefined]);
 
+function hasMotionBlurTransition({
+	node,
+}: {
+	node: VideoNode | ImageNode;
+}): boolean {
+	const inPresetId = node.params.transitions?.in?.presetId ?? "";
+	const outPresetId = node.params.transitions?.out?.presetId ?? "";
+	return (
+		inPresetId.includes("motion-blur") || outPresetId.includes("motion-blur")
+	);
+}
+
 function parseCssColorToRgba(
 	color: string,
 ): { r: number; g: number; b: number; a: number } | null {
@@ -161,6 +173,17 @@ export function splitSceneForHybridPreview({
 				reasonIfUnsupported: `Unsupported blend mode: ${node.params.blendMode}`,
 				gpuNodes: [],
 				cpuPreNodes: [],
+				cpuPostNodes: [],
+				gpuClearColor,
+			};
+		}
+		if (hasMotionBlurTransition({ node })) {
+			return {
+				supported: false,
+				reasonIfUnsupported:
+					"Motion blur transitions currently render on Canvas preview",
+				gpuNodes: [],
+				cpuPreNodes: normalizedChildren,
 				cpuPostNodes: [],
 				gpuClearColor,
 			};

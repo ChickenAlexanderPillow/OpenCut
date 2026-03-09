@@ -122,6 +122,34 @@ function lerpNumber({
 	return leftValue + (rightValue - leftValue) * progress;
 }
 
+function applyEasingProgress({
+	progress,
+	interpolation,
+}: {
+	progress: number;
+	interpolation:
+		| "linear"
+		| "hold"
+		| "ease-in"
+		| "ease-out"
+		| "ease-in-out";
+}): number {
+	const t = clamp01({ value: progress });
+	if (interpolation === "ease-in") {
+		return t * t * t;
+	}
+	if (interpolation === "ease-out") {
+		const inv = 1 - t;
+		return 1 - inv * inv * inv;
+	}
+	if (interpolation === "ease-in-out") {
+		return t < 0.5
+			? 4 * t * t * t
+			: 1 - Math.pow(-2 * t + 2, 3) / 2;
+	}
+	return t;
+}
+
 function interpolateColor({
 	leftColor,
 	rightColor,
@@ -267,11 +295,15 @@ export function getNumberChannelValueAtTime({
 			if (leftKeyframe.interpolation === "hold") {
 				return leftKeyframe.value;
 			}
+			const easedProgress = applyEasingProgress({
+				progress,
+				interpolation: leftKeyframe.interpolation,
+			});
 
 			return lerpNumber({
 				leftValue: leftKeyframe.value,
 				rightValue: rightKeyframe.value,
-				progress,
+				progress: easedProgress,
 			});
 		},
 	});
@@ -294,11 +326,15 @@ export function getColorValueAtTime({
 			if (leftKeyframe.interpolation === "hold") {
 				return leftKeyframe.value;
 			}
+			const easedProgress = applyEasingProgress({
+				progress,
+				interpolation: leftKeyframe.interpolation,
+			});
 
 			return interpolateColor({
 				leftColor: leftKeyframe.value,
 				rightColor: rightKeyframe.value,
-				progress,
+				progress: easedProgress,
 			});
 		},
 	});

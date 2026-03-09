@@ -7,7 +7,6 @@ import {
 	Happy01Icon,
 	Image02Icon,
 	Video01Icon,
-	MagicWand05Icon,
 	MusicNote03Icon,
 	TextIcon,
 	Settings01Icon,
@@ -21,7 +20,6 @@ export const TAB_KEYS = [
 	"transcript",
 	"text",
 	"stickers",
-	"effects",
 	"transitions",
 	"overlay",
 	"settings",
@@ -34,6 +32,45 @@ const createHugeiconsIcon =
 	({ className }: { className?: string }) => (
 		<HugeiconsIcon icon={icon} className={className} />
 	);
+
+function OcGradientSquareIcon({ className }: { className?: string }) {
+	return (
+		<svg
+			viewBox="0 0 24 24"
+			fill="none"
+			xmlns="http://www.w3.org/2000/svg"
+			className={className}
+		>
+			<title>Transitions</title>
+			<defs>
+				<linearGradient id="transitions-tab-gradient" x1="4" y1="4" x2="20" y2="20">
+					<stop offset="0%" stopColor="#fb7185" />
+					<stop offset="55%" stopColor="#f59e0b" />
+					<stop offset="100%" stopColor="#22c55e" />
+				</linearGradient>
+			</defs>
+			<rect
+				x="3.5"
+				y="3.5"
+				width="17"
+				height="17"
+				rx="4.5"
+				fill="url(#transitions-tab-gradient)"
+				fillOpacity="0.22"
+				stroke="url(#transitions-tab-gradient)"
+				strokeWidth="1.5"
+			/>
+			<path
+				d="M7.5 15.5L11 12L13.2 14.2L16.8 8.8"
+				stroke="url(#transitions-tab-gradient)"
+				strokeWidth="1.8"
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			/>
+			<circle cx="16.8" cy="8.8" r="1.2" fill="url(#transitions-tab-gradient)" />
+		</svg>
+	);
+}
 
 export const tabs = {
 	media: {
@@ -60,12 +97,8 @@ export const tabs = {
 		icon: createHugeiconsIcon({ icon: Happy01Icon }),
 		label: "Stickers",
 	},
-	effects: {
-		icon: createHugeiconsIcon({ icon: MagicWand05Icon }),
-		label: "Effects",
-	},
 	transitions: {
-		icon: createHugeiconsIcon({ icon: MagicWand05Icon }),
+		icon: OcGradientSquareIcon,
 		label: "Transitions",
 	},
 	overlay: {

@@ -20,7 +20,12 @@ export type AnimationValueKind = "number" | "color" | "discrete";
 export type DiscreteValue = boolean | string;
 export type AnimationValue = number | string | boolean;
 
-export type ContinuousKeyframeInterpolation = "linear" | "hold";
+export type ContinuousKeyframeInterpolation =
+	| "linear"
+	| "hold"
+	| "ease-in"
+	| "ease-out"
+	| "ease-in-out";
 export type DiscreteKeyframeInterpolation = "hold";
 export type AnimationInterpolation =
 	| ContinuousKeyframeInterpolation

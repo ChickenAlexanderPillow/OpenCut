@@ -39,7 +39,10 @@ import type {
 	TranscriptionModelId,
 	TranscriptionSegment,
 } from "@/types/transcription";
-import type { AnimationPropertyPath } from "@/types/animation";
+import type {
+	AnimationInterpolation,
+	AnimationPropertyPath,
+} from "@/types/animation";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 import { useClipGenerationStore } from "@/stores/clip-generation-store";
@@ -86,6 +89,7 @@ import {
 	syncCaptionsFromTranscriptEdits,
 	validateAndHealCaptionDriftInTracks,
 } from "@/lib/transcript-editor/sync-captions";
+import { getElementBaseValueForProperty, resolveNumberAtTime } from "@/lib/animation";
 
 const MIN_VIRAL_CLIP_SCORE = 56;
 const MAX_VIRAL_CLIP_COUNT = 5;
@@ -2274,6 +2278,7 @@ export function useEditorActions() {
 			propertyPath: AnimationPropertyPath;
 			time: number;
 			value: number;
+			interpolation?: AnimationInterpolation;
 			keyframeId: string;
 		}> = [];
 		const metadataUpdates: Array<{
@@ -2292,6 +2297,19 @@ export function useEditorActions() {
 				preset,
 				side,
 				duration: resolvedDuration,
+				getBaseValueForPath: ({ propertyPath, time }) => {
+					const baseValue = getElementBaseValueForProperty({
+						element,
+						propertyPath,
+					});
+					if (typeof baseValue !== "number") return null;
+					return resolveNumberAtTime({
+						baseValue,
+						animations: element.animations,
+						propertyPath,
+						localTime: time,
+					});
+				},
 			});
 			const ownedKeyframes = specs.map((spec) => ({
 				propertyPath: spec.propertyPath,
@@ -2307,6 +2325,7 @@ export function useEditorActions() {
 					propertyPath: spec.propertyPath,
 					time: spec.time,
 					value: spec.value,
+					interpolation: spec.interpolation,
 					keyframeId,
 				});
 			}

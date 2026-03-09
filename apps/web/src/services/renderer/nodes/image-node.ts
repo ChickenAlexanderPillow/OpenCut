@@ -127,6 +127,13 @@ export class ImageNode extends VisualNode<ImageNodeParams> {
 			rotation: resolved.transform.rotate,
 			opacity: resolved.opacity,
 			blendMode: this.params.blendMode,
+			motionBlur: this.getMotionBlurForDraw({
+				time,
+				rendererWidth,
+				rendererHeight,
+				sourceWidth,
+				sourceHeight,
+			}) ?? undefined,
 		};
 	}
 }

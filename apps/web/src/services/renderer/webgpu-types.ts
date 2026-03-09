@@ -11,6 +11,13 @@ export interface WebGPUVisualDrawData {
 	rotation: number;
 	opacity: number;
 	blendMode?: BlendMode;
+	motionBlur?: {
+		deltaX: number;
+		deltaY: number;
+		deltaRotation: number;
+		deltaScaleRatio: number;
+		samples: number;
+	};
 }
 
 export type PreviewRendererMode = "auto" | "webgpu" | "canvas2d";

@@ -207,6 +207,7 @@ export function buildScene(params: BuildSceneParams) {
 							opacity: stableElement.opacity,
 							blendMode: stableElement.blendMode,
 							animations: stableElement.animations,
+							transitions: stableElement.transitions,
 							frameRateCap: params.previewFrameRateCap,
 							...(params.isPreview && {
 								previewProxyScale: params.previewProxyScale,
@@ -226,6 +227,7 @@ export function buildScene(params: BuildSceneParams) {
 							opacity: stableElement.opacity,
 							blendMode: stableElement.blendMode,
 							animations: stableElement.animations,
+							transitions: stableElement.transitions,
 							...(params.isPreview && {
 								maxSourceSize: PREVIEW_MAX_IMAGE_SIZE,
 							}),
@@ -286,6 +288,7 @@ export function buildScene(params: BuildSceneParams) {
 						opacity: stableElement.opacity,
 						blendMode: stableElement.blendMode,
 						animations: stableElement.animations,
+						transitions: stableElement.transitions,
 					}),
 				);
 			}

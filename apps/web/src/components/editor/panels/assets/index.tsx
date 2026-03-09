@@ -9,7 +9,6 @@ import {
 } from "@/stores/assets-panel-store";
 import { TabBar } from "./tabbar";
 import { Clips } from "./views/clips";
-import { EffectsView } from "./views/effects";
 import { TransitionsView } from "./views/transitions";
 import { MediaView } from "./views/assets";
 import { SettingsView } from "./views/settings";
@@ -37,14 +36,16 @@ export function AssetsPanel() {
 		transcript: <TranscriptView />,
 		text: <TextView />,
 		stickers: <StickersView />,
-		effects: <EffectsView />,
 		transitions: <TransitionsView />,
 		overlay: <OverlayView />,
 		settings: <SettingsView />,
 	};
 
 	return (
-		<div className="panel bg-background flex h-full rounded-sm border overflow-hidden">
+		<div
+			className="panel bg-background flex h-full rounded-sm border overflow-hidden"
+			data-editor-selection-root="assets"
+		>
 			<TabBar />
 			<Separator orientation="vertical" />
 			<div className="flex-1 overflow-hidden relative">
