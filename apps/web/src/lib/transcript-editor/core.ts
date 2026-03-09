@@ -381,7 +381,7 @@ export function mapCompressedTimeToSourceTime({
 	let compressedCursor = 0;
 	for (const cut of merged) {
 		const keep = Math.max(0, cut.start - sourceCursor);
-		if (safeTime <= compressedCursor + keep) {
+		if (safeTime < compressedCursor + keep) {
 			return sourceCursor + (safeTime - compressedCursor);
 		}
 		compressedCursor += keep;

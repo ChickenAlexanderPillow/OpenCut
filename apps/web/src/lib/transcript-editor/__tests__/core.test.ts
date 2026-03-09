@@ -60,6 +60,13 @@ describe("transcript editor core", () => {
 		).toBeCloseTo(0.3, 4);
 	});
 
+	test("maps compressed cut boundary to the first kept source sample after the cut", () => {
+		const cuts = [{ start: 0.225, end: 0.716, reason: "manual" as const }];
+		expect(
+			mapCompressedTimeToSourceTime({ compressedTime: 0.225, cuts }),
+		).toBeCloseTo(0.716, 4);
+	});
+
 	test("computes keep duration and removes fillers", () => {
 		const words = [
 			{ id: "w1", text: "I", startTime: 0, endTime: 0.2, removed: false },

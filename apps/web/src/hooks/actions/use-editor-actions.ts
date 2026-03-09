@@ -84,6 +84,13 @@ import {
 import { DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import { clearTranscriptTimelineSnapshotCache } from "@/lib/transcript-editor/snapshot";
 import {
+	compileTranscriptDraft,
+	getTranscriptApplied,
+	getTranscriptCompileState,
+	getTranscriptDraft,
+	withTranscriptState,
+} from "@/lib/transcript-editor/state";
+import {
 	dedupeTranscriptEditsInTracks,
 	rebuildCaptionTrackForMediaElement,
 	syncCaptionsFromTranscriptEdits,
@@ -114,6 +121,7 @@ const clipTranscriptInFlight = new Map<
 	string,
 	Promise<Awaited<ReturnType<typeof getOrCreateClipTranscriptForAsset>>>
 >();
+const transcriptCompileTimers = new Map<string, number>();
 const EDITOR_SUBSCRIBE_PROJECT = ["project"] as const;
 
 function asVisualTargetElement({
@@ -769,7 +777,7 @@ function initializeTranscriptEditFromExistingCaption({
 }: {
 	tracks: TimelineTrack[];
 	mediaElementId: string;
-}): NonNullable<VideoElement["transcriptEdit"]> | null {
+}): NonNullable<VideoElement["transcriptDraft"]> | null {
 	let sourceMediaElement: TimelineElement | null = null;
 	for (const track of tracks) {
 		if (track.type !== "video" && track.type !== "audio") continue;
@@ -826,8 +834,8 @@ function buildDefaultTranscriptSegmentsUi({
 	words,
 }: {
 	elementId: string;
-	words: NonNullable<VideoElement["transcriptEdit"]>["words"];
-}): NonNullable<VideoElement["transcriptEdit"]>["segmentsUi"] {
+	words: NonNullable<VideoElement["transcriptDraft"]>["words"];
+}): NonNullable<VideoElement["transcriptDraft"]>["segmentsUi"] {
 	if (words.length === 0) return [];
 	const segments: Array<{ wordStartIndex: number; wordEndIndex: number }> = [];
 	let segmentStart = 0;
@@ -863,8 +871,8 @@ function areTranscriptWordsEqual({
 	before,
 	after,
 }: {
-	before: NonNullable<VideoElement["transcriptEdit"]>["words"];
-	after: NonNullable<VideoElement["transcriptEdit"]>["words"];
+	before: NonNullable<VideoElement["transcriptDraft"]>["words"];
+	after: NonNullable<VideoElement["transcriptDraft"]>["words"];
 }): boolean {
 	if (before.length !== after.length) return false;
 	for (let i = 0; i < before.length; i++) {
@@ -885,8 +893,8 @@ function areTranscriptSegmentsEqual({
 	before,
 	after,
 }: {
-	before: NonNullable<VideoElement["transcriptEdit"]>["segmentsUi"];
-	after: NonNullable<VideoElement["transcriptEdit"]>["segmentsUi"];
+	before: NonNullable<VideoElement["transcriptDraft"]>["segmentsUi"];
+	after: NonNullable<VideoElement["transcriptDraft"]>["segmentsUi"];
 }): boolean {
 	const beforeSegments = before ?? [];
 	const afterSegments = after ?? [];
@@ -989,21 +997,22 @@ function buildCompactTranscriptPatch({
 	afterElement: VideoElement | AudioElement;
 }): CompactTranscriptPatch | null {
 	const beforeEdit = beforeElement.transcriptEdit;
-	const afterEdit = afterElement.transcriptEdit;
-	if (!beforeEdit || !afterEdit) return null;
-	if (beforeEdit.words.length !== afterEdit.words.length) return null;
+	const afterEdit = afterElement.transcriptDraft ?? afterElement.transcriptEdit;
+	const beforeDraft = beforeElement.transcriptDraft ?? beforeEdit;
+	if (!beforeDraft || !afterEdit) return null;
+	if (beforeDraft.words.length !== afterEdit.words.length) return null;
 	const segmentsChanged = !areTranscriptSegmentsEqual({
-		before: beforeEdit.segmentsUi,
+		before: beforeDraft.segmentsUi,
 		after: afterEdit.segmentsUi,
 	});
 	const cutsChanged = !areTranscriptCutsEqual({
-		before: beforeEdit.cuts,
+		before: beforeDraft.cuts,
 		after: afterEdit.cuts,
 	});
 
 	const wordDiffs: CompactTranscriptWordDiff[] = [];
-	for (let index = 0; index < beforeEdit.words.length; index++) {
-		const beforeWord = beforeEdit.words[index];
+	for (let index = 0; index < beforeDraft.words.length; index++) {
+		const beforeWord = beforeDraft.words[index];
 		const afterWord = afterEdit.words[index];
 		if (!beforeWord || !afterWord || beforeWord.id !== afterWord.id) {
 			return null;
@@ -1040,18 +1049,18 @@ function buildCompactTranscriptPatch({
 		elementId,
 		beforeDuration: beforeElement.duration,
 		afterDuration: afterElement.duration,
-		beforeUpdatedAt: beforeEdit.updatedAt,
+		beforeUpdatedAt: beforeDraft.updatedAt,
 		afterUpdatedAt: afterEdit.updatedAt,
 		beforeSegmentsUi:
-			segmentsChanged && beforeEdit.segmentsUi
-				? [...beforeEdit.segmentsUi]
+			segmentsChanged && beforeDraft.segmentsUi
+				? [...beforeDraft.segmentsUi]
 				: undefined,
 		afterSegmentsUi:
 			segmentsChanged && afterEdit.segmentsUi
 				? [...afterEdit.segmentsUi]
 				: undefined,
 		wordDiffs,
-		beforeCuts: cutsChanged ? mergeCutRanges({ cuts: beforeEdit.cuts }) : undefined,
+		beforeCuts: cutsChanged ? mergeCutRanges({ cuts: beforeDraft.cuts }) : undefined,
 		afterCuts: cutsChanged ? mergeCutRanges({ cuts: afterEdit.cuts }) : undefined,
 	};
 }
@@ -1084,9 +1093,10 @@ class CompactTranscriptMutationCommand extends Command {
 				const patch = elementPatches.get(element.id);
 				if (!patch) return element;
 				if (!isTranscriptEditableMediaElement(element)) return element;
-				if (!element.transcriptEdit) return element;
+				const currentDraft = getTranscriptDraft(element);
+				if (!currentDraft) return element;
 				const wordsById = new Map(
-					element.transcriptEdit.words.map((word) => [
+					currentDraft.words.map((word) => [
 						word.id,
 						{ ...word },
 					]),
@@ -1111,35 +1121,48 @@ class CompactTranscriptMutationCommand extends Command {
 								: wordDiff.segmentId.after;
 					}
 				}
-				const words = element.transcriptEdit.words.map((word) => {
+				const words = currentDraft.words.map((word) => {
 					const nextWord = wordsById.get(word.id);
 					return nextWord ?? word;
 				});
 				const segmentsUi =
 					direction === "before"
-						? (patch.beforeSegmentsUi ?? element.transcriptEdit.segmentsUi)
-						: (patch.afterSegmentsUi ?? element.transcriptEdit.segmentsUi);
+						? (patch.beforeSegmentsUi ?? currentDraft.segmentsUi)
+						: (patch.afterSegmentsUi ?? currentDraft.segmentsUi);
 				const cuts =
 					direction === "before"
 						? (patch.beforeCuts ?? buildTranscriptCutsFromWords({ words }))
 						: (patch.afterCuts ?? buildTranscriptCutsFromWords({ words }));
-				return {
-					...element,
-					duration:
+				const nextDraft = {
+					...currentDraft,
+					words,
+					cuts,
+					segmentsUi,
+					updatedAt:
 						direction === "before"
-							? patch.beforeDuration
-							: patch.afterDuration,
-					transcriptEdit: {
-						...element.transcriptEdit,
-						words,
-						cuts,
-						segmentsUi,
-						updatedAt:
-							direction === "before"
-								? patch.beforeUpdatedAt
-								: patch.afterUpdatedAt,
-					},
+							? patch.beforeUpdatedAt
+							: patch.afterUpdatedAt,
 				};
+				return withTranscriptState({
+					element: {
+						...element,
+						duration:
+							direction === "before"
+								? patch.beforeDuration
+								: patch.afterDuration,
+					},
+					draft: nextDraft,
+					applied: compileTranscriptDraft({
+						mediaElementId: element.id,
+						draft: nextDraft,
+						mediaStartTime: element.startTime,
+						mediaDuration:
+							direction === "before"
+								? patch.beforeDuration
+								: patch.afterDuration,
+					}),
+					compileState: { status: "idle", updatedAt: nextDraft.updatedAt },
+				});
 			});
 			return { ...track, elements: nextElements } as TimelineTrack;
 		});
@@ -1179,6 +1202,117 @@ class CompactTranscriptMutationCommand extends Command {
 	}
 }
 
+function scheduleTranscriptDraftCompile({
+	editor,
+	mediaElementIds,
+}: {
+	editor: ReturnType<typeof useEditor>;
+	mediaElementIds: string[];
+}): void {
+	if (typeof window === "undefined") return;
+	const uniqueIds = [...new Set(mediaElementIds)];
+	for (const mediaElementId of uniqueIds) {
+		const existingTimer = transcriptCompileTimers.get(mediaElementId);
+		if (typeof existingTimer === "number") {
+			window.clearTimeout(existingTimer);
+		}
+		const timer = window.setTimeout(() => {
+			transcriptCompileTimers.delete(mediaElementId);
+			const currentTracks = editor.timeline.getTracks();
+			let nextTracks = currentTracks;
+			let changed = false;
+			for (const track of currentTracks) {
+				if (track.type !== "video" && track.type !== "audio") continue;
+				for (const element of track.elements) {
+					if (!isTranscriptEditableMediaElement(element)) continue;
+					if (element.id !== mediaElementId) continue;
+					const draft = getTranscriptDraft(element);
+					if (!draft || draft.words.length === 0) continue;
+					const applied = compileTranscriptDraft({
+						mediaElementId,
+						draft,
+						mediaStartTime: element.startTime,
+						mediaDuration: element.duration,
+					});
+					nextTracks = nextTracks.map((candidateTrack) => {
+						if (candidateTrack.id !== track.id) return candidateTrack;
+						if (candidateTrack.type === "video") {
+							return {
+								...candidateTrack,
+								elements: candidateTrack.elements.map((candidateElement) =>
+									candidateElement.id === mediaElementId &&
+									isTranscriptEditableMediaElement(candidateElement)
+										? withTranscriptState({
+												element: candidateElement,
+												draft,
+												applied,
+												compileState: {
+													status: "idle",
+													updatedAt: draft.updatedAt,
+												},
+										  })
+										: candidateElement,
+								),
+							} satisfies TimelineTrack;
+						}
+						if (candidateTrack.type === "audio") {
+							return {
+								...candidateTrack,
+								elements: candidateTrack.elements.map((candidateElement) =>
+									candidateElement.id === mediaElementId &&
+									isTranscriptEditableMediaElement(candidateElement)
+										? withTranscriptState({
+												element: candidateElement,
+												draft,
+												applied,
+												compileState: {
+													status: "idle",
+													updatedAt: draft.updatedAt,
+												},
+										  })
+										: candidateElement,
+								),
+							} satisfies TimelineTrack;
+						}
+							return candidateTrack;
+					});
+					changed = true;
+				}
+			}
+			if (!changed) {
+				editor.playback.setBlockedReason({ reason: null });
+				return;
+			}
+			const syncResult = syncCaptionsFromTranscriptEdits({
+				tracks: nextTracks,
+				mediaElementId,
+			});
+			if (syncResult.changed) {
+				nextTracks = syncResult.tracks;
+			}
+			const deduped = dedupeTranscriptEditsInTracks({ tracks: nextTracks });
+			if (deduped.changed) {
+				nextTracks = deduped.tracks;
+			}
+			const driftCheck = validateAndHealCaptionDriftInTracks({
+				tracks: nextTracks,
+				projectId: editor.project.getActive().metadata.id,
+			});
+			if (driftCheck.changed) {
+				nextTracks = driftCheck.tracks;
+			}
+			try {
+				editor.timeline.updateTracks(nextTracks);
+				clearTranscriptTimelineSnapshotCache();
+				editor.save.markDirty();
+			} finally {
+				editor.playback.setBlockedReason({ reason: null });
+			}
+		}, 120);
+		transcriptCompileTimers.set(mediaElementId, timer);
+	}
+}
+
 function applyTranscriptEditMutation({
 	editor,
 	trackId,
@@ -1190,14 +1324,14 @@ function applyTranscriptEditMutation({
 	editor: ReturnType<typeof useEditor>;
 	trackId: string;
 	elementId: string;
-	mutateWords?: (words: NonNullable<VideoElement["transcriptEdit"]>["words"]) => NonNullable<VideoElement["transcriptEdit"]>["words"];
+	mutateWords?: (words: NonNullable<VideoElement["transcriptDraft"]>["words"]) => NonNullable<VideoElement["transcriptDraft"]>["words"];
 	mutateSegmentsUi?: (
-		segments: NonNullable<VideoElement["transcriptEdit"]>["segmentsUi"],
-		words: NonNullable<VideoElement["transcriptEdit"]>["words"],
-	) => NonNullable<VideoElement["transcriptEdit"]>["segmentsUi"];
+		segments: NonNullable<VideoElement["transcriptDraft"]>["segmentsUi"],
+		words: NonNullable<VideoElement["transcriptDraft"]>["words"],
+	) => NonNullable<VideoElement["transcriptDraft"]>["segmentsUi"];
 	mutateCuts?: (
 		cuts: TranscriptEditCutRange[],
-		words: NonNullable<VideoElement["transcriptEdit"]>["words"],
+		words: NonNullable<VideoElement["transcriptDraft"]>["words"],
 	) => TranscriptEditCutRange[];
 }): { changed: boolean; error?: string } {
 	const tracks = editor.timeline.getTracks();
@@ -1205,20 +1339,20 @@ function applyTranscriptEditMutation({
 	if (!target || !isTranscriptEditableMediaElement(target)) {
 		return { changed: false, error: "Select a video/audio element first" };
 	}
-	const transcriptEdit =
-		target.transcriptEdit ??
+	const transcriptDraft =
+		getTranscriptDraft(target) ??
 		initializeTranscriptEditFromExistingCaption({
 			tracks,
 			mediaElementId: target.id,
 		});
-	if (!transcriptEdit) {
+	if (!transcriptDraft) {
 		return { changed: false, error: "No word-level transcript available for selected element" };
 	}
 
 	// Transcript words are the source of truth for editing state.
 	// Do not re-derive removed flags from persisted cuts here, or unmute can re-collapse after reload.
 	const baseWords = normalizeTranscriptWords({
-		words: transcriptEdit.words,
+		words: transcriptDraft.words,
 	});
 	let nextWords = baseWords;
 	if (mutateWords) {
@@ -1229,7 +1363,7 @@ function applyTranscriptEditMutation({
 		return { changed: false, error: "Cannot remove all words from transcript" };
 	}
 	const derivedWordCuts = buildTranscriptCutsFromWords({ words: nextWords });
-	const preservedNonWordCuts = (transcriptEdit.cuts ?? []).filter(
+	const preservedNonWordCuts = (transcriptDraft.cuts ?? []).filter(
 		(cut) => cut.reason === "pause",
 	);
 	let cuts = mergeCutRanges({
@@ -1240,17 +1374,9 @@ function applyTranscriptEditMutation({
 			cuts: mutateCuts(cuts, nextWords),
 		});
 	}
-	const originalDuration = Math.max(
-		target.duration,
-		nextWords[nextWords.length - 1]?.endTime ?? target.duration,
-	);
-	const nextDuration = computeKeepDuration({
-		originalDuration,
-		cuts,
-	});
 	const initialSegmentsUi =
-		transcriptEdit.segmentsUi && transcriptEdit.segmentsUi.length > 0
-			? transcriptEdit.segmentsUi
+		transcriptDraft.segmentsUi && transcriptDraft.segmentsUi.length > 0
+			? transcriptDraft.segmentsUi
 			: buildDefaultTranscriptSegmentsUi({
 					elementId: target.id,
 					words: nextWords,
@@ -1266,15 +1392,14 @@ function applyTranscriptEditMutation({
 		after: nextSegmentsUi,
 	});
 	const cutsChanged = !areTranscriptCutsEqual({
-		before: transcriptEdit.cuts ?? [],
+		before: transcriptDraft.cuts ?? [],
 		after: cuts,
 	});
-	const durationChanged = Math.abs(nextDuration - target.duration) > 0.0001;
-	if (!wordsChanged && !segmentsChanged && !cutsChanged && !durationChanged) {
+	if (!wordsChanged && !segmentsChanged && !cutsChanged) {
 		return { changed: false };
 	}
 
-	const baseEdit = {
+	const nextDraft = {
 		version: 1 as const,
 		source: "word-level" as const,
 		words: nextWords,
@@ -1291,24 +1416,42 @@ function applyTranscriptEditMutation({
 	const updatedTracks = tracks.map((track) => {
 		if (track.type === "video") {
 			const nextElements = track.elements.map((element) =>
-				relatedElementIds.has(element.id)
-					? {
-							...element,
-							duration: nextDuration,
-							transcriptEdit: baseEdit,
-						}
+				relatedElementIds.has(element.id) && isTranscriptEditableMediaElement(element)
+					? withTranscriptState({
+							element,
+							draft: nextDraft,
+							applied: compileTranscriptDraft({
+								mediaElementId: element.id,
+								draft: nextDraft,
+								mediaStartTime: element.startTime,
+								mediaDuration: element.duration,
+							}),
+							compileState: {
+								status: "compiling",
+								updatedAt: nextDraft.updatedAt,
+							},
+					  })
 					: element,
 			);
 			return { ...track, elements: nextElements } as TimelineTrack;
 		}
 		if (track.type === "audio") {
 			const nextElements = track.elements.map((element) =>
-				relatedElementIds.has(element.id)
-					? {
-							...element,
-							duration: nextDuration,
-							transcriptEdit: baseEdit,
-						}
+				relatedElementIds.has(element.id) && isTranscriptEditableMediaElement(element)
+					? withTranscriptState({
+							element,
+							draft: nextDraft,
+							applied: compileTranscriptDraft({
+								mediaElementId: element.id,
+								draft: nextDraft,
+								mediaStartTime: element.startTime,
+								mediaDuration: element.duration,
+							}),
+							compileState: {
+								status: "compiling",
+								updatedAt: nextDraft.updatedAt,
+							},
+					  })
 					: element,
 			);
 			return { ...track, elements: nextElements } as TimelineTrack;
@@ -1316,84 +1459,20 @@ function applyTranscriptEditMutation({
 		return track;
 	});
 
-	const isRealtimePlayback =
-		editor.playback.getIsPlaying() || editor.playback.getIsScrubbing();
-	let syncedTracks = updatedTracks;
-	const syncResult = syncCaptionsFromTranscriptEdits({
-		tracks: syncedTracks,
-		mediaElementId: target.id,
+	if (editor.playback.getIsPlaying() || editor.playback.getIsScrubbing()) {
+		editor.playback.pause();
+	}
+	editor.playback.setBlockedReason({
+		reason: "Updating transcript playback",
 	});
-	if (!syncResult.error && syncResult.changed) {
-		syncedTracks = syncResult.tracks;
-	}
-	let dedupeChanged = false;
-	let driftChanged = false;
-	if (!isRealtimePlayback) {
-		const deduped = dedupeTranscriptEditsInTracks({ tracks: syncedTracks });
-		dedupeChanged = deduped.changed;
-		if (deduped.changed) {
-			syncedTracks = deduped.tracks;
-		}
-		const driftCheck = validateAndHealCaptionDriftInTracks({
-			tracks: syncedTracks,
-			projectId: editor.project.getActive().metadata.id,
-		});
-		driftChanged = driftCheck.changed;
-		if (driftChanged) {
-			syncedTracks = driftCheck.tracks;
-		}
-	}
 
-	if (hasTrackStructureChange({ beforeTracks: tracks, afterTracks: syncedTracks })) {
-		editor.command.execute({
-			command: new TracksSnapshotCommand(tracks, syncedTracks),
-		});
-	} else {
-		const patches: CompactTranscriptPatch[] = [];
-		let canUseCompactPatches = true;
-		for (const mediaElementId of relatedElementIds) {
-			const beforeRecord = tracks
-				.flatMap((track) => track.elements.map((element) => ({ track, element })))
-				.find((item) => item.element.id === mediaElementId);
-			const afterRecord = syncedTracks
-				.flatMap((track) => track.elements.map((element) => ({ track, element })))
-				.find((item) => item.element.id === mediaElementId);
-			if (!beforeRecord || !afterRecord) continue;
-			if (
-				(beforeRecord.element.type !== "video" &&
-					beforeRecord.element.type !== "audio") ||
-				(afterRecord.element.type !== "video" && afterRecord.element.type !== "audio")
-			) {
-				continue;
-			}
-			const patch = buildCompactTranscriptPatch({
-				trackId: beforeRecord.track.id,
-				elementId: beforeRecord.element.id,
-				beforeElement: beforeRecord.element,
-				afterElement: afterRecord.element,
-			});
-			if (!patch) {
-				canUseCompactPatches = false;
-				break;
-			}
-			patches.push(patch);
-		}
-		if (patches.length === 0) {
-			return { changed: false };
-		}
-		if (!canUseCompactPatches || dedupeChanged || driftChanged) {
-			editor.command.execute({
-				command: new TracksSnapshotCommand(tracks, syncedTracks),
-			});
-		} else {
-			editor.command.execute({
-				command: new CompactTranscriptMutationCommand(
-					patches,
-					Array.from(relatedElementIds),
-				),
-			});
-		}
-	}
+	editor.command.execute({
+		command: new TracksSnapshotCommand(tracks, updatedTracks),
+	});
+	scheduleTranscriptDraftCompile({
+		editor,
+		mediaElementIds: Array.from(relatedElementIds),
+	});
 	editor.save.markDirty();
 
 	return { changed: true };
@@ -2143,8 +2222,6 @@ function computeRemovedTimelineRangesFromTranscriptCuts({
 
 export function useEditorActions() {
 	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PROJECT });
-	const textBasedEditingDisabled =
-		process.env.NEXT_PUBLIC_DISABLE_TEXT_BASED_EDITING !== "false";
 	const activeProject = editor.project.getActive();
 	const transcriptionStatus = useTranscriptionStatusStore();
 	const { registerProcess, updateProcessLabel, removeProcess } =
@@ -2741,7 +2818,6 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-toggle-word",
 		(args) => {
-			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			const wordId = typeof args?.wordId === "string" ? args.wordId : "";
@@ -2766,7 +2842,6 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-update-word",
 		(args) => {
-			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			const wordId = typeof args?.wordId === "string" ? args.wordId : "";
@@ -2796,7 +2871,6 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-update-words",
 		(args) => {
-			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			const updates = Array.isArray(args?.updates)
@@ -2836,7 +2910,6 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-set-words-removed",
 		(args) => {
-			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			const wordIds = Array.isArray(args?.wordIds)
@@ -2864,7 +2937,6 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-remove-fillers",
 		(args) => {
-			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			if (!trackId || !elementId) return;
@@ -2893,7 +2965,6 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-remove-pauses",
 		(args) => {
-			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			const thresholdSecondsRaw = args?.thresholdSeconds;
@@ -2933,7 +3004,6 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-restore-all",
 		(args) => {
-			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			if (!trackId || !elementId) return;
@@ -2957,7 +3027,6 @@ export function useEditorActions() {
 	useActionHandler(
 		"transcript-split-segment-ui",
 		(args) => {
-			if (textBasedEditingDisabled) return;
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
 			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
 			const wordId = typeof args?.wordId === "string" ? args.wordId : "";

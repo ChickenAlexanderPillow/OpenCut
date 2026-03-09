@@ -5,7 +5,11 @@ import type { Transform } from "@/types/timeline";
 import type { ElementTransitions } from "@/types/timeline";
 import type { ElementAnimations } from "@/types/animation";
 import { resolveOpacityAtTime, resolveTransformAtTime } from "@/lib/animation";
-import { mapCompressedTimeToSourceTime } from "@/lib/transcript-editor/core";
+import {
+	buildCompressedCutBoundaryTimes,
+	mapCompressedTimeToSourceTime,
+} from "@/lib/transcript-editor/core";
+import { TRANSCRIPT_CUT_VISUAL_BOUNDARY_GUARD_SECONDS } from "@/lib/transcript-editor/constants";
 import type { TranscriptEditCutRange } from "@/types/transcription";
 
 const VISUAL_EPSILON = 1 / 1000;
@@ -37,6 +41,8 @@ export abstract class VisualNode<
 	private static readonly MOTION_BLUR_SAMPLES = 16;
 	private static readonly MOTION_BLUR_TRAIL_OPACITY_FACTOR = 0.52;
 	private static readonly MOTION_BLUR_MAX_FILTER_PX = 18;
+	private static readonly TRANSCRIPT_BOUNDARY_GUARD_SECONDS =
+		TRANSCRIPT_CUT_VISUAL_BOUNDARY_GUARD_SECONDS;
 
 	private static clamp01(value: number): number {
 		return Math.max(0, Math.min(1, value));
@@ -75,6 +81,28 @@ export abstract class VisualNode<
 		return null;
 	}
 
+	private crossesTranscriptBoundary({
+		startElapsed,
+		endElapsed,
+	}: {
+		startElapsed: number;
+		endElapsed: number;
+	}): boolean {
+		const transcriptCuts = this.params.transcriptCuts ?? [];
+		if (transcriptCuts.length === 0) return false;
+		const minElapsed = Math.min(startElapsed, endElapsed);
+		const maxElapsed = Math.max(startElapsed, endElapsed);
+		const guard = VisualNode.TRANSCRIPT_BOUNDARY_GUARD_SECONDS;
+		const boundaries = buildCompressedCutBoundaryTimes({
+			cuts: transcriptCuts,
+		});
+		return boundaries.some((boundary) => {
+			if (Math.abs(boundary - minElapsed) <= guard) return true;
+			if (Math.abs(boundary - maxElapsed) <= guard) return true;
+			return boundary > minElapsed && boundary < maxElapsed;
+		});
+	}
+
 	protected getMotionBlurForDraw({
 		time,
 		rendererWidth,
@@ -97,6 +125,17 @@ export abstract class VisualNode<
 		const elapsed = this.getClipElapsedTime(time);
 		const blurSide = this.getActiveMotionBlurSide({ elapsed });
 		if (!blurSide) return null;
+		const previousElapsed = this.getClipElapsedTime(
+			Math.max(this.params.timeOffset, time - VisualNode.MOTION_BLUR_FRAME_WINDOW_SECONDS),
+		);
+		if (
+			this.crossesTranscriptBoundary({
+				startElapsed: previousElapsed,
+				endElapsed: elapsed,
+			})
+		) {
+			return null;
+		}
 
 		const localNow = this.getLocalTime(time);
 		const prevTime = Math.max(

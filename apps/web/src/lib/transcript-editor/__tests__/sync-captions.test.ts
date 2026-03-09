@@ -983,6 +983,7 @@ describe("sync captions from transcript edits", () => {
 		const dedupedB = dedupedAudioTrack.elements.find((element) => element.id === "audio-b");
 		expect(dedupedA?.transcriptEdit?.words[0]?.text).toBe("old");
 		expect(dedupedB?.transcriptEdit).toBeUndefined();
+		expect(dedupedB?.transcriptApplied?.removedRanges).toEqual([]);
 	});
 
 	test("dedupe keeps transcript edit only on caption-target companion (aligned video+audio)", () => {
@@ -1048,6 +1049,7 @@ describe("sync captions from transcript edits", () => {
 		expect(dedupedVideoElement?.type).toBe("video");
 		if (!dedupedVideoElement || dedupedVideoElement.type !== "video") return;
 		expect(dedupedVideoElement.transcriptEdit).toBeUndefined();
+		expect(dedupedVideoElement.transcriptApplied).toBeDefined();
 		expect(dedupedAudioTrack.elements[0]?.transcriptEdit).toBeDefined();
 	});
 
@@ -1118,6 +1120,7 @@ describe("sync captions from transcript edits", () => {
 		if (!dedupedVideoElement || dedupedVideoElement.type !== "video") return;
 		expect(result.changed).toBe(true);
 		expect(dedupedVideoElement.transcriptEdit).toBeUndefined();
+		expect(dedupedVideoElement.transcriptApplied).toBeDefined();
 		expect(dedupedAudioTrack.elements[0]?.transcriptEdit).toBeDefined();
 	});
 

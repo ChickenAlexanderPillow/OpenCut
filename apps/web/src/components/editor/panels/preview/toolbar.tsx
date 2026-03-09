@@ -11,7 +11,7 @@ import {
 	PlayIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Repeat } from "lucide-react";
+import { Loader2, Repeat } from "lucide-react";
 
 export function PreviewToolbar({
 	isFullscreen,
@@ -24,6 +24,8 @@ export function PreviewToolbar({
 		subscribeTo: ["playback", "timeline", "project"],
 	});
 	const isPlaying = editor.playback.getIsPlaying();
+	const blockedReason = editor.playback.getBlockedReason();
+	const isPlaybackBlocked = blockedReason !== null;
 	const isLoopEnabled = editor.playback.getIsLoopEnabled();
 	const currentTime = editor.playback.getCurrentTime();
 	const totalDuration = editor.timeline.getTotalDuration();
@@ -63,8 +65,14 @@ export function PreviewToolbar({
 					size="sm"
 					className="h-9 w-9 min-w-9 overflow-visible p-0"
 					onClick={() => invokeAction("toggle-play")}
+					disabled={isPlaybackBlocked}
+					title={blockedReason ?? undefined}
 				>
-					<HugeiconsIcon icon={isPlaying ? PauseIcon : PlayIcon} />
+					{isPlaybackBlocked ? (
+						<Loader2 className="size-4 animate-spin" />
+					) : (
+						<HugeiconsIcon icon={isPlaying ? PauseIcon : PlayIcon} />
+					)}
 				</Button>
 				<Button
 					variant={isLoopEnabled ? "secondary" : "text"}

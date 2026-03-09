@@ -6,7 +6,6 @@ import {
 	mapSourceTimeToCompressedTime,
 } from "@/lib/transcript-editor/core";
 import { TRANSCRIPT_CUT_AUDIO_SMOOTHING_SECONDS } from "@/lib/transcript-editor/constants";
-import { normalizeTranscriptCutsToClipLocalSource } from "@/lib/transcript-editor/snapshot";
 import type { TimelineTrack } from "@/types/timeline";
 import type { MediaAsset } from "@/types/assets";
 import type { TranscriptEditCutRange } from "@/types/transcription";
@@ -154,10 +153,7 @@ async function decodeAndMixAudioSource({
 		const sink = new AudioBufferSink(audioTrack);
 		const normalizedCuts =
 			source.transcriptCuts && source.transcriptCuts.length > 0
-				? normalizeTranscriptCutsToClipLocalSource({
-						cuts: source.transcriptCuts,
-						trimStart: source.trimStart,
-					})
+				? source.transcriptCuts
 				: [];
 		const sourceWindowDuration = normalizedCuts.length
 			? mapCompressedTimeToSourceTime({

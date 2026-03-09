@@ -12,6 +12,11 @@ import {
 	mapCompressedTimeToSourceTime,
 	normalizeTranscriptWords,
 } from "@/lib/transcript-editor/core";
+import {
+	compileTranscriptDraft,
+	getTranscriptCompileState,
+	getTranscriptDraft,
+} from "@/lib/transcript-editor/state";
 import { getEffectiveTranscriptCutsFromTranscriptEdit } from "@/lib/transcript-editor/snapshot";
 import { DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import { toElementLocalCaptionTime } from "@/lib/captions/timing";
@@ -245,18 +250,6 @@ function buildDefaultSegmentGroups({
 }
 
 export function TranscriptView() {
-	const textBasedEditingDisabled =
-		process.env.NEXT_PUBLIC_DISABLE_TEXT_BASED_EDITING !== "false";
-	if (textBasedEditingDisabled) {
-		return (
-			<PanelView title="Transcript & Captions" contentClassName="space-y-2">
-				<div className="text-sm text-muted-foreground p-3 border rounded-md">
-					Text-based editing is temporarily disabled for diagnostics.
-				</div>
-			</PanelView>
-		);
-	}
-
 	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_TRANSCRIPT_VIEW });
 	const { selectedElements } = useElementSelection();
 	const transcriptionStatus = useTranscriptionStatusStore();
@@ -308,7 +301,7 @@ export function TranscriptView() {
 
 	const words = useMemo(() => {
 		if (!activeMedia) return [];
-		const fromElement = activeMedia.element.transcriptEdit?.words ?? [];
+		const fromElement = getTranscriptDraft(activeMedia.element)?.words ?? [];
 		if (fromElement.length > 0)
 			return normalizeTranscriptWords({ words: fromElement });
 		return getFallbackWordsFromCaptions({
@@ -321,11 +314,12 @@ export function TranscriptView() {
 		if (!activeMedia) {
 			return buildTranscriptCutsFromWords({ words });
 		}
-		if (!activeMedia.element.transcriptEdit) {
+		const transcriptDraft = getTranscriptDraft(activeMedia.element);
+		if (!transcriptDraft) {
 			return buildTranscriptCutsFromWords({ words });
 		}
 		return getEffectiveTranscriptCutsFromTranscriptEdit({
-			transcriptEdit: activeMedia.element.transcriptEdit,
+			transcriptEdit: transcriptDraft,
 		});
 	}, [activeMedia, words]);
 	const wordsWithCutState = useMemo(
@@ -369,7 +363,10 @@ export function TranscriptView() {
 		return current?.id ?? null;
 	}, [activeMedia, wordsWithCutState, cuts, currentTime]);
 
-	const segmentsUi = activeMedia?.element.transcriptEdit?.segmentsUi;
+	const transcriptCompileState = activeMedia
+		? getTranscriptCompileState(activeMedia.element)
+		: { status: "idle" as const };
+	const segmentsUi = activeMedia ? getTranscriptDraft(activeMedia.element)?.segmentsUi : undefined;
 	const groups =
 		segmentsUi && segmentsUi.length > 0
 			? segmentsUi
@@ -622,7 +619,7 @@ export function TranscriptView() {
 			if (!activeMedia || !activeMediaAsset) {
 				throw new Error("Select one uploaded audio/video element first.");
 			}
-			if ((activeMedia.element.transcriptEdit?.words?.length ?? 0) > 0) {
+			if ((getTranscriptDraft(activeMedia.element)?.words?.length ?? 0) > 0) {
 				setIsGeneratingCaptions(true);
 				setGenerateError(null);
 				setGenerateStep("Rebuilding from transcript...");
@@ -695,19 +692,31 @@ export function TranscriptView() {
 				mediaElementId: activeMedia.element.id,
 				segments: sourceWindowSegments,
 			});
-			const transcriptVersion = 1;
+			const transcriptVersion = 1 as const;
+			const transcriptDraft = {
+				version: transcriptVersion,
+				source: "word-level" as const,
+				words: wordsForEdit,
+				cuts: buildTranscriptCutsFromWords({ words: wordsForEdit }),
+				updatedAt: new Date().toISOString(),
+			};
 			editor.timeline.updateElements({
 				updates: [
 					{
 						trackId: activeMedia.trackId,
 						elementId: activeMedia.element.id,
 						updates: {
-							transcriptEdit: {
-								version: transcriptVersion,
-								source: "word-level",
-								words: wordsForEdit,
-								cuts: buildTranscriptCutsFromWords({ words: wordsForEdit }),
-								updatedAt: new Date().toISOString(),
+							transcriptDraft,
+							transcriptEdit: transcriptDraft,
+							transcriptApplied: compileTranscriptDraft({
+								mediaElementId: activeMedia.element.id,
+								draft: transcriptDraft,
+								mediaStartTime: activeMedia.element.startTime,
+								mediaDuration: activeMedia.element.duration,
+							}),
+							transcriptCompileState: {
+								status: "idle",
+								updatedAt: transcriptDraft.updatedAt,
 							},
 						},
 					},
@@ -991,6 +1000,12 @@ export function TranscriptView() {
 				Transcript edits update captions, playback, and export
 				non-destructively.
 			</div>
+			{transcriptCompileState.status === "compiling" && (
+				<div className="text-[11px] text-muted-foreground px-1 flex items-center gap-1">
+					<Spinner className="size-3" />
+					Updating clip playback…
+				</div>
+			)}
 		</PanelView>
 	);
 }

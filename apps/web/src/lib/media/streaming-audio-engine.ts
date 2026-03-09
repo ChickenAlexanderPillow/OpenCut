@@ -5,7 +5,7 @@ import {
 	buildCompressedCutBoundaryTimes,
 	mapCompressedTimeToSourceTime,
 } from "@/lib/transcript-editor/core";
-import { normalizeTranscriptCutsToClipLocalSource } from "@/lib/transcript-editor/snapshot";
+import { TRANSCRIPT_CUT_AUDIO_OVERLAP_SECONDS } from "@/lib/transcript-editor/constants";
 import {
 	collectAudioClips,
 	decodeMediaFileToAudioBuffer,
@@ -165,9 +165,11 @@ export class StreamingTimelineAudioEngine {
 	private readonly schedulerIntervalMs = 50;
 	private readonly minSegmentDurationSeconds = 1 / 120;
 	private readonly boundaryToleranceSeconds = 1 / 1000;
-	private readonly boundaryCrossfadeSeconds = 0.01;
+	private readonly boundaryCrossfadeSeconds = 0.02;
 	private readonly unscheduleFadeSeconds = 0.01;
-	private readonly slipCrossfadeSeconds = 0.012;
+	private readonly slipCrossfadeSeconds = 0.02;
+	private readonly transcriptBoundaryOverlapSeconds =
+		TRANSCRIPT_CUT_AUDIO_OVERLAP_SECONDS;
 	private readonly decodeSlipThresholdSeconds = 0.004;
 	private readonly decodePaddingSeconds = 1.5;
 	private readonly decodeChunkSeconds = 12;
@@ -243,6 +245,31 @@ export class StreamingTimelineAudioEngine {
 
 		this.clips = clips;
 		this.revision = nextRevision;
+		if (typeof window !== "undefined") {
+			window.dispatchEvent(
+				new CustomEvent("opencut:audio-prepared-clips", {
+					detail: {
+						clips: clips.map((clip) => ({
+							id: clip.id,
+							sourceKey: clip.sourceKey,
+							mediaIdentity: clip.mediaIdentity,
+							startTime: clip.startTime,
+							duration: clip.duration,
+							trimStart: clip.trimStart,
+							trimEnd: clip.trimEnd,
+							muted: clip.muted,
+							gain: clip.gain,
+							transcriptRevision: clip.transcriptRevision,
+							transcriptCuts: clip.transcriptCuts.map((cut) => ({
+								start: cut.start,
+								end: cut.end,
+								reason: cut.reason,
+							})),
+						})),
+					},
+				}),
+			);
+		}
 		return {
 			diff: {
 				...diff,
@@ -886,6 +913,10 @@ export class StreamingTimelineAudioEngine {
 					clip,
 					localTime: localPlaybackStart,
 				}) || localPlaybackStart <= this.boundaryToleranceSeconds;
+			const transcriptStartBoundary = this.isTranscriptBoundary({
+				clip,
+				localTime: localPlaybackStart,
+			});
 			const _naturalEndBoundary =
 				this.isClipOrTranscriptBoundary({
 					clip,
@@ -899,7 +930,25 @@ export class StreamingTimelineAudioEngine {
 			let boundaryLeadSeconds = 0;
 			const previousEndAtContext =
 				this.lastScheduledEndAtContextByClipId.get(clip.id) ?? null;
-			if (previousEndAtContext !== null && !naturalStartBoundary) {
+			if (previousEndAtContext !== null && transcriptStartBoundary) {
+				const desiredLead = this.transcriptBoundaryOverlapSeconds;
+				const maxLeadFromNow = Math.max(
+					0,
+					desiredContextStart - (contextNow + 0.002),
+				);
+				boundaryLeadSeconds = Math.min(desiredLead, maxLeadFromNow);
+				if (boundaryLeadSeconds > 0) {
+					contextStart = desiredContextStart - boundaryLeadSeconds;
+					const desiredContextEnd =
+						desiredContextStart + boundedPlaybackDuration;
+					const availableFromAdjustedStart =
+						decodedWindow.sourceWindowEnd - sourceAbsoluteStart;
+					boundedPlaybackDuration = Math.min(
+						desiredContextEnd - contextStart,
+						Math.max(0, availableFromAdjustedStart),
+					);
+				}
+			} else if (previousEndAtContext !== null && !naturalStartBoundary) {
 				const decodeSlip = desiredContextStart - previousEndAtContext;
 				const desiredLead =
 					decodeSlip > this.decodeSlipThresholdSeconds
@@ -950,11 +999,21 @@ export class StreamingTimelineAudioEngine {
 					new CustomEvent("opencut:audio-schedule-level", {
 						detail: {
 							clipId: clip.id,
+							sourceKey: clip.sourceKey,
+							transcriptRevision: clip.transcriptRevision,
+							transcriptCuts: clip.transcriptCuts.map((cut) => ({
+								start: cut.start,
+								end: cut.end,
+								reason: cut.reason,
+							})),
 							peak: scheduledPeak,
 							duration: boundedPlaybackDuration,
 							timelineSegmentStart,
 							timelineSegmentEnd,
 							contextStart,
+							localPlaybackStart,
+							sourceAbsoluteStart,
+							sourceAbsoluteOffset,
 						},
 					}),
 				);
@@ -1137,15 +1196,32 @@ export class StreamingTimelineAudioEngine {
 		);
 	}
 
+	private isTranscriptBoundary({
+		clip,
+		localTime,
+	}: {
+		clip: StreamingClip;
+		localTime: number;
+	}): boolean {
+		const clipLocalCuts = this.getClipLocalTranscriptCuts({ clip });
+		if (clipLocalCuts.length === 0) {
+			return false;
+		}
+		const boundaries = buildCompressedCutBoundaryTimes({
+			cuts: clipLocalCuts,
+		});
+		return boundaries.some(
+			(boundary) =>
+				Math.abs(boundary - localTime) <= this.boundaryToleranceSeconds,
+		);
+	}
+
 	private getClipLocalTranscriptCuts({
 		clip,
 	}: {
 		clip: StreamingClip;
 	}): TranscriptEditCutRange[] {
 		if (!clip.transcriptCuts || clip.transcriptCuts.length === 0) return [];
-		return normalizeTranscriptCutsToClipLocalSource({
-			cuts: clip.transcriptCuts,
-			trimStart: clip.trimStart,
-		});
+		return clip.transcriptCuts;
 	}
 }

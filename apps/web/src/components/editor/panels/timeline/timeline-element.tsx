@@ -43,6 +43,7 @@ import { mediaSupportsAudio } from "@/lib/media/media-utils";
 import { getActionDefinition, type TAction, invokeAction } from "@/lib/actions";
 import { useElementSelection } from "@/hooks/timeline/element/use-element-selection";
 import { resolveStickerId } from "@/lib/stickers";
+import { getTranscriptApplied, getTranscriptDraft } from "@/lib/transcript-editor/state";
 import Image from "next/image";
 import {
 	ScissorIcon,
@@ -98,27 +99,57 @@ function isTranscriptMediaElement(
 
 function getVisibleTranscriptCutOverlays({
 	element,
+	tracks,
 }: {
 	element: TimelineElementType;
+	tracks: TimelineTrack[];
 }): Array<{ leftPercent: number; widthPercent: number }> {
-	if (!isTranscriptMediaElement(element)) return [];
-	const cuts = element.transcriptEdit?.cuts ?? [];
-	if (cuts.length === 0 || element.duration <= 0) return [];
+	const resolveOverlaysForMedia = (
+		mediaElement: Extract<TimelineElementType, { type: "video" | "audio" }>,
+	): Array<{ leftPercent: number; widthPercent: number }> => {
+		const draft = getTranscriptDraft(mediaElement);
+		const applied = getTranscriptApplied(mediaElement);
+		const cuts = draft?.cuts ?? applied?.removedRanges ?? [];
+		if (cuts.length === 0 || mediaElement.duration <= 0) return [];
 
-	const visibleStart = element.trimStart;
-	const visibleEnd = element.trimStart + element.duration;
-	const overlays: Array<{ leftPercent: number; widthPercent: number }> = [];
+		const visibleStart = mediaElement.trimStart;
+		const visibleEnd = mediaElement.trimStart + mediaElement.duration;
+		const overlays: Array<{ leftPercent: number; widthPercent: number }> = [];
 
-	for (const cut of cuts) {
-		const start = Math.max(visibleStart, cut.start);
-		const end = Math.min(visibleEnd, cut.end);
-		if (end - start <= 0) continue;
-		overlays.push({
-			leftPercent: ((start - visibleStart) / element.duration) * 100,
-			widthPercent: ((end - start) / element.duration) * 100,
-		});
+		for (const cut of cuts) {
+			const start = Math.max(visibleStart, cut.start);
+			const end = Math.min(visibleEnd, cut.end);
+			if (end - start <= 0) continue;
+			overlays.push({
+				leftPercent: ((start - visibleStart) / mediaElement.duration) * 100,
+				widthPercent: ((end - start) / mediaElement.duration) * 100,
+			});
+		}
+		return overlays;
+	};
+
+	if (isTranscriptMediaElement(element)) {
+		return resolveOverlaysForMedia(element);
 	}
-	return overlays;
+	if (element.type !== "text" || !element.captionSourceRef?.mediaElementId) {
+		return [];
+	}
+	let sourceTrackElement: Extract<TimelineElementType, { type: "video" | "audio" }> | null =
+		null;
+	for (const track of tracks) {
+		for (const candidate of track.elements) {
+			if (
+				isTranscriptMediaElement(candidate) &&
+				candidate.id === element.captionSourceRef.mediaElementId
+			) {
+				sourceTrackElement = candidate;
+				break;
+			}
+		}
+		if (sourceTrackElement) break;
+	}
+	if (!sourceTrackElement) return [];
+	return resolveOverlaysForMedia(sourceTrackElement);
 }
 
 const TIMELINE_KEYFRAME_PATHS: AnimationPropertyPath[] = [
@@ -219,7 +250,7 @@ export function TimelineElement({
 	onElementClick,
 	dragState,
 }: TimelineElementProps) {
-	const editor = useEditor({ subscribeTo: ["media", "project"] });
+	const editor = useEditor({ subscribeTo: ["media", "project", "timeline"] });
 	const { selectedElements } = useElementSelection();
 	const snappingEnabled = useTimelineStore((state) => state.snappingEnabled);
 	const { requestRevealMedia } = useAssetsPanelStore();
@@ -516,7 +547,10 @@ function ElementInner({
 }) {
 	const showMutedOverlay = element.type === "audio" && hasAudio && isMuted;
 	const showHiddenOverlay = canElementBeHidden(element) && element.hidden;
-	const transcriptCutOverlays = getVisibleTranscriptCutOverlays({ element });
+	const transcriptCutOverlays = getVisibleTranscriptCutOverlays({
+		element,
+		tracks: editor.timeline.getTracks(),
+	});
 	const isVisual = isVisualTimelineElement(element);
 	const elementKeyframes = useMemo(
 		() =>

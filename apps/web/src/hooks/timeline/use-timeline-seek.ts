@@ -170,10 +170,9 @@ export function useTimelineSeek({
 
 			if (shouldProcess) {
 				clearSelectedElements();
-				handleTimelineSeek({ event, source: "tracks" });
 			}
 		},
-		[shouldProcessTimelineClick, handleTimelineSeek, clearSelectedElements],
+		[shouldProcessTimelineClick, clearSelectedElements],
 	);
 
 	const handleRulerClick = useCallback(

@@ -4,6 +4,11 @@ import type {
 	TranscriptEditCutRange,
 	TranscriptCutTimeDomain,
 	TranscriptEditWord,
+	TranscriptDraftState,
+	TranscriptAppliedState,
+	TranscriptCompileState,
+	TranscriptProjectionSource,
+	TranscriptSegmentUi,
 } from "./transcription";
 
 export interface Bookmark {
@@ -67,24 +72,17 @@ interface BaseAudioElement extends BaseTimelineElement {
 	volume: number;
 	muted?: boolean;
 	buffer?: AudioBuffer;
+	transcriptDraft?: TranscriptDraftState;
+	transcriptApplied?: TranscriptAppliedState;
+	transcriptCompileState?: TranscriptCompileState;
 	transcriptEdit?: {
 		version: 1;
 		source: "word-level";
 		words: TranscriptEditWord[];
 		cuts: TranscriptEditCutRange[];
 		cutTimeDomain?: TranscriptCutTimeDomain;
-		projectionSource?: {
-			words: TranscriptEditWord[];
-			cuts: TranscriptEditCutRange[];
-			updatedAt: string;
-			baseTrimStart: number;
-		};
-		segmentsUi?: Array<{
-			id: string;
-			wordStartIndex: number;
-			wordEndIndex: number;
-			label?: string;
-		}>;
+		projectionSource?: TranscriptProjectionSource;
+		segmentsUi?: TranscriptSegmentUi[];
 		updatedAt: string;
 	};
 }
@@ -116,24 +114,17 @@ export interface VideoElement extends BaseTimelineElement {
 	mediaId: string;
 	muted?: boolean;
 	hidden?: boolean;
+	transcriptDraft?: TranscriptDraftState;
+	transcriptApplied?: TranscriptAppliedState;
+	transcriptCompileState?: TranscriptCompileState;
 	transcriptEdit?: {
 		version: 1;
 		source: "word-level";
 		words: TranscriptEditWord[];
 		cuts: TranscriptEditCutRange[];
 		cutTimeDomain?: TranscriptCutTimeDomain;
-		projectionSource?: {
-			words: TranscriptEditWord[];
-			cuts: TranscriptEditCutRange[];
-			updatedAt: string;
-			baseTrimStart: number;
-		};
-		segmentsUi?: Array<{
-			id: string;
-			wordStartIndex: number;
-			wordEndIndex: number;
-			label?: string;
-		}>;
+		projectionSource?: TranscriptProjectionSource;
+		segmentsUi?: TranscriptSegmentUi[];
 		updatedAt: string;
 	};
 	transform: Transform;

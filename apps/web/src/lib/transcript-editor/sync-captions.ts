@@ -8,6 +8,11 @@ import {
 	type TranscriptTimelineSnapshot,
 	validateCaptionAgainstSnapshot,
 } from "@/lib/transcript-editor/snapshot";
+import {
+	getTranscriptApplied,
+	getTranscriptDraft,
+	withTranscriptState,
+} from "@/lib/transcript-editor/state";
 import type { TimelineTrack, VideoElement, AudioElement, TextElement } from "@/types/timeline";
 
 function isEditableMediaElement(
@@ -72,7 +77,7 @@ function resolveTranscriptUnitSourceRefId({
 	mediaElement: VideoElement | AudioElement;
 	mediaElementId: string;
 }): string {
-	const firstWordId = mediaElement.transcriptEdit?.words[0]?.id ?? "";
+	const firstWordId = getTranscriptDraft(mediaElement)?.words[0]?.id ?? "";
 	const marker = ":word:";
 	const markerIndex = firstWordId.indexOf(marker);
 	if (markerIndex > 0) {
@@ -608,8 +613,9 @@ export function syncCaptionsFromTranscriptEdits({
 	if (!mediaRecord) {
 		return { tracks, changed: false, error: "media element not found" };
 	}
-	const transcriptEdit = mediaRecord.element.transcriptEdit;
-	if (!transcriptEdit || transcriptEdit.words.length === 0) {
+	const transcriptDraft = getTranscriptDraft(mediaRecord.element);
+	const transcriptApplied = getTranscriptApplied(mediaRecord.element);
+	if (!transcriptDraft || transcriptDraft.words.length === 0 || !transcriptApplied) {
 		return reconcileCaptionFromSnapshot({
 			tracks,
 			mediaElementId,
@@ -624,16 +630,26 @@ export function syncCaptionsFromTranscriptEdits({
 			}),
 		});
 	}
-	const snapshot = buildTranscriptTimelineSnapshot({
+	return reconcileCaptionFromSnapshot({
+		tracks,
 		mediaElementId,
-		transcriptVersion: transcriptEdit.version,
-		updatedAt: transcriptEdit.updatedAt,
-		words: transcriptEdit.words,
-		cuts: transcriptEdit.cuts,
-		mediaStartTime: mediaRecord.element.startTime,
-		mediaDuration: mediaRecord.element.duration,
+		snapshot: {
+			mediaElementId,
+			updatedAt: transcriptApplied.updatedAt,
+			transcriptVersion: transcriptDraft.version,
+			revisionKey: transcriptApplied.revisionKey,
+			words: transcriptDraft.words,
+			wordsWithCutState: transcriptDraft.words,
+			activeWords: transcriptDraft.words.filter((word) => !word.removed),
+			effectiveCuts: transcriptApplied.removedRanges,
+			captionPayload: transcriptApplied.captionPayload,
+			isTimelineAligned: true,
+			timeMap: {
+				toSourceTime: (time) => time,
+				toCompressedTime: (time) => time,
+			},
+		},
 	});
-	return reconcileCaptionFromSnapshot({ tracks, mediaElementId, snapshot });
 }
 
 export function rebuildCaptionTrackForMediaElement({
@@ -651,8 +667,9 @@ export function rebuildCaptionTrackForMediaElement({
 	if (!mediaRecord) {
 		return { tracks, changed: false, error: "media element not found" };
 	}
-	const transcriptEdit = mediaRecord.element.transcriptEdit;
-	if (!transcriptEdit || transcriptEdit.words.length === 0) {
+	const transcriptDraft = getTranscriptDraft(mediaRecord.element);
+	const transcriptApplied = getTranscriptApplied(mediaRecord.element);
+	if (!transcriptDraft || transcriptDraft.words.length === 0 || !transcriptApplied) {
 		return { tracks, changed: false, error: "transcript edit metadata missing" };
 	}
 	const sourceRefId = resolveTranscriptUnitSourceRefId({
@@ -665,19 +682,10 @@ export function rebuildCaptionTrackForMediaElement({
 		targetMediaElement: mediaRecord.element,
 		sourceRefId,
 	});
-	const snapshot = buildTranscriptTimelineSnapshot({
-		mediaElementId,
-		transcriptVersion: transcriptEdit.version,
-		updatedAt: transcriptEdit.updatedAt,
-		words: transcriptEdit.words,
-		cuts: transcriptEdit.cuts,
-		mediaStartTime: mediaRecord.element.startTime,
-		mediaDuration: mediaRecord.element.duration,
-	});
-	if (!snapshot.captionPayload) {
+	if (!transcriptApplied.captionPayload) {
 		return { tracks, changed: false, error: "cannot rebuild caption from empty transcript" };
 	}
-	const timelinePayload = snapshot.captionPayload;
+	const timelinePayload = transcriptApplied.captionPayload;
 	const preferredTrackId = resolveRebuildTargetCaptionTrackId({
 		tracks,
 		mediaElementId,
@@ -702,7 +710,7 @@ export function rebuildCaptionTrackForMediaElement({
 			captionWordTimings: timelinePayload.wordTimings,
 			captionSourceRef: {
 				mediaElementId,
-				transcriptVersion: transcriptEdit.version,
+				transcriptVersion: transcriptDraft.version,
 			},
 		};
 		if (track.id !== trackId) {
@@ -780,14 +788,15 @@ export function validateAndHealCaptionDriftInTracks({
 			const sourceMediaId = element.captionSourceRef?.mediaElementId;
 			if (!sourceMediaId) continue;
 			const sourceMedia = mediaById.get(sourceMediaId);
-			const transcriptEdit = sourceMedia?.transcriptEdit;
-			if (!sourceMedia || !transcriptEdit) continue;
+			const transcriptDraft = sourceMedia ? getTranscriptDraft(sourceMedia) : undefined;
+			const transcriptApplied = sourceMedia ? getTranscriptApplied(sourceMedia) : undefined;
+			if (!sourceMedia || !transcriptDraft || !transcriptApplied) continue;
 			const snapshot = buildTranscriptTimelineSnapshot({
 				mediaElementId: sourceMediaId,
-				transcriptVersion: transcriptEdit.version,
-				updatedAt: transcriptEdit.updatedAt,
-				words: transcriptEdit.words,
-				cuts: transcriptEdit.cuts,
+				transcriptVersion: transcriptDraft.version,
+				updatedAt: transcriptDraft.updatedAt,
+				words: transcriptDraft.words,
+				cuts: transcriptApplied.removedRanges,
 				mediaStartTime: sourceMedia.startTime,
 				mediaDuration: sourceMedia.duration,
 			});
@@ -817,14 +826,15 @@ export function validateAndHealCaptionDriftInTracks({
 		nextTracks = result.tracks;
 		changed = true;
 		const sourceMedia = mediaById.get(mediaElementId);
-		const transcriptEdit = sourceMedia?.transcriptEdit;
-		if (!sourceMedia || !transcriptEdit) continue;
+		const transcriptDraft = sourceMedia ? getTranscriptDraft(sourceMedia) : undefined;
+		const transcriptApplied = sourceMedia ? getTranscriptApplied(sourceMedia) : undefined;
+		if (!sourceMedia || !transcriptDraft || !transcriptApplied) continue;
 		const snapshot = buildTranscriptTimelineSnapshot({
 			mediaElementId,
-			transcriptVersion: transcriptEdit.version,
-			updatedAt: transcriptEdit.updatedAt,
-			words: transcriptEdit.words,
-			cuts: transcriptEdit.cuts,
+			transcriptVersion: transcriptDraft.version,
+			updatedAt: transcriptDraft.updatedAt,
+			words: transcriptDraft.words,
+			cuts: transcriptApplied.removedRanges,
 			mediaStartTime: sourceMedia.startTime,
 			mediaDuration: sourceMedia.duration,
 		});
@@ -1154,10 +1164,10 @@ export function reconcileLinkedCaptionIntegrityInTracks({
 			// Removed media are already handled by orphan cleanup above.
 			continue;
 		}
-		const transcriptWords = afterMedia.transcriptEdit?.words.length ?? 0;
+		const transcriptWords = getTranscriptDraft(afterMedia)?.words.length ?? 0;
 		if (transcriptWords === 0) continue;
-		const transcriptUpdatedAt = afterMedia.transcriptEdit?.updatedAt ?? "";
-		const beforeTranscriptUpdatedAt = beforeMedia.transcriptEdit?.updatedAt ?? "";
+		const transcriptUpdatedAt = getTranscriptDraft(afterMedia)?.updatedAt ?? "";
+		const beforeTranscriptUpdatedAt = getTranscriptDraft(beforeMedia)?.updatedAt ?? "";
 		const timingOrTrimChanged =
 			Math.abs(afterMedia.startTime - beforeMedia.startTime) > 1e-6 ||
 			Math.abs(afterMedia.duration - beforeMedia.duration) > 1e-6 ||
@@ -1172,7 +1182,7 @@ export function reconcileLinkedCaptionIntegrityInTracks({
 	}
 	for (const [mediaElementId, media] of afterMediaById.entries()) {
 		if (beforeMediaById.has(mediaElementId)) continue;
-		if ((media.transcriptEdit?.words.length ?? 0) > 0) {
+		if ((getTranscriptDraft(media)?.words.length ?? 0) > 0) {
 			mediaIdsNeedingTranscriptSync.add(mediaElementId);
 		}
 	}
@@ -1227,7 +1237,7 @@ export function syncAllCaptionsFromTranscriptEditsInTracks({
 	let changed = false;
 	const mediaIds = tracks.flatMap((track) =>
 		track.elements
-			.filter((element) => isEditableMediaElement(element) && Boolean(element.transcriptEdit))
+			.filter((element) => isEditableMediaElement(element) && Boolean(getTranscriptDraft(element)))
 			.map((element) => element.id),
 	);
 	for (const mediaElementId of mediaIds) {
@@ -1303,7 +1313,7 @@ export function dedupeTranscriptEditsInTracks({
 
 	const groups = new Map<string, Array<VideoElement | AudioElement>>();
 	for (const entry of mediaEntries) {
-		if (!entry.element.transcriptEdit) continue;
+		if (!getTranscriptDraft(entry.element)) continue;
 		const sourceRefId = sourceRefByMediaId.get(entry.element.id) ?? entry.element.id;
 		const existing = groups.get(sourceRefId);
 		if (existing) {
@@ -1318,13 +1328,13 @@ export function dedupeTranscriptEditsInTracks({
 	for (const [sourceRefId, group] of groups.entries()) {
 		const captionTargetId = captionTargetBySourceRef.get(sourceRefId);
 		const captionTarget = captionTargetId ? mediaById.get(captionTargetId) : null;
-		const primary = captionTarget?.transcriptEdit
+		const primary = captionTarget && getTranscriptDraft(captionTarget)
 			? captionTarget
 			: group.reduce((best, candidate) => {
 				const bestUpdatedAtMs =
-					Date.parse(best.transcriptEdit?.updatedAt ?? "") || 0;
+					Date.parse(getTranscriptDraft(best)?.updatedAt ?? "") || 0;
 				const candidateUpdatedAtMs =
-					Date.parse(candidate.transcriptEdit?.updatedAt ?? "") || 0;
+					Date.parse(getTranscriptDraft(candidate)?.updatedAt ?? "") || 0;
 				return candidateUpdatedAtMs > bestUpdatedAtMs ? candidate : best;
 			}, group[0]);
 		keepIds.add(primary.id);
@@ -1335,10 +1345,19 @@ export function dedupeTranscriptEditsInTracks({
 		if (track.type !== "video" && track.type !== "audio") return track;
 		const nextElements = track.elements.map((element) => {
 			if (!isEditableMediaElement(element)) return element;
-			if (!element.transcriptEdit) return element;
+			if (!getTranscriptDraft(element)) return element;
 			if (keepIds.has(element.id)) return element;
 			changed = true;
-			return { ...element, transcriptEdit: undefined };
+			const preservedApplied = getTranscriptApplied(element);
+			return withTranscriptState({
+				element,
+				draft: undefined,
+				applied: preservedApplied,
+				compileState: {
+					status: "idle",
+					updatedAt: preservedApplied?.updatedAt,
+				},
+			});
 		});
 		return { ...track, elements: nextElements } as TimelineTrack;
 	});

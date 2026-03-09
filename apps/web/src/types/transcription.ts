@@ -25,6 +25,71 @@ export interface TranscriptEditCutRange {
 
 export type TranscriptCutTimeDomain = "clip-local-source" | "source-absolute";
 
+export interface TranscriptSegmentUi {
+	id: string;
+	wordStartIndex: number;
+	wordEndIndex: number;
+	label?: string;
+}
+
+export interface TranscriptProjectionSource {
+	words: TranscriptEditWord[];
+	cuts: TranscriptEditCutRange[];
+	updatedAt: string;
+	baseTrimStart: number;
+}
+
+export interface TranscriptDraftState {
+	version: 1;
+	source: "word-level";
+	words: TranscriptEditWord[];
+	cuts: TranscriptEditCutRange[];
+	cutTimeDomain?: TranscriptCutTimeDomain;
+	projectionSource?: TranscriptProjectionSource;
+	segmentsUi?: TranscriptSegmentUi[];
+	updatedAt: string;
+}
+
+export interface CompiledCaptionWordTiming {
+	word: string;
+	startTime: number;
+	endTime: number;
+}
+
+export interface CompiledCaptionPayload {
+	content: string;
+	startTime: number;
+	duration: number;
+	wordTimings: CompiledCaptionWordTiming[];
+}
+
+export interface TranscriptAppliedSegment {
+	start: number;
+	end: number;
+	duration: number;
+}
+
+export interface TranscriptAppliedTimeMap {
+	cutBoundaries: number[];
+	sourceDuration: number;
+	playableDuration: number;
+}
+
+export interface TranscriptAppliedState {
+	version: 1;
+	revisionKey: string;
+	updatedAt: string;
+	removedRanges: TranscriptEditCutRange[];
+	keptSegments: TranscriptAppliedSegment[];
+	timeMap: TranscriptAppliedTimeMap;
+	captionPayload: CompiledCaptionPayload | null;
+}
+
+export type TranscriptCompileState =
+	| { status: "idle"; updatedAt?: string }
+	| { status: "compiling"; updatedAt: string }
+	| { status: "failed"; updatedAt: string; error: string };
+
 export interface TranscriptionResult {
 	text: string;
 	segments: TranscriptionSegment[];

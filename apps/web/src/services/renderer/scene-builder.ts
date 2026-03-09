@@ -20,8 +20,11 @@ import { resolveLogoOverlayTransform } from "@/lib/branding/logo-overlay";
 import type { VideoCache } from "@/services/video-cache/service";
 import {
 	buildTranscriptTimelineSnapshot,
-	getEffectiveTranscriptCutsFromTranscriptEdit,
 } from "@/lib/transcript-editor/snapshot";
+import {
+	getTranscriptApplied,
+	getTranscriptDraft,
+} from "@/lib/transcript-editor/state";
 import { normalizeTimelineElementForInvariants } from "@/lib/timeline/element-timing";
 
 const PREVIEW_MAX_IMAGE_SIZE = 2048;
@@ -73,14 +76,15 @@ export function resolveLiveCaptionElementFromTranscriptSource({
 	element: TextElement;
 	sourceMedia: VideoElement | AudioElement;
 }): TextElement | null {
-	const transcriptEdit = sourceMedia.transcriptEdit;
-	if (!transcriptEdit || transcriptEdit.words.length === 0) {
+	const transcriptDraft = getTranscriptDraft(sourceMedia);
+	const transcriptApplied = getTranscriptApplied(sourceMedia);
+	if (!transcriptDraft || transcriptDraft.words.length === 0 || !transcriptApplied) {
 		return null;
 	}
 	// Salt snapshot revision with media timing so preview caption timing cannot
 	// reuse a stale cache entry after move/trim while transcript words are unchanged.
 	const timingRevisionSalt = [
-		transcriptEdit.updatedAt,
+		transcriptDraft.updatedAt,
 		sourceMedia.startTime.toFixed(4),
 		sourceMedia.duration.toFixed(4),
 		sourceMedia.trimStart.toFixed(4),
@@ -88,10 +92,10 @@ export function resolveLiveCaptionElementFromTranscriptSource({
 	].join("|");
 	const snapshot = buildTranscriptTimelineSnapshot({
 		mediaElementId: sourceMedia.id,
-		transcriptVersion: transcriptEdit.version,
+		transcriptVersion: transcriptDraft.version,
 		updatedAt: timingRevisionSalt,
-		words: transcriptEdit.words,
-		cuts: transcriptEdit.cuts,
+		words: transcriptDraft.words,
+		cuts: transcriptApplied.removedRanges,
 		mediaStartTime: sourceMedia.startTime,
 		mediaDuration: sourceMedia.duration,
 	});
@@ -109,7 +113,7 @@ export function resolveLiveCaptionElementFromTranscriptSource({
 		captionWordTimings: timings,
 		captionSourceRef: {
 			mediaElementId: sourceMedia.id,
-			transcriptVersion: transcriptEdit.version,
+			transcriptVersion: transcriptDraft.version,
 		},
 	};
 }
@@ -154,7 +158,7 @@ export function buildScene(params: BuildSceneParams) {
 				element,
 			});
 			mediaElementById.set(normalizedElement.id, normalizedElement);
-			if ((normalizedElement.transcriptEdit?.words.length ?? 0) > 0) {
+			if ((getTranscriptDraft(normalizedElement)?.words.length ?? 0) > 0) {
 				transcriptMediaCandidates.push(normalizedElement);
 			}
 		}
@@ -200,9 +204,7 @@ export function buildScene(params: BuildSceneParams) {
 							timeOffset: stableElement.startTime,
 							trimStart: stableElement.trimStart,
 							trimEnd: stableElement.trimEnd,
-							transcriptCuts: getEffectiveTranscriptCutsFromTranscriptEdit({
-								transcriptEdit: stableElement.transcriptEdit,
-							}),
+							transcriptCuts: getTranscriptApplied(stableElement)?.removedRanges ?? [],
 							transform: stableElement.transform,
 							opacity: stableElement.opacity,
 							blendMode: stableElement.blendMode,
@@ -244,7 +246,7 @@ export function buildScene(params: BuildSceneParams) {
 				const sourceMedia =
 					(sourceMediaFromRef &&
 					isEditableMediaElement(sourceMediaFromRef) &&
-					(sourceMediaFromRef.transcriptEdit?.words.length ?? 0) > 0
+					(getTranscriptDraft(sourceMediaFromRef)?.words.length ?? 0) > 0
 						? sourceMediaFromRef
 						: null) ??
 					// Heuristic source resolution is only for legacy/unbound caption elements.

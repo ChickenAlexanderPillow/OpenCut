@@ -1,6 +1,7 @@
 import type { EditorCore } from "@/core";
 import { createAudioContext } from "@/lib/media/audio";
 import { StreamingTimelineAudioEngine } from "@/lib/media/streaming-audio-engine";
+import { getTranscriptRevisionKey } from "@/lib/transcript-editor/state";
 
 const AUDIO_MANAGER_GLOBAL_KEY = "__opencut_audio_manager_singleton__";
 
@@ -9,43 +10,11 @@ type GlobalWithAudioManager = typeof globalThis & {
 };
 
 function buildTranscriptAudioRevision({
-	transcriptEdit,
+	transcriptRevisionKey,
 }: {
-	transcriptEdit:
-		| {
-				updatedAt: string;
-				words: Array<{ id: string; text: string; removed?: boolean }>;
-				cuts: Array<{ start: number; end: number; reason: string }>;
-		  }
-		| undefined;
+	transcriptRevisionKey?: string;
 }): string {
-	if (!transcriptEdit) return "";
-	const effectiveCuts = transcriptEdit.cuts
-		.filter(
-			(cut) =>
-				Number.isFinite(cut.start) &&
-				Number.isFinite(cut.end) &&
-				cut.end > cut.start,
-		)
-		.map((cut) => ({
-			start: Math.max(0, cut.start),
-			end: Math.max(0, cut.end),
-			reason: cut.reason ?? "remove",
-		}))
-		.sort((left, right) => left.start - right.start || left.end - right.end);
-	let hash = 5381;
-	const updateHash = (value: string): void => {
-		for (let index = 0; index < value.length; index++) {
-			hash = (hash * 33) ^ value.charCodeAt(index);
-		}
-	};
-	// Playback invalidation should only react to timeline audio cuts.
-	for (const cut of effectiveCuts) {
-		updateHash(cut.start.toFixed(3));
-		updateHash(cut.end.toFixed(3));
-		updateHash(cut.reason);
-	}
-	return `${effectiveCuts.length}:${(hash >>> 0).toString(36)}`;
+	return transcriptRevisionKey ?? "";
 }
 
 export class AudioManager {
@@ -742,7 +711,7 @@ export class AudioManager {
 					updateHash(element.muted ? "1" : "0");
 					updateHash(
 						buildTranscriptAudioRevision({
-							transcriptEdit: element.transcriptEdit,
+							transcriptRevisionKey: getTranscriptRevisionKey(element),
 						}),
 					);
 					continue;
@@ -759,7 +728,7 @@ export class AudioManager {
 					updateHash(element.muted ? "1" : "0");
 					updateHash(
 						buildTranscriptAudioRevision({
-							transcriptEdit: element.transcriptEdit,
+							transcriptRevisionKey: getTranscriptRevisionKey(element),
 						}),
 					);
 				}

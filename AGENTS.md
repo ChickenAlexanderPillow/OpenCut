@@ -120,6 +120,15 @@ Each command extends `Command` from `@/lib/commands/base-command` and implements
 
 Actions and commands work together: actions are "what triggered this", commands are "how to do it (and undo it)".
 
+## Root Cause Fixes
+
+Prefer fixing the underlying cause of a bug or inconsistency instead of adding fallback logic to mask it.
+
+- Do not add defensive fallbacks just to make broken state appear to work.
+- Trace failures to the source manager, command, action, or data flow and correct the real issue there.
+- Only introduce a fallback when it is a deliberate product requirement, and document why the root cause cannot be solved directly.
+- If a fallback is unavoidable, treat it as temporary unless there is a clear long-term reason for it.
+
 ## Playwright Session Policy
 
 Use shared browser storage for any stateful browser validation (auth/session/project-local data).

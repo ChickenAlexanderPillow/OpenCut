@@ -12,10 +12,12 @@ export class PlaybackManager {
 	private playbackTimer: number | null = null;
 	private lastUpdate = 0;
 	private lastNotifiedAt = 0;
+	private blockedReason: string | null = null;
 
 	constructor(private editor: EditorCore) {}
 
 	play(): void {
+		if (this.blockedReason) return;
 		if (this.isPlaying) return;
 		const duration = this.editor.timeline.getTotalDuration();
 		const playbackBounds = this.getPlaybackBounds({ duration });
@@ -216,6 +218,19 @@ export class PlaybackManager {
 
 	getIsScrubbing(): boolean {
 		return this.isScrubbing;
+	}
+
+	getBlockedReason(): string | null {
+		return this.blockedReason;
+	}
+
+	setBlockedReason({ reason }: { reason: string | null }): void {
+		if (this.blockedReason === reason) return;
+		this.blockedReason = reason;
+		if (reason && this.isPlaying) {
+			this.pause();
+		}
+		this.notify();
 	}
 
 	subscribe(listener: () => void): () => void {

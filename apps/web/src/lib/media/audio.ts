@@ -3,6 +3,7 @@ import type {
 	LibraryAudioElement,
 	TimelineElement,
 	TimelineTrack,
+	UploadAudioElement,
 	VideoElement,
 } from "@/types/timeline";
 import type { MediaAsset } from "@/types/assets";
@@ -18,11 +19,101 @@ import {
 } from "@/lib/transcript-editor/core";
 import { TRANSCRIPT_CUT_AUDIO_SMOOTHING_SECONDS } from "@/lib/transcript-editor/constants";
 import { getEffectiveTranscriptCutsForClipWindow } from "@/lib/transcript-editor/snapshot";
+import {
+	getTranscriptApplied,
+	getTranscriptDraft,
+	getTranscriptRevisionKey,
+} from "@/lib/transcript-editor/state";
 
 const MAX_AUDIO_CHANNELS = 2;
 const EXPORT_SAMPLE_RATE = 44100;
 const SILENCE_FLOOR = 1e-4;
+const COMPANION_ALIGNMENT_TOLERANCE_SECONDS = 0.05;
 const sharedDecodeContexts = new Map<string, AudioContext>();
+
+function getTranscriptDraftLike(
+	element: AudioElement | VideoElement,
+): AudioElement["transcriptEdit"] | VideoElement["transcriptEdit"] | undefined {
+	const draft = getTranscriptDraft(element);
+	if (!draft) return undefined;
+	return {
+		version: draft.version,
+		source: draft.source,
+		words: draft.words,
+		cuts: draft.cuts,
+		cutTimeDomain: draft.cutTimeDomain,
+		projectionSource: draft.projectionSource,
+		segmentsUi: draft.segmentsUi,
+		updatedAt: draft.updatedAt,
+	};
+}
+
+function getAppliedTranscriptCuts(
+	element: AudioElement | VideoElement,
+): TranscriptEditCutRange[] {
+	return getTranscriptApplied(element)?.removedRanges ?? [];
+}
+
+function isAlignedCompanionAudio({
+	video,
+	audio,
+}: {
+	video: VideoElement;
+	audio: UploadAudioElement;
+}): boolean {
+	const videoTimelineEnd = video.startTime + video.duration;
+	const audioTimelineEnd = audio.startTime + audio.duration;
+	const videoSourceEnd = video.trimStart + video.duration;
+	const audioSourceEnd = audio.trimStart + audio.duration;
+	const timelineOverlap =
+		videoTimelineEnd > audio.startTime - COMPANION_ALIGNMENT_TOLERANCE_SECONDS &&
+		audioTimelineEnd > video.startTime - COMPANION_ALIGNMENT_TOLERANCE_SECONDS;
+	const sourceOverlap =
+		videoSourceEnd > audio.trimStart - COMPANION_ALIGNMENT_TOLERANCE_SECONDS &&
+		audioSourceEnd > video.trimStart - COMPANION_ALIGNMENT_TOLERANCE_SECONDS;
+	return (
+		video.mediaId === audio.mediaId &&
+		((Math.abs(video.startTime - audio.startTime) <=
+			COMPANION_ALIGNMENT_TOLERANCE_SECONDS &&
+			Math.abs(video.duration - audio.duration) <=
+				COMPANION_ALIGNMENT_TOLERANCE_SECONDS &&
+			Math.abs(video.trimStart - audio.trimStart) <=
+				COMPANION_ALIGNMENT_TOLERANCE_SECONDS &&
+			Math.abs(video.trimEnd - audio.trimEnd) <=
+				COMPANION_ALIGNMENT_TOLERANCE_SECONDS) ||
+			(timelineOverlap && sourceOverlap))
+	);
+}
+
+function collectSuppressedCompanionAudioIds({
+	tracks,
+}: {
+	tracks: TimelineTrack[];
+}): Set<string> {
+	const videos: VideoElement[] = [];
+	const uploadAudios: UploadAudioElement[] = [];
+
+	for (const track of tracks) {
+		if (track.type !== "video" && track.type !== "audio") continue;
+		for (const element of track.elements) {
+			if (element.type === "video") {
+				videos.push(normalizeTimelineElementForInvariants({ element }));
+				continue;
+			}
+			if (element.type === "audio" && element.sourceType === "upload") {
+				uploadAudios.push(normalizeTimelineElementForInvariants({ element }));
+			}
+		}
+	}
+
+	const suppressed = new Set<string>();
+	for (const audio of uploadAudios) {
+		if (videos.some((video) => isAlignedCompanionAudio({ video, audio }))) {
+			suppressed.add(audio.id);
+		}
+	}
+	return suppressed;
+}
 
 function getSharedDecodeContext({
 	sampleRate,
@@ -176,6 +267,9 @@ export async function collectAudioElements({
 	const mediaMap = new Map<string, MediaAsset>(
 		mediaAssets.map((media) => [media.id, media]),
 	);
+	const suppressedCompanionAudioIds = collectSuppressedCompanionAudioIds({
+		tracks,
+	});
 	const pendingElements: Array<Promise<CollectedAudioElement | null>> = [];
 
 	for (const track of tracks) {
@@ -187,12 +281,15 @@ export async function collectAudioElements({
 		for (const element of track.elements) {
 			const stableElement = normalizeTimelineElementForInvariants({ element });
 			if (!canElementHaveAudio(stableElement)) continue;
+			if (
+				stableElement.type === "audio" &&
+				stableElement.sourceType === "upload" &&
+				suppressedCompanionAudioIds.has(stableElement.id)
+			) {
+				continue;
+			}
 			if (stableElement.duration <= 0) continue;
-			const effectiveTranscriptCuts =
-				getEffectiveTranscriptCutsForClipWindow({
-					transcriptEdit: stableElement.transcriptEdit,
-					trimStart: stableElement.trimStart,
-				});
+			const effectiveTranscriptCuts = getAppliedTranscriptCuts(stableElement);
 
 			const isTrackMuted = canTracktHaveAudio(track) && track.muted;
 
@@ -330,11 +427,7 @@ async function resolveAudioBufferForElement({
 }): Promise<AudioBuffer | null> {
 		try {
 			if (element.buffer) return element.buffer;
-			const effectiveTranscriptCuts =
-				getEffectiveTranscriptCutsForClipWindow({
-					transcriptEdit: element.transcriptEdit,
-					trimStart: element.trimStart,
-				});
+			const effectiveTranscriptCuts = getAppliedTranscriptCuts(element);
 
 		if (element.sourceType === "upload") {
 			const asset = mediaMap.get(element.mediaId);
@@ -536,43 +629,11 @@ export interface AudioClipSource {
 }
 
 function buildTranscriptAudioRevision({
-	transcriptEdit,
+	transcriptRevisionKey,
 }: {
-	transcriptEdit:
-		| {
-				updatedAt: string;
-				words: Array<{ id: string; text: string; removed?: boolean }>;
-				cuts: Array<{ start: number; end: number; reason: string }>;
-		  }
-		| undefined;
+	transcriptRevisionKey?: string;
 }): string {
-	if (!transcriptEdit) return "";
-	const effectiveCuts = transcriptEdit.cuts
-		.filter(
-			(cut) =>
-				Number.isFinite(cut.start) &&
-				Number.isFinite(cut.end) &&
-				cut.end > cut.start,
-		)
-		.map((cut) => ({
-			start: Math.max(0, cut.start),
-			end: Math.max(0, cut.end),
-			reason: cut.reason ?? "remove",
-		}))
-		.sort((left, right) => left.start - right.start || left.end - right.end);
-	let hash = 5381;
-	const updateHash = (value: string): void => {
-		for (let index = 0; index < value.length; index++) {
-			hash = (hash * 33) ^ value.charCodeAt(index);
-		}
-	};
-	// Audio graph changes should only track effective cut boundaries.
-	for (const cut of effectiveCuts) {
-		updateHash(cut.start.toFixed(3));
-		updateHash(cut.end.toFixed(3));
-		updateHash(cut.reason);
-	}
-	return `${effectiveCuts.length}:${(hash >>> 0).toString(36)}`;
+	return transcriptRevisionKey ?? "";
 }
 
 function clampGain(value: number): number {
@@ -821,12 +882,9 @@ async function fetchLibraryAudioClip({
 			muted,
 			gain,
 			transcriptRevision: buildTranscriptAudioRevision({
-				transcriptEdit: element.transcriptEdit,
+				transcriptRevisionKey: getTranscriptRevisionKey(element),
 			}),
-			transcriptCuts: getEffectiveTranscriptCutsForClipWindow({
-				transcriptEdit: element.transcriptEdit,
-				trimStart: element.trimStart,
-			}),
+			transcriptCuts: getAppliedTranscriptCuts(element),
 		};
 	} catch (error) {
 		console.warn("Failed to fetch library audio:", error);
@@ -851,10 +909,7 @@ function collectMediaAudioSource({
 		trimStart: stableElement.trimStart,
 		trimEnd: stableElement.trimEnd,
 		gain,
-		transcriptCuts: getEffectiveTranscriptCutsForClipWindow({
-			transcriptEdit: stableElement.transcriptEdit,
-			trimStart: stableElement.trimStart,
-		}),
+		transcriptCuts: getAppliedTranscriptCuts(stableElement),
 	};
 }
 
@@ -889,17 +944,16 @@ function collectMediaAudioClip({
 		muted,
 		gain,
 		transcriptRevision:
-			"transcriptEdit" in stableElement
+			"transcriptApplied" in stableElement || "transcriptEdit" in stableElement
 				? buildTranscriptAudioRevision({
-						transcriptEdit: stableElement.transcriptEdit,
+						transcriptRevisionKey: getTranscriptRevisionKey(
+							stableElement as AudioElement | VideoElement,
+						),
 					})
 				: "",
 		transcriptCuts:
-			"transcriptEdit" in stableElement
-				? getEffectiveTranscriptCutsForClipWindow({
-						transcriptEdit: stableElement.transcriptEdit,
-						trimStart: stableElement.trimStart,
-					})
+			"transcriptApplied" in stableElement || "transcriptEdit" in stableElement
+				? getAppliedTranscriptCuts(stableElement as AudioElement | VideoElement)
 				: [],
 	};
 }
@@ -915,6 +969,9 @@ export async function collectAudioMixSources({
 	const mediaMap = new Map<string, MediaAsset>(
 		mediaAssets.map((asset) => [asset.id, asset]),
 	);
+	const suppressedCompanionAudioIds = collectSuppressedCompanionAudioIds({
+		tracks,
+	});
 	const pendingLibrarySources: Array<Promise<AudioMixSource | null>> = [];
 
 	for (const track of tracks) {
@@ -925,6 +982,13 @@ export async function collectAudioMixSources({
 
 		for (const element of track.elements) {
 			if (!canElementHaveAudio(element)) continue;
+			if (
+				element.type === "audio" &&
+				element.sourceType === "upload" &&
+				suppressedCompanionAudioIds.has(element.id)
+			) {
+				continue;
+			}
 			const isElementMuted =
 				"muted" in element ? (element.muted ?? false) : false;
 			if (isElementMuted) continue;
@@ -978,6 +1042,9 @@ export async function collectAudioClips({
 	const mediaMap = new Map<string, MediaAsset>(
 		mediaAssets.map((asset) => [asset.id, asset]),
 	);
+	const suppressedCompanionAudioIds = collectSuppressedCompanionAudioIds({
+		tracks,
+	});
 	const pendingLibraryClips: Array<Promise<AudioClipSource | null>> = [];
 
 	for (const track of tracks) {
@@ -989,6 +1056,13 @@ export async function collectAudioClips({
 		for (const element of track.elements) {
 			const stableElement = normalizeTimelineElementForInvariants({ element });
 			if (!canElementHaveAudio(stableElement)) continue;
+			if (
+				stableElement.type === "audio" &&
+				stableElement.sourceType === "upload" &&
+				suppressedCompanionAudioIds.has(stableElement.id)
+			) {
+				continue;
+			}
 
 			const isElementMuted =
 				"muted" in stableElement ? (stableElement.muted ?? false) : false;
