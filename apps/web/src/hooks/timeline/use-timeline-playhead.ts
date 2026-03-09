@@ -8,6 +8,7 @@ import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
 
 interface UseTimelinePlayheadProps {
 	zoomLevel: number;
+	displayTime?: number;
 	rulerRef: React.RefObject<HTMLDivElement | null>;
 	rulerScrollRef: React.RefObject<HTMLDivElement | null>;
 	tracksScrollRef: React.RefObject<HTMLDivElement | null>;
@@ -16,6 +17,7 @@ interface UseTimelinePlayheadProps {
 
 export function useTimelinePlayhead({
 	zoomLevel,
+	displayTime,
 	rulerRef,
 	rulerScrollRef,
 	tracksScrollRef,
@@ -46,7 +48,11 @@ export function useTimelinePlayhead({
 	const scrubResumeDelayMs = 400;
 
 	const playheadPosition =
-		isScrubbing && scrubTime !== null ? scrubTime : currentTime;
+		isScrubbing && scrubTime !== null
+			? scrubTime
+			: typeof displayTime === "number"
+				? displayTime
+				: currentTime;
 
 	const handleScrub = useCallback(
 		({

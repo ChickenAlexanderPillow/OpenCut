@@ -25,6 +25,7 @@ import {
 	getTranscriptApplied,
 	getTranscriptDraft,
 } from "@/lib/transcript-editor/state";
+import { buildCompressedVisualTracks } from "@/lib/transcript-editor/visual-timeline";
 import { normalizeTimelineElementForInvariants } from "@/lib/timeline/element-timing";
 
 const PREVIEW_MAX_IMAGE_SIZE = 2048;
@@ -132,7 +133,8 @@ export type BuildSceneParams = {
 };
 
 export function buildScene(params: BuildSceneParams) {
-	const { tracks, mediaAssets, duration, canvasSize, background } = params;
+	const { mediaAssets, duration, canvasSize, background } = params;
+	const tracks = buildCompressedVisualTracks({ tracks: params.tracks });
 
 	const rootNode = new RootNode({ duration });
 	const mediaMap = new Map(mediaAssets.map((m) => [m.id, m]));

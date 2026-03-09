@@ -7,6 +7,7 @@ import { useEditor } from "@/hooks/use-editor";
 
 interface TimelinePlayheadProps {
 	zoomLevel: number;
+	displayTime?: number;
 	rulerRef: React.RefObject<HTMLDivElement | null>;
 	rulerScrollRef: React.RefObject<HTMLDivElement | null>;
 	tracksScrollRef: React.RefObject<HTMLDivElement | null>;
@@ -17,6 +18,7 @@ interface TimelinePlayheadProps {
 
 export function TimelinePlayhead({
 	zoomLevel,
+	displayTime,
 	rulerRef,
 	rulerScrollRef,
 	tracksScrollRef,
@@ -31,6 +33,7 @@ export function TimelinePlayhead({
 
 	const { playheadPosition, handlePlayheadMouseDown } = useTimelinePlayhead({
 		zoomLevel,
+		displayTime,
 		rulerRef,
 		rulerScrollRef,
 		tracksScrollRef,

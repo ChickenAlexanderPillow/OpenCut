@@ -56,6 +56,7 @@ import { useTimelinePlayhead } from "@/hooks/timeline/use-timeline-playhead";
 import { DragLine } from "./drag-line";
 import { invokeAction } from "@/lib/actions";
 import { ListChecks } from "lucide-react";
+import { mapPlaybackTimeToCompressedVisualTime } from "@/lib/transcript-editor/visual-timeline";
 
 export function Timeline() {
 	const tracksContainerHeight = { min: 0, max: 800 };
@@ -96,6 +97,10 @@ export function Timeline() {
 	);
 
 	const timelineDuration = timeline.getTotalDuration() || 0;
+	const visualPlayheadTime = mapPlaybackTimeToCompressedVisualTime({
+		time: editor.playback.getCurrentTime(),
+		tracks,
+	});
 	const minZoomLevel = getTimelineZoomMin({
 		duration: timelineDuration,
 		containerWidth: tracksContainerRef.current?.clientWidth,
@@ -459,9 +464,10 @@ export function Timeline() {
 										handleRulerMouseDown={handlePlayheadRulerMouseDown}
 									/>
 								</div>
-								<TimelinePlayhead
-									zoomLevel={zoomLevel}
-									rulerRef={rulerRef}
+									<TimelinePlayhead
+										zoomLevel={zoomLevel}
+										displayTime={visualPlayheadTime}
+										rulerRef={rulerRef}
 									rulerScrollRef={tracksScrollRef}
 									tracksScrollRef={tracksScrollRef}
 									timelineRef={timelineRef}
