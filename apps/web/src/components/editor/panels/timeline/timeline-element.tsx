@@ -258,6 +258,8 @@ export function TimelineElement({
 		visualLayout.visualStartTime *
 		TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
 		zoomLevel;
+	const roundedElementWidth = Math.round(elementWidth);
+	const roundedElementLeft = Math.round(elementLeft);
 
 	const revealInMedia = () => {
 		if (hasMediaId(element)) {
@@ -337,8 +339,8 @@ export function TimelineElement({
 						data-visual-duration={visualLayout.visualDuration}
 						className={`absolute top-0 h-full select-none`}
 					style={{
-						left: `${elementLeft}px`,
-						width: `${elementWidth}px`,
+						left: `${roundedElementLeft}px`,
+						width: `${roundedElementWidth}px`,
 						transform:
 							isBeingDragged && dragState.isDragging
 								? `translate3d(0, ${dragOffsetY}px, 0)`
@@ -1256,7 +1258,7 @@ function ElementContent({
 		(mediaAsset.type === "video" && mediaAsset.thumbnailUrl)
 	) {
 		const trackHeight = getTrackHeight({ type: track.type });
-		const tileWidth = trackHeight * (16 / 9);
+		const tileWidth = Math.round(trackHeight * (16 / 9));
 		const imageUrl =
 			mediaAsset.type === "image" ? mediaAsset.url : mediaAsset.thumbnailUrl;
 

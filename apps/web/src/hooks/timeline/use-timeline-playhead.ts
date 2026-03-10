@@ -275,9 +275,11 @@ export function useTimelinePlayhead({
 			playheadPixels > rulerViewport.scrollLeft + viewportWidth;
 
 		if (needsScroll) {
-			const desiredScroll = Math.max(
-				scrollMinimum,
-				Math.min(scrollMaximum, playheadPixels - viewportWidth / 2),
+			const desiredScroll = Math.round(
+				Math.max(
+					scrollMinimum,
+					Math.min(scrollMaximum, playheadPixels - viewportWidth / 2),
+				),
 			);
 			rulerViewport.scrollLeft = tracksViewport.scrollLeft = desiredScroll;
 		}
