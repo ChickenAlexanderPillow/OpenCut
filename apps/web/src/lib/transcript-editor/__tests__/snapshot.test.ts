@@ -147,6 +147,33 @@ describe("transcript timeline snapshot", () => {
 		expect(snapshot.captionPayload?.content).toBe("hello world");
 	});
 
+	test("realigns shifted caption timings without dropping hidden flags", () => {
+		const snapshot = buildTranscriptTimelineSnapshot({
+			mediaElementId: "audio-1",
+			transcriptVersion: 1,
+			updatedAt: "2026-03-05T00:00:00.000Z",
+			words: [
+				{ id: "w0", text: "hello", startTime: 12.0, endTime: 12.3, removed: false },
+				{ id: "w1", text: "secret", startTime: 12.35, endTime: 12.6, hidden: true, removed: false },
+				{ id: "w2", text: "world", startTime: 12.7, endTime: 13.0, removed: false },
+			],
+			cuts: [],
+			mediaStartTime: 5,
+			mediaDuration: 2,
+		});
+		const wordTimings = snapshot.captionPayload?.wordTimings;
+		expect(wordTimings).toHaveLength(3);
+		expect(wordTimings?.[0]).toMatchObject({ word: "hello", hidden: false });
+		expect(wordTimings?.[0]?.startTime).toBeCloseTo(5, 6);
+		expect(wordTimings?.[0]?.endTime).toBeCloseTo(5.3, 6);
+		expect(wordTimings?.[1]).toMatchObject({ word: "secret", hidden: true });
+		expect(wordTimings?.[1]?.startTime).toBeCloseTo(5.35, 6);
+		expect(wordTimings?.[1]?.endTime).toBeCloseTo(5.6, 6);
+		expect(wordTimings?.[2]).toMatchObject({ word: "world", hidden: false });
+		expect(wordTimings?.[2]?.startTime).toBeCloseTo(5.7, 6);
+		expect(wordTimings?.[2]?.endTime).toBeCloseTo(6, 6);
+	});
+
 	test("legacy non-pause cuts still remove words when removed flags are absent", () => {
 		const snapshot = buildTranscriptTimelineSnapshot({
 			mediaElementId: "audio-1",

@@ -41,15 +41,22 @@ function isTranscriptAlreadyTimelineAligned({
 	return looksTimeline && !looksLocal;
 }
 
-function realignShiftedTimelineWordTimings({
+function realignShiftedTimelineWordTimings<
+	T extends {
+		word: string;
+		startTime: number;
+		endTime: number;
+		hidden?: boolean;
+	},
+>({
 	timings,
 	mediaStartTime,
 	mediaDuration,
 }: {
-	timings: Array<{ word: string; startTime: number; endTime: number }>;
+	timings: T[];
 	mediaStartTime: number;
 	mediaDuration: number;
-}): Array<{ word: string; startTime: number; endTime: number }> {
+}): T[] {
 	if (timings.length === 0) return timings;
 	const minStart = Math.min(...timings.map((timing) => timing.startTime));
 	const maxEnd = Math.max(...timings.map((timing) => timing.endTime));
