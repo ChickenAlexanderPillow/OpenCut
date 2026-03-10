@@ -72,12 +72,13 @@ export function useTimelinePlayhead({
 			const relativeMouseX = event.clientX - rulerRect.left;
 
 			const timelineContentWidth =
+				TIMELINE_CONSTANTS.START_OFFSET_PX +
 				(displayDuration ?? duration) *
 				TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
 				zoomLevel;
 
 			const clampedMouseX = Math.max(
-				0,
+				TIMELINE_CONSTANTS.START_OFFSET_PX,
 				Math.min(timelineContentWidth, relativeMouseX),
 			);
 
@@ -85,7 +86,8 @@ export function useTimelinePlayhead({
 				0,
 				Math.min(
 					displayDuration ?? duration,
-					clampedMouseX / (TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel),
+					(clampedMouseX - TIMELINE_CONSTANTS.START_OFFSET_PX) /
+						(TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel),
 				),
 			);
 			const rawTime = mapVisualTimeToRealTime
@@ -187,6 +189,7 @@ export function useTimelinePlayhead({
 		rulerScrollRef,
 		tracksScrollRef,
 		contentWidth:
+			TIMELINE_CONSTANTS.START_OFFSET_PX +
 			(displayDuration ?? duration) *
 			TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
 			zoomLevel,
@@ -265,6 +268,7 @@ export function useTimelinePlayhead({
 		if (!rulerViewport || !tracksViewport) return;
 
 		const playheadPixels =
+			TIMELINE_CONSTANTS.START_OFFSET_PX +
 			playheadPosition * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
 		const viewportWidth = rulerViewport.clientWidth;
 		const scrollMinimum = 0;

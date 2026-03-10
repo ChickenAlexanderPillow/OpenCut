@@ -18,7 +18,9 @@ export function TimelineTick({
 	fps,
 	showLabel,
 }: TimelineTickProps) {
-	const leftPosition = time * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
+	const leftPosition =
+		TIMELINE_CONSTANTS.START_OFFSET_PX +
+		time * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
 
 	if (showLabel) {
 		const label = formatRulerLabel({

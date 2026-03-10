@@ -45,7 +45,11 @@ export function TimelineRuler({
 	const editor = useEditor();
 	const duration = editor.timeline.getTotalDuration();
 	const pixelsPerSecond = TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
-	const visibleDuration = dynamicTimelineWidth / pixelsPerSecond;
+	const visibleDuration = Math.max(
+		0,
+		(dynamicTimelineWidth - TIMELINE_CONSTANTS.START_OFFSET_PX) /
+			pixelsPerSecond,
+	);
 	const effectiveDuration = Math.max(displayDuration, visibleDuration);
 	const timelineViewState = editor.project.getTimelineViewState();
 	const inPoint =
@@ -60,8 +64,12 @@ export function TimelineRuler({
 	const regionEnd = outPoint ?? duration;
 	const hasValidRange =
 		inPoint !== null && outPoint !== null && regionEnd > regionStart + 1e-6;
-	const startPx = mapRealTimeToVisualTime(regionStart) * pixelsPerSecond;
-	const endPx = mapRealTimeToVisualTime(regionEnd) * pixelsPerSecond;
+	const startPx =
+		TIMELINE_CONSTANTS.START_OFFSET_PX +
+		mapRealTimeToVisualTime(regionStart) * pixelsPerSecond;
+	const endPx =
+		TIMELINE_CONSTANTS.START_OFFSET_PX +
+		mapRealTimeToVisualTime(regionEnd) * pixelsPerSecond;
 	const project = editor.project.getActive();
 	const fps = project?.settings.fps ?? DEFAULT_FPS;
 	const { labelIntervalSeconds, tickIntervalSeconds } = getRulerConfig({
@@ -102,10 +110,15 @@ export function TimelineRuler({
 
 	const visibleStartTime = Math.max(
 		0,
-		(scrollLeft - bufferPx) / pixelsPerSecond,
+		(scrollLeft - bufferPx - TIMELINE_CONSTANTS.START_OFFSET_PX) /
+			pixelsPerSecond,
 	);
 	const visibleEndTime =
-		(scrollLeft + viewportWidth + bufferPx) / pixelsPerSecond;
+		(scrollLeft +
+			viewportWidth +
+			bufferPx -
+			TIMELINE_CONSTANTS.START_OFFSET_PX) /
+		pixelsPerSecond;
 
 	const startTickIndex = Math.max(
 		0,
@@ -162,8 +175,12 @@ export function TimelineRuler({
 			if (!rulerNode) return null;
 			const rect = rulerNode.getBoundingClientRect();
 			const relativeX = clientX - rect.left;
-			const clampedX = Math.max(0, Math.min(dynamicTimelineWidth, relativeX));
-			const visualTime = clampedX / pixelsPerSecond;
+			const clampedX = Math.max(
+				TIMELINE_CONSTANTS.START_OFFSET_PX,
+				Math.min(dynamicTimelineWidth, relativeX),
+			);
+			const visualTime =
+				(clampedX - TIMELINE_CONSTANTS.START_OFFSET_PX) / pixelsPerSecond;
 			return mapVisualTimeToRealTime(visualTime);
 		},
 		[rulerRef, dynamicTimelineWidth, pixelsPerSecond, mapVisualTimeToRealTime],
@@ -260,6 +277,15 @@ export function TimelineRuler({
 				onMouseDown={handleRulerMouseDown}
 				onContextMenu={handleRangeContextMenu}
 			>
+				<div
+					aria-hidden="true"
+					className="pointer-events-none absolute top-0 bottom-0 left-0"
+					style={{
+						width: `${TIMELINE_CONSTANTS.START_OFFSET_PX}px`,
+						borderRight:
+							"1px solid color-mix(in oklab, var(--foreground) 12%, transparent)",
+					}}
+				/>
 				{hasValidRange && (
 					<div
 						className="pointer-events-none absolute top-0 h-full border-y border-cyan-500/70 bg-cyan-400/30"

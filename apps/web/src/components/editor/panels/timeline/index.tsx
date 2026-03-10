@@ -211,7 +211,7 @@ export function Timeline() {
 		minZoom: minZoomLevel,
 	});
 	const dynamicTimelineWidth = Math.max(
-		contentWidth + paddingPx,
+		contentWidth + paddingPx + TIMELINE_CONSTANTS.START_OFFSET_PX,
 		containerWidth,
 	);
 
@@ -465,6 +465,15 @@ export function Timeline() {
 									width: `${dynamicTimelineWidth}px`,
 								}}
 							>
+								<div
+									aria-hidden="true"
+									className="pointer-events-none absolute top-0 bottom-0 left-0 z-[1]"
+									style={{
+										width: `${TIMELINE_CONSTANTS.START_OFFSET_PX}px`,
+										borderRight:
+											"1px solid color-mix(in oklab, var(--foreground) 10%, transparent)",
+									}}
+								/>
 								<div
 									ref={timelineHeaderRef}
 									className="bg-background sticky top-0 flex flex-col"

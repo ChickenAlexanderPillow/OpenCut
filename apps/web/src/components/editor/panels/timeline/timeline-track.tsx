@@ -79,6 +79,7 @@ export function TimelineTrackContent({
 		rulerScrollRef,
 		tracksScrollRef,
 		contentWidth:
+			TIMELINE_CONSTANTS.START_OFFSET_PX +
 			visualDuration * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel,
 	});
 
@@ -153,6 +154,7 @@ function GapRegion({
 	onSelect: (gap: TimelineGapSelection) => void;
 }) {
 	const left =
+		TIMELINE_CONSTANTS.START_OFFSET_PX +
 		gap.startTime * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
 	const width = Math.max(
 		2,

@@ -1,5 +1,9 @@
 import type { TimelineTrack, ElementType } from "@/types/timeline";
-import { TRACK_HEIGHTS, TRACK_GAP } from "@/constants/timeline-constants";
+import {
+	TRACK_HEIGHTS,
+	TRACK_GAP,
+	TIMELINE_CONSTANTS,
+} from "@/constants/timeline-constants";
 import { wouldElementOverlap } from "./element-utils";
 import type { ComputeDropTargetParams, DropTarget } from "@/types/timeline";
 import { isMainTrack, enforceMainTrackStart } from "./track-utils";
@@ -119,7 +123,11 @@ export function computeDropTarget({
 			? startTimeOverride
 			: isExternalDrop
 				? playheadTime
-				: Math.max(0, mouseX / (pixelsPerSecond * zoomLevel));
+				: Math.max(
+						0,
+						(mouseX - TIMELINE_CONSTANTS.START_OFFSET_PX) /
+							(pixelsPerSecond * zoomLevel),
+					);
 
 	const mainTrackIndex = getMainTrackIndex({ tracks });
 

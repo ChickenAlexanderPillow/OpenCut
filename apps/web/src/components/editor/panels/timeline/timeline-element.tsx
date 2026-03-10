@@ -255,6 +255,7 @@ export function TimelineElement({
 		TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
 		zoomLevel;
 	const elementLeft =
+		TIMELINE_CONSTANTS.START_OFFSET_PX +
 		visualLayout.visualStartTime *
 		TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
 		zoomLevel;

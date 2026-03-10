@@ -53,6 +53,7 @@ export function TimelinePlayhead({
 	const totalHeight = Math.max(0, timelineContainerHeight - 4);
 
 	const timelinePosition =
+		TIMELINE_CONSTANTS.START_OFFSET_PX +
 		playheadPosition * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
 	const leftPosition = timelinePosition;
 

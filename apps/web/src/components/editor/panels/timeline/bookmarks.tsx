@@ -163,7 +163,9 @@ function TimelineBookmark({
 			: 0;
 	const hasDurationRange = durationWidth > MIN_BOOKMARK_WIDTH_PX;
 	const bookmarkWidth = BOOKMARK_MARKER_WIDTH_PX + Math.max(durationWidth, 0);
-	const left = displayTime * PIXELS_PER_SECOND * zoomLevel;
+	const left =
+		TIMELINE_CONSTANTS.START_OFFSET_PX +
+		displayTime * PIXELS_PER_SECOND * zoomLevel;
 	const bookmarkLeft = left - BOOKMARK_HALF_WIDTH_PX;
 	const rightHalfLeft = BOOKMARK_HALF_WIDTH_PX + Math.max(durationWidth, 0);
 	const iconColor = bookmark.color ?? DEFAULT_BOOKMARK_COLOR;

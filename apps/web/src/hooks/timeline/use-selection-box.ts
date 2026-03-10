@@ -155,6 +155,7 @@ export function useSelectionBox({
 
 				for (const element of track.elements) {
 					const elementLeft =
+						TIMELINE_CONSTANTS.START_OFFSET_PX +
 						mapRealTimeToVisualTime({
 							time: element.startTime,
 							model: visualModel,

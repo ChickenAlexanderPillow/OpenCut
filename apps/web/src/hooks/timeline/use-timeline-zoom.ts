@@ -181,8 +181,10 @@ export function useTimelineZoom({
 
 		if (sliderPercent >= TIMELINE_CONSTANTS.ZOOM_ANCHOR_PLAYHEAD_THRESHOLD) {
 			const playheadPixelsBefore =
+				TIMELINE_CONSTANTS.START_OFFSET_PX +
 				playheadPosition * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * previousZoom;
 			const playheadPixelsAfter =
+				TIMELINE_CONSTANTS.START_OFFSET_PX +
 				playheadPosition * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
 
 			const viewportOffset = playheadPixelsBefore - currentScrollLeft;

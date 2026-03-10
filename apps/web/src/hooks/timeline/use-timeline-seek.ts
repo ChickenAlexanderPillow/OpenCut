@@ -136,7 +136,7 @@ export function useTimelineSeek({
 				0,
 				Math.min(
 					displayDuration,
-					(mouseX + scrollLeft) /
+					(mouseX + scrollLeft - TIMELINE_CONSTANTS.START_OFFSET_PX) /
 						(TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel),
 				),
 			);

@@ -55,6 +55,7 @@ export function useSnapIndicatorPosition({
 			: 0;
 
 	const timelinePosition =
+		TIMELINE_CONSTANTS.START_OFFSET_PX +
 		mapRealTimeToVisualTime({
 			time: snapPoint?.time || 0,
 			model: visualModel,
