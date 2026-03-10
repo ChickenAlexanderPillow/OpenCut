@@ -8,19 +8,18 @@ import { invokeAction } from "@/lib/actions";
 import { DEFAULT_TRANSCRIPTION_MODEL } from "@/constants/transcription-constants";
 import {
 	applyCutRangesToWords,
-	buildCaptionPayloadFromTranscriptWords,
 	buildTranscriptCutsFromWords,
 	isFillerWordOrPhrase,
 	mapCompressedTimeToSourceTime,
 	normalizeTranscriptWords,
 } from "@/lib/transcript-editor/core";
+import { buildTranscriptWordsFromCaptionTimings } from "@/lib/transcript-editor/caption-fallback";
 import {
 	compileTranscriptDraft,
 	getTranscriptCompileState,
 	getTranscriptDraft,
 } from "@/lib/transcript-editor/state";
 import { getEffectiveTranscriptCutsFromTranscriptEdit } from "@/lib/transcript-editor/snapshot";
-import { DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import { toElementLocalCaptionTime } from "@/lib/captions/timing";
 import {
 	clipTranscriptSegmentsForWindow,
@@ -66,6 +65,26 @@ function formatTime(time: number): string {
 	return `${mins}:${secs}`;
 }
 
+function findActiveWordIdAtSourceTime({
+	words,
+	time,
+	matchHidden,
+}: {
+	words: TranscriptEditWord[];
+	time: number;
+	matchHidden: boolean;
+}): string | null {
+	for (let index = words.length - 1; index >= 0; index--) {
+		const word = words[index];
+		if (word.removed) continue;
+		if (Boolean(word.hidden) !== matchHidden) continue;
+		if (time >= word.startTime && time < word.endTime) {
+			return word.id;
+		}
+	}
+	return null;
+}
+
 function isMediaElement(
 	element: TimelineElement,
 ): element is VideoElement | AudioElement {
@@ -90,14 +109,11 @@ function getFallbackWordsFromCaptions({
 			return true;
 		});
 	if (!matched || (matched.captionWordTimings?.length ?? 0) === 0) return [];
-	return normalizeTranscriptWords({
-		words: (matched.captionWordTimings ?? []).map((timing, index) => ({
-			id: `${mediaElementId}:fallback:${index}:${timing.startTime.toFixed(3)}`,
-			text: timing.word,
-			startTime: timing.startTime,
-			endTime: timing.endTime,
-			removed: false,
-		})),
+	return buildTranscriptWordsFromCaptionTimings({
+		mediaElementId,
+		mediaStartTime: 0,
+		timings: matched.captionWordTimings ?? [],
+		idPrefix: "fallback",
 	});
 }
 
@@ -365,26 +381,35 @@ export function TranscriptView() {
 			),
 		[wordsWithCutState],
 	);
-	const currentCaptionPayload = useMemo(
-		() => buildCaptionPayloadFromTranscriptWords({ words, cuts }),
-		[words, cuts],
-	);
-
-	const currentWordId = useMemo(() => {
-		if (!activeMedia || !currentCaptionPayload) return null;
+	const currentSourceTime = useMemo(() => {
+		if (!activeMedia) return null;
 		const localCompressed = Math.max(
 			0,
 			currentTime - activeMedia.element.startTime,
 		);
-		const activeVisibleIndex = currentCaptionPayload.wordTimings.findIndex(
-			(timing) =>
-				!timing.hidden &&
-				localCompressed >= timing.startTime &&
-				localCompressed < timing.endTime,
-		);
-		if (activeVisibleIndex < 0) return null;
-		return visibleCaptionWords[activeVisibleIndex]?.id ?? null;
-	}, [activeMedia, currentCaptionPayload, currentTime, visibleCaptionWords]);
+		return mapCompressedTimeToSourceTime({
+			compressedTime: localCompressed,
+			cuts,
+		});
+	}, [activeMedia, currentTime, cuts]);
+
+	const currentWordId = useMemo(() => {
+		if (currentSourceTime == null) return null;
+		return findActiveWordIdAtSourceTime({
+			words: visibleCaptionWords,
+			time: currentSourceTime,
+			matchHidden: false,
+		});
+	}, [currentSourceTime, visibleCaptionWords]);
+
+	const currentHiddenWordId = useMemo(() => {
+		if (currentSourceTime == null) return null;
+		return findActiveWordIdAtSourceTime({
+			words: wordsWithCutState,
+			time: currentSourceTime,
+			matchHidden: true,
+		});
+	}, [currentSourceTime, wordsWithCutState]);
 
 	const transcriptCompileState = activeMedia
 		? getTranscriptCompileState(activeMedia.element)
@@ -841,19 +866,6 @@ export function TranscriptView() {
 						variant="outline"
 						size="sm"
 						onClick={() =>
-							invokeAction("transcript-remove-pauses", {
-								trackId: activeMedia.trackId,
-								elementId: activeMedia.element.id,
-								thresholdSeconds: DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS,
-							})
-						}
-					>
-						Remove Pauses
-					</Button>
-					<Button
-						variant="outline"
-						size="sm"
-						onClick={() =>
 							invokeAction("transcript-restore-all", {
 								trackId: activeMedia.trackId,
 								elementId: activeMedia.element.id,
@@ -983,9 +995,14 @@ export function TranscriptView() {
 														selectedWordIdsSet.has(word.id)
 															? "bg-secondary"
 															: "",
-														word.removed ? "opacity-40 line-through" : "",
+														word.removed
+															? "line-through decoration-red-500 decoration-2 opacity-70"
+															: "",
 														word.hidden ? "opacity-45" : "",
 														currentWordId === word.id ? "text-white" : "",
+														currentHiddenWordId === word.id
+															? "bg-zinc-500/50 text-white"
+															: "",
 														selectedWordIds.includes(word.id)
 															? "bg-accent"
 															: "",
@@ -997,7 +1014,7 @@ export function TranscriptView() {
 														.join(" ")}
 													style={
 														currentWordId === word.id
-															? { backgroundColor: "#c71e3a" }
+															? { backgroundColor: "#0f766e" }
 															: undefined
 													}
 												>

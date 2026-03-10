@@ -57,8 +57,7 @@ import { DragLine } from "./drag-line";
 import { invokeAction } from "@/lib/actions";
 import { ListChecks } from "lucide-react";
 import {
-	buildTimelineVisualModel,
-	mapRealTimeToVisualTime,
+	type TimelineVisualModel,
 	mapVisualTimeToRealTime,
 } from "@/lib/transcript-editor/visual-timeline";
 
@@ -101,14 +100,15 @@ export function Timeline() {
 	);
 
 	const timelineDuration = timeline.getTotalDuration() || 0;
-	const visualTimeline = useMemo(
-		() => buildTimelineVisualModel({ tracks, duration: timelineDuration }),
-		[tracks, timelineDuration],
+	const visualTimeline = useMemo<TimelineVisualModel>(
+		() => ({
+			cuts: [],
+			totalRemovedDuration: 0,
+			totalVisualDuration: timelineDuration,
+		}),
+		[timelineDuration],
 	);
-	const visualPlayheadTime = mapRealTimeToVisualTime({
-		time: editor.playback.getCurrentTime(),
-		model: visualTimeline,
-	});
+	const visualPlayheadTime = editor.playback.getCurrentTime();
 	const minZoomLevel = getTimelineZoomMin({
 		duration: visualTimeline.totalVisualDuration,
 		containerWidth: tracksContainerRef.current?.clientWidth,
@@ -473,9 +473,7 @@ export function Timeline() {
 										zoomLevel={zoomLevel}
 										dynamicTimelineWidth={dynamicTimelineWidth}
 										displayDuration={visualTimeline.totalVisualDuration}
-										mapRealTimeToVisualTime={(time) =>
-											mapRealTimeToVisualTime({ time, model: visualTimeline })
-										}
+										mapRealTimeToVisualTime={(time) => time}
 										mapVisualTimeToRealTime={(time) =>
 											mapVisualTimeToRealTime({ time, model: visualTimeline })
 										}

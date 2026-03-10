@@ -1,11 +1,9 @@
-import type { EditorCore } from "@/core";
-import type { Command } from "@/lib/commands/base-command";
 import { BatchCommand } from "@/lib/commands";
-import { AddMediaAssetCommand } from "@/lib/commands/media";
 import { AddTrackCommand, InsertElementCommand } from "@/lib/commands/timeline";
-import { processMediaAssets } from "@/lib/media/processing";
-import { buildElementFromMedia } from "@/lib/timeline/element-utils";
-import { autoLinkTranscriptAndCaptionsForMediaElement } from "@/lib/media/transcript-import";
+import type { EditorCore } from "@/core";
+import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
+import type { Command } from "@/lib/commands/base-command";
+import { buildLibraryAudioElement } from "@/lib/timeline/element-utils";
 
 export type LocalMusicSourceFile = {
 	name: string;
@@ -27,35 +25,98 @@ type LocalMusicInsertTarget =
 			isNewTrack: boolean;
 	  };
 
-async function fetchLocalMusicFile({
+function buildLocalMusicSourceUrl({
 	root,
 	file,
 }: {
 	root: string;
 	file: LocalMusicSourceFile;
-}): Promise<File> {
+}): string {
 	const search = new URLSearchParams({
 		path: file.relativePath,
 		root,
 	});
-	const response = await fetch(`/api/music/local/source?${search.toString()}`, {
-		cache: "no-store",
-	});
+	return `/api/music/local/source?${search.toString()}`;
+}
 
+async function resolveLocalMusicDuration({
+	sourceUrl,
+}: {
+	sourceUrl: string;
+}): Promise<number> {
+	return await new Promise<number>((resolve, reject) => {
+		const audio = new Audio();
+		const cleanup = () => {
+			audio.removeAttribute("src");
+			audio.load();
+			audio.remove();
+		};
+
+		audio.preload = "metadata";
+		audio.addEventListener("loadedmetadata", () => {
+			const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+			cleanup();
+			resolve(duration);
+		});
+		audio.addEventListener("error", () => {
+			cleanup();
+			reject(new Error("Could not load local music metadata"));
+		});
+		audio.src = sourceUrl;
+		audio.load();
+	});
+}
+
+async function fetchLocalMusicFile({
+	sourceUrl,
+	file,
+}: {
+	sourceUrl: string;
+	file: LocalMusicSourceFile;
+}): Promise<File> {
+	const response = await fetch(sourceUrl, { cache: "no-store" });
 	if (!response.ok) {
-		const payload = (await response.json().catch(() => null)) as {
-			error?: string;
-		} | null;
-		throw new Error(payload?.error || `Failed to load ${file.name}`);
+		throw new Error(`Failed to load ${file.name}`);
 	}
 
 	const blob = await response.blob();
-	const contentType =
-		response.headers.get("content-type") || `audio/${file.extension}`;
-
 	return new File([blob], file.name, {
-		type: contentType,
+		type: blob.type || `audio/${file.extension}`,
 		lastModified: file.modifiedAt ? Date.parse(file.modifiedAt) : Date.now(),
+	});
+}
+
+async function resolveDurationFromFile({
+	file,
+}: {
+	file: File;
+}): Promise<number> {
+	return await new Promise<number>((resolve, reject) => {
+		const audio = new Audio();
+		const objectUrl = URL.createObjectURL(file);
+		const cleanup = () => {
+			URL.revokeObjectURL(objectUrl);
+			audio.removeAttribute("src");
+			audio.load();
+			audio.remove();
+		};
+
+		audio.preload = "metadata";
+		audio.addEventListener("loadedmetadata", () => {
+			const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+			cleanup();
+			if (duration > 0) {
+				resolve(duration);
+				return;
+			}
+			reject(new Error("Could not resolve local music duration"));
+		});
+		audio.addEventListener("error", () => {
+			cleanup();
+			reject(new Error("Could not load local music file"));
+		});
+		audio.src = objectUrl;
+		audio.load();
 	});
 }
 
@@ -69,28 +130,22 @@ export async function importLocalMusicToTimeline({
 	root: string;
 	file: LocalMusicSourceFile;
 	target: LocalMusicInsertTarget;
-}): Promise<{ assetId: string; elementId: string; trackId: string | null }> {
+}): Promise<{ elementId: string; trackId: string | null }> {
 	const activeProject = editor.project.getActive();
 	if (!activeProject) {
 		throw new Error("No active project");
 	}
 
-	const sourceFile = await fetchLocalMusicFile({ root, file });
-	const processedAssets = await processMediaAssets({ files: [sourceFile] });
-	const asset = processedAssets[0];
+	const sourceUrl = buildLocalMusicSourceUrl({ root, file });
+	let duration: number = TIMELINE_CONSTANTS.DEFAULT_ELEMENT_DURATION;
+	try {
+		const resolvedDuration = await resolveLocalMusicDuration({ sourceUrl });
+		if (resolvedDuration > 0) {
+			duration = resolvedDuration;
+		}
+	} catch {}
 
-	if (!asset || asset.type !== "audio") {
-		throw new Error(`Failed to import ${file.name}`);
-	}
-
-	const addMediaCmd = new AddMediaAssetCommand(
-		activeProject.metadata.id,
-		asset,
-	);
-	const assetId = addMediaCmd.getAssetId();
-	addMediaCmd.setAsset({ asset });
-
-	const commands: Command[] = [addMediaCmd];
+	const commands: Command[] = [];
 	let trackId: string | undefined;
 
 	if (target.mode === "explicit") {
@@ -103,11 +158,10 @@ export async function importLocalMusicToTimeline({
 		}
 	}
 
-	const element = buildElementFromMedia({
-		mediaId: assetId,
-		mediaType: "audio",
-		name: asset.name,
-		duration: asset.duration ?? 0,
+	const element = buildLibraryAudioElement({
+		sourceUrl,
+		name: file.name,
+		duration,
 		startTime: target.startTime,
 	});
 
@@ -124,17 +178,38 @@ export async function importLocalMusicToTimeline({
 
 	const insertedTrackId =
 		(target.mode === "auto" ? insertCmd.getTrackId() : trackId) ?? null;
-	if (insertedTrackId) {
-		void autoLinkTranscriptAndCaptionsForMediaElement({
-			editor,
-			trackId: insertedTrackId,
-			elementId: insertCmd.getElementId(),
-		});
+	const elementId = insertCmd.getElementId();
+
+	if (
+		insertedTrackId &&
+		(!Number.isFinite(duration) ||
+			duration <= 0 ||
+			duration === TIMELINE_CONSTANTS.DEFAULT_ELEMENT_DURATION)
+	) {
+		void (async () => {
+			try {
+				const sourceFile = await fetchLocalMusicFile({ sourceUrl, file });
+				const resolvedDuration = await resolveDurationFromFile({
+					file: sourceFile,
+				});
+				if (
+					!Number.isFinite(resolvedDuration) ||
+					resolvedDuration <= 0 ||
+					Math.abs(resolvedDuration - duration) < 0.01
+				) {
+					return;
+				}
+				editor.timeline.updateElementDuration({
+					trackId: insertedTrackId,
+					elementId,
+					duration: resolvedDuration,
+				});
+			} catch {}
+		})();
 	}
 
 	return {
-		assetId,
-		elementId: insertCmd.getElementId(),
+		elementId,
 		trackId: insertedTrackId,
 	};
 }

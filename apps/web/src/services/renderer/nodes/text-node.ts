@@ -331,11 +331,14 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		const karaokeHighlightMode =
 			this.params.captionStyle?.karaokeHighlightMode ?? "block";
 		const captionWordTimings = this.getTimelineCaptionTimings();
-		if (captionWordTimings.length > 0) {
+		const visibleCaptionWordTimings = captionWordTimings.filter(
+			(timing) => !timing.hidden,
+		);
+		if (visibleCaptionWordTimings.length > 0) {
 			const firstWordStart =
-				captionWordTimings[0]?.startTime ?? this.params.startTime;
+				visibleCaptionWordTimings[0]?.startTime ?? this.params.startTime;
 			const lastWordEnd =
-				captionWordTimings[captionWordTimings.length - 1]?.endTime ??
+				visibleCaptionWordTimings[visibleCaptionWordTimings.length - 1]?.endTime ??
 				this.params.startTime + this.params.duration;
 			const hasActiveWordWindow = time >= firstWordStart && time < lastWordEnd;
 			if (!hasActiveWordWindow) {
@@ -344,19 +347,19 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			}
 		}
 		const latestStartedWordIndex = resolveLatestStartedWordIndex({
-			captionWordTimings,
+			captionWordTimings: visibleCaptionWordTimings,
 			time,
 		});
 		const strictActiveWordIndex = resolveActiveWordIndex({
-			captionWordTimings,
+			captionWordTimings: visibleCaptionWordTimings,
 			time,
 		});
 		const strictActiveWordIndices = resolveActiveWordIndices({
-			captionWordTimings,
+			captionWordTimings: visibleCaptionWordTimings,
 			time,
 		});
 		const nextWordIndex = resolveNextWordIndex({
-			captionWordTimings,
+			captionWordTimings: visibleCaptionWordTimings,
 			time,
 		});
 		const totalWords = this.params.content.match(/\S+/g)?.length ?? 0;
@@ -366,11 +369,13 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		);
 		const fallbackWordIndex =
 			totalWords > 0 ? Math.floor(clampedProgress * totalWords) : -1;
-		const hasWordTimings = captionWordTimings.length > 0;
+		const hasWordTimings = visibleCaptionWordTimings.length > 0;
 		const activeWordIndex = hasWordTimings
 			? strictActiveWordIndex
 			: fallbackWordIndex;
-		const captionWords = this.getTimelineCaptionWords();
+		const captionWords = this.getTimelineCaptionWords().filter(
+			(token) => !token.hidden,
+		);
 		const wordsOnScreenRaw = this.params.captionStyle?.wordsOnScreen;
 		const wordsOnScreen =
 			typeof wordsOnScreenRaw === "number"
@@ -761,9 +766,9 @@ export class TextNode extends BaseNode<TextNodeParams> {
 					if (
 						hasWordTimings &&
 						absoluteWordIndex >= 0 &&
-						absoluteWordIndex < captionWordTimings.length
+						absoluteWordIndex < visibleCaptionWordTimings.length
 					) {
-						const activeTiming = captionWordTimings[absoluteWordIndex];
+						const activeTiming = visibleCaptionWordTimings[absoluteWordIndex];
 						const fadeInProgress = Math.max(
 							0,
 							Math.min(1, (time - activeTiming.startTime) / 0.08),
@@ -774,7 +779,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 						this.params.captionStyle?.karaokeHighlightEaseInOnly === true &&
 						hasWordTimings &&
 						absoluteWordIndex >= 0 &&
-						absoluteWordIndex < captionWordTimings.length
+						absoluteWordIndex < visibleCaptionWordTimings.length
 					) {
 						easeInOutFactor = motionFactor;
 					}

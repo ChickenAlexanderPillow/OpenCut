@@ -37,6 +37,61 @@ function isEditableMediaElement(
 	return candidate.type === "video" || candidate.type === "audio";
 }
 
+function getEditableMediaSourceId(
+	element: VideoElement | AudioElement,
+): string | null {
+	if (element.type === "video") return element.mediaId;
+	if (element.sourceType === "upload") return element.mediaId;
+	return null;
+}
+
+function isAlignedTranscriptCompanion({
+	target,
+	candidate,
+}: {
+	target: VideoElement | AudioElement;
+	candidate: VideoElement | AudioElement;
+}): boolean {
+	const startAligned = Math.abs(candidate.startTime - target.startTime) < 0.02;
+	const trimAligned = Math.abs(candidate.trimStart - target.trimStart) < 0.05;
+	const endAligned =
+		Math.abs(
+			candidate.trimStart + candidate.duration - (target.trimStart + target.duration),
+		) < 0.05;
+	if (startAligned && trimAligned && endAligned) return true;
+
+	const targetTimelineEnd = target.startTime + target.duration;
+	const candidateTimelineEnd = candidate.startTime + candidate.duration;
+	const targetSourceEnd = target.trimStart + target.duration;
+	const candidateSourceEnd = candidate.trimStart + candidate.duration;
+	const timelineOverlap =
+		targetTimelineEnd > candidate.startTime - 0.05 &&
+		candidateTimelineEnd > target.startTime - 0.05;
+	const sourceOverlap =
+		targetSourceEnd > candidate.trimStart - 0.05 &&
+		candidateSourceEnd > target.trimStart - 0.05;
+	return timelineOverlap && sourceOverlap;
+}
+
+function resolveTranscriptCompanionForCaptionSource({
+	sourceMedia,
+	candidates,
+}: {
+	sourceMedia: VideoElement | AudioElement;
+	candidates: Array<VideoElement | AudioElement>;
+}): VideoElement | AudioElement | null {
+	const targetSourceId = getEditableMediaSourceId(sourceMedia);
+	if (!targetSourceId) return null;
+	for (const candidate of candidates) {
+		if (candidate.id === sourceMedia.id) continue;
+		if (getEditableMediaSourceId(candidate) !== targetSourceId) continue;
+		if ((getTranscriptDraft(candidate)?.words.length ?? 0) === 0) continue;
+		if (!isAlignedTranscriptCompanion({ target: sourceMedia, candidate })) continue;
+		return candidate;
+	}
+	return null;
+}
+
 function resolveCaptionSourceMediaHeuristically({
 	element,
 	candidates,
@@ -244,12 +299,17 @@ export function buildScene(params: BuildSceneParams) {
 				const sourceMediaFromRef = sourceMediaId
 					? mediaElementById.get(sourceMediaId)
 					: null;
+				const sourceMediaFromRefOrCompanion =
+					sourceMediaFromRef && isEditableMediaElement(sourceMediaFromRef)
+						? (getTranscriptDraft(sourceMediaFromRef)?.words.length ?? 0) > 0
+							? sourceMediaFromRef
+							: resolveTranscriptCompanionForCaptionSource({
+									sourceMedia: sourceMediaFromRef,
+									candidates: transcriptMediaCandidates,
+							  })
+						: null;
 				const sourceMedia =
-					(sourceMediaFromRef &&
-					isEditableMediaElement(sourceMediaFromRef) &&
-					(getTranscriptDraft(sourceMediaFromRef)?.words.length ?? 0) > 0
-						? sourceMediaFromRef
-						: null) ??
+					sourceMediaFromRefOrCompanion ??
 					// Heuristic source resolution is only for legacy/unbound caption elements.
 					// If a caption has an explicit source ref that no longer exists, treat it as stale.
 					(!sourceMediaId

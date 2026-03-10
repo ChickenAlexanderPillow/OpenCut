@@ -1,7 +1,7 @@
 import type { EditorCore } from "@/core";
 import { createAudioContext } from "@/lib/media/audio";
 import { StreamingTimelineAudioEngine } from "@/lib/media/streaming-audio-engine";
-import { getTranscriptRevisionKey } from "@/lib/transcript-editor/state";
+import { getTranscriptAudioRevisionKey } from "@/lib/transcript-editor/state";
 
 const AUDIO_MANAGER_GLOBAL_KEY = "__opencut_audio_manager_singleton__";
 
@@ -217,6 +217,10 @@ export class AudioManager {
 			return;
 		}
 		this.lastAudioFingerprint = nextFingerprint;
+		// Invalidate any in-flight graph prepares or playback restarts against an older
+		// timeline state before scheduling the next rebuild.
+		this.prepareGraphSequence += 1;
+		this.playbackRequestId += 1;
 		this.setAudioGraphDirty({
 			dirty: true,
 			reason: "timeline-or-media-change",
@@ -558,27 +562,35 @@ export class AudioManager {
 			phase: "queued",
 			reason: "rebuild-queued",
 		});
-		this.rebuildDebounceTimer = window.setTimeout(() => {
-			this.rebuildDebounceTimer = null;
-			this.pendingGraphRebuild = false;
-			this.emitAudioGraphState({
-				phase: "rebuilding",
-				reason: "rebuild-start",
-			});
-			const playhead = this.editor.playback.getCurrentTime();
-			if (this.editor.playback.getIsPlaying() && !this.editor.playback.getIsScrubbing()) {
-				// During active playback, rebuild+restart transport so no stale nodes remain.
-				void this.startPlayback({
-					time: playhead,
-					stopCurrentOutputFirst: true,
+		this.rebuildDebounceTimer = window.setTimeout(
+			() => {
+				this.rebuildDebounceTimer = null;
+				this.pendingGraphRebuild = false;
+				this.emitAudioGraphState({
+					phase: "rebuilding",
+					reason: "rebuild-start",
 				});
-				return;
-			}
-			void this.prepareStreamingGraph({
-				playhead,
-				prewarm: !this.editor.playback.getIsPlaying() && !this.editor.playback.getIsScrubbing(),
-			});
-		}, Math.max(0, Math.floor(delayMs)));
+				const playhead = this.editor.playback.getCurrentTime();
+				if (
+					this.editor.playback.getIsPlaying() &&
+					!this.editor.playback.getIsScrubbing()
+				) {
+					// During active playback, rebuild+restart transport so no stale nodes remain.
+					void this.startPlayback({
+						time: playhead,
+						stopCurrentOutputFirst: true,
+					});
+					return;
+				}
+				void this.prepareStreamingGraph({
+					playhead,
+					prewarm:
+						!this.editor.playback.getIsPlaying() &&
+						!this.editor.playback.getIsScrubbing(),
+				});
+			},
+			Math.max(0, Math.floor(delayMs)),
+		);
 	}
 
 	private setAudioGraphDirty({
@@ -711,7 +723,7 @@ export class AudioManager {
 					updateHash(element.muted ? "1" : "0");
 					updateHash(
 						buildTranscriptAudioRevision({
-							transcriptRevisionKey: getTranscriptRevisionKey(element),
+							transcriptRevisionKey: getTranscriptAudioRevisionKey(element),
 						}),
 					);
 					continue;
@@ -728,7 +740,7 @@ export class AudioManager {
 					updateHash(element.muted ? "1" : "0");
 					updateHash(
 						buildTranscriptAudioRevision({
-							transcriptRevisionKey: getTranscriptRevisionKey(element),
+							transcriptRevisionKey: getTranscriptAudioRevisionKey(element),
 						}),
 					);
 				}

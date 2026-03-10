@@ -59,8 +59,17 @@ export function getTranscriptCompileState(
 export function getTranscriptApplied(
 	element: TranscriptEditableElement,
 ): TranscriptAppliedState | undefined {
-	if (element.transcriptApplied) return element.transcriptApplied;
 	const draft = getTranscriptDraft(element);
+	const applied = element.transcriptApplied;
+	if (
+		applied &&
+		draft &&
+		applied.updatedAt === draft.updatedAt &&
+		applied.version === draft.version
+	) {
+		return applied;
+	}
+	if (applied && !draft) return applied;
 	if (!draft || draft.words.length === 0) return undefined;
 	return compileTranscriptDraft({
 		mediaElementId: element.id,
@@ -80,6 +89,18 @@ export function getTranscriptRevisionKey(
 	element: TranscriptEditableElement,
 ): string {
 	return getTranscriptApplied(element)?.revisionKey ?? "";
+}
+
+export function getTranscriptAudioRevisionKey(
+	element: TranscriptEditableElement,
+): string {
+	const applied = getTranscriptApplied(element);
+	if (!applied) return "";
+	const parts = [String(applied.version), String(applied.removedRanges.length)];
+	for (const cut of applied.removedRanges) {
+		parts.push(cut.start.toFixed(4), cut.end.toFixed(4), cut.reason);
+	}
+	return parts.join("|");
 }
 
 function buildKeptSegments({

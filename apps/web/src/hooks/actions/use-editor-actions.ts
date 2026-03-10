@@ -86,6 +86,7 @@ import {
 	mergeCutRanges,
 	normalizeTranscriptWords,
 } from "@/lib/transcript-editor/core";
+import { buildTranscriptWordsFromCaptionTimings } from "@/lib/transcript-editor/caption-fallback";
 import { DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import { clearTranscriptTimelineSnapshotCache } from "@/lib/transcript-editor/snapshot";
 import {
@@ -819,15 +820,10 @@ function initializeTranscriptEditFromExistingCaption({
 	if (!sourceCaption || (sourceCaption.captionWordTimings?.length ?? 0) === 0) {
 		return null;
 	}
-	const words = normalizeTranscriptWords({
-		words: (sourceCaption.captionWordTimings ?? []).map((timing, index) => ({
-			id: `${mediaElementId}:word:${index}:${timing.startTime.toFixed(3)}`,
-			text: timing.word,
-			// Caption timings are timeline absolute; transcript edit words are clip-local.
-			startTime: Math.max(0, timing.startTime - sourceMediaElement.startTime),
-			endTime: Math.max(0.01, timing.endTime - sourceMediaElement.startTime),
-			removed: false,
-		})),
+	const words = buildTranscriptWordsFromCaptionTimings({
+		mediaElementId,
+		mediaStartTime: sourceMediaElement.startTime,
+		timings: sourceCaption.captionWordTimings ?? [],
 	});
 	const cuts = buildTranscriptCutsFromWords({ words });
 	return {
@@ -983,6 +979,8 @@ type CompactTranscriptPatch = {
 	elementId: string;
 	beforeDuration: number;
 	afterDuration: number;
+	beforeTrimEnd: number;
+	afterTrimEnd: number;
 	beforeUpdatedAt: string;
 	afterUpdatedAt: string;
 	beforeSegmentsUi?: Array<{
@@ -1081,6 +1079,8 @@ function buildCompactTranscriptPatch({
 		elementId,
 		beforeDuration: beforeElement.duration,
 		afterDuration: afterElement.duration,
+		beforeTrimEnd: beforeElement.trimEnd,
+		afterTrimEnd: afterElement.trimEnd,
 		beforeUpdatedAt: beforeDraft.updatedAt,
 		afterUpdatedAt: afterEdit.updatedAt,
 		beforeSegmentsUi:
@@ -1189,6 +1189,10 @@ class CompactTranscriptMutationCommand extends Command {
 							direction === "before"
 								? patch.beforeDuration
 								: patch.afterDuration,
+						trimEnd:
+							direction === "before"
+								? patch.beforeTrimEnd
+								: patch.afterTrimEnd,
 					},
 					draft: nextDraft,
 					applied: compileTranscriptDraft({
@@ -1241,6 +1245,41 @@ class CompactTranscriptMutationCommand extends Command {
 	}
 }
 
+function resolveTranscriptProjectedTiming({
+	element,
+	nextDraft,
+}: {
+	element: VideoElement | AudioElement;
+	nextDraft: NonNullable<VideoElement["transcriptDraft"]>;
+}): {
+	duration: number;
+	trimEnd: number;
+	applied: ReturnType<typeof compileTranscriptDraft>;
+} {
+	const currentApplied = getTranscriptApplied(element);
+	const currentSourceDuration =
+		currentApplied?.timeMap.sourceDuration ?? element.duration;
+	const baseTrimEnd = Math.max(
+		0,
+		element.trimEnd - Math.max(0, currentSourceDuration - element.duration),
+	);
+	const applied = compileTranscriptDraft({
+		mediaElementId: element.id,
+		draft: nextDraft,
+		mediaStartTime: element.startTime,
+		mediaDuration: currentSourceDuration,
+	});
+	const removedDuration = Math.max(
+		0,
+		applied.timeMap.sourceDuration - applied.timeMap.playableDuration,
+	);
+	return {
+		duration: applied.timeMap.playableDuration,
+		trimEnd: baseTrimEnd + removedDuration,
+		applied,
+	};
+}
+
 function scheduleTranscriptDraftCompile({
 	editor,
 	mediaElementIds,
@@ -1267,11 +1306,9 @@ function scheduleTranscriptDraftCompile({
 					if (element.id !== mediaElementId) continue;
 					const draft = getTranscriptDraft(element);
 					if (!draft || draft.words.length === 0) continue;
-					const applied = compileTranscriptDraft({
-						mediaElementId,
-						draft,
-						mediaStartTime: element.startTime,
-						mediaDuration: element.duration,
+					const projected = resolveTranscriptProjectedTiming({
+						element,
+						nextDraft: draft,
 					});
 					nextTracks = nextTracks.map((candidateTrack) => {
 						if (candidateTrack.id !== track.id) return candidateTrack;
@@ -1282,9 +1319,13 @@ function scheduleTranscriptDraftCompile({
 									candidateElement.id === mediaElementId &&
 									isTranscriptEditableMediaElement(candidateElement)
 										? withTranscriptState({
-												element: candidateElement,
+												element: {
+													...candidateElement,
+													duration: projected.duration,
+													trimEnd: projected.trimEnd,
+												},
 												draft,
-												applied,
+												applied: projected.applied,
 												compileState: {
 													status: "idle",
 													updatedAt: draft.updatedAt,
@@ -1301,9 +1342,13 @@ function scheduleTranscriptDraftCompile({
 									candidateElement.id === mediaElementId &&
 									isTranscriptEditableMediaElement(candidateElement)
 										? withTranscriptState({
-												element: candidateElement,
+												element: {
+													...candidateElement,
+													duration: projected.duration,
+													trimEnd: projected.trimEnd,
+												},
 												draft,
-												applied,
+												applied: projected.applied,
 												compileState: {
 													status: "idle",
 													updatedAt: draft.updatedAt,
@@ -1462,20 +1507,25 @@ function applyTranscriptEditMutation({
 			const nextElements = track.elements.map((element) =>
 				relatedElementIds.has(element.id) &&
 				isTranscriptEditableMediaElement(element)
-					? withTranscriptState({
-							element,
-							draft: nextDraft,
-							applied: compileTranscriptDraft({
-								mediaElementId: element.id,
+					? (() => {
+							const projected = resolveTranscriptProjectedTiming({
+								element,
+								nextDraft,
+							});
+							return withTranscriptState({
+								element: {
+									...element,
+									duration: projected.duration,
+									trimEnd: projected.trimEnd,
+								},
 								draft: nextDraft,
-								mediaStartTime: element.startTime,
-								mediaDuration: element.duration,
-							}),
-							compileState: {
-								status: "compiling",
-								updatedAt: nextDraft.updatedAt,
-							},
-						})
+								applied: projected.applied,
+								compileState: {
+									status: "compiling",
+									updatedAt: nextDraft.updatedAt,
+								},
+							});
+						})()
 					: element,
 			);
 			return { ...track, elements: nextElements } as TimelineTrack;
@@ -1484,26 +1534,41 @@ function applyTranscriptEditMutation({
 			const nextElements = track.elements.map((element) =>
 				relatedElementIds.has(element.id) &&
 				isTranscriptEditableMediaElement(element)
-					? withTranscriptState({
-							element,
-							draft: nextDraft,
-							applied: compileTranscriptDraft({
-								mediaElementId: element.id,
+					? (() => {
+							const projected = resolveTranscriptProjectedTiming({
+								element,
+								nextDraft,
+							});
+							return withTranscriptState({
+								element: {
+									...element,
+									duration: projected.duration,
+									trimEnd: projected.trimEnd,
+								},
 								draft: nextDraft,
-								mediaStartTime: element.startTime,
-								mediaDuration: element.duration,
-							}),
-							compileState: {
-								status: "compiling",
-								updatedAt: nextDraft.updatedAt,
-							},
-						})
+								applied: projected.applied,
+								compileState: {
+									status: "compiling",
+									updatedAt: nextDraft.updatedAt,
+								},
+							});
+						})()
 					: element,
 			);
 			return { ...track, elements: nextElements } as TimelineTrack;
 		}
 		return track;
 	});
+	let syncedTracks = updatedTracks;
+	for (const mediaElementId of relatedElementIds) {
+		const syncResult = syncCaptionsFromTranscriptEdits({
+			tracks: syncedTracks,
+			mediaElementId,
+		});
+		if (syncResult.changed) {
+			syncedTracks = syncResult.tracks;
+		}
+	}
 
 	if (editor.playback.getIsPlaying() || editor.playback.getIsScrubbing()) {
 		editor.playback.pause();
@@ -1513,12 +1578,13 @@ function applyTranscriptEditMutation({
 	});
 
 	editor.command.execute({
-		command: new TracksSnapshotCommand(tracks, updatedTracks),
+		command: new TracksSnapshotCommand(tracks, syncedTracks),
 	});
 	scheduleTranscriptDraftCompile({
 		editor,
 		mediaElementIds: Array.from(relatedElementIds),
 	});
+	clearTranscriptTimelineSnapshotCache();
 	editor.save.markDirty();
 
 	return { changed: true };

@@ -146,6 +146,74 @@ describe("scene builder live caption source resolution", () => {
 		expect(textNode?.params?.content).toBe("alpha");
 	});
 
+	test("uses aligned companion transcript when explicit source media has been deduped", () => {
+		const source: AudioElement = {
+			...createAudioElement({
+				id: "audio-1",
+				startTime: 10,
+				duration: 2,
+				words: [{ id: "shared:word:0", text: "stale", startTime: 0, endTime: 0.4 }],
+			}),
+			mediaId: "shared-media",
+			transcriptDraft: undefined,
+			transcriptApplied: undefined,
+			transcriptEdit: undefined,
+		};
+		const companion: AudioElement = {
+			...createAudioElement({
+				id: "audio-2",
+				startTime: 10,
+				duration: 2,
+				words: [
+					{ id: "shared:word:0", text: "hello", startTime: 0, endTime: 0.4 },
+					{
+						id: "shared:word:1",
+						text: "world",
+						startTime: 0.45,
+						endTime: 0.8,
+						hidden: true,
+					},
+				],
+			}),
+			mediaId: "shared-media",
+		};
+		const caption = createCaption({ sourceMediaElementId: source.id });
+
+		const scene = buildScene({
+			tracks: [
+				{
+					id: "audio-track",
+					type: "audio",
+					name: "Audio",
+					muted: false,
+					elements: [source, companion],
+				},
+				{
+					id: "text-track",
+					type: "text",
+					name: "Captions",
+					hidden: false,
+					elements: [caption],
+				},
+			],
+			mediaAssets: [],
+			duration: 20,
+			canvasSize: { width: 1280, height: 720 },
+			background: { type: "color", color: "#000000" },
+		});
+
+		const textNode = scene.children.find(
+			(node) => node.constructor.name === "TextNode",
+		) as
+			| {
+					params?: {
+						content?: string;
+					};
+			  }
+			| undefined;
+		expect(textNode?.params?.content).toBe("hello");
+	});
+
 	test("does not heuristically relink caption when explicit source ref is missing", () => {
 		const transcriptCarrier = createAudioElement({
 			id: "audio-2",

@@ -353,11 +353,13 @@ export function buildTranscriptTimelineSnapshot({
 								word: timing.word,
 								startTime: mediaStartTime + timing.startTime,
 								endTime: mediaStartTime + timing.endTime,
+								hidden: timing.hidden,
 							}))
 				).map((timing) => ({
 					word: timing.word,
 					startTime: timing.startTime,
 					endTime: timing.endTime,
+					hidden: timing.hidden,
 				}));
 				if (!isTimelineAligned) {
 					timelineWordTimings = realignShiftedTimelineWordTimings({
@@ -377,6 +379,7 @@ export function buildTranscriptTimelineSnapshot({
 							mediaStartTime + 0.01,
 							Math.min(mediaStartTime + mediaDuration, timing.endTime),
 						),
+						hidden: timing.hidden,
 					}))
 					.filter((timing) => timing.endTime - timing.startTime > 0.001);
 				if (timelineWordTimings.length === 0) return null;

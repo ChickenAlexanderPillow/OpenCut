@@ -1189,4 +1189,85 @@ describe("sync captions from transcript edits", () => {
 		expect(textTrack.elements[0]?.content).toBe("hello world");
 		expect(textTrack.elements[0]?.captionWordTimings).toHaveLength(2);
 	});
+
+	test("hidden words are removed from caption text but keep caption timing continuity", () => {
+		const audio: AudioElement = {
+			...createAudioElement({
+				id: "audio-1",
+				startTime: 8,
+				duration: 3,
+				words: [
+					{ id: "w1", text: "hello", startTime: 0.0, endTime: 0.3, removed: false },
+					{
+						id: "w2",
+						text: "hidden",
+						startTime: 0.35,
+						endTime: 0.6,
+						removed: false,
+						hidden: true,
+					},
+					{ id: "w3", text: "world", startTime: 0.7, endTime: 1.0, removed: false },
+				],
+			}),
+			transcriptEdit: {
+				version: 1,
+				source: "word-level",
+				words: [
+					{ id: "w1", text: "hello", startTime: 0.0, endTime: 0.3, removed: false },
+					{
+						id: "w2",
+						text: "hidden",
+						startTime: 0.35,
+						endTime: 0.6,
+						removed: false,
+						hidden: true,
+					},
+					{ id: "w3", text: "world", startTime: 0.7, endTime: 1.0, removed: false },
+				],
+				cuts: [],
+				updatedAt: new Date().toISOString(),
+			},
+		};
+		const existingCaption = createCaption({
+			id: "caption-1",
+			sourceMediaElementId: "audio-1",
+			startTime: 8,
+			duration: 1.0,
+			content: "hello hidden world",
+			wordTimings: [
+				{ word: "hello", startTime: 8.0, endTime: 8.3 },
+				{ word: "hidden", startTime: 8.35, endTime: 8.6 },
+				{ word: "world", startTime: 8.7, endTime: 9.0 },
+			],
+		});
+		const tracks: TimelineTrack[] = [
+			{
+				id: "audio-track",
+				type: "audio",
+				name: "Audio",
+				muted: false,
+				elements: [audio],
+			},
+			{
+				id: "text-track",
+				type: "text",
+				name: "Captions",
+				hidden: false,
+				elements: [existingCaption],
+			},
+		];
+
+		const result = syncCaptionsFromTranscriptEdits({
+			tracks,
+			mediaElementId: "audio-1",
+		});
+		expect(result.changed).toBe(true);
+		const textTrack = result.tracks.find((track) => track.id === "text-track");
+		expect(textTrack?.type).toBe("text");
+		if (textTrack?.type !== "text") return;
+		expect(textTrack.elements).toHaveLength(1);
+		expect(textTrack.elements[0]?.content).toBe("hello world");
+		expect(textTrack.elements[0]?.captionWordTimings).toHaveLength(3);
+		expect(textTrack.elements[0]?.captionWordTimings?.[1]?.hidden).toBe(true);
+	});
 });

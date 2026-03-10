@@ -20,9 +20,9 @@ import {
 import { TRANSCRIPT_CUT_AUDIO_SMOOTHING_SECONDS } from "@/lib/transcript-editor/constants";
 import { getEffectiveTranscriptCutsForClipWindow } from "@/lib/transcript-editor/snapshot";
 import {
+	getTranscriptAudioRevisionKey,
 	getTranscriptApplied,
 	getTranscriptDraft,
-	getTranscriptRevisionKey,
 } from "@/lib/transcript-editor/state";
 
 const MAX_AUDIO_CHANNELS = 2;
@@ -882,7 +882,7 @@ async function fetchLibraryAudioClip({
 			muted,
 			gain,
 			transcriptRevision: buildTranscriptAudioRevision({
-				transcriptRevisionKey: getTranscriptRevisionKey(element),
+				transcriptRevisionKey: getTranscriptAudioRevisionKey(element),
 			}),
 			transcriptCuts: getAppliedTranscriptCuts(element),
 		};
@@ -946,7 +946,7 @@ function collectMediaAudioClip({
 		transcriptRevision:
 			"transcriptApplied" in stableElement || "transcriptEdit" in stableElement
 				? buildTranscriptAudioRevision({
-						transcriptRevisionKey: getTranscriptRevisionKey(
+						transcriptRevisionKey: getTranscriptAudioRevisionKey(
 							stableElement as AudioElement | VideoElement,
 						),
 					})
