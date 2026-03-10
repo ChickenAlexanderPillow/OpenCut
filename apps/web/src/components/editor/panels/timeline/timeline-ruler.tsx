@@ -18,6 +18,9 @@ import { cn } from "@/utils/ui";
 interface TimelineRulerProps {
 	zoomLevel: number;
 	dynamicTimelineWidth: number;
+	displayDuration: number;
+	mapRealTimeToVisualTime: (time: number) => number;
+	mapVisualTimeToRealTime: (time: number) => number;
 	rulerRef: React.RefObject<HTMLDivElement | null>;
 	tracksScrollRef: React.RefObject<HTMLElement | null>;
 	handleWheel: (e: React.WheelEvent) => void;
@@ -29,6 +32,9 @@ interface TimelineRulerProps {
 export function TimelineRuler({
 	zoomLevel,
 	dynamicTimelineWidth,
+	displayDuration,
+	mapRealTimeToVisualTime,
+	mapVisualTimeToRealTime,
 	rulerRef,
 	tracksScrollRef,
 	handleWheel,
@@ -40,22 +46,22 @@ export function TimelineRuler({
 	const duration = editor.timeline.getTotalDuration();
 	const pixelsPerSecond = TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
 	const visibleDuration = dynamicTimelineWidth / pixelsPerSecond;
-	const effectiveDuration = Math.max(duration, visibleDuration);
+	const effectiveDuration = Math.max(displayDuration, visibleDuration);
 	const timelineViewState = editor.project.getTimelineViewState();
 	const inPoint =
 		typeof timelineViewState.inPoint === "number"
-			? Math.max(0, Math.min(effectiveDuration, timelineViewState.inPoint))
+			? Math.max(0, Math.min(duration, timelineViewState.inPoint))
 			: null;
 	const outPoint =
 		typeof timelineViewState.outPoint === "number"
-			? Math.max(0, Math.min(effectiveDuration, timelineViewState.outPoint))
+			? Math.max(0, Math.min(duration, timelineViewState.outPoint))
 			: null;
 	const regionStart = inPoint ?? 0;
-	const regionEnd = outPoint ?? effectiveDuration;
+	const regionEnd = outPoint ?? duration;
 	const hasValidRange =
 		inPoint !== null && outPoint !== null && regionEnd > regionStart + 1e-6;
-	const startPx = regionStart * pixelsPerSecond;
-	const endPx = regionEnd * pixelsPerSecond;
+	const startPx = mapRealTimeToVisualTime(regionStart) * pixelsPerSecond;
+	const endPx = mapRealTimeToVisualTime(regionEnd) * pixelsPerSecond;
 	const project = editor.project.getActive();
 	const fps = project?.settings.fps ?? DEFAULT_FPS;
 	const { labelIntervalSeconds, tickIntervalSeconds } = getRulerConfig({
@@ -116,14 +122,15 @@ export function TimelineRuler({
 		tickIndex <= endTickIndex;
 		tickIndex += 1
 	) {
-		const time = tickIndex * tickIntervalSeconds;
-		if (time > effectiveDuration) break;
+		const visualTime = tickIndex * tickIntervalSeconds;
+		if (visualTime > effectiveDuration) break;
 
-		const showLabel = shouldShowLabel({ time, labelIntervalSeconds });
+		const showLabel = shouldShowLabel({ time: visualTime, labelIntervalSeconds });
 		timelineTicks.push(
 			<TimelineTick
 				key={tickIndex}
-				time={time}
+				time={visualTime}
+				labelTime={mapVisualTimeToRealTime(visualTime)}
 				zoomLevel={zoomLevel}
 				fps={fps}
 				showLabel={showLabel}
@@ -156,9 +163,10 @@ export function TimelineRuler({
 			const rect = rulerNode.getBoundingClientRect();
 			const relativeX = clientX - rect.left;
 			const clampedX = Math.max(0, Math.min(dynamicTimelineWidth, relativeX));
-			return clampedX / pixelsPerSecond;
+			const visualTime = clampedX / pixelsPerSecond;
+			return mapVisualTimeToRealTime(visualTime);
 		},
-		[rulerRef, dynamicTimelineWidth, pixelsPerSecond],
+		[rulerRef, dynamicTimelineWidth, pixelsPerSecond, mapVisualTimeToRealTime],
 	);
 
 	const handleMarkerMouseDown = ({

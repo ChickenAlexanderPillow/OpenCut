@@ -2,6 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
 import { getCumulativeHeightBefore, getTrackHeight } from "@/lib/timeline";
 import type { TimelineTrack } from "@/types/timeline";
+import type { TimelineVisualModel } from "@/lib/transcript-editor/visual-timeline";
+import {
+	mapRealTimeToVisualTime,
+	getVisualDurationForRealSpan,
+} from "@/lib/transcript-editor/visual-timeline";
 
 interface UseSelectionBoxProps {
 	containerRef: React.RefObject<HTMLElement | null>;
@@ -12,6 +17,7 @@ interface UseSelectionBoxProps {
 	isEnabled?: boolean;
 	tracksScrollRef: React.RefObject<HTMLDivElement | null>;
 	zoomLevel: number;
+	visualModel: TimelineVisualModel;
 }
 
 interface SelectionBoxState {
@@ -94,6 +100,7 @@ export function useSelectionBox({
 	isEnabled = true,
 	tracksScrollRef,
 	zoomLevel,
+	visualModel,
 }: UseSelectionBoxProps) {
 	const [selectionBox, setSelectionBox] = useState<SelectionBoxState | null>(
 		null,
@@ -147,8 +154,19 @@ export function useSelectionBox({
 				const elementBottom = trackTop + trackHeight;
 
 				for (const element of track.elements) {
-					const elementLeft = element.startTime * pixelsPerSecond;
-					const elementRight = elementLeft + element.duration * pixelsPerSecond;
+					const elementLeft =
+						mapRealTimeToVisualTime({
+							time: element.startTime,
+							model: visualModel,
+						}) * pixelsPerSecond;
+					const elementRight =
+						elementLeft +
+						getVisualDurationForRealSpan({
+							startTime: element.startTime,
+							duration: element.duration,
+							model: visualModel,
+						}) *
+							pixelsPerSecond;
 
 					const elementRectangle = {
 						left: elementLeft,
@@ -172,7 +190,14 @@ export function useSelectionBox({
 			}
 			onSelectionComplete(selectedElements);
 		},
-		[containerRef, onSelectionComplete, tracks, tracksScrollRef, zoomLevel],
+		[
+			containerRef,
+			onSelectionComplete,
+			tracks,
+			tracksScrollRef,
+			zoomLevel,
+			visualModel,
+		],
 	);
 
 	useEffect(() => {

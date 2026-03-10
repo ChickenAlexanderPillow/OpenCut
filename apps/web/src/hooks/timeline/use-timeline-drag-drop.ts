@@ -20,8 +20,10 @@ import { BatchCommand } from "@/lib/commands";
 import { computeDropTarget } from "@/lib/timeline/drop-utils";
 import { getDragData, hasDragData } from "@/lib/drag-data";
 import { invokeAction } from "@/lib/actions";
+import { importLocalMusicToTimeline } from "@/lib/music/import-local-music";
 import type { TrackType, DropTarget, ElementType } from "@/types/timeline";
 import type {
+	LocalMusicDragData,
 	MediaDragData,
 	StickerDragData,
 } from "@/types/drag";
@@ -77,6 +79,7 @@ export function useTimelineDragDrop({
 
 			if (dragData.type === "text") return "text";
 			if (dragData.type === "sticker") return "sticker";
+			if (dragData.type === "local-music") return "audio";
 			if (dragData.type === "media") {
 				return dragData.mediaType;
 			}
@@ -128,7 +131,9 @@ export function useTimelineDragDrop({
 
 			const dragData = getDragData({ dataTransfer: e.dataTransfer });
 			if (dragData?.type === "transition") {
-				const domTarget = (e.target as HTMLElement | null)?.closest<HTMLElement>(
+				const domTarget = (
+					e.target as HTMLElement | null
+				)?.closest<HTMLElement>(
 					"[data-timeline-element-id][data-timeline-track-id]",
 				);
 				if (domTarget) {
@@ -369,6 +374,38 @@ export function useTimelineDragDrop({
 		[editor.command, editor, mediaAssets, tracks],
 	);
 
+	const executeLocalMusicDrop = useCallback(
+		async ({
+			target,
+			dragData,
+		}: {
+			target: DropTarget;
+			dragData: LocalMusicDragData;
+		}) => {
+			const existingTrackId = target.isNewTrack
+				? undefined
+				: tracks[target.trackIndex]?.id;
+
+			await importLocalMusicToTimeline({
+				editor,
+				root: dragData.root,
+				file: {
+					name: dragData.name,
+					relativePath: dragData.relativePath,
+					extension: dragData.extension,
+				},
+				target: {
+					mode: "explicit",
+					startTime: target.xPosition,
+					trackId: existingTrackId,
+					trackIndex: target.trackIndex,
+					isNewTrack: target.isNewTrack,
+				},
+			});
+		},
+		[editor, tracks],
+	);
+
 	const executeFileDrop = useCallback(
 		async ({
 			files,
@@ -509,6 +546,9 @@ export function useTimelineDragDrop({
 					} else if (dragData.type === "sticker") {
 						if (!currentTarget) return;
 						executeStickerDrop({ target: currentTarget, dragData });
+					} else if (dragData.type === "local-music") {
+						if (!currentTarget) return;
+						await executeLocalMusicDrop({ target: currentTarget, dragData });
 					} else {
 						if (!currentTarget) return;
 						executeMediaDrop({ target: currentTarget, dragData });
@@ -535,6 +575,7 @@ export function useTimelineDragDrop({
 			dropTarget,
 			executeTextDrop,
 			executeStickerDrop,
+			executeLocalMusicDrop,
 			executeMediaDrop,
 			executeFileDrop,
 			transitionDropTarget,

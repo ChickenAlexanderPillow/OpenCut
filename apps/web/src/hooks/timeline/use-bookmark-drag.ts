@@ -34,6 +34,7 @@ interface UseBookmarkDragProps {
 	scrollRef: RefObject<HTMLElement | null>;
 	snappingEnabled: boolean;
 	onSnapPointChange?: (snapPoint: SnapPoint | null) => void;
+	mapVisualTimeToRealTime?: (time: number) => number;
 }
 
 const EDITOR_SUBSCRIBE_NONE = [] as const;
@@ -43,6 +44,7 @@ export function useBookmarkDrag({
 	scrollRef,
 	snappingEnabled,
 	onSnapPointChange,
+	mapVisualTimeToRealTime,
 }: UseBookmarkDragProps) {
 	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_NONE });
 	const isShiftHeldRef = useShiftKey();
@@ -146,6 +148,7 @@ export function useBookmarkDrag({
 					containerRect: scrollContainer.getBoundingClientRect(),
 					zoomLevel,
 					scrollLeft,
+					mapVisualTimeToRealTime,
 				});
 				const frameSnappedTime = snapTimeToFrame({
 					time: Math.max(0, Math.min(mouseTime, duration)),
@@ -176,6 +179,7 @@ export function useBookmarkDrag({
 				containerRect: scrollContainer.getBoundingClientRect(),
 				zoomLevel,
 				scrollLeft,
+				mapVisualTimeToRealTime,
 			});
 			const clampedTime = Math.max(0, Math.min(mouseTime, duration));
 			const frameSnappedTime = snapTimeToFrame({
@@ -207,6 +211,7 @@ export function useBookmarkDrag({
 		startDrag,
 		getSnapResult,
 		onSnapPointChange,
+		mapVisualTimeToRealTime,
 	]);
 
 	useEffect(() => {

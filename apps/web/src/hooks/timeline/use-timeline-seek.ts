@@ -11,9 +11,11 @@ interface UseTimelineSeekProps {
 	tracksScrollRef: RefObject<HTMLDivElement | null>;
 	zoomLevel: number;
 	duration: number;
+	displayDuration: number;
 	isSelecting: boolean;
 	clearSelectedElements: () => void;
 	seek: (time: number) => void;
+	mapVisualTimeToRealTime?: (time: number) => number;
 }
 
 function resetMouseTracking({
@@ -63,9 +65,11 @@ export function useTimelineSeek({
 	tracksScrollRef,
 	zoomLevel,
 	duration,
+	displayDuration,
 	isSelecting,
 	clearSelectedElements,
 	seek,
+	mapVisualTimeToRealTime,
 }: UseTimelineSeekProps) {
 	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_NONE });
 
@@ -128,14 +132,17 @@ export function useTimelineSeek({
 			const mouseX = event.clientX - rect.left;
 			const scrollLeft = scrollContainer.scrollLeft;
 
-			const rawTime = Math.max(
+			const rawVisualTime = Math.max(
 				0,
 				Math.min(
-					duration,
+					displayDuration,
 					(mouseX + scrollLeft) /
 						(TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel),
 				),
 			);
+			const rawTime = mapVisualTimeToRealTime
+				? mapVisualTimeToRealTime(rawVisualTime)
+				: rawVisualTime;
 
 			const projectFps = editor.project.getActiveOrNull()?.settings.fps ?? 30;
 			const time = getSnappedSeekTime({

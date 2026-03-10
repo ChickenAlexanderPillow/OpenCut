@@ -2,6 +2,7 @@ type CaptionWordTiming = {
 	word: string;
 	startTime: number;
 	endTime: number;
+	hidden?: boolean;
 };
 
 const RELATIVE_TOLERANCE_SECONDS = 0.25;
@@ -19,7 +20,10 @@ export function isCaptionTimingRelativeToElement({
 	const minAllowedStart = -RELATIVE_TOLERANCE_SECONDS;
 	let validCount = 0;
 	for (const timing of timings) {
-		if (!Number.isFinite(timing.startTime) || !Number.isFinite(timing.endTime)) {
+		if (
+			!Number.isFinite(timing.startTime) ||
+			!Number.isFinite(timing.endTime)
+		) {
 			continue;
 		}
 		if (timing.endTime <= timing.startTime) continue;

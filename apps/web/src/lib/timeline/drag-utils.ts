@@ -5,15 +5,18 @@ export function getMouseTimeFromClientX({
 	containerRect,
 	zoomLevel,
 	scrollLeft,
+	mapVisualTimeToRealTime,
 }: {
 	clientX: number;
 	containerRect: DOMRect;
 	zoomLevel: number;
 	scrollLeft: number;
+	mapVisualTimeToRealTime?: (time: number) => number;
 }): number {
 	const mouseX = clientX - containerRect.left + scrollLeft;
-	return Math.max(
+	const visualTime = Math.max(
 		0,
 		mouseX / (TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel),
 	);
+	return mapVisualTimeToRealTime ? mapVisualTimeToRealTime(visualTime) : visualTime;
 }

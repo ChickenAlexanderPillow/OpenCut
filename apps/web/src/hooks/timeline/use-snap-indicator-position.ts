@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
 import type { TimelineTrack } from "@/types/timeline";
+import type { TimelineVisualModel } from "@/lib/transcript-editor/visual-timeline";
+import { mapRealTimeToVisualTime } from "@/lib/transcript-editor/visual-timeline";
 
 interface UseSnapIndicatorPositionParams {
 	snapPoint: { time: number } | null;
 	zoomLevel: number;
 	tracks: TimelineTrack[];
+	visualModel: TimelineVisualModel;
 	timelineRef: React.RefObject<HTMLDivElement | null>;
 	trackLabelsRef?: React.RefObject<HTMLDivElement | null>;
 	tracksScrollRef: React.RefObject<HTMLDivElement | null>;
@@ -21,6 +24,7 @@ export function useSnapIndicatorPosition({
 	snapPoint,
 	zoomLevel,
 	tracks,
+	visualModel,
 	timelineRef,
 	trackLabelsRef,
 	tracksScrollRef,
@@ -51,7 +55,12 @@ export function useSnapIndicatorPosition({
 			: 0;
 
 	const timelinePosition =
-		(snapPoint?.time || 0) * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
+		mapRealTimeToVisualTime({
+			time: snapPoint?.time || 0,
+			model: visualModel,
+		}) *
+		TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
+		zoomLevel;
 	const leftPosition = trackLabelsWidth + timelinePosition - scrollLeft;
 
 	return {

@@ -13,7 +13,12 @@ import {
 	getTranscriptDraft,
 	withTranscriptState,
 } from "@/lib/transcript-editor/state";
-import type { TimelineTrack, VideoElement, AudioElement, TextElement } from "@/types/timeline";
+import type {
+	TimelineTrack,
+	VideoElement,
+	AudioElement,
+	TextElement,
+} from "@/types/timeline";
 
 function isEditableMediaElement(
 	element: unknown,
@@ -48,11 +53,10 @@ function hasStrongRangeOverlap({
 	return overlap / minDuration >= minRatio;
 }
 
-function ensureCaptionTrack({
-	tracks,
-}: {
+function ensureCaptionTrack({ tracks }: { tracks: TimelineTrack[] }): {
 	tracks: TimelineTrack[];
-}): { tracks: TimelineTrack[]; trackId: string } {
+	trackId: string;
+} {
 	const existingCaptionTrackId = findCaptionTrackIdInScene({ tracks });
 	if (existingCaptionTrackId) {
 		return { tracks, trackId: existingCaptionTrackId };
@@ -131,6 +135,7 @@ function areCaptionWordTimingsEqual({
 		if (prev.word !== curr.word) return false;
 		if (Math.abs(prev.startTime - curr.startTime) > 1e-6) return false;
 		if (Math.abs(prev.endTime - curr.endTime) > 1e-6) return false;
+		if (Boolean(prev.hidden) !== Boolean(curr.hidden)) return false;
 	}
 	return true;
 }
@@ -172,7 +177,9 @@ function isCompanionAligned({
 	const trimAligned = Math.abs(candidate.trimStart - target.trimStart) < 0.05;
 	const endAligned =
 		Math.abs(
-			candidate.trimStart + candidate.duration - (target.trimStart + target.duration),
+			candidate.trimStart +
+				candidate.duration -
+				(target.trimStart + target.duration),
 		) < 0.05;
 	if (startAligned && trimAligned && endAligned) return true;
 
@@ -213,7 +220,9 @@ function collectCompanionMediaIds({
 			mediaElementId: element.id,
 		});
 		if (candidateSourceRefId !== sourceRefId) continue;
-		if (!isCompanionAligned({ target: targetMediaElement, candidate: element })) {
+		if (
+			!isCompanionAligned({ target: targetMediaElement, candidate: element })
+		) {
 			continue;
 		}
 		ids.add(element.id);
@@ -249,7 +258,9 @@ function removeLinkedCaptionsForMedia({
 	return { tracks: nextTracks, changed };
 }
 
-type CaptionTelemetryEventName = "caption_drift_detected" | "caption_drift_autohealed";
+type CaptionTelemetryEventName =
+	| "caption_drift_detected"
+	| "caption_drift_autohealed";
 const DRIFT_TELEMETRY_THROTTLE_MS = 3_000;
 const MAX_DRIFT_TELEMETRY_ENTRIES = 500;
 const driftTelemetryLastEmittedAt = new Map<string, number>();
@@ -429,7 +440,8 @@ export function reconcileCaptionFromSnapshot({
 		const removed = removeLinkedCaptionsForMedia({
 			tracks,
 			linkedMediaElementIds: companionMediaIds,
-			legacySourceRefId: sourceRefId !== mediaElementId ? sourceRefId : undefined,
+			legacySourceRefId:
+				sourceRefId !== mediaElementId ? sourceRefId : undefined,
 		});
 		return removed.changed
 			? { tracks: removed.tracks, changed: true }
@@ -443,7 +455,9 @@ export function reconcileCaptionFromSnapshot({
 	let nextTracks = targetTrackInfo.tracks;
 	let changed = targetTrackInfo.tracks !== tracks;
 
-	const relatedMediaBySourceRef = collectEditableMediaElements({ tracks }).filter(
+	const relatedMediaBySourceRef = collectEditableMediaElements({
+		tracks,
+	}).filter(
 		(element) =>
 			resolveTranscriptUnitSourceRefId({
 				mediaElement: element,
@@ -454,28 +468,25 @@ export function reconcileCaptionFromSnapshot({
 		sourceRefId !== mediaElementId &&
 		relatedMediaBySourceRef.length <= companionMediaIds.size;
 
-	const linkedCaptions = nextTracks
-		.flatMap((track) =>
-			track.type === "text"
-				? track.elements
-						.filter(
-							(element) => {
-								if (element.type !== "text") return false;
-								const linkedMediaId = element.captionSourceRef?.mediaElementId;
-								const linkedByCompanion =
-									typeof linkedMediaId === "string" &&
-									companionMediaIds.has(linkedMediaId);
-								return (
-									(linkedByCompanion ||
-									(canUseLegacySourceRefMatching &&
-										linkedMediaId === sourceRefId)) &&
-									element.captionStyle?.linkedToCaptionGroup !== false
-								);
-							},
-						)
-						.map((element) => ({ trackId: track.id, element }))
-				: [],
-		);
+	const linkedCaptions = nextTracks.flatMap((track) =>
+		track.type === "text"
+			? track.elements
+					.filter((element) => {
+						if (element.type !== "text") return false;
+						const linkedMediaId = element.captionSourceRef?.mediaElementId;
+						const linkedByCompanion =
+							typeof linkedMediaId === "string" &&
+							companionMediaIds.has(linkedMediaId);
+						return (
+							(linkedByCompanion ||
+								(canUseLegacySourceRefMatching &&
+									linkedMediaId === sourceRefId)) &&
+							element.captionStyle?.linkedToCaptionGroup !== false
+						);
+					})
+					.map((element) => ({ trackId: track.id, element }))
+			: [],
+	);
 	const heuristicCaptions =
 		linkedCaptions.length > 0
 			? []
@@ -490,11 +501,12 @@ export function reconcileCaptionFromSnapshot({
 										element.captionStyle?.linkedToCaptionGroup !== false &&
 										Math.abs(element.startTime - timelinePayload.startTime) <=
 											0.25 &&
-										Math.abs(element.duration - timelinePayload.duration) <= 1.5,
+										Math.abs(element.duration - timelinePayload.duration) <=
+											1.5,
 								)
 								.map((element) => ({ trackId: track.id, element }))
 						: [],
-			  );
+				);
 	const candidateCaptions =
 		linkedCaptions.length > 0 ? linkedCaptions : heuristicCaptions;
 	const primaryCaption = candidateCaptions[0] ?? null;
@@ -506,7 +518,10 @@ export function reconcileCaptionFromSnapshot({
 	}
 	const finalPayload = timelinePayload;
 
-	const updatedCaptionElements: Array<{ trackId: string; element: TextElement }> = [];
+	const updatedCaptionElements: Array<{
+		trackId: string;
+		element: TextElement;
+	}> = [];
 	if (!primaryCaption) {
 		const blue = resolveBlueHighlightCaptionPreset();
 		updatedCaptionElements.push({
@@ -563,7 +578,9 @@ export function reconcileCaptionFromSnapshot({
 		if (track.type !== "text") return track;
 		const filteredElements =
 			duplicateCaptionIds.size > 0
-				? track.elements.filter((element) => !duplicateCaptionIds.has(element.id))
+				? track.elements.filter(
+						(element) => !duplicateCaptionIds.has(element.id),
+					)
 				: track.elements;
 		const updatesForTrack = updatedCaptionElements.filter(
 			(item) => item.trackId === track.id,
@@ -575,7 +592,9 @@ export function reconcileCaptionFromSnapshot({
 			return track;
 		}
 
-		const updateMap = new Map(updatesForTrack.map((item) => [item.element.id, item.element]));
+		const updateMap = new Map(
+			updatesForTrack.map((item) => [item.element.id, item.element]),
+		);
 		const existing = filteredElements.map((element) => {
 			const updated = updateMap.get(element.id);
 			return updated ? updated : element;
@@ -615,7 +634,11 @@ export function syncCaptionsFromTranscriptEdits({
 	}
 	const transcriptDraft = getTranscriptDraft(mediaRecord.element);
 	const transcriptApplied = getTranscriptApplied(mediaRecord.element);
-	if (!transcriptDraft || transcriptDraft.words.length === 0 || !transcriptApplied) {
+	if (
+		!transcriptDraft ||
+		transcriptDraft.words.length === 0 ||
+		!transcriptApplied
+	) {
 		return reconcileCaptionFromSnapshot({
 			tracks,
 			mediaElementId,
@@ -669,8 +692,16 @@ export function rebuildCaptionTrackForMediaElement({
 	}
 	const transcriptDraft = getTranscriptDraft(mediaRecord.element);
 	const transcriptApplied = getTranscriptApplied(mediaRecord.element);
-	if (!transcriptDraft || transcriptDraft.words.length === 0 || !transcriptApplied) {
-		return { tracks, changed: false, error: "transcript edit metadata missing" };
+	if (
+		!transcriptDraft ||
+		transcriptDraft.words.length === 0 ||
+		!transcriptApplied
+	) {
+		return {
+			tracks,
+			changed: false,
+			error: "transcript edit metadata missing",
+		};
 	}
 	const sourceRefId = resolveTranscriptUnitSourceRefId({
 		mediaElement: mediaRecord.element,
@@ -683,7 +714,11 @@ export function rebuildCaptionTrackForMediaElement({
 		sourceRefId,
 	});
 	if (!transcriptApplied.captionPayload) {
-		return { tracks, changed: false, error: "cannot rebuild caption from empty transcript" };
+		return {
+			tracks,
+			changed: false,
+			error: "cannot rebuild caption from empty transcript",
+		};
 	}
 	const timelinePayload = transcriptApplied.captionPayload;
 	const preferredTrackId = resolveRebuildTargetCaptionTrackId({
@@ -788,8 +823,12 @@ export function validateAndHealCaptionDriftInTracks({
 			const sourceMediaId = element.captionSourceRef?.mediaElementId;
 			if (!sourceMediaId) continue;
 			const sourceMedia = mediaById.get(sourceMediaId);
-			const transcriptDraft = sourceMedia ? getTranscriptDraft(sourceMedia) : undefined;
-			const transcriptApplied = sourceMedia ? getTranscriptApplied(sourceMedia) : undefined;
+			const transcriptDraft = sourceMedia
+				? getTranscriptDraft(sourceMedia)
+				: undefined;
+			const transcriptApplied = sourceMedia
+				? getTranscriptApplied(sourceMedia)
+				: undefined;
 			if (!sourceMedia || !transcriptDraft || !transcriptApplied) continue;
 			const snapshot = buildTranscriptTimelineSnapshot({
 				mediaElementId: sourceMediaId,
@@ -826,8 +865,12 @@ export function validateAndHealCaptionDriftInTracks({
 		nextTracks = result.tracks;
 		changed = true;
 		const sourceMedia = mediaById.get(mediaElementId);
-		const transcriptDraft = sourceMedia ? getTranscriptDraft(sourceMedia) : undefined;
-		const transcriptApplied = sourceMedia ? getTranscriptApplied(sourceMedia) : undefined;
+		const transcriptDraft = sourceMedia
+			? getTranscriptDraft(sourceMedia)
+			: undefined;
+		const transcriptApplied = sourceMedia
+			? getTranscriptApplied(sourceMedia)
+			: undefined;
 		if (!sourceMedia || !transcriptDraft || !transcriptApplied) continue;
 		const snapshot = buildTranscriptTimelineSnapshot({
 			mediaElementId,
@@ -891,7 +934,8 @@ function alignLinkedCaptionBoundsToSourceMedia({
 								endTime: timing.endTime + startShift,
 							}))
 							.filter(
-								(timing) => timing.endTime > sourceStart && timing.startTime < sourceEnd,
+								(timing) =>
+									timing.endTime > sourceStart && timing.startTime < sourceEnd,
 							)
 							.map((timing) => ({
 								word: timing.word,
@@ -987,7 +1031,8 @@ function shiftStaleAbsoluteCaptionTimingsForMovedLinkedMedia({
 					endTime: timing.endTime + mediaStartShift,
 				}))
 				.filter(
-					(timing) => timing.endTime > sourceStart && timing.startTime < sourceEnd,
+					(timing) =>
+						timing.endTime > sourceStart && timing.startTime < sourceEnd,
 				)
 				.map((timing) => ({
 					word: timing.word,
@@ -1167,7 +1212,8 @@ export function reconcileLinkedCaptionIntegrityInTracks({
 		const transcriptWords = getTranscriptDraft(afterMedia)?.words.length ?? 0;
 		if (transcriptWords === 0) continue;
 		const transcriptUpdatedAt = getTranscriptDraft(afterMedia)?.updatedAt ?? "";
-		const beforeTranscriptUpdatedAt = getTranscriptDraft(beforeMedia)?.updatedAt ?? "";
+		const beforeTranscriptUpdatedAt =
+			getTranscriptDraft(beforeMedia)?.updatedAt ?? "";
 		const timingOrTrimChanged =
 			Math.abs(afterMedia.startTime - beforeMedia.startTime) > 1e-6 ||
 			Math.abs(afterMedia.duration - beforeMedia.duration) > 1e-6 ||
@@ -1176,7 +1222,10 @@ export function reconcileLinkedCaptionIntegrityInTracks({
 		if (timingOrTrimChanged) {
 			hasMediaTimingShift = true;
 		}
-		if (timingOrTrimChanged || transcriptUpdatedAt !== beforeTranscriptUpdatedAt) {
+		if (
+			timingOrTrimChanged ||
+			transcriptUpdatedAt !== beforeTranscriptUpdatedAt
+		) {
 			mediaIdsNeedingTranscriptSync.add(mediaElementId);
 		}
 	}
@@ -1201,12 +1250,13 @@ export function reconcileLinkedCaptionIntegrityInTracks({
 		}
 	}
 
-	const staleAbsoluteTimingRepair = shiftStaleAbsoluteCaptionTimingsForMovedLinkedMedia({
-		beforeTracks,
-		tracks: nextTracks,
-		beforeMediaById,
-		afterMediaById,
-	});
+	const staleAbsoluteTimingRepair =
+		shiftStaleAbsoluteCaptionTimingsForMovedLinkedMedia({
+			beforeTracks,
+			tracks: nextTracks,
+			beforeMediaById,
+			afterMediaById,
+		});
 	if (staleAbsoluteTimingRepair.changed) {
 		nextTracks = staleAbsoluteTimingRepair.tracks;
 		changed = true;
@@ -1237,7 +1287,11 @@ export function syncAllCaptionsFromTranscriptEditsInTracks({
 	let changed = false;
 	const mediaIds = tracks.flatMap((track) =>
 		track.elements
-			.filter((element) => isEditableMediaElement(element) && Boolean(getTranscriptDraft(element)))
+			.filter(
+				(element) =>
+					isEditableMediaElement(element) &&
+					Boolean(getTranscriptDraft(element)),
+			)
 			.map((element) => element.id),
 	);
 	for (const mediaElementId of mediaIds) {
@@ -1286,7 +1340,9 @@ export function dedupeTranscriptEditsInTracks({
 	);
 	if (mediaEntries.length === 0) return { tracks, changed: false };
 
-	const mediaById = new Map(mediaEntries.map((entry) => [entry.element.id, entry.element]));
+	const mediaById = new Map(
+		mediaEntries.map((entry) => [entry.element.id, entry.element]),
+	);
 	const sourceRefByMediaId = new Map(
 		mediaEntries.map((entry) => [
 			entry.element.id,
@@ -1314,7 +1370,8 @@ export function dedupeTranscriptEditsInTracks({
 	const groups = new Map<string, Array<VideoElement | AudioElement>>();
 	for (const entry of mediaEntries) {
 		if (!getTranscriptDraft(entry.element)) continue;
-		const sourceRefId = sourceRefByMediaId.get(entry.element.id) ?? entry.element.id;
+		const sourceRefId =
+			sourceRefByMediaId.get(entry.element.id) ?? entry.element.id;
 		const existing = groups.get(sourceRefId);
 		if (existing) {
 			existing.push(entry.element);
@@ -1327,16 +1384,19 @@ export function dedupeTranscriptEditsInTracks({
 	const keepIds = new Set<string>();
 	for (const [sourceRefId, group] of groups.entries()) {
 		const captionTargetId = captionTargetBySourceRef.get(sourceRefId);
-		const captionTarget = captionTargetId ? mediaById.get(captionTargetId) : null;
-		const primary = captionTarget && getTranscriptDraft(captionTarget)
-			? captionTarget
-			: group.reduce((best, candidate) => {
-				const bestUpdatedAtMs =
-					Date.parse(getTranscriptDraft(best)?.updatedAt ?? "") || 0;
-				const candidateUpdatedAtMs =
-					Date.parse(getTranscriptDraft(candidate)?.updatedAt ?? "") || 0;
-				return candidateUpdatedAtMs > bestUpdatedAtMs ? candidate : best;
-			}, group[0]);
+		const captionTarget = captionTargetId
+			? mediaById.get(captionTargetId)
+			: null;
+		const primary =
+			captionTarget && getTranscriptDraft(captionTarget)
+				? captionTarget
+				: group.reduce((best, candidate) => {
+						const bestUpdatedAtMs =
+							Date.parse(getTranscriptDraft(best)?.updatedAt ?? "") || 0;
+						const candidateUpdatedAtMs =
+							Date.parse(getTranscriptDraft(candidate)?.updatedAt ?? "") || 0;
+						return candidateUpdatedAtMs > bestUpdatedAtMs ? candidate : best;
+					}, group[0]);
 		keepIds.add(primary.id);
 	}
 
@@ -1362,5 +1422,7 @@ export function dedupeTranscriptEditsInTracks({
 		return { ...track, elements: nextElements } as TimelineTrack;
 	});
 
-	return changed ? { tracks: nextTracks, changed: true } : { tracks, changed: false };
+	return changed
+		? { tracks: nextTracks, changed: true }
+		: { tracks, changed: false };
 }

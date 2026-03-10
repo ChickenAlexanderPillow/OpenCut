@@ -173,6 +173,7 @@ export function applyCutRangesToWords({
 		return normalizedWords.map((word) => ({
 			...word,
 			removed: Boolean(word.removed),
+			hidden: Boolean(word.hidden),
 		}));
 	}
 
@@ -190,6 +191,7 @@ export function applyCutRangesToWords({
 		return {
 			...word,
 			removed: Boolean(word.removed) || removedByCuts,
+			hidden: Boolean(word.hidden),
 		};
 	});
 }
@@ -443,7 +445,12 @@ export function buildCaptionPayloadFromTranscriptWords({
 	content: string;
 	startTime: number;
 	duration: number;
-	wordTimings: Array<{ word: string; startTime: number; endTime: number }>;
+	wordTimings: Array<{
+		word: string;
+		startTime: number;
+		endTime: number;
+		hidden?: boolean;
+	}>;
 } | null {
 	const normalized = normalizeTranscriptWords({ words });
 	const transcriptCuts = cuts
@@ -453,10 +460,7 @@ export function buildCaptionPayloadFromTranscriptWords({
 		words: normalized,
 		cuts: transcriptCuts,
 	});
-	// Captions intentionally hide filler words even when transcript keeps them editable.
-	const active = wordsWithCutState.filter(
-		(word) => !word.removed && !isFillerWordOrPhrase({ text: word.text }),
-	);
+	const active = wordsWithCutState.filter((word) => !word.removed);
 	if (active.length === 0) return null;
 
 	const timings = active
@@ -476,6 +480,8 @@ export function buildCaptionPayloadFromTranscriptWords({
 				word: word.text,
 				startTime,
 				endTime,
+				hidden:
+					Boolean(word.hidden) || isFillerWordOrPhrase({ text: word.text }),
 			};
 		})
 		.filter((timing) => timing.word.trim().length > 0);
@@ -483,9 +489,11 @@ export function buildCaptionPayloadFromTranscriptWords({
 	if (timings.length === 0) return null;
 
 	const content = timings
+		.filter((timing) => !timing.hidden)
 		.map((timing) => timing.word)
 		.join(" ")
 		.trim();
+	if (!content) return null;
 	const startTime = timings[0].startTime;
 	const endTime = timings[timings.length - 1].endTime;
 	return {

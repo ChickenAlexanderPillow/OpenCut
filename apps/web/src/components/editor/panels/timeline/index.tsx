@@ -18,7 +18,7 @@ import {
 	ContextMenuTrigger,
 } from "../../../ui/context-menu";
 import { useTimelineZoom } from "@/hooks/timeline/use-timeline-zoom";
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { TimelineTrackContent } from "./timeline-track";
 import { TimelinePlayhead } from "./timeline-playhead";
 import { SelectionBox } from "../../selection-box";
@@ -56,7 +56,11 @@ import { useTimelinePlayhead } from "@/hooks/timeline/use-timeline-playhead";
 import { DragLine } from "./drag-line";
 import { invokeAction } from "@/lib/actions";
 import { ListChecks } from "lucide-react";
-import { mapPlaybackTimeToCompressedVisualTime } from "@/lib/transcript-editor/visual-timeline";
+import {
+	buildTimelineVisualModel,
+	mapRealTimeToVisualTime,
+	mapVisualTimeToRealTime,
+} from "@/lib/transcript-editor/visual-timeline";
 
 export function Timeline() {
 	const tracksContainerHeight = { min: 0, max: 800 };
@@ -97,12 +101,16 @@ export function Timeline() {
 	);
 
 	const timelineDuration = timeline.getTotalDuration() || 0;
-	const visualPlayheadTime = mapPlaybackTimeToCompressedVisualTime({
+	const visualTimeline = useMemo(
+		() => buildTimelineVisualModel({ tracks, duration: timelineDuration }),
+		[tracks, timelineDuration],
+	);
+	const visualPlayheadTime = mapRealTimeToVisualTime({
 		time: editor.playback.getCurrentTime(),
-		tracks,
+		model: visualTimeline,
 	});
 	const minZoomLevel = getTimelineZoomMin({
-		duration: timelineDuration,
+		duration: visualTimeline.totalVisualDuration,
 		containerWidth: tracksContainerRef.current?.clientWidth,
 	});
 
@@ -117,6 +125,7 @@ export function Timeline() {
 			initialPlayheadTime: savedViewState?.playheadTime,
 			tracksScrollRef,
 			rulerScrollRef: tracksScrollRef,
+			playheadDisplayTime: visualPlayheadTime,
 		});
 
 	const {
@@ -133,6 +142,8 @@ export function Timeline() {
 		headerRef: timelineHeaderRef,
 		snappingEnabled,
 		onSnapPointChange: handleSnapPointChange,
+		mapVisualTimeToRealTime: (time) =>
+			mapVisualTimeToRealTime({ time, model: visualTimeline }),
 	});
 
 	const {
@@ -144,6 +155,8 @@ export function Timeline() {
 		scrollRef: tracksScrollRef,
 		snappingEnabled,
 		onSnapPointChange: handleSnapPointChange,
+		mapVisualTimeToRealTime: (time) =>
+			mapVisualTimeToRealTime({ time, model: visualTimeline }),
 	});
 
 	const { handleRulerMouseDown: handlePlayheadRulerMouseDown } =
@@ -153,6 +166,10 @@ export function Timeline() {
 			rulerScrollRef: tracksScrollRef,
 			tracksScrollRef,
 			playheadRef,
+			displayTime: visualPlayheadTime,
+			displayDuration: visualTimeline.totalVisualDuration,
+			mapVisualTimeToRealTime: (time) =>
+				mapVisualTimeToRealTime({ time, model: visualTimeline }),
 		});
 
 	const {
@@ -180,11 +197,14 @@ export function Timeline() {
 		},
 		tracksScrollRef,
 		zoomLevel,
+		visualModel: visualTimeline,
 	});
 
 	const containerWidth = tracksContainerRef.current?.clientWidth || 1000;
 	const contentWidth =
-		timelineDuration * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
+		visualTimeline.totalVisualDuration *
+		TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
+		zoomLevel;
 	const paddingPx = getTimelinePaddingPx({
 		containerWidth,
 		zoomLevel,
@@ -220,9 +240,12 @@ export function Timeline() {
 		tracksScrollRef,
 		zoomLevel,
 		duration: timeline.getTotalDuration(),
+		displayDuration: visualTimeline.totalVisualDuration,
 		isSelecting,
 		clearSelectedElements: clearElementSelection,
 		seek,
+		mapVisualTimeToRealTime: (time) =>
+			mapVisualTimeToRealTime({ time, model: visualTimeline }),
 	});
 
 	const fitTimelineToView = useCallback(() => {
@@ -278,6 +301,7 @@ export function Timeline() {
 					snapPoint={currentSnapPoint}
 					zoomLevel={zoomLevel}
 					tracks={tracks}
+					visualModel={visualTimeline}
 					timelineRef={timelineRef}
 					trackLabelsRef={trackLabelsRef}
 					tracksScrollRef={tracksScrollRef}
@@ -393,6 +417,7 @@ export function Timeline() {
 							dropTarget={dropTarget}
 							tracks={timeline.getTracks()}
 							isVisible={isDragOver}
+							visualModel={visualTimeline}
 							zoomLevel={zoomLevel}
 							dragElementType={dragElementType}
 							dragElementDuration={dragElementDuration}
@@ -402,6 +427,7 @@ export function Timeline() {
 							dropTarget={dragDropTarget}
 							tracks={timeline.getTracks()}
 							isVisible={dragState.isDragging}
+							visualModel={visualTimeline}
 							headerHeight={timelineHeaderHeight}
 						/>
 						<ScrollArea
@@ -446,6 +472,13 @@ export function Timeline() {
 									<TimelineRuler
 										zoomLevel={zoomLevel}
 										dynamicTimelineWidth={dynamicTimelineWidth}
+										displayDuration={visualTimeline.totalVisualDuration}
+										mapRealTimeToVisualTime={(time) =>
+											mapRealTimeToVisualTime({ time, model: visualTimeline })
+										}
+										mapVisualTimeToRealTime={(time) =>
+											mapVisualTimeToRealTime({ time, model: visualTimeline })
+										}
 										rulerRef={rulerRef}
 										tracksScrollRef={tracksScrollRef}
 										handleWheel={handleWheel}
@@ -456,6 +489,7 @@ export function Timeline() {
 									<TimelineBookmarksRow
 										zoomLevel={zoomLevel}
 										dynamicTimelineWidth={dynamicTimelineWidth}
+										visualModel={visualTimeline}
 										dragState={bookmarkDragState}
 										onBookmarkMouseDown={handleBookmarkMouseDown}
 										handleWheel={handleWheel}
@@ -467,6 +501,10 @@ export function Timeline() {
 									<TimelinePlayhead
 										zoomLevel={zoomLevel}
 										displayTime={visualPlayheadTime}
+										displayDuration={visualTimeline.totalVisualDuration}
+										mapVisualTimeToRealTime={(time) =>
+											mapVisualTimeToRealTime({ time, model: visualTimeline })
+										}
 										rulerRef={rulerRef}
 									rulerScrollRef={tracksScrollRef}
 									tracksScrollRef={tracksScrollRef}
@@ -508,7 +546,9 @@ export function Timeline() {
 													>
 														<TimelineTrackContent
 															track={track}
+															tracks={tracks}
 															zoomLevel={zoomLevel}
+															visualModel={visualTimeline}
 															dragState={dragState}
 															rulerScrollRef={tracksScrollRef}
 															tracksScrollRef={tracksScrollRef}

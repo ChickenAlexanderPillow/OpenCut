@@ -8,7 +8,9 @@ import { invokeAction } from "@/lib/actions";
 import { DEFAULT_TRANSCRIPTION_MODEL } from "@/constants/transcription-constants";
 import {
 	applyCutRangesToWords,
+	buildCaptionPayloadFromTranscriptWords,
 	buildTranscriptCutsFromWords,
+	isFillerWordOrPhrase,
 	mapCompressedTimeToSourceTime,
 	normalizeTranscriptWords,
 } from "@/lib/transcript-editor/core";
@@ -39,7 +41,7 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
-import { AlignJustify, Check, Pencil, X } from "lucide-react";
+import { AlignJustify, Check, Eye, EyeOff, Pencil, X } from "lucide-react";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 
@@ -172,7 +174,10 @@ function buildTranscriptWordsFromSegments({
 		const segmentEnd = Math.max(segmentStart + 0.01, segment.end);
 		const duration = Math.max(0.01, segmentEnd - segmentStart);
 		const weights = tokens.map((token) =>
-			Math.max(1, token.replace(/[^\p{L}\p{N}']+/gu, "").length || token.length),
+			Math.max(
+				1,
+				token.replace(/[^\p{L}\p{N}']+/gu, "").length || token.length,
+			),
 		);
 		const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
 		let consumed = 0;
@@ -209,7 +214,9 @@ function getSelectedCaptionElement({
 	for (const selected of selectedElements) {
 		const track = tracks.find((item) => item.id === selected.trackId);
 		if (!track || track.type !== "text") continue;
-		const element = track.elements.find((item) => item.id === selected.elementId);
+		const element = track.elements.find(
+			(item) => item.id === selected.elementId,
+		);
 		if (!element || element.type !== "text") continue;
 		if ((element.captionWordTimings?.length ?? 0) === 0) continue;
 		return { trackId: selected.trackId, element };
@@ -259,7 +266,9 @@ export function TranscriptView() {
 	const currentTime = editor.playback.getCurrentTime();
 	const [editingWordId, setEditingWordId] = useState<string | null>(null);
 	const [editingWordText, setEditingWordText] = useState("");
-	const [editingTargetWordIds, setEditingTargetWordIds] = useState<string[]>([]);
+	const [editingTargetWordIds, setEditingTargetWordIds] = useState<string[]>(
+		[],
+	);
 	const [selectedWordIds, setSelectedWordIds] = useState<string[]>([]);
 	const [isSelectionActive, setIsSelectionActive] = useState(false);
 	const [hoveredWordId, setHoveredWordId] = useState<string | null>(null);
@@ -294,7 +303,7 @@ export function TranscriptView() {
 				? getMediaAssetForElement({
 						element: activeMedia.element,
 						assets: editor.media.getAssets(),
-				  })
+					})
 				: null,
 		[activeMedia, editor],
 	);
@@ -342,31 +351,47 @@ export function TranscriptView() {
 			);
 		});
 	}, [activeMedia, tracks]);
-	const hasTranscriptData = useMemo(() => wordsWithCutState.length > 0, [wordsWithCutState]);
+	const hasTranscriptData = useMemo(
+		() => wordsWithCutState.length > 0,
+		[wordsWithCutState],
+	);
+	const visibleCaptionWords = useMemo(
+		() =>
+			wordsWithCutState.filter(
+				(word) =>
+					!word.removed &&
+					!word.hidden &&
+					!isFillerWordOrPhrase({ text: word.text }),
+			),
+		[wordsWithCutState],
+	);
+	const currentCaptionPayload = useMemo(
+		() => buildCaptionPayloadFromTranscriptWords({ words, cuts }),
+		[words, cuts],
+	);
 
 	const currentWordId = useMemo(() => {
-		if (!activeMedia || wordsWithCutState.length === 0) return null;
+		if (!activeMedia || !currentCaptionPayload) return null;
 		const localCompressed = Math.max(
 			0,
 			currentTime - activeMedia.element.startTime,
 		);
-		const sourceTime = mapCompressedTimeToSourceTime({
-			compressedTime: localCompressed,
-			cuts,
-		});
-		const current = wordsWithCutState.find(
-			(word) =>
-				!word.removed &&
-				sourceTime >= word.startTime &&
-				sourceTime < word.endTime,
+		const activeVisibleIndex = currentCaptionPayload.wordTimings.findIndex(
+			(timing) =>
+				!timing.hidden &&
+				localCompressed >= timing.startTime &&
+				localCompressed < timing.endTime,
 		);
-		return current?.id ?? null;
-	}, [activeMedia, wordsWithCutState, cuts, currentTime]);
+		if (activeVisibleIndex < 0) return null;
+		return visibleCaptionWords[activeVisibleIndex]?.id ?? null;
+	}, [activeMedia, currentCaptionPayload, currentTime, visibleCaptionWords]);
 
 	const transcriptCompileState = activeMedia
 		? getTranscriptCompileState(activeMedia.element)
 		: { status: "idle" as const };
-	const segmentsUi = activeMedia ? getTranscriptDraft(activeMedia.element)?.segmentsUi : undefined;
+	const segmentsUi = activeMedia
+		? getTranscriptDraft(activeMedia.element)?.segmentsUi
+		: undefined;
 	const groups =
 		segmentsUi && segmentsUi.length > 0
 			? segmentsUi
@@ -388,13 +413,19 @@ export function TranscriptView() {
 		if (!selectedCaption || !activeMedia) return new Set<string>();
 		if (
 			selectedCaption.element.captionSourceRef?.mediaElementId &&
-			selectedCaption.element.captionSourceRef.mediaElementId !== activeMedia.element.id
+			selectedCaption.element.captionSourceRef.mediaElementId !==
+				activeMedia.element.id
 		) {
 			return new Set<string>();
 		}
 		const timings = selectedCaption.element.captionWordTimings ?? [];
 		if (timings.length === 0) return new Set<string>();
-		const ranges = timings.map((timing) => ({
+		const visibleTimings = timings.filter((timing) => !timing.hidden);
+		if (visibleTimings.length === 0) return new Set<string>();
+		if (visibleTimings.length === visibleCaptionWords.length) {
+			return new Set(visibleCaptionWords.map((word) => word.id));
+		}
+		const ranges = visibleTimings.map((timing) => ({
 			start: mapCompressedTimeToSourceTime({
 				compressedTime: toElementLocalCaptionTime({
 					time: timing.startTime,
@@ -414,7 +445,7 @@ export function TranscriptView() {
 				cuts,
 			}),
 		}));
-		const highlighted = wordsWithCutState
+		const highlighted = visibleCaptionWords
 			.filter((word) =>
 				ranges.some(
 					(range) => word.endTime > range.start && word.startTime < range.end,
@@ -422,7 +453,7 @@ export function TranscriptView() {
 			)
 			.map((word) => word.id);
 		return new Set(highlighted);
-	}, [selectedCaption, activeMedia, cuts, wordsWithCutState]);
+	}, [selectedCaption, activeMedia, cuts, visibleCaptionWords]);
 	const selectedWordIdsSet = useMemo(
 		() => new Set(selectedWordIds),
 		[selectedWordIds],
@@ -496,7 +527,7 @@ export function TranscriptView() {
 			const selectedIds = wordNodes
 				.filter((node) => range.intersectsNode(node))
 				.map((node) => node.dataset.wordId ?? "")
-			.filter((id) => id.length > 0);
+				.filter((id) => id.length > 0);
 			if (selectedIds.length === 0) {
 				setIsSelectionActive(false);
 				return;
@@ -509,17 +540,18 @@ export function TranscriptView() {
 			setIsSelectionActive(true);
 		};
 		const onKeyDown = (event: KeyboardEvent) => {
-			if (
-				event.key !== "Backspace" &&
-				event.key !== "Delete"
-			) {
+			if (event.key !== "Backspace" && event.key !== "Delete") {
 				return;
 			}
 			if (editingWordIdRef.current) return;
 			const container = selectionContainerRef.current;
 			const currentSelectedWordIds = selectedWordIdsRef.current;
 			const currentActiveMedia = activeMediaRef.current;
-			if (!container || !currentActiveMedia || currentSelectedWordIds.length === 0) {
+			if (
+				!container ||
+				!currentActiveMedia ||
+				currentSelectedWordIds.length === 0
+			) {
 				return;
 			}
 			const selection = window.getSelection();
@@ -555,8 +587,7 @@ export function TranscriptView() {
 		const container = selectionContainerRef.current;
 		if (!container) return;
 		const onMouseMove = (event: MouseEvent) => {
-			const target =
-				event.target instanceof HTMLElement ? event.target : null;
+			const target = event.target instanceof HTMLElement ? event.target : null;
 			const wordId =
 				target?.closest<HTMLElement>("[data-word-id]")?.dataset.wordId ?? null;
 			setHoveredWordId(wordId);
@@ -610,7 +641,13 @@ export function TranscriptView() {
 			})),
 		});
 		clearEditingState();
-	}, [activeMedia, editingTargetWordIds, editingWordId, editingWordText, clearEditingState]);
+	}, [
+		activeMedia,
+		editingTargetWordIds,
+		editingWordId,
+		editingWordText,
+		clearEditingState,
+	]);
 
 	const handleGenerateCaptions = useCallback(async () => {
 		let transcriptionOperationId: string | undefined;
@@ -633,7 +670,9 @@ export function TranscriptView() {
 			setGenerateError(null);
 			setGenerateStep("Transcribing...");
 			const activeProject = editor.project.getActive();
-			transcriptionOperationId = transcriptionStatus.start("Transcribing media...");
+			transcriptionOperationId = transcriptionStatus.start(
+				"Transcribing media...",
+			);
 			projectProcessId = registerProcess({
 				projectId: activeProject.metadata.id,
 				kind: "transcription",
@@ -773,13 +812,19 @@ export function TranscriptView() {
 					</div>
 				)}
 				{activeMediaAsset ? (
-					<Button onClick={() => void handleGenerateCaptions()} disabled={isGeneratingCaptions}>
+					<Button
+						onClick={() => void handleGenerateCaptions()}
+						disabled={isGeneratingCaptions}
+					>
 						{isGeneratingCaptions && <Spinner className="mr-1" />}
-						{isGeneratingCaptions ? generateStep || "Generating..." : "Generate captions"}
+						{isGeneratingCaptions
+							? generateStep || "Generating..."
+							: "Generate captions"}
 					</Button>
 				) : (
 					<div className="text-xs text-muted-foreground p-2 border rounded-md">
-						Selected media is not transcribable (library audio is not supported).
+						Selected media is not transcribable (library audio is not
+						supported).
 					</div>
 				)}
 			</PanelView>
@@ -828,7 +873,8 @@ export function TranscriptView() {
 					const target =
 						event.target instanceof HTMLElement ? event.target : null;
 					const clickedWordId =
-						target?.closest<HTMLElement>("[data-word-id]")?.dataset.wordId ?? null;
+						target?.closest<HTMLElement>("[data-word-id]")?.dataset.wordId ??
+						null;
 					if (!clickedWordId || !selectedWordIdsSet.has(clickedWordId)) {
 						setSelectedWordIdsIfChanged([]);
 						setIsSelectionActive(false);
@@ -844,7 +890,7 @@ export function TranscriptView() {
 								{formatTime(start)} Paragraph {groupIndex + 1}
 							</div>
 							<p
-								className="text-sm leading-7 select-text border-l pl-3"
+								className="text-sm leading-8 select-text border-l pl-3 pr-1 py-2"
 								onMouseUp={(event) => {
 									if (editingWordId) return;
 									const target =
@@ -885,7 +931,7 @@ export function TranscriptView() {
 								{group.words.map((word) => (
 									<span
 										key={word.id}
-										className="relative group/word inline-block mr-1.5"
+										className="relative group/word inline-block mr-1.5 my-1"
 										data-word-id={word.id}
 									>
 										{editingWordId === word.id ? (
@@ -924,20 +970,25 @@ export function TranscriptView() {
 											</span>
 										) : (
 											<>
-											<span
-												className={[
-													"select-text rounded-full px-0.5 py-0.5 transition-colors cursor-pointer",
-													!isSelectionActive ? "hover:bg-secondary" : "",
-													!isSelectionActive ? "group-hover/word:bg-secondary" : "",
-													hoveredWordId &&
-													selectedWordIds.length > 1 &&
-													selectedWordIdsSet.has(hoveredWordId) &&
-													selectedWordIdsSet.has(word.id)
-														? "bg-secondary"
-														: "",
-													word.removed ? "opacity-40 line-through" : "",
-													currentWordId === word.id ? "text-white" : "",
-													selectedWordIds.includes(word.id) ? "bg-accent" : "",
+												<span
+													className={[
+														"select-text rounded-full px-0.5 py-0.5 transition-colors cursor-pointer",
+														!isSelectionActive ? "hover:bg-secondary" : "",
+														!isSelectionActive
+															? "group-hover/word:bg-secondary"
+															: "",
+														hoveredWordId &&
+														selectedWordIds.length > 1 &&
+														selectedWordIdsSet.has(hoveredWordId) &&
+														selectedWordIdsSet.has(word.id)
+															? "bg-secondary"
+															: "",
+														word.removed ? "opacity-40 line-through" : "",
+														word.hidden ? "opacity-45" : "",
+														currentWordId === word.id ? "text-white" : "",
+														selectedWordIds.includes(word.id)
+															? "bg-accent"
+															: "",
 														selectedCaptionWordIds.has(word.id)
 															? "ring-1 ring-primary/70"
 															: "",
@@ -952,39 +1003,73 @@ export function TranscriptView() {
 												>
 													{word.text}
 												</span>
-												<Button
-													variant="ghost"
-													size="icon"
-													className="absolute -top-1 -right-1 size-4 rounded-full opacity-0 group-hover/word:opacity-100 transition-opacity"
-													data-word-edit-trigger="true"
-													onClick={() => {
-														if (
-															selectedWordIds.length > 1 &&
-															selectedWordIdsSet.has(word.id)
-														) {
-															const orderedSelected = orderedWordIds.filter((id) =>
-																selectedWordIdsSet.has(id),
-															);
-															const wordsById = new Map(
-																wordsWithCutState.map((item) => [item.id, item.text]),
-															);
-															setEditingTargetWordIds(orderedSelected);
-															setEditingWordId(orderedSelected[0] ?? word.id);
-															setEditingWordText(
-																orderedSelected
-																	.map((id) => wordsById.get(id) ?? "")
-																	.filter(Boolean)
-																	.join(" "),
-															);
-															return;
+												<span className="absolute -top-3 right-0 flex items-center gap-0.5 opacity-0 group-hover/word:opacity-100 transition-opacity">
+													<Button
+														variant="ghost"
+														size="icon"
+														className="size-4 rounded-full"
+														data-word-edit-trigger="true"
+														onClick={() => {
+															if (
+																selectedWordIds.length > 1 &&
+																selectedWordIdsSet.has(word.id)
+															) {
+																const orderedSelected = orderedWordIds.filter(
+																	(id) => selectedWordIdsSet.has(id),
+																);
+																const wordsById = new Map(
+																	wordsWithCutState.map((item) => [
+																		item.id,
+																		item.text,
+																	]),
+																);
+																setEditingTargetWordIds(orderedSelected);
+																setEditingWordId(orderedSelected[0] ?? word.id);
+																setEditingWordText(
+																	orderedSelected
+																		.map((id) => wordsById.get(id) ?? "")
+																		.filter(Boolean)
+																		.join(" "),
+																);
+																return;
+															}
+															setEditingTargetWordIds([word.id]);
+															setEditingWordId(word.id);
+															setEditingWordText(word.text);
+														}}
+													>
+														<Pencil className="size-2.5" />
+													</Button>
+													<Button
+														variant="ghost"
+														size="icon"
+														className="size-4 rounded-full"
+														data-word-edit-trigger="true"
+														onClick={() =>
+															invokeAction("transcript-toggle-word-hidden", {
+																trackId: activeMedia.trackId,
+																elementId: activeMedia.element.id,
+																wordId: word.id,
+															})
 														}
-														setEditingTargetWordIds([word.id]);
-														setEditingWordId(word.id);
-														setEditingWordText(word.text);
-													}}
-												>
-													<Pencil className="size-2.5" />
-												</Button>
+														title={
+															word.hidden
+																? "Show word in captions"
+																: "Hide word from captions"
+														}
+														aria-label={
+															word.hidden
+																? "Show word in captions"
+																: "Hide word from captions"
+														}
+													>
+														{word.hidden ? (
+															<EyeOff className="size-2.5" />
+														) : (
+															<Eye className="size-2.5" />
+														)}
+													</Button>
+												</span>
 											</>
 										)}
 									</span>

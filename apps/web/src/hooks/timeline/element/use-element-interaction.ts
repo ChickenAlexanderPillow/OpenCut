@@ -43,6 +43,7 @@ interface UseElementInteractionProps {
 	headerRef?: RefObject<HTMLElement | null>;
 	snappingEnabled: boolean;
 	onSnapPointChange?: (snapPoint: SnapPoint | null) => void;
+	mapVisualTimeToRealTime?: (time: number) => number;
 }
 
 const initialDragState: ElementDragState = {
@@ -108,13 +109,23 @@ function getClickOffsetTime({
 	clientX,
 	elementRect,
 	zoomLevel,
+	visualStartTime,
+	mapVisualTimeToRealTime,
 }: {
 	clientX: number;
 	elementRect: DOMRect;
 	zoomLevel: number;
+	visualStartTime?: number;
+	mapVisualTimeToRealTime?: (time: number) => number;
 }): number {
 	const clickOffsetX = clientX - elementRect.left;
-	return clickOffsetX / (TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel);
+	const visualOffsetTime =
+		clickOffsetX / (TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel);
+	if (typeof visualStartTime !== "number" || !mapVisualTimeToRealTime) {
+		return visualOffsetTime;
+	}
+	const realTime = mapVisualTimeToRealTime(visualStartTime + visualOffsetTime);
+	return Math.max(0, realTime - mapVisualTimeToRealTime(visualStartTime));
 }
 
 function getVerticalDragDirection({
@@ -205,6 +216,7 @@ export function useElementInteraction({
 	headerRef,
 	snappingEnabled,
 	onSnapPointChange,
+	mapVisualTimeToRealTime,
 }: UseElementInteractionProps) {
 	const editor = useEditor({ subscribeTo: ["timeline", "project"] });
 	const rippleEditingEnabled = useTimelineStore((state) => state.rippleEditingEnabled);
@@ -335,6 +347,7 @@ export function useElementInteraction({
 						containerRect: scrollContainer.getBoundingClientRect(),
 						zoomLevel,
 						scrollLeft,
+						mapVisualTimeToRealTime,
 					});
 					const adjustedTime = Math.max(
 						0,
@@ -383,6 +396,7 @@ export function useElementInteraction({
 				containerRect: scrollContainer.getBoundingClientRect(),
 				zoomLevel,
 				scrollLeft,
+				mapVisualTimeToRealTime,
 			});
 			const adjustedTime = Math.max(0, mouseTime - dragState.clickOffsetTime);
 			const fps = activeProject.settings.fps;
@@ -447,6 +461,7 @@ export function useElementInteraction({
 		startDrag,
 		getDragSnapResult,
 		onSnapPointChange,
+		mapVisualTimeToRealTime,
 	]);
 
 	useEffect(() => {
@@ -702,6 +717,10 @@ export function useElementInteraction({
 				clientX: event.clientX,
 				elementRect: event.currentTarget.getBoundingClientRect(),
 				zoomLevel,
+				visualStartTime: Number(
+					event.currentTarget.getAttribute("data-visual-start-time"),
+				),
+				mapVisualTimeToRealTime,
 			});
 			pendingDragRef.current = {
 				elementId: element.id,
@@ -713,7 +732,12 @@ export function useElementInteraction({
 			};
 			setIsPendingDrag(true);
 		},
-		[zoomLevel, isElementSelected, handleSelectionClick],
+		[
+			zoomLevel,
+			isElementSelected,
+			handleSelectionClick,
+			mapVisualTimeToRealTime,
+		],
 	);
 
 	const handleElementClick = useCallback(

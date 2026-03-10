@@ -24,8 +24,16 @@ export interface TransitionDragData extends BaseDragData {
 	presetId: string;
 }
 
+export interface LocalMusicDragData extends BaseDragData {
+	type: "local-music";
+	root: string;
+	relativePath: string;
+	extension: string;
+}
+
 export type TimelineDragData =
 	| MediaDragData
 	| TextDragData
 	| StickerDragData
-	| TransitionDragData;
+	| TransitionDragData
+	| LocalMusicDragData;

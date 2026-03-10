@@ -19,6 +19,7 @@ interface UseTimelineZoomProps {
 	initialPlayheadTime?: number;
 	tracksScrollRef: RefObject<HTMLDivElement | null>;
 	rulerScrollRef: RefObject<HTMLDivElement | null>;
+	playheadDisplayTime?: number;
 }
 
 interface UseTimelineZoomReturn {
@@ -38,6 +39,7 @@ export function useTimelineZoom({
 	initialPlayheadTime,
 	tracksScrollRef,
 	rulerScrollRef,
+	playheadDisplayTime,
 }: UseTimelineZoomProps): UseTimelineZoomReturn {
 	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_NONE });
 	const hasInitializedRef = useRef(false);
@@ -144,6 +146,7 @@ export function useTimelineZoom({
 
 		const currentScrollLeft = preZoomScrollLeftRef.current;
 		const playheadTime = editor.playback.getCurrentTime();
+		const playheadPosition = playheadDisplayTime ?? playheadTime;
 		const sliderPercent = zoomToSlider({ zoomLevel, minZoom });
 		const previousSliderPercent = zoomToSlider({
 			zoomLevel: previousZoom,
@@ -178,9 +181,9 @@ export function useTimelineZoom({
 
 		if (sliderPercent >= TIMELINE_CONSTANTS.ZOOM_ANCHOR_PLAYHEAD_THRESHOLD) {
 			const playheadPixelsBefore =
-				playheadTime * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * previousZoom;
+				playheadPosition * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * previousZoom;
 			const playheadPixelsAfter =
-				playheadTime * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
+				playheadPosition * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
 
 			const viewportOffset = playheadPixelsBefore - currentScrollLeft;
 			const newScrollLeft = playheadPixelsAfter - viewportOffset;
@@ -201,7 +204,14 @@ export function useTimelineZoom({
 				playheadTime,
 			},
 		});
-	}, [zoomLevel, editor, tracksScrollRef, rulerScrollRef, minZoom]);
+	}, [
+		zoomLevel,
+		editor,
+		tracksScrollRef,
+		rulerScrollRef,
+		minZoom,
+		playheadDisplayTime,
+	]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: tracksScrollRef is a stable ref
 	const saveScrollPosition = useCallback(() => {

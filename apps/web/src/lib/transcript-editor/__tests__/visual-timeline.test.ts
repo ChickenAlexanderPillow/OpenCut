@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
-	buildCompressedVisualTracks,
-	mapPlaybackTimeToCompressedVisualTime,
+	buildTimelineVisualModel,
+	getTimelineElementVisualLayout,
+	mapRealTimeToVisualTime,
+	mapVisualTimeToRealTime,
 } from "@/lib/transcript-editor/visual-timeline";
-import type { TimelineTrack, VideoElement } from "@/types/timeline";
+import type { TextElement, TimelineTrack, VideoElement } from "@/types/timeline";
 
 const DEFAULT_TRANSFORM = {
 	scale: 1,
@@ -15,12 +17,12 @@ function createVideoElement({
 	id,
 	startTime,
 	duration,
-	playableDuration,
+	removedRanges = [],
 }: {
 	id: string;
 	startTime: number;
 	duration: number;
-	playableDuration?: number;
+	removedRanges?: Array<{ start: number; end: number }>;
 }): VideoElement {
 	return {
 		id,
@@ -34,17 +36,25 @@ function createVideoElement({
 		transform: DEFAULT_TRANSFORM,
 		opacity: 1,
 		transcriptApplied:
-			typeof playableDuration === "number"
+			removedRanges.length > 0
 				? {
 						version: 1,
 						revisionKey: `${id}:rev`,
-						updatedAt: "2026-03-09T00:00:00.000Z",
-						removedRanges: [],
+						updatedAt: "2026-03-10T00:00:00.000Z",
+						removedRanges: removedRanges.map((cut) => ({
+							...cut,
+							reason: "manual" as const,
+						})),
 						keptSegments: [],
 						timeMap: {
 							cutBoundaries: [],
 							sourceDuration: duration,
-							playableDuration,
+							playableDuration:
+								duration -
+								removedRanges.reduce(
+									(sum, cut) => sum + (cut.end - cut.start),
+									0,
+								),
 						},
 						captionPayload: null,
 				  }
@@ -52,8 +62,45 @@ function createVideoElement({
 	};
 }
 
+function createCaptionElement({
+	id,
+	startTime,
+	duration,
+	mediaElementId,
+}: {
+	id: string;
+	startTime: number;
+	duration: number;
+	mediaElementId: string;
+}): TextElement {
+	return {
+		id,
+		name: id,
+		type: "text",
+		content: "Caption",
+		startTime,
+		duration,
+		trimStart: 0,
+		trimEnd: 0,
+		fontSize: 32,
+		fontFamily: "sans",
+		color: "#fff",
+		background: { color: "transparent" },
+		textAlign: "center",
+		fontWeight: "normal",
+		fontStyle: "normal",
+		textDecoration: "none",
+		transform: DEFAULT_TRANSFORM,
+		opacity: 1,
+		captionSourceRef: {
+			mediaElementId,
+			transcriptVersion: 1,
+		},
+	};
+}
+
 describe("visual transcript timeline", () => {
-	test("compresses transcript-edited main track visuals and shifts following clips earlier", () => {
+	test("builds a condensed visual duration from main-track transcript cuts", () => {
 		const tracks: TimelineTrack[] = [
 			{
 				id: "main-track",
@@ -67,7 +114,7 @@ describe("visual transcript timeline", () => {
 						id: "clip-a",
 						startTime: 0,
 						duration: 10,
-						playableDuration: 7,
+						removedRanges: [{ start: 3, end: 6 }],
 					}),
 					createVideoElement({
 						id: "clip-b",
@@ -78,16 +125,14 @@ describe("visual transcript timeline", () => {
 			},
 		];
 
-		const compressed = buildCompressedVisualTracks({ tracks });
-		const mainTrack = compressed[0];
-		const clipA = mainTrack?.elements[0];
-		const clipB = mainTrack?.elements[1];
+		const model = buildTimelineVisualModel({ tracks, duration: 15 });
 
-		expect(clipA?.duration).toBeCloseTo(7, 6);
-		expect(clipB?.startTime).toBeCloseTo(7, 6);
+		expect(model.totalVisualDuration).toBeCloseTo(12, 6);
+		expect(mapRealTimeToVisualTime({ time: 10, model })).toBeCloseTo(7, 6);
+		expect(mapVisualTimeToRealTime({ time: 7, model })).toBeCloseTo(10, 6);
 	});
 
-	test("maps playhead time to compressed visual time after edited clip playable end", () => {
+	test("clamps a removed region to a single visual cut marker time", () => {
 		const tracks: TimelineTrack[] = [
 			{
 				id: "main-track",
@@ -101,23 +146,62 @@ describe("visual transcript timeline", () => {
 						id: "clip-a",
 						startTime: 0,
 						duration: 10,
-						playableDuration: 7,
+						removedRanges: [{ start: 3, end: 6 }],
 					}),
 				],
 			},
 		];
 
-		expect(
-			mapPlaybackTimeToCompressedVisualTime({
-				time: 6.5,
-				tracks,
-			}),
-		).toBeCloseTo(6.5, 6);
-		expect(
-			mapPlaybackTimeToCompressedVisualTime({
-				time: 7.2,
-				tracks,
-			}),
-		).toBeCloseTo(4.2, 6);
+		const model = buildTimelineVisualModel({ tracks, duration: 10 });
+
+		expect(mapRealTimeToVisualTime({ time: 2.5, model })).toBeCloseTo(2.5, 6);
+		expect(mapRealTimeToVisualTime({ time: 3.2, model })).toBeCloseTo(3, 6);
+		expect(mapRealTimeToVisualTime({ time: 6.8, model })).toBeCloseTo(3.8, 6);
+		expect(mapVisualTimeToRealTime({ time: 3, model })).toBeCloseTo(6, 6);
+	});
+
+	test("renders linked captions with matching condensed layout and cut markers", () => {
+		const video = createVideoElement({
+			id: "clip-a",
+			startTime: 5,
+			duration: 10,
+			removedRanges: [{ start: 2, end: 4 }],
+		});
+		const caption = createCaptionElement({
+			id: "caption-a",
+			startTime: 5,
+			duration: 10,
+			mediaElementId: video.id,
+		});
+		const tracks: TimelineTrack[] = [
+			{
+				id: "main-track",
+				name: "Main",
+				type: "video",
+				isMain: true,
+				muted: false,
+				hidden: false,
+				elements: [video],
+			},
+			{
+				id: "caption-track",
+				name: "Captions",
+				type: "text",
+				hidden: false,
+				elements: [caption],
+			},
+		];
+
+		const model = buildTimelineVisualModel({ tracks, duration: 15 });
+		const layout = getTimelineElementVisualLayout({
+			element: caption,
+			tracks,
+			model,
+		});
+
+		expect(layout.visualStartTime).toBeCloseTo(5, 6);
+		expect(layout.visualDuration).toBeCloseTo(8, 6);
+		expect(layout.cutMarkers).toHaveLength(1);
+		expect(layout.cutMarkers[0]?.leftPercent).toBeCloseTo(25, 2);
 	});
 });

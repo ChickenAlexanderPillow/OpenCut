@@ -9,19 +9,23 @@ import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
 interface UseTimelinePlayheadProps {
 	zoomLevel: number;
 	displayTime?: number;
+	displayDuration?: number;
 	rulerRef: React.RefObject<HTMLDivElement | null>;
 	rulerScrollRef: React.RefObject<HTMLDivElement | null>;
 	tracksScrollRef: React.RefObject<HTMLDivElement | null>;
 	playheadRef?: React.RefObject<HTMLDivElement | null>;
+	mapVisualTimeToRealTime?: (time: number) => number;
 }
 
 export function useTimelinePlayhead({
 	zoomLevel,
 	displayTime,
+	displayDuration,
 	rulerRef,
 	rulerScrollRef,
 	tracksScrollRef,
 	playheadRef,
+	mapVisualTimeToRealTime,
 }: UseTimelinePlayheadProps) {
 	const editor = useEditor({
 		subscribeTo: ["playback", "timeline", "project", "scenes"],
@@ -48,10 +52,10 @@ export function useTimelinePlayhead({
 	const scrubResumeDelayMs = 400;
 
 	const playheadPosition =
-		isScrubbing && scrubTime !== null
-			? scrubTime
-			: typeof displayTime === "number"
-				? displayTime
+		typeof displayTime === "number"
+			? displayTime
+			: isScrubbing && scrubTime !== null
+				? scrubTime
 				: currentTime;
 
 	const handleScrub = useCallback(
@@ -68,20 +72,25 @@ export function useTimelinePlayhead({
 			const relativeMouseX = event.clientX - rulerRect.left;
 
 			const timelineContentWidth =
-				duration * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
+				(displayDuration ?? duration) *
+				TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
+				zoomLevel;
 
 			const clampedMouseX = Math.max(
 				0,
 				Math.min(timelineContentWidth, relativeMouseX),
 			);
 
-			const rawTime = Math.max(
+			const rawVisualTime = Math.max(
 				0,
 				Math.min(
-					duration,
+					displayDuration ?? duration,
 					clampedMouseX / (TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel),
 				),
 			);
+			const rawTime = mapVisualTimeToRealTime
+				? mapVisualTimeToRealTime(rawVisualTime)
+				: rawVisualTime;
 
 			const framesPerSecond = activeProject.settings.fps;
 			const frameTime = getSnappedSeekTime({
@@ -116,6 +125,7 @@ export function useTimelinePlayhead({
 		},
 		[
 			duration,
+			displayDuration,
 			zoomLevel,
 			seek,
 			rulerRef,
@@ -123,6 +133,7 @@ export function useTimelinePlayhead({
 			isShiftHeldRef,
 			editor.scenes,
 			editor.timeline,
+			mapVisualTimeToRealTime,
 		],
 	);
 
@@ -175,7 +186,10 @@ export function useTimelinePlayhead({
 		getMouseClientX: () => lastMouseXRef.current,
 		rulerScrollRef,
 		tracksScrollRef,
-		contentWidth: duration * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel,
+		contentWidth:
+			(displayDuration ?? duration) *
+			TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
+			zoomLevel,
 	});
 
 	useEffect(() => {

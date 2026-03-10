@@ -197,6 +197,7 @@ export interface TextElement extends BaseTimelineElement {
 		word: string;
 		startTime: number;
 		endTime: number;
+		hidden?: boolean;
 	}>;
 	captionSourceRef?: {
 		mediaElementId: string;

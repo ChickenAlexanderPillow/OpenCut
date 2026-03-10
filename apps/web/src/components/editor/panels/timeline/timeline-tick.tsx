@@ -5,6 +5,7 @@ import { formatRulerLabel } from "@/lib/timeline/ruler-utils";
 
 interface TimelineTickProps {
 	time: number;
+	labelTime?: number;
 	zoomLevel: number;
 	fps: number;
 	showLabel: boolean;
@@ -12,6 +13,7 @@ interface TimelineTickProps {
 
 export function TimelineTick({
 	time,
+	labelTime,
 	zoomLevel,
 	fps,
 	showLabel,
@@ -19,7 +21,10 @@ export function TimelineTick({
 	const leftPosition = time * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
 
 	if (showLabel) {
-		const label = formatRulerLabel({ timeInSeconds: time, fps });
+		const label = formatRulerLabel({
+			timeInSeconds: labelTime ?? time,
+			fps,
+		});
 		return (
 			<span
 				className="text-muted-foreground/85 absolute bottom-0 select-none text-[10px] leading-none"

@@ -14,6 +14,7 @@ export interface TranscriptEditWord {
 	startTime: number;
 	endTime: number;
 	removed?: boolean;
+	hidden?: boolean;
 	segmentId?: string;
 }
 
@@ -54,6 +55,7 @@ export interface CompiledCaptionWordTiming {
 	word: string;
 	startTime: number;
 	endTime: number;
+	hidden?: boolean;
 }
 
 export interface CompiledCaptionPayload {
@@ -130,5 +132,6 @@ export interface CaptionChunk {
 		word: string;
 		startTime: number;
 		endTime: number;
+		hidden?: boolean;
 	}>;
 }

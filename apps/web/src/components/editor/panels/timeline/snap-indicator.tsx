@@ -3,12 +3,14 @@
 import { useSnapIndicatorPosition } from "@/hooks/timeline/use-snap-indicator-position";
 import type { SnapPoint } from "@/lib/timeline/snap-utils";
 import type { TimelineTrack } from "@/types/timeline";
+import type { TimelineVisualModel } from "@/lib/transcript-editor/visual-timeline";
 
 interface SnapIndicatorProps {
 	snapPoint: SnapPoint | null;
 	zoomLevel: number;
 	isVisible: boolean;
 	tracks: TimelineTrack[];
+	visualModel: TimelineVisualModel;
 	timelineRef: React.RefObject<HTMLDivElement | null>;
 	trackLabelsRef?: React.RefObject<HTMLDivElement | null>;
 	tracksScrollRef: React.RefObject<HTMLDivElement | null>;
@@ -19,6 +21,7 @@ export function SnapIndicator({
 	zoomLevel,
 	isVisible,
 	tracks,
+	visualModel,
 	timelineRef,
 	trackLabelsRef,
 	tracksScrollRef,
@@ -27,6 +30,7 @@ export function SnapIndicator({
 		snapPoint,
 		zoomLevel,
 		tracks,
+		visualModel,
 		timelineRef,
 		trackLabelsRef,
 		tracksScrollRef,

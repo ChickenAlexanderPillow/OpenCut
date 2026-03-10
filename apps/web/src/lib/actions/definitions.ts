@@ -108,6 +108,11 @@ export const ACTIONS = {
 		category: "editing",
 		args: { trackId: "string", elementId: "string", wordId: "string" },
 	},
+	"transcript-toggle-word-hidden": {
+		description: "Toggle transcript word caption visibility state",
+		category: "editing",
+		args: { trackId: "string", elementId: "string", wordId: "string" },
+	},
 	"transcript-update-word": {
 		description: "Update transcript word text",
 		category: "editing",
@@ -145,7 +150,11 @@ export const ACTIONS = {
 	"transcript-remove-pauses": {
 		description: "Remove long pauses from transcript",
 		category: "editing",
-		args: { trackId: "string", elementId: "string", thresholdSeconds: "number" },
+		args: {
+			trackId: "string",
+			elementId: "string",
+			thresholdSeconds: "number",
+		},
 	},
 	"transcript-restore-all": {
 		description: "Restore all removed transcript words",
@@ -158,7 +167,8 @@ export const ACTIONS = {
 		args: { trackId: "string", elementId: "string", wordId: "string" },
 	},
 	"rebuild-captions-for-clip": {
-		description: "Rebuild captions for a clip and replace the current caption track",
+		description:
+			"Rebuild captions for a clip and replace the current caption track",
 		category: "editing",
 		args: { trackId: "string", elementId: "string" },
 	},

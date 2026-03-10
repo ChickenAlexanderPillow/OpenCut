@@ -62,7 +62,9 @@ function realignShiftedTimelineWordTimings({
 		minStart > mediaStartTime + windowSlack + CAPTION_TIMING_SHIFT_EPSILON;
 	const displacedBackward =
 		maxEnd <
-		mediaStartTime - CAPTION_TIMING_SHIFT_EPSILON + CAPTION_TIMING_SHIFT_SLACK_SECONDS;
+		mediaStartTime -
+			CAPTION_TIMING_SHIFT_EPSILON +
+			CAPTION_TIMING_SHIFT_SLACK_SECONDS;
 	const compactSpan = span <= windowSlack + CAPTION_TIMING_SHIFT_EPSILON;
 	if (!compactSpan || (!displacedForward && !displacedBackward)) {
 		return timings;
@@ -96,12 +98,10 @@ export function resolveEffectiveTranscriptCuts({
 export function getEffectiveTranscriptCutsFromTranscriptEdit({
 	transcriptEdit,
 }: {
-	transcriptEdit?:
-		| {
-				words: TranscriptEditWord[];
-				cuts: TranscriptEditCutRange[];
-		  }
-		| null;
+	transcriptEdit?: {
+		words: TranscriptEditWord[];
+		cuts: TranscriptEditCutRange[];
+	} | null;
 }): TranscriptEditCutRange[] {
 	if (!transcriptEdit || transcriptEdit.words.length === 0) return [];
 	return resolveEffectiveTranscriptCuts({
@@ -177,13 +177,11 @@ export function getEffectiveTranscriptCutsForClipWindow({
 	transcriptEdit,
 	trimStart,
 }: {
-	transcriptEdit?:
-		| {
-				words: TranscriptEditWord[];
-				cuts: TranscriptEditCutRange[];
-				cutTimeDomain?: TranscriptCutTimeDomain;
-		  }
-		| null;
+	transcriptEdit?: {
+		words: TranscriptEditWord[];
+		cuts: TranscriptEditCutRange[];
+		cutTimeDomain?: TranscriptCutTimeDomain;
+	} | null;
 	trimStart: number;
 }): TranscriptEditCutRange[] {
 	const effective = getEffectiveTranscriptCutsFromTranscriptEdit({
@@ -234,6 +232,7 @@ function getRevisionKey({
 		updateHash(word.startTime.toFixed(4));
 		updateHash(word.endTime.toFixed(4));
 		updateHash(word.removed ? "1" : "0");
+		updateHash(word.hidden ? "1" : "0");
 	}
 	updateHash(String(effectiveCuts.length));
 	for (const cut of effectiveCuts) {
@@ -275,7 +274,12 @@ export type TranscriptTimelineSnapshot = {
 		content: string;
 		startTime: number;
 		duration: number;
-		wordTimings: Array<{ word: string; startTime: number; endTime: number }>;
+		wordTimings: Array<{
+			word: string;
+			startTime: number;
+			endTime: number;
+			hidden?: boolean;
+		}>;
 	} | null;
 	isTimelineAligned: boolean;
 	timeMap: {
@@ -342,18 +346,19 @@ export function buildTranscriptTimelineSnapshot({
 	const captionPayload = !compressedPayload
 		? null
 		: (() => {
-				let timelineWordTimings = (isTimelineAligned
-					? compressedPayload.wordTimings
-					: compressedPayload.wordTimings.map((timing) => ({
-							word: timing.word,
-							startTime: mediaStartTime + timing.startTime,
-							endTime: mediaStartTime + timing.endTime,
-					  })))
-					.map((timing) => ({
-						word: timing.word,
-						startTime: timing.startTime,
-						endTime: timing.endTime,
-					}));
+				let timelineWordTimings = (
+					isTimelineAligned
+						? compressedPayload.wordTimings
+						: compressedPayload.wordTimings.map((timing) => ({
+								word: timing.word,
+								startTime: mediaStartTime + timing.startTime,
+								endTime: mediaStartTime + timing.endTime,
+							}))
+				).map((timing) => ({
+					word: timing.word,
+					startTime: timing.startTime,
+					endTime: timing.endTime,
+				}));
 				if (!isTimelineAligned) {
 					timelineWordTimings = realignShiftedTimelineWordTimings({
 						timings: timelineWordTimings,
@@ -382,7 +387,7 @@ export function buildTranscriptTimelineSnapshot({
 					duration: Math.max(0.04, mediaDuration),
 					wordTimings: timelineWordTimings,
 				};
-		  })();
+			})();
 
 	const snapshot: TranscriptTimelineSnapshot = {
 		mediaElementId,
@@ -441,7 +446,8 @@ export function validateCaptionAgainstSnapshot({
 	}
 	if (
 		typeof captionElement.captionSourceRef?.transcriptVersion === "number" &&
-		captionElement.captionSourceRef.transcriptVersion !== snapshot.transcriptVersion
+		captionElement.captionSourceRef.transcriptVersion !==
+			snapshot.transcriptVersion
 	) {
 		return { valid: false, reason: "transcript-version-mismatch" };
 	}
@@ -476,6 +482,9 @@ export function validateCaptionAgainstSnapshot({
 			return { valid: false, reason: "timing-mismatch" };
 		}
 		if (Math.abs(actual.endTime - expectedTiming.endTime) > 0.02) {
+			return { valid: false, reason: "timing-mismatch" };
+		}
+		if (Boolean(actual.hidden) !== Boolean(expectedTiming.hidden)) {
 			return { valid: false, reason: "timing-mismatch" };
 		}
 	}

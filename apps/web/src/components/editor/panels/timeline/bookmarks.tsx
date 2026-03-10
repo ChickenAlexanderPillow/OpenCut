@@ -28,6 +28,11 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { uppercase } from "@/utils/string";
 import { clamp } from "@/utils/math";
+import type { TimelineVisualModel } from "@/lib/transcript-editor/visual-timeline";
+import {
+	mapRealTimeToVisualTime,
+	getVisualDurationForRealSpan,
+} from "@/lib/transcript-editor/visual-timeline";
 
 const PIXELS_PER_SECOND = TIMELINE_CONSTANTS.PIXELS_PER_SECOND;
 const MIN_BOOKMARK_WIDTH_PX = 2;
@@ -54,6 +59,7 @@ function seekToBookmarkTime({
 interface TimelineBookmarksRowProps {
 	zoomLevel: number;
 	dynamicTimelineWidth: number;
+	visualModel: TimelineVisualModel;
 	dragState: BookmarkDragState;
 	onBookmarkMouseDown: (params: {
 		event: React.MouseEvent;
@@ -68,6 +74,7 @@ interface TimelineBookmarksRowProps {
 export function TimelineBookmarksRow({
 	zoomLevel,
 	dynamicTimelineWidth,
+	visualModel,
 	dragState,
 	onBookmarkMouseDown,
 	handleWheel,
@@ -103,6 +110,7 @@ export function TimelineBookmarksRow({
 						key={`bookmark-${bookmark.time}`}
 						bookmark={bookmark}
 						zoomLevel={zoomLevel}
+						visualModel={visualModel}
 						dragState={dragState}
 						onBookmarkMouseDown={onBookmarkMouseDown}
 					/>
@@ -115,11 +123,13 @@ export function TimelineBookmarksRow({
 function TimelineBookmark({
 	bookmark,
 	zoomLevel,
+	visualModel,
 	dragState,
 	onBookmarkMouseDown,
 }: {
 	bookmark: Bookmark;
 	zoomLevel: number;
+	visualModel: TimelineVisualModel;
 	dragState: BookmarkDragState;
 	onBookmarkMouseDown: (params: {
 		event: React.MouseEvent;
@@ -135,11 +145,22 @@ function TimelineBookmark({
 		dragState.bookmarkTime !== null &&
 		Math.abs(dragState.bookmarkTime - bookmark.time) < BOOKMARK_TIME_EPSILON;
 
-	const displayTime = isDragging ? dragState.currentTime : bookmark.time;
+	const displayTime = mapRealTimeToVisualTime({
+		time: isDragging ? dragState.currentTime : bookmark.time,
+		model: visualModel,
+	});
 	const time = bookmark.time;
 	const bookmarkDuration = bookmark.duration ?? 0;
 	const durationWidth =
-		bookmarkDuration > 0 ? bookmarkDuration * PIXELS_PER_SECOND * zoomLevel : 0;
+		bookmarkDuration > 0
+			? getVisualDurationForRealSpan({
+					startTime: bookmark.time,
+					duration: bookmarkDuration,
+					model: visualModel,
+			  }) *
+			  PIXELS_PER_SECOND *
+			  zoomLevel
+			: 0;
 	const hasDurationRange = durationWidth > MIN_BOOKMARK_WIDTH_PX;
 	const bookmarkWidth = BOOKMARK_MARKER_WIDTH_PX + Math.max(durationWidth, 0);
 	const left = displayTime * PIXELS_PER_SECOND * zoomLevel;

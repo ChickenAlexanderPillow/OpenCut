@@ -43,7 +43,8 @@ import { mediaSupportsAudio } from "@/lib/media/media-utils";
 import { getActionDefinition, type TAction, invokeAction } from "@/lib/actions";
 import { useElementSelection } from "@/hooks/timeline/element/use-element-selection";
 import { resolveStickerId } from "@/lib/stickers";
-import { getTranscriptApplied, getTranscriptDraft } from "@/lib/transcript-editor/state";
+import type { TimelineVisualModel } from "@/lib/transcript-editor/visual-timeline";
+import { getTimelineElementVisualLayout as getElementVisualLayout } from "@/lib/transcript-editor/visual-timeline";
 import Image from "next/image";
 import {
 	ScissorIcon,
@@ -95,61 +96,6 @@ function isTranscriptMediaElement(
 	element: TimelineElementType,
 ): element is Extract<TimelineElementType, { type: "video" | "audio" }> {
 	return element.type === "video" || element.type === "audio";
-}
-
-function getVisibleTranscriptCutOverlays({
-	element,
-	tracks,
-}: {
-	element: TimelineElementType;
-	tracks: TimelineTrack[];
-}): Array<{ leftPercent: number; widthPercent: number }> {
-	const resolveOverlaysForMedia = (
-		mediaElement: Extract<TimelineElementType, { type: "video" | "audio" }>,
-	): Array<{ leftPercent: number; widthPercent: number }> => {
-		const draft = getTranscriptDraft(mediaElement);
-		const applied = getTranscriptApplied(mediaElement);
-		const cuts = draft?.cuts ?? applied?.removedRanges ?? [];
-		if (cuts.length === 0 || mediaElement.duration <= 0) return [];
-
-		const visibleStart = mediaElement.trimStart;
-		const visibleEnd = mediaElement.trimStart + mediaElement.duration;
-		const overlays: Array<{ leftPercent: number; widthPercent: number }> = [];
-
-		for (const cut of cuts) {
-			const start = Math.max(visibleStart, cut.start);
-			const end = Math.min(visibleEnd, cut.end);
-			if (end - start <= 0) continue;
-			overlays.push({
-				leftPercent: ((start - visibleStart) / mediaElement.duration) * 100,
-				widthPercent: ((end - start) / mediaElement.duration) * 100,
-			});
-		}
-		return overlays;
-	};
-
-	if (isTranscriptMediaElement(element)) {
-		return resolveOverlaysForMedia(element);
-	}
-	if (element.type !== "text" || !element.captionSourceRef?.mediaElementId) {
-		return [];
-	}
-	let sourceTrackElement: Extract<TimelineElementType, { type: "video" | "audio" }> | null =
-		null;
-	for (const track of tracks) {
-		for (const candidate of track.elements) {
-			if (
-				isTranscriptMediaElement(candidate) &&
-				candidate.id === element.captionSourceRef.mediaElementId
-			) {
-				sourceTrackElement = candidate;
-				break;
-			}
-		}
-		if (sourceTrackElement) break;
-	}
-	if (!sourceTrackElement) return [];
-	return resolveOverlaysForMedia(sourceTrackElement);
 }
 
 const TIMELINE_KEYFRAME_PATHS: AnimationPropertyPath[] = [
@@ -227,7 +173,9 @@ const KEYFRAME_EASING_OPTIONS: Array<{
 interface TimelineElementProps {
 	element: TimelineElementType;
 	track: TimelineTrack;
+	tracks: TimelineTrack[];
 	zoomLevel: number;
+	visualModel: TimelineVisualModel;
 	isSelected: boolean;
 	onSnapPointChange?: (snapPoint: SnapPoint | null) => void;
 	onResizeStateChange?: (params: { isResizing: boolean }) => void;
@@ -242,7 +190,9 @@ interface TimelineElementProps {
 export function TimelineElement({
 	element,
 	track,
+	tracks,
 	zoomLevel,
+	visualModel,
 	isSelected,
 	onSnapPointChange,
 	onResizeStateChange,
@@ -291,9 +241,23 @@ export function TimelineElement({
 			: element.startTime;
 	const displayedStartTime = isResizing ? currentStartTime : elementStartTime;
 	const displayedDuration = isResizing ? currentDuration : element.duration;
+	const visualLayout = getElementVisualLayout({
+		element: {
+			...element,
+			startTime: displayedStartTime,
+			duration: displayedDuration,
+		},
+		tracks,
+		model: visualModel,
+	});
 	const elementWidth =
-		displayedDuration * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
-	const elementLeft = displayedStartTime * 50 * zoomLevel;
+		visualLayout.visualDuration *
+		TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
+		zoomLevel;
+	const elementLeft =
+		visualLayout.visualStartTime *
+		TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
+		zoomLevel;
 
 	const revealInMedia = () => {
 		if (hasMediaId(element)) {
@@ -367,9 +331,11 @@ export function TimelineElement({
 			<ContextMenuTrigger asChild>
 				<div
 					data-timeline-element-id={element.id}
-					data-timeline-track-id={track.id}
-					data-timeline-element-type={element.type}
-					className={`absolute top-0 h-full select-none`}
+						data-timeline-track-id={track.id}
+						data-timeline-element-type={element.type}
+						data-visual-start-time={visualLayout.visualStartTime}
+						data-visual-duration={visualLayout.visualDuration}
+						className={`absolute top-0 h-full select-none`}
 					style={{
 						left: `${elementLeft}px`,
 						width: `${elementWidth}px`,
@@ -383,7 +349,11 @@ export function TimelineElement({
 						editor={editor}
 						element={element}
 						track={track}
+						tracks={tracks}
 						isSelected={isSelected}
+						visualModel={visualModel}
+						visualStartTime={visualLayout.visualStartTime}
+						visualDuration={visualLayout.visualDuration}
 						projectFps={activeProject.settings.fps}
 						snappingEnabled={snappingEnabled}
 						hasAudio={hasAudio}
@@ -505,7 +475,11 @@ function ElementInner({
 	editor,
 	element,
 	track,
+	tracks,
 	isSelected,
+	visualModel,
+	visualStartTime,
+	visualDuration,
 	projectFps,
 	snappingEnabled,
 	hasAudio,
@@ -520,7 +494,11 @@ function ElementInner({
 	editor: ReturnType<typeof useEditor>;
 	element: TimelineElementType;
 	track: TimelineTrack;
+	tracks: TimelineTrack[];
 	isSelected: boolean;
+	visualModel: TimelineVisualModel;
+	visualStartTime: number;
+	visualDuration: number;
 	projectFps: number;
 	snappingEnabled: boolean;
 	hasAudio: boolean;
@@ -547,10 +525,11 @@ function ElementInner({
 }) {
 	const showMutedOverlay = element.type === "audio" && hasAudio && isMuted;
 	const showHiddenOverlay = canElementBeHidden(element) && element.hidden;
-	const transcriptCutOverlays = getVisibleTranscriptCutOverlays({
+	const transcriptCutMarkers = getElementVisualLayout({
 		element,
-		tracks: editor.timeline.getTracks(),
-	});
+		tracks,
+		model: visualModel,
+	}).cutMarkers;
 	const isVisual = isVisualTimelineElement(element);
 	const elementKeyframes = useMemo(
 		() =>
@@ -934,6 +913,8 @@ function ElementInner({
 			<button
 				type="button"
 				data-timeline-element-hit-target={element.id}
+				data-visual-start-time={visualStartTime}
+				data-visual-duration={visualDuration}
 				className="absolute inset-0 size-full cursor-pointer"
 				onClick={(e) => onElementClick(e, element)}
 				onMouseDown={(e) => onElementMouseDown(e, element)}
@@ -948,13 +929,12 @@ function ElementInner({
 						onWaveformPeaksResolved={onWaveformPeaksResolved}
 					/>
 				</div>
-				{transcriptCutOverlays.map((overlay) => (
+				{transcriptCutMarkers.map((marker, index) => (
 					<div
-						key={`${overlay.leftPercent.toFixed(3)}:${overlay.widthPercent.toFixed(3)}`}
-						className="pointer-events-none absolute top-0 bottom-0 bg-black/35"
+						key={`${element.id}:cut-marker:${index}`}
+						className="pointer-events-none absolute top-1 bottom-1 w-1 -translate-x-1/2 rounded-full border border-black/25 bg-zinc-400/90"
 						style={{
-							left: `${overlay.leftPercent}%`,
-							width: `${overlay.widthPercent}%`,
+							left: `${marker.leftPercent}%`,
 						}}
 					/>
 				))}

@@ -5,12 +5,18 @@ import {
 	TRACK_HEIGHTS,
 } from "@/constants/timeline-constants";
 import type { TimelineTrack, DropTarget, ElementType } from "@/types/timeline";
+import type { TimelineVisualModel } from "@/lib/transcript-editor/visual-timeline";
+import {
+	mapRealTimeToVisualTime,
+	getVisualDurationForRealSpan,
+} from "@/lib/transcript-editor/visual-timeline";
 
 interface DragLineProps {
 	dropTarget: DropTarget | null;
 	tracks: TimelineTrack[];
 	isVisible: boolean;
 	zoomLevel?: number;
+	visualModel: TimelineVisualModel;
 	dragElementType?: ElementType | null;
 	dragElementDuration?: number | null;
 	headerHeight?: number;
@@ -21,6 +27,7 @@ export function DragLine({
 	tracks,
 	isVisible,
 	zoomLevel = 1,
+	visualModel,
 	dragElementType = null,
 	dragElementDuration = null,
 	headerHeight = 0,
@@ -33,13 +40,22 @@ export function DragLine({
 		dragElementDuration && dragElementDuration > 0
 			? Math.max(
 					2,
-					dragElementDuration *
+					getVisualDurationForRealSpan({
+						startTime: dropTarget.xPosition,
+						duration: dragElementDuration,
+						model: visualModel,
+					}) *
 						TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
 						zoomLevel,
 				)
 			: 0;
 	const ghostLeftPx =
-		dropTarget.xPosition * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
+		mapRealTimeToVisualTime({
+			time: dropTarget.xPosition,
+			model: visualModel,
+		}) *
+		TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
+		zoomLevel;
 	const showGhost =
 		ghostWidthPx > 0 &&
 		(dragElementType === "audio" ||

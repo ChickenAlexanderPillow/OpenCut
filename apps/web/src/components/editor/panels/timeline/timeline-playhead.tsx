@@ -8,6 +8,8 @@ import { useEditor } from "@/hooks/use-editor";
 interface TimelinePlayheadProps {
 	zoomLevel: number;
 	displayTime?: number;
+	displayDuration?: number;
+	mapVisualTimeToRealTime?: (time: number) => number;
 	rulerRef: React.RefObject<HTMLDivElement | null>;
 	rulerScrollRef: React.RefObject<HTMLDivElement | null>;
 	tracksScrollRef: React.RefObject<HTMLDivElement | null>;
@@ -19,6 +21,8 @@ interface TimelinePlayheadProps {
 export function TimelinePlayhead({
 	zoomLevel,
 	displayTime,
+	displayDuration,
+	mapVisualTimeToRealTime,
 	rulerRef,
 	rulerScrollRef,
 	tracksScrollRef,
@@ -34,10 +38,12 @@ export function TimelinePlayhead({
 	const { playheadPosition, handlePlayheadMouseDown } = useTimelinePlayhead({
 		zoomLevel,
 		displayTime,
+		displayDuration,
 		rulerRef,
 		rulerScrollRef,
 		tracksScrollRef,
 		playheadRef,
+		mapVisualTimeToRealTime,
 	});
 
 	const timelineContainerHeight =
@@ -61,7 +67,7 @@ export function TimelinePlayhead({
 		const { start, end } = editor.playback.getPlaybackBounds();
 		const nextTime = Math.max(
 			start,
-			Math.min(end, playheadPosition + direction * step),
+			Math.min(end, editor.playback.getCurrentTime() + direction * step),
 		);
 
 		editor.playback.seek({ time: nextTime });
@@ -73,7 +79,7 @@ export function TimelinePlayhead({
 			role="slider"
 			aria-label="Timeline playhead"
 			aria-valuemin={0}
-			aria-valuemax={duration}
+			aria-valuemax={displayDuration ?? duration}
 			aria-valuenow={playheadPosition}
 			tabIndex={0}
 			className="pointer-events-none absolute z-5"

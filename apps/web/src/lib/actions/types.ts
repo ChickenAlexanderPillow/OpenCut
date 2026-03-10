@@ -13,6 +13,9 @@ export type TActionArgsMap = {
 	"transcript-toggle-word":
 		| { trackId: string; elementId: string; wordId: string }
 		| undefined;
+	"transcript-toggle-word-hidden":
+		| { trackId: string; elementId: string; wordId: string }
+		| undefined;
 	"transcript-update-word":
 		| { trackId: string; elementId: string; wordId: string; text: string }
 		| undefined;
@@ -31,7 +34,9 @@ export type TActionArgsMap = {
 				removed: boolean;
 		  }
 		| undefined;
-	"transcript-remove-fillers": { trackId: string; elementId: string } | undefined;
+	"transcript-remove-fillers":
+		| { trackId: string; elementId: string }
+		| undefined;
 	"transcript-remove-pauses":
 		| { trackId: string; elementId: string; thresholdSeconds?: number }
 		| undefined;

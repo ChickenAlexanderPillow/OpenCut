@@ -54,13 +54,14 @@ import {
 	getOrCreateClipTranscriptForAsset,
 } from "@/lib/clips/transcript";
 import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
-import {
-	resolveBlueHighlightCaptionPreset,
-} from "@/constants/caption-presets";
+import { resolveBlueHighlightCaptionPreset } from "@/constants/caption-presets";
 import { findCaptionTrackIdInScene } from "@/lib/captions/caption-track";
 import { normalizeGeneratedCaptionsInProject } from "@/lib/captions/generated-caption-normalizer";
 import { getMainTrack } from "@/lib/timeline/track-utils";
-import { canElementHaveAudio, isVisualElement } from "@/lib/timeline/element-utils";
+import {
+	canElementHaveAudio,
+	isVisualElement,
+} from "@/lib/timeline/element-utils";
 import {
 	buildTransitionKeyframeSpecs,
 	getTransitionPreset,
@@ -69,7 +70,11 @@ import {
 import type { MediaAsset } from "@/types/assets";
 import type { TProject } from "@/types/project";
 import type { ClipCandidate } from "@/types/clip-generation";
-import { DEFAULT_BLEND_MODE, DEFAULT_OPACITY, DEFAULT_TRANSFORM } from "@/constants/timeline-constants";
+import {
+	DEFAULT_BLEND_MODE,
+	DEFAULT_OPACITY,
+	DEFAULT_TRANSFORM,
+} from "@/constants/timeline-constants";
 import { getVideoInfo } from "@/lib/media/mediabunny";
 import { ALL_FORMATS, AudioBufferSink, BlobSource, Input } from "mediabunny";
 import {
@@ -96,7 +101,10 @@ import {
 	syncCaptionsFromTranscriptEdits,
 	validateAndHealCaptionDriftInTracks,
 } from "@/lib/transcript-editor/sync-captions";
-import { getElementBaseValueForProperty, resolveNumberAtTime } from "@/lib/animation";
+import {
+	getElementBaseValueForProperty,
+	resolveNumberAtTime,
+} from "@/lib/animation";
 
 const MIN_VIRAL_CLIP_SCORE = 56;
 const MAX_VIRAL_CLIP_COUNT = 5;
@@ -338,20 +346,21 @@ function getSmartCutSegmentsForElement({
 	const clipEnd = element.startTime + element.duration;
 
 	const sourceMediaId = getSmartCutMediaSourceId({ element });
-	const transcriptWordTimings =
-		(element.transcriptEdit?.words ?? [])
-			.filter((word) => !word.removed)
-			.map((word) => ({
-				startTime: element.startTime + (word.startTime - element.trimStart),
-				endTime: element.startTime + (word.endTime - element.trimStart),
-			}));
+	const transcriptWordTimings = (element.transcriptEdit?.words ?? [])
+		.filter((word) => !word.removed)
+		.map((word) => ({
+			startTime: element.startTime + (word.startTime - element.trimStart),
+			endTime: element.startTime + (word.endTime - element.trimStart),
+		}));
 	const siblingTranscriptWordTimings =
 		sourceMediaId === null
 			? []
 			: mediaElements
 					.filter((candidate) => {
 						if (candidate.id === element.id) return false;
-						return getSmartCutMediaSourceId({ element: candidate }) === sourceMediaId;
+						return (
+							getSmartCutMediaSourceId({ element: candidate }) === sourceMediaId
+						);
 					})
 					.flatMap((candidate) => candidate.transcriptEdit?.words ?? [])
 					.filter((word) => !word.removed)
@@ -533,13 +542,17 @@ function resolveClipTranscriptionApiCandidates(): string[] {
 		} else {
 			candidates.push("/api/clips/transcribe");
 			if (fallbackBase) {
-				candidates.push(`${fallbackBase.replace(/\/$/, "")}/api/clips/transcribe`);
+				candidates.push(
+					`${fallbackBase.replace(/\/$/, "")}/api/clips/transcribe`,
+				);
 			}
 		}
 	} else {
 		candidates.push("/api/clips/transcribe");
 		if (fallbackBase) {
-			candidates.push(`${fallbackBase.replace(/\/$/, "")}/api/clips/transcribe`);
+			candidates.push(
+				`${fallbackBase.replace(/\/$/, "")}/api/clips/transcribe`,
+			);
 		}
 	}
 
@@ -628,9 +641,7 @@ async function fetchScoredCandidates({
 	throw (
 		lastHttpError ??
 		lastNetworkError ??
-		new Error(
-			`Failed to reach clip scoring API (${endpoints.join(", ")})`,
-		)
+		new Error(`Failed to reach clip scoring API (${endpoints.join(", ")})`)
 	);
 }
 
@@ -643,7 +654,9 @@ async function getOrCreateClipTranscriptWithReuse({
 	project: TProject;
 	asset: MediaAsset;
 	modelId: TranscriptionModelId;
-	onProgress?: Parameters<typeof getOrCreateClipTranscriptForAsset>[0]["onProgress"];
+	onProgress?: Parameters<
+		typeof getOrCreateClipTranscriptForAsset
+	>[0]["onProgress"];
 }) {
 	const inFlightKey = `${project.metadata.id}:${asset.id}:${modelId}`;
 	const existing = clipTranscriptInFlight.get(inFlightKey);
@@ -734,8 +747,10 @@ function getTranscriptCompanionElementIds({
 				element: candidate,
 			});
 			if (!candidateSourceId || candidateSourceId !== targetSourceId) continue;
-			const startAligned = Math.abs(candidate.startTime - target.startTime) < 0.02;
-			const trimAligned = Math.abs(candidate.trimStart - target.trimStart) < 0.05;
+			const startAligned =
+				Math.abs(candidate.startTime - target.startTime) < 0.02;
+			const trimAligned =
+				Math.abs(candidate.trimStart - target.trimStart) < 0.05;
 			const endAligned =
 				Math.abs(
 					candidate.trimStart +
@@ -884,6 +899,7 @@ function areTranscriptWordsEqual({
 		if (Math.abs(a.startTime - b.startTime) > 0.0001) return false;
 		if (Math.abs(a.endTime - b.endTime) > 0.0001) return false;
 		if (Boolean(a.removed) !== Boolean(b.removed)) return false;
+		if (Boolean(a.hidden) !== Boolean(b.hidden)) return false;
 		if ((a.segmentId ?? undefined) !== (b.segmentId ?? undefined)) return false;
 	}
 	return true;
@@ -943,10 +959,18 @@ function hasTrackStructureChange({
 	for (let trackIndex = 0; trackIndex < beforeTracks.length; trackIndex++) {
 		const beforeTrack = beforeTracks[trackIndex];
 		const afterTrack = afterTracks[trackIndex];
-		if (!beforeTrack || !afterTrack || beforeTrack.id !== afterTrack.id) return true;
+		if (!beforeTrack || !afterTrack || beforeTrack.id !== afterTrack.id)
+			return true;
 		if (beforeTrack.elements.length !== afterTrack.elements.length) return true;
-		for (let elementIndex = 0; elementIndex < beforeTrack.elements.length; elementIndex++) {
-			if (beforeTrack.elements[elementIndex]?.id !== afterTrack.elements[elementIndex]?.id) {
+		for (
+			let elementIndex = 0;
+			elementIndex < beforeTrack.elements.length;
+			elementIndex++
+		) {
+			if (
+				beforeTrack.elements[elementIndex]?.id !==
+				afterTrack.elements[elementIndex]?.id
+			) {
 				return true;
 			}
 		}
@@ -982,6 +1006,7 @@ type CompactTranscriptWordDiff = {
 	id: string;
 	text?: { before: string; after: string };
 	removed?: { before: boolean; after: boolean };
+	hidden?: { before: boolean; after: boolean };
 	segmentId?: { before?: string; after?: string };
 };
 
@@ -1033,13 +1058,20 @@ function buildCompactTranscriptPatch({
 		if (beforeRemoved !== afterRemoved) {
 			diff.removed = { before: beforeRemoved, after: afterRemoved };
 		}
-		if ((beforeWord.segmentId ?? undefined) !== (afterWord.segmentId ?? undefined)) {
+		const beforeHidden = Boolean(beforeWord.hidden);
+		const afterHidden = Boolean(afterWord.hidden);
+		if (beforeHidden !== afterHidden) {
+			diff.hidden = { before: beforeHidden, after: afterHidden };
+		}
+		if (
+			(beforeWord.segmentId ?? undefined) !== (afterWord.segmentId ?? undefined)
+		) {
 			diff.segmentId = {
 				before: beforeWord.segmentId ?? undefined,
 				after: afterWord.segmentId ?? undefined,
 			};
 		}
-		if (diff.text || diff.removed || diff.segmentId) {
+		if (diff.text || diff.removed || diff.hidden || diff.segmentId) {
 			wordDiffs.push(diff);
 		}
 	}
@@ -1060,8 +1092,12 @@ function buildCompactTranscriptPatch({
 				? [...afterEdit.segmentsUi]
 				: undefined,
 		wordDiffs,
-		beforeCuts: cutsChanged ? mergeCutRanges({ cuts: beforeDraft.cuts }) : undefined,
-		afterCuts: cutsChanged ? mergeCutRanges({ cuts: afterEdit.cuts }) : undefined,
+		beforeCuts: cutsChanged
+			? mergeCutRanges({ cuts: beforeDraft.cuts })
+			: undefined,
+		afterCuts: cutsChanged
+			? mergeCutRanges({ cuts: afterEdit.cuts })
+			: undefined,
 	};
 }
 
@@ -1073,15 +1109,13 @@ class CompactTranscriptMutationCommand extends Command {
 		super();
 	}
 
-	private applyPatches({
-		direction,
-	}: {
-		direction: "before" | "after";
-	}): void {
+	private applyPatches({ direction }: { direction: "before" | "after" }): void {
 		const editor = EditorCore.getInstance();
 		const patchByTrack = new Map<string, Map<string, CompactTranscriptPatch>>();
 		for (const patch of this.patches) {
-			const byElement = patchByTrack.get(patch.trackId) ?? new Map<string, CompactTranscriptPatch>();
+			const byElement =
+				patchByTrack.get(patch.trackId) ??
+				new Map<string, CompactTranscriptPatch>();
 			byElement.set(patch.elementId, patch);
 			patchByTrack.set(patch.trackId, byElement);
 		}
@@ -1096,23 +1130,28 @@ class CompactTranscriptMutationCommand extends Command {
 				const currentDraft = getTranscriptDraft(element);
 				if (!currentDraft) return element;
 				const wordsById = new Map(
-					currentDraft.words.map((word) => [
-						word.id,
-						{ ...word },
-					]),
+					currentDraft.words.map((word) => [word.id, { ...word }]),
 				);
 				for (const wordDiff of patch.wordDiffs) {
 					const word = wordsById.get(wordDiff.id);
 					if (!word) continue;
 					if (wordDiff.text) {
 						word.text =
-							direction === "before" ? wordDiff.text.before : wordDiff.text.after;
+							direction === "before"
+								? wordDiff.text.before
+								: wordDiff.text.after;
 					}
 					if (wordDiff.removed) {
 						word.removed =
 							direction === "before"
 								? wordDiff.removed.before
 								: wordDiff.removed.after;
+					}
+					if (wordDiff.hidden) {
+						word.hidden =
+							direction === "before"
+								? wordDiff.hidden.before
+								: wordDiff.hidden.after;
 					}
 					if (wordDiff.segmentId) {
 						word.segmentId =
@@ -1250,7 +1289,7 @@ function scheduleTranscriptDraftCompile({
 													status: "idle",
 													updatedAt: draft.updatedAt,
 												},
-										  })
+											})
 										: candidateElement,
 								),
 							} satisfies TimelineTrack;
@@ -1269,12 +1308,12 @@ function scheduleTranscriptDraftCompile({
 													status: "idle",
 													updatedAt: draft.updatedAt,
 												},
-										  })
+											})
 										: candidateElement,
 								),
 							} satisfies TimelineTrack;
 						}
-							return candidateTrack;
+						return candidateTrack;
 					});
 					changed = true;
 				}
@@ -1324,7 +1363,9 @@ function applyTranscriptEditMutation({
 	editor: ReturnType<typeof useEditor>;
 	trackId: string;
 	elementId: string;
-	mutateWords?: (words: NonNullable<VideoElement["transcriptDraft"]>["words"]) => NonNullable<VideoElement["transcriptDraft"]>["words"];
+	mutateWords?: (
+		words: NonNullable<VideoElement["transcriptDraft"]>["words"],
+	) => NonNullable<VideoElement["transcriptDraft"]>["words"];
 	mutateSegmentsUi?: (
 		segments: NonNullable<VideoElement["transcriptDraft"]>["segmentsUi"],
 		words: NonNullable<VideoElement["transcriptDraft"]>["words"],
@@ -1346,7 +1387,10 @@ function applyTranscriptEditMutation({
 			mediaElementId: target.id,
 		});
 	if (!transcriptDraft) {
-		return { changed: false, error: "No word-level transcript available for selected element" };
+		return {
+			changed: false,
+			error: "No word-level transcript available for selected element",
+		};
 	}
 
 	// Transcript words are the source of truth for editing state.
@@ -1416,7 +1460,8 @@ function applyTranscriptEditMutation({
 	const updatedTracks = tracks.map((track) => {
 		if (track.type === "video") {
 			const nextElements = track.elements.map((element) =>
-				relatedElementIds.has(element.id) && isTranscriptEditableMediaElement(element)
+				relatedElementIds.has(element.id) &&
+				isTranscriptEditableMediaElement(element)
 					? withTranscriptState({
 							element,
 							draft: nextDraft,
@@ -1430,14 +1475,15 @@ function applyTranscriptEditMutation({
 								status: "compiling",
 								updatedAt: nextDraft.updatedAt,
 							},
-					  })
+						})
 					: element,
 			);
 			return { ...track, elements: nextElements } as TimelineTrack;
 		}
 		if (track.type === "audio") {
 			const nextElements = track.elements.map((element) =>
-				relatedElementIds.has(element.id) && isTranscriptEditableMediaElement(element)
+				relatedElementIds.has(element.id) &&
+				isTranscriptEditableMediaElement(element)
 					? withTranscriptState({
 							element,
 							draft: nextDraft,
@@ -1451,7 +1497,7 @@ function applyTranscriptEditMutation({
 								status: "compiling",
 								updatedAt: nextDraft.updatedAt,
 							},
-					  })
+						})
 					: element,
 			);
 			return { ...track, elements: nextElements } as TimelineTrack;
@@ -1503,11 +1549,16 @@ function buildClipElement({
 		canvasSize.width > 0 &&
 		canvasSize.height > 0;
 	const coverScale = shouldCoverScale
-		? Math.max(canvasSize.width / sourceWidth, canvasSize.height / sourceHeight) /
+		? Math.max(
+				canvasSize.width / sourceWidth,
+				canvasSize.height / sourceHeight,
+			) /
 			Math.min(canvasSize.width / sourceWidth, canvasSize.height / sourceHeight)
 		: 1;
 	const effectiveScale =
-		typeof scaleOverride === "number" && Number.isFinite(scaleOverride) && scaleOverride > 0
+		typeof scaleOverride === "number" &&
+		Number.isFinite(scaleOverride) &&
+		scaleOverride > 0
 			? scaleOverride
 			: coverScale;
 
@@ -1557,9 +1608,9 @@ function buildContinuousCaptionForClip({
 	duration: number;
 	wordTimings: Array<{ word: string; startTime: number; endTime: number }>;
 } | null {
-	const sourceWordCount = segments
-		.flatMap((segment) => segment.text.match(/\S+/g) ?? [])
-		.length;
+	const sourceWordCount = segments.flatMap(
+		(segment) => segment.text.match(/\S+/g) ?? [],
+	).length;
 	const rawWordTimings = segments
 		.slice()
 		.flatMap((segment) => {
@@ -1638,11 +1689,15 @@ function buildContinuousCaptionForClip({
 		});
 	}
 
-	const content = normalizedWordTimings.map((timing) => timing.word).join(" ").trim();
+	const content = normalizedWordTimings
+		.map((timing) => timing.word)
+		.join(" ")
+		.trim();
 	if (!content) return null;
 
 	const startTime = normalizedWordTimings[0].startTime;
-	const endTime = normalizedWordTimings[normalizedWordTimings.length - 1].endTime;
+	const endTime =
+		normalizedWordTimings[normalizedWordTimings.length - 1].endTime;
 	return {
 		content,
 		startTime,
@@ -1742,7 +1797,10 @@ async function transcribeClipWindowWordLevel({
 			cacheKey,
 		});
 	} catch (error) {
-		console.warn("Failed clip-window word-level transcription for captions:", error);
+		console.warn(
+			"Failed clip-window word-level transcription for captions:",
+			error,
+		);
 		return null;
 	}
 }
@@ -1823,7 +1881,9 @@ async function transcribeClipAudioWithApi({
 			window.clearTimeout(timeoutId);
 			if (!response.ok) {
 				const body = await response.text();
-				throw new Error(`Clip transcription failed (${response.status}): ${body}`);
+				throw new Error(
+					`Clip transcription failed (${response.status}): ${body}`,
+				);
 			}
 			const json = (await response.json()) as {
 				segments?: Array<{ text: string; start: number; end: number }>;
@@ -1853,7 +1913,8 @@ async function transcribeClipAudioWithApi({
 				}));
 			if (segments.length > 0) {
 				const durationMs = Date.now() - requestStartedAt;
-				const durationSeconds = json.audioDurationSeconds ??
+				const durationSeconds =
+					json.audioDurationSeconds ??
 					Math.max(0, segments[segments.length - 1]!.end - segments[0]!.start);
 				console.info("Clip transcription metrics", {
 					cacheKey,
@@ -1873,7 +1934,9 @@ async function transcribeClipAudioWithApi({
 		} catch (error) {
 			window.clearTimeout(timeoutId);
 			lastNetworkError =
-				error instanceof Error ? error : new Error("Failed to reach transcription API");
+				error instanceof Error
+					? error
+					: new Error("Failed to reach transcription API");
 		}
 	}
 
@@ -1976,10 +2039,9 @@ async function sliceClipBufferFromFullDecode({
 		const channels = Math.max(1, decoded.numberOfChannels);
 		const clipped = context.createBuffer(channels, length, decoded.sampleRate);
 		for (let channelIndex = 0; channelIndex < channels; channelIndex++) {
-			const source = decoded.getChannelData(channelIndex).subarray(
-				startSample,
-				endSample,
-			);
+			const source = decoded
+				.getChannelData(channelIndex)
+				.subarray(startSample, endSample);
 			clipped.copyToChannel(source, channelIndex);
 		}
 		void context.close().catch(() => undefined);
@@ -2056,7 +2118,10 @@ async function decodeAssetWindowToAudioBuffer({
 			const chunkLength = chunk.length;
 			if (chunkLength <= 0) continue;
 			for (let channelIndex = 0; channelIndex < channels; channelIndex++) {
-				const sourceChannel = Math.min(channelIndex, chunk.numberOfChannels - 1);
+				const sourceChannel = Math.min(
+					channelIndex,
+					chunk.numberOfChannels - 1,
+				);
 				const sourceData = chunk.getChannelData(sourceChannel);
 				mergedByChannel[channelIndex].set(sourceData, writeOffset);
 			}
@@ -2170,7 +2235,10 @@ function retimeGeneratedCaptions({
 					captionWordTimings: nextWordTimings,
 				};
 			})
-			.filter((element): element is typeof track.elements[number] => element !== null)
+			.filter(
+				(element): element is (typeof track.elements)[number] =>
+					element !== null,
+			)
 			.sort((a, b) => a.startTime - b.startTime);
 
 		return {
@@ -2186,9 +2254,17 @@ function computeRemovedTimelineRangesFromTranscriptCuts({
 }: {
 	processable: Array<{
 		track: TimelineTrack;
-		element: { id: string; startTime: number; duration: number; trimStart: number };
+		element: {
+			id: string;
+			startTime: number;
+			duration: number;
+			trimStart: number;
+		};
 	}>;
-	resultsByElementKey: Map<string, { segments: Array<{ start: number; end: number }> }>;
+	resultsByElementKey: Map<
+		string,
+		{ segments: Array<{ start: number; end: number }> }
+	>;
 }): Array<{ start: number; end: number }> {
 	const removed: Array<{ start: number; end: number }> = [];
 
@@ -2234,7 +2310,8 @@ export function useEditorActions() {
 		rippleEditingEnabled,
 		requestFitView,
 	} = useTimelineStore();
-	const { setStatus, setProgress, setError, setCandidates, reset } = useClipGenerationStore();
+	const { setStatus, setProgress, setError, setCandidates, reset } =
+		useClipGenerationStore();
 
 	async function resolveVideoCoverScale({
 		asset,
@@ -2256,7 +2333,10 @@ export function useEditorActions() {
 					height = videoInfo.height;
 				}
 			} catch (error) {
-				console.warn("Failed to resolve source video dimensions for cover-fit:", error);
+				console.warn(
+					"Failed to resolve source video dimensions for cover-fit:",
+					error,
+				);
 			}
 		}
 
@@ -2686,7 +2766,9 @@ export function useEditorActions() {
 				const tracks = editor.timeline.getTracks();
 				const mediaAssets = editor.media.getAssets();
 				const currentProject = editor.project.getActive();
-				const mediaById = new Map(mediaAssets.map((asset) => [asset.id, asset]));
+				const mediaById = new Map(
+					mediaAssets.map((asset) => [asset.id, asset]),
+				);
 				const transcriptionCache = findLatestValidTranscriptionCacheEntry({
 					project: currentProject,
 					tracks,
@@ -2704,9 +2786,11 @@ export function useEditorActions() {
 						element: VideoElement | AudioElement;
 					} => {
 						const { element } = item;
-						if (element.type !== "video" && element.type !== "audio") return false;
+						if (element.type !== "video" && element.type !== "audio")
+							return false;
 						if (element.type === "video") return mediaById.has(element.mediaId);
-						if (element.sourceType === "upload") return mediaById.has(element.mediaId);
+						if (element.sourceType === "upload")
+							return mediaById.has(element.mediaId);
 						return false;
 					},
 				);
@@ -2717,9 +2801,7 @@ export function useEditorActions() {
 				}
 				const timelineMediaElements = tracks.flatMap((track) =>
 					track.elements.filter(
-						(
-							element,
-						): element is VideoElement | AudioElement =>
+						(element): element is VideoElement | AudioElement =>
 							element.type === "video" ||
 							(element.type === "audio" && element.sourceType === "upload"),
 					),
@@ -2758,13 +2840,16 @@ export function useEditorActions() {
 					return;
 				}
 
-				const { tracks: updatedTracks, changedElements, totalRemovedDuration } =
-					applySmartCutsToTracks({
-						tracks,
-						selectedElements,
-						resultsByElementKey,
-						ripple: rippleEditingEnabled,
-					});
+				const {
+					tracks: updatedTracks,
+					changedElements,
+					totalRemovedDuration,
+				} = applySmartCutsToTracks({
+					tracks,
+					selectedElements,
+					resultsByElementKey,
+					ripple: rippleEditingEnabled,
+				});
 
 				let nextTracks = updatedTracks;
 				if (rippleEditingEnabled) {
@@ -2819,7 +2904,8 @@ export function useEditorActions() {
 		"transcript-toggle-word",
 		(args) => {
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
-			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
+			const elementId =
+				typeof args?.elementId === "string" ? args.elementId : "";
 			const wordId = typeof args?.wordId === "string" ? args.wordId : "";
 			if (!trackId || !elementId || !wordId) return;
 
@@ -2840,10 +2926,36 @@ export function useEditorActions() {
 	);
 
 	useActionHandler(
+		"transcript-toggle-word-hidden",
+		(args) => {
+			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
+			const elementId =
+				typeof args?.elementId === "string" ? args.elementId : "";
+			const wordId = typeof args?.wordId === "string" ? args.wordId : "";
+			if (!trackId || !elementId || !wordId) return;
+
+			const result = applyTranscriptEditMutation({
+				editor,
+				trackId,
+				elementId,
+				mutateWords: (words) =>
+					words.map((word) =>
+						word.id === wordId ? { ...word, hidden: !word.hidden } : word,
+					),
+			});
+			if (result.error) {
+				toast.error(result.error);
+			}
+		},
+		undefined,
+	);
+
+	useActionHandler(
 		"transcript-update-word",
 		(args) => {
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
-			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
+			const elementId =
+				typeof args?.elementId === "string" ? args.elementId : "";
 			const wordId = typeof args?.wordId === "string" ? args.wordId : "";
 			const text = typeof args?.text === "string" ? args.text.trim() : "";
 			if (!trackId || !elementId || !wordId || !text) {
@@ -2857,9 +2969,7 @@ export function useEditorActions() {
 				trackId,
 				elementId,
 				mutateWords: (words) =>
-					words.map((word) =>
-						word.id === wordId ? { ...word, text } : word,
-					),
+					words.map((word) => (word.id === wordId ? { ...word, text } : word)),
 			});
 			if (result.error) {
 				toast.error(result.error);
@@ -2872,18 +2982,19 @@ export function useEditorActions() {
 		"transcript-update-words",
 		(args) => {
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
-			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
+			const elementId =
+				typeof args?.elementId === "string" ? args.elementId : "";
 			const updates = Array.isArray(args?.updates)
 				? args.updates.filter(
 						(item): item is { wordId: string; text: string } =>
 							Boolean(
 								item &&
-								typeof item.wordId === "string" &&
-								item.wordId.length > 0 &&
-								typeof item.text === "string" &&
-								item.text.trim().length > 0,
+									typeof item.wordId === "string" &&
+									item.wordId.length > 0 &&
+									typeof item.text === "string" &&
+									item.text.trim().length > 0,
 							),
-				  )
+					)
 				: [];
 			if (!trackId || !elementId || updates.length === 0) return;
 			const textByWordId = new Map(
@@ -2911,9 +3022,12 @@ export function useEditorActions() {
 		"transcript-set-words-removed",
 		(args) => {
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
-			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
+			const elementId =
+				typeof args?.elementId === "string" ? args.elementId : "";
 			const wordIds = Array.isArray(args?.wordIds)
-				? args.wordIds.filter((value): value is string => typeof value === "string")
+				? args.wordIds.filter(
+						(value): value is string => typeof value === "string",
+					)
 				: [];
 			const removed = Boolean(args?.removed);
 			if (!trackId || !elementId || wordIds.length === 0) return;
@@ -2938,7 +3052,8 @@ export function useEditorActions() {
 		"transcript-remove-fillers",
 		(args) => {
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
-			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
+			const elementId =
+				typeof args?.elementId === "string" ? args.elementId : "";
 			if (!trackId || !elementId) return;
 			const result = applyTranscriptEditMutation({
 				editor,
@@ -2966,12 +3081,13 @@ export function useEditorActions() {
 		"transcript-remove-pauses",
 		(args) => {
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
-			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
+			const elementId =
+				typeof args?.elementId === "string" ? args.elementId : "";
 			const thresholdSecondsRaw = args?.thresholdSeconds;
 			const thresholdSeconds =
 				typeof thresholdSecondsRaw === "number" &&
-					Number.isFinite(thresholdSecondsRaw) &&
-					thresholdSecondsRaw > 0
+				Number.isFinite(thresholdSecondsRaw) &&
+				thresholdSecondsRaw > 0
 					? thresholdSecondsRaw
 					: DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS;
 			if (!trackId || !elementId) return;
@@ -2993,7 +3109,9 @@ export function useEditorActions() {
 				return;
 			}
 			if (result.changed) {
-				toast.success(`Removed pauses longer than ${thresholdSeconds.toFixed(1)}s`);
+				toast.success(
+					`Removed pauses longer than ${thresholdSeconds.toFixed(1)}s`,
+				);
 			} else {
 				toast.info("No long pauses detected");
 			}
@@ -3005,13 +3123,15 @@ export function useEditorActions() {
 		"transcript-restore-all",
 		(args) => {
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
-			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
+			const elementId =
+				typeof args?.elementId === "string" ? args.elementId : "";
 			if (!trackId || !elementId) return;
 			const result = applyTranscriptEditMutation({
 				editor,
 				trackId,
 				elementId,
-				mutateWords: (words) => words.map((word) => ({ ...word, removed: false })),
+				mutateWords: (words) =>
+					words.map((word) => ({ ...word, removed: false, hidden: false })),
 			});
 			if (result.error) {
 				toast.error(result.error);
@@ -3028,7 +3148,8 @@ export function useEditorActions() {
 		"transcript-split-segment-ui",
 		(args) => {
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
-			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
+			const elementId =
+				typeof args?.elementId === "string" ? args.elementId : "";
 			const wordId = typeof args?.wordId === "string" ? args.wordId : "";
 			if (!trackId || !elementId || !wordId) return;
 			const result = applyTranscriptEditMutation({
@@ -3037,16 +3158,18 @@ export function useEditorActions() {
 				elementId,
 				mutateSegmentsUi: (segments, words) => {
 					const splitIndex = words.findIndex((word) => word.id === wordId);
-					if (splitIndex <= 0 || splitIndex >= words.length - 1) return segments;
-					const currentSegments = segments && segments.length > 0
-						? [...segments]
-						: [
-								{
-									id: `${elementId}:seg:0`,
-									wordStartIndex: 0,
-									wordEndIndex: words.length - 1,
-								},
-							];
+					if (splitIndex <= 0 || splitIndex >= words.length - 1)
+						return segments;
+					const currentSegments =
+						segments && segments.length > 0
+							? [...segments]
+							: [
+									{
+										id: `${elementId}:seg:0`,
+										wordStartIndex: 0,
+										wordEndIndex: words.length - 1,
+									},
+								];
 					const containingIndex = currentSegments.findIndex(
 						(segment) =>
 							splitIndex >= segment.wordStartIndex &&
@@ -3083,7 +3206,8 @@ export function useEditorActions() {
 		"rebuild-captions-for-clip",
 		(args) => {
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
-			const elementId = typeof args?.elementId === "string" ? args.elementId : "";
+			const elementId =
+				typeof args?.elementId === "string" ? args.elementId : "";
 			if (!trackId || !elementId) return;
 			const tracks = editor.timeline.getTracks();
 			const target = getElementFromTracks({ tracks, trackId, elementId });
@@ -3157,12 +3281,12 @@ export function useEditorActions() {
 		"generate-viral-clips",
 		(args) => {
 			void (async () => {
-				const candidateSourceAssets = editor
-					.media
+				const candidateSourceAssets = editor.media
 					.getAssets()
 					.filter(
 						(asset) =>
-							!asset.ephemeral && (asset.type === "video" || asset.type === "audio"),
+							!asset.ephemeral &&
+							(asset.type === "video" || asset.type === "audio"),
 					);
 				const resolvedSourceMediaId =
 					args?.sourceMediaId && args.sourceMediaId.length > 0
@@ -3177,8 +3301,13 @@ export function useEditorActions() {
 				const mediaAsset = candidateSourceAssets.find(
 					(asset) => asset.id === resolvedSourceMediaId,
 				);
-				if (!mediaAsset || (mediaAsset.type !== "video" && mediaAsset.type !== "audio")) {
-					setError({ error: "Selected media does not support clip generation" });
+				if (
+					!mediaAsset ||
+					(mediaAsset.type !== "video" && mediaAsset.type !== "audio")
+				) {
+					setError({
+						error: "Selected media does not support clip generation",
+					});
 					toast.error("Select a video or audio asset to generate clips");
 					return;
 				}
@@ -3190,7 +3319,8 @@ export function useEditorActions() {
 				let hasTranscriptionProgress = false;
 
 				try {
-					const mediaLinkedProject = currentProject.externalMediaLinks?.[mediaAsset.id];
+					const mediaLinkedProject =
+						currentProject.externalMediaLinks?.[mediaAsset.id];
 					if (mediaLinkedProject) {
 						const linkedKey = `${mediaLinkedProject.sourceSystem}:${mediaLinkedProject.externalProjectId}`;
 						const hasLinkedTranscript = Boolean(
@@ -3214,7 +3344,11 @@ export function useEditorActions() {
 										sourceSystem: "thumbnail_decoupled";
 										externalProjectId: string;
 										transcriptText: string;
-										segments: Array<{ text: string; start: number; end: number }>;
+										segments: Array<{
+											text: string;
+											start: number;
+											end: number;
+										}>;
 										segmentsCount: number;
 										audioDurationSeconds: number | null;
 										qualityMeta?: Record<string, unknown>;
@@ -3253,8 +3387,11 @@ export function useEditorActions() {
 						// Fail fast when transcript cannot be resolved so linkage issues are visible.
 						const latestProject = editor.project.getActive();
 						const hasResolvedLinkedTranscript = Boolean(
-							latestProject.externalTranscriptCache?.[linkedKey]?.transcriptText?.trim() &&
-								(latestProject.externalTranscriptCache?.[linkedKey]?.segments?.length ?? 0) > 0,
+							latestProject.externalTranscriptCache?.[
+								linkedKey
+							]?.transcriptText?.trim() &&
+								(latestProject.externalTranscriptCache?.[linkedKey]?.segments
+									?.length ?? 0) > 0,
 						);
 						if (!hasResolvedLinkedTranscript) {
 							throw new Error(
@@ -3269,7 +3406,9 @@ export function useEditorActions() {
 						progress: 5,
 						progressMessage: "Preparing transcript...",
 					});
-					transcriptionOperationId = transcriptionStatus.start("Preparing transcript...");
+					transcriptionOperationId = transcriptionStatus.start(
+						"Preparing transcript...",
+					);
 					projectProcessId = registerProcess({
 						projectId: currentProject.metadata.id,
 						kind: "clip-generation",
@@ -3297,9 +3436,9 @@ export function useEditorActions() {
 					const projectForTranscript = editor.project.getActive();
 					const mediaLinkedProjectResolved =
 						projectForTranscript.externalMediaLinks?.[mediaAsset.id];
-					let transcriptResult:
-						| Awaited<ReturnType<typeof getOrCreateClipTranscriptWithReuse>>
-						| null = null;
+					let transcriptResult: Awaited<
+						ReturnType<typeof getOrCreateClipTranscriptWithReuse>
+					> | null = null;
 					if (mediaLinkedProjectResolved) {
 						const linkedKey = `${mediaLinkedProjectResolved.sourceSystem}:${mediaLinkedProjectResolved.externalProjectId}`;
 						const linkedTranscript =
@@ -3309,13 +3448,14 @@ export function useEditorActions() {
 								`Linked transcript missing in cache for media ${mediaAsset.name} (${mediaLinkedProjectResolved.externalProjectId}).`,
 							);
 						}
-						const derived = buildClipTranscriptEntryFromLinkedExternalTranscript({
-							asset: mediaAsset,
-							modelId: DEFAULT_TRANSCRIPTION_MODEL,
-							language: "auto",
-							externalTranscript: linkedTranscript,
-							requireSuitability: false,
-						});
+						const derived =
+							buildClipTranscriptEntryFromLinkedExternalTranscript({
+								asset: mediaAsset,
+								modelId: DEFAULT_TRANSCRIPTION_MODEL,
+								language: "auto",
+								externalTranscript: linkedTranscript,
+								requireSuitability: false,
+							});
 						if (!derived) {
 							throw new Error(
 								`Linked transcript is empty/invalid for media ${mediaAsset.name} (${mediaLinkedProjectResolved.externalProjectId}).`,
@@ -3346,7 +3486,10 @@ export function useEditorActions() {
 								});
 								setProgress({
 									sourceMediaId: mediaAsset.id,
-									progress: Math.max(8, Math.min(70, 8 + (progress.progress * 0.62))),
+									progress: Math.max(
+										8,
+										Math.min(70, 8 + progress.progress * 0.62),
+									),
 									progressMessage:
 										progress.message ?? "Transcribing source media...",
 								});
@@ -3367,7 +3510,10 @@ export function useEditorActions() {
 						});
 					}
 
-					if (mediaLinkedProjectResolved && transcriptResult.source !== "media-linked") {
+					if (
+						mediaLinkedProjectResolved &&
+						transcriptResult.source !== "media-linked"
+					) {
 						throw new Error(
 							`Linked media transcript was not selected for ${mediaAsset.name}. Source resolved: ${transcriptResult.source}`,
 						);
@@ -3431,11 +3577,12 @@ export function useEditorActions() {
 									minClipSeconds: VIRAL_CLIP_MIN_SECONDS,
 									targetClipSeconds: VIRAL_CLIP_TARGET_SECONDS,
 									maxClipSeconds: VIRAL_CLIP_MAX_SECONDS,
-							  });
-					const mediaDurationForCandidates = resolveMediaDurationForClipCandidates({
-						assetDuration: mediaAsset.duration,
-						segments: transcriptResult.transcript.segments,
-					});
+								});
+					const mediaDurationForCandidates =
+						resolveMediaDurationForClipCandidates({
+							assetDuration: mediaAsset.duration,
+							segments: transcriptResult.transcript.segments,
+						});
 					const likelyWordLevelTranscript = isLikelyWordLevelTranscript({
 						segments: transcriptResult.transcript.segments,
 					});
@@ -3447,7 +3594,7 @@ export function useEditorActions() {
 									minClipSeconds: VIRAL_CLIP_MIN_SECONDS,
 									targetClipSeconds: VIRAL_CLIP_TARGET_SECONDS,
 									maxClipSeconds: VIRAL_CLIP_MAX_SECONDS,
-							  })
+								})
 							: [];
 					const candidateDraftsResolved =
 						candidateDrafts.length > 0
@@ -3463,7 +3610,9 @@ export function useEditorActions() {
 							mediaDurationForCandidates,
 							likelyWordLevelTranscript,
 						});
-						setError({ error: "No candidate windows found for this transcript" });
+						setError({
+							error: "No candidate windows found for this transcript",
+						});
 						toast.error("Could not derive clip candidates from transcript");
 						return;
 					}
@@ -3524,7 +3673,7 @@ export function useEditorActions() {
 									return Array.from(byId.values())
 										.sort((a, b) => b.scoreOverall - a.scoreOverall)
 										.slice(0, MAX_VIRAL_CLIP_COUNT);
-							  })();
+								})();
 
 					if (selectedCandidates.length === 0) {
 						setError({
@@ -3562,7 +3711,9 @@ export function useEditorActions() {
 					editor.project.setActiveProject({ project: projectWithCache });
 					editor.save.markDirty();
 					await editor.save.flush();
-					toast.success(`Generated ${selectedCandidates.length} clip candidate(s)`);
+					toast.success(
+						`Generated ${selectedCandidates.length} clip candidate(s)`,
+					);
 				} catch (error) {
 					const message =
 						error instanceof Error ? error.message : "Clip generation failed";
@@ -3594,26 +3745,31 @@ export function useEditorActions() {
 						return;
 					}
 
-					const mediaAsset = editor
-						.media
+					const mediaAsset = editor.media
 						.getAssets()
 						.find((asset) => asset.id === sourceMediaId);
-					if (!mediaAsset || (mediaAsset.type !== "video" && mediaAsset.type !== "audio")) {
+					if (
+						!mediaAsset ||
+						(mediaAsset.type !== "video" && mediaAsset.type !== "audio")
+					) {
 						toast.error("Source media for clips was not found");
 						return;
 					}
 
-					const candidateIds =
-						args?.candidateIds?.length
-							? args.candidateIds
-							: clipStoreState.selectedCandidateIds;
+					const candidateIds = args?.candidateIds?.length
+						? args.candidateIds
+						: clipStoreState.selectedCandidateIds;
 					if (candidateIds.length === 0) {
 						toast.error("Select one or more clip candidates to import");
 						return;
 					}
 
 					const candidates = candidateIds
-						.map((id) => clipStoreState.candidates.find((candidate) => candidate.id === id))
+						.map((id) =>
+							clipStoreState.candidates.find(
+								(candidate) => candidate.id === id,
+							),
+						)
 						.filter(
 							(candidate): candidate is NonNullable<typeof candidate> =>
 								candidate != null,
@@ -3703,8 +3859,7 @@ export function useEditorActions() {
 							}
 							let wordLevelSegments: TranscriptionSegment[] | null =
 								clipWordTranscriptionCache[clipWordTranscriptionCacheKey]
-									?.segments ??
-								null;
+									?.segments ?? null;
 							if (!wordLevelSegments) {
 								wordLevelSegments =
 									clipAudioBuffer && clipAudioBuffer.length > 0
@@ -3742,8 +3897,10 @@ export function useEditorActions() {
 									`Word-level transcription unavailable for clip "${candidate.title || candidate.id}". Aborting import to avoid inaccurate caption timing.`,
 								);
 							}
-							const clippedSegments: TranscriptionSegment[] = wordLevelSegments ?? [];
-							const captionSource: PreparedClipImport["captionSource"] = "local-word";
+							const clippedSegments: TranscriptionSegment[] =
+								wordLevelSegments ?? [];
+							const captionSource: PreparedClipImport["captionSource"] =
+								"local-word";
 							preparedImports.push({
 								candidate,
 								clipAudioBuffer,
@@ -3845,15 +4002,14 @@ export function useEditorActions() {
 									trackId: mainTrack.id,
 								});
 								boundMediaElementId =
-									refreshedMainTrack?.elements
-										.find(
-											(element) =>
-												element.type === "video" &&
-												element.startTime === 0 &&
-												Math.abs(element.trimStart - candidate.startTime) < 0.02 &&
-												Math.abs(element.duration - candidate.duration) < 0.02,
-										)
-										?.id ?? null;
+									refreshedMainTrack?.elements.find(
+										(element) =>
+											element.type === "video" &&
+											element.startTime === 0 &&
+											Math.abs(element.trimStart - candidate.startTime) <
+												0.02 &&
+											Math.abs(element.duration - candidate.duration) < 0.02,
+									)?.id ?? null;
 								boundMediaTrackId = boundMediaElementId ? mainTrack.id : null;
 							}
 
@@ -3893,17 +4049,20 @@ export function useEditorActions() {
 							}
 
 							if (continuousCaption) {
-								const captionPayloadFromTranscript = buildCaptionPayloadFromTranscriptWords({
-									words: normalizeTranscriptWords({
-										words: continuousCaption.wordTimings.map((timing, index) => ({
-											id: `caption-source-word:${index}:${timing.startTime.toFixed(3)}`,
-											text: timing.word,
-											startTime: timing.startTime,
-											endTime: timing.endTime,
-											removed: false,
-										})),
-									}),
-								});
+								const captionPayloadFromTranscript =
+									buildCaptionPayloadFromTranscriptWords({
+										words: normalizeTranscriptWords({
+											words: continuousCaption.wordTimings.map(
+												(timing, index) => ({
+													id: `caption-source-word:${index}:${timing.startTime.toFixed(3)}`,
+													text: timing.word,
+													startTime: timing.startTime,
+													endTime: timing.endTime,
+													removed: false,
+												}),
+											),
+										}),
+									});
 								if (!captionPayloadFromTranscript) {
 									continue;
 								}
@@ -3932,27 +4091,27 @@ export function useEditorActions() {
 										content: captionPayloadFromTranscript.content,
 										duration: captionPayloadFromTranscript.duration,
 										startTime: captionPayloadFromTranscript.startTime,
-										captionWordTimings: captionPayloadFromTranscript.wordTimings,
+										captionWordTimings:
+											captionPayloadFromTranscript.wordTimings,
 										captionSourceRef: boundMediaElementId
 											? {
 													mediaElementId: boundMediaElementId,
 													transcriptVersion: 1,
-											  }
+												}
 											: undefined,
 										...blueHighlightPreset.textProps,
 										captionStyle: blueHighlightPreset.captionStyle,
 									},
 								});
 
-								const insertedCaptions = editor
-									.timeline
-									.getTrackById({ trackId: captionTrackId })
-									?.elements
-									.filter(
-										(element) =>
-											element.type === "text" &&
-											element.name.startsWith("Caption "),
-									) ?? [];
+								const insertedCaptions =
+									editor.timeline
+										.getTrackById({ trackId: captionTrackId })
+										?.elements.filter(
+											(element) =>
+												element.type === "text" &&
+												element.name.startsWith("Caption "),
+										) ?? [];
 								if (insertedCaptions.length > 0) {
 									editor.timeline.updateElements({
 										updates: insertedCaptions.map((element) => ({
@@ -3986,7 +4145,9 @@ export function useEditorActions() {
 						project: editor.project.getActive(),
 					});
 					if (normalizedProject.changed) {
-						editor.project.setActiveProject({ project: normalizedProject.project });
+						editor.project.setActiveProject({
+							project: normalizedProject.project,
+						});
 						editor.save.markDirty();
 					}
 					if (editor.playback.getVolume() <= 0) {
@@ -4064,8 +4225,7 @@ export function useEditorActions() {
 				typeof args?.trackId === "string" && args.trackId.length > 0
 					? args.trackId
 					: null;
-			const captionElements = editor
-				.timeline
+			const captionElements = editor.timeline
 				.getTracks()
 				.filter((track) => track.type === "text")
 				.filter((track) => (trackId ? track.id === trackId : true))
@@ -4083,7 +4243,9 @@ export function useEditorActions() {
 						})),
 				);
 			if (captionElements.length === 0) {
-				toast.error(trackId ? "No captions found on selected track" : "No captions found");
+				toast.error(
+					trackId ? "No captions found on selected track" : "No captions found",
+				);
 				return;
 			}
 			setElementSelection({ elements: captionElements });
@@ -4213,15 +4375,15 @@ export function useEditorActions() {
 			const results = editor.timeline.getElementsWithTracks({
 				elements: selectedElements,
 			});
-				const items = results.map(({ track, element }) => {
-					const { ...elementWithoutId } = element;
-					return {
-						trackId: track.id,
-						trackType: track.type,
-						element: elementWithoutId,
-						sourceElementId: element.id,
-					};
-				});
+			const items = results.map(({ track, element }) => {
+				const { ...elementWithoutId } = element;
+				return {
+					trackId: track.id,
+					trackType: track.type,
+					element: elementWithoutId,
+					sourceElementId: element.id,
+				};
+			});
 
 			setClipboard({ items });
 		},

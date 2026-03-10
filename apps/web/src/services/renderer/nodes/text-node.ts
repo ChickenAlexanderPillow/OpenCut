@@ -89,26 +89,6 @@ function getLineLeft({
 	return -lineWidth / 2;
 }
 
-function getWordRange({
-	line,
-	wordIndex,
-}: {
-	line: string;
-	wordIndex: number;
-}): { start: number; end: number } | null {
-	let currentIndex = 0;
-	const regex = /\S+/g;
-	let match: RegExpExecArray | null = regex.exec(line);
-	while (match) {
-		if (currentIndex === wordIndex) {
-			return { start: match.index, end: match.index + match[0].length };
-		}
-		currentIndex += 1;
-		match = regex.exec(line);
-	}
-	return null;
-}
-
 function clampWordCount(value: number): number {
 	return Math.max(1, Math.min(12, Math.round(value)));
 }
@@ -188,24 +168,36 @@ function resolveNextWordIndex({
 	return -1;
 }
 
-function buildLinesFromWords({
-	words,
+type CaptionRenderToken = {
+	word: string;
+	hidden?: boolean;
+};
+
+function buildLineTokenGroups({
+	tokens,
 	maxLines,
 }: {
-	words: string[];
+	tokens: CaptionRenderToken[];
 	maxLines: number;
-}): string[] {
-	if (words.length === 0) return [];
+}): CaptionRenderToken[][] {
+	if (tokens.length === 0) return [];
 	const clampedMaxLines = clampLineCount(maxLines);
-	const lineCount = Math.min(clampedMaxLines, words.length);
-	const wordsPerLine = Math.ceil(words.length / lineCount);
-	const lines: string[] = [];
+	const lineCount = Math.min(clampedMaxLines, tokens.length);
+	const wordsPerLine = Math.ceil(tokens.length / lineCount);
+	const groups: CaptionRenderToken[][] = [];
 
-	for (let i = 0; i < words.length; i += wordsPerLine) {
-		lines.push(words.slice(i, i + wordsPerLine).join(" "));
+	for (let i = 0; i < tokens.length; i += wordsPerLine) {
+		groups.push(tokens.slice(i, i + wordsPerLine));
 	}
 
-	return lines;
+	return groups;
+}
+
+function stringifyVisibleLineTokens(tokens: CaptionRenderToken[]): string {
+	return tokens
+		.filter((token) => !token.hidden)
+		.map((token) => token.word)
+		.join(" ");
 }
 
 function isSentenceEndingWord(word: string): boolean {
@@ -241,22 +233,27 @@ export type TextNodeParams = TextElement & {
 };
 
 export class TextNode extends BaseNode<TextNodeParams> {
-	private cachedCaptionTimingsRef:
-		| Array<{ word: string; startTime: number; endTime: number }>
-		| null = null;
+	private cachedCaptionTimingsRef: Array<{
+		word: string;
+		startTime: number;
+		endTime: number;
+		hidden?: boolean;
+	}> | null = null;
 	private cachedCaptionTimingsStartTime = Number.NaN;
 	private cachedCaptionTimingsDuration = Number.NaN;
 	private cachedTimelineCaptionTimings: Array<{
 		word: string;
 		startTime: number;
 		endTime: number;
+		hidden?: boolean;
 	}> = [];
-	private cachedTimelineCaptionWords: string[] = [];
+	private cachedTimelineCaptionWords: CaptionRenderToken[] = [];
 
 	private getTimelineCaptionTimings(): Array<{
 		word: string;
 		startTime: number;
 		endTime: number;
+		hidden?: boolean;
 	}> {
 		const sourceTimings = this.params.captionWordTimings ?? [];
 		if (
@@ -272,7 +269,10 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			elementDuration: this.params.duration,
 		});
 		this.cachedTimelineCaptionWords = this.cachedTimelineCaptionTimings.map(
-			(timing) => timing.word,
+			(timing) => ({
+				word: timing.word,
+				hidden: timing.hidden,
+			}),
 		);
 		this.cachedCaptionTimingsRef = sourceTimings;
 		this.cachedCaptionTimingsStartTime = this.params.startTime;
@@ -280,7 +280,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		return this.cachedTimelineCaptionTimings;
 	}
 
-	private getTimelineCaptionWords(): string[] {
+	private getTimelineCaptionWords(): CaptionRenderToken[] {
 		void this.getTimelineCaptionTimings();
 		return this.cachedTimelineCaptionWords;
 	}
@@ -332,7 +332,8 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			this.params.captionStyle?.karaokeHighlightMode ?? "block";
 		const captionWordTimings = this.getTimelineCaptionTimings();
 		if (captionWordTimings.length > 0) {
-			const firstWordStart = captionWordTimings[0]?.startTime ?? this.params.startTime;
+			const firstWordStart =
+				captionWordTimings[0]?.startTime ?? this.params.startTime;
 			const lastWordEnd =
 				captionWordTimings[captionWordTimings.length - 1]?.endTime ??
 				this.params.startTime + this.params.duration;
@@ -417,10 +418,10 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			for (let size = maxWords; size >= 1; size--) {
 				const candidateWords = captionWords.slice(start, start + size);
 				if (candidateWords.length === 0) continue;
-				const candidateLines = buildLinesFromWords({
-					words: candidateWords,
+				const candidateLines = buildLineTokenGroups({
+					tokens: candidateWords,
 					maxLines: maxLinesOnScreen,
-				});
+				}).map((lineTokens) => stringifyVisibleLineTokens(lineTokens));
 				const candidateMetrics = candidateLines.map((line) =>
 					renderer.context.measureText(line),
 				);
@@ -439,30 +440,29 @@ export class TextNode extends BaseNode<TextNodeParams> {
 					backgroundMode,
 					fontSizeRatio,
 				});
-					const candidatePlacement = resolveTextPlacement({
+				const candidatePlacement = resolveTextPlacement({
+					canvasWidth: this.params.canvasWidth,
+					canvasHeight: this.params.canvasHeight,
+					positionX:
+						this.params.transform.position.x + this.params.canvasCenter.x,
+					positionY: resolveSafeAreaAnchoredPositionY({
 						canvasWidth: this.params.canvasWidth,
 						canvasHeight: this.params.canvasHeight,
-						positionX:
-							this.params.transform.position.x + this.params.canvasCenter.x,
-						positionY: resolveSafeAreaAnchoredPositionY({
-							canvasWidth: this.params.canvasWidth,
-							canvasHeight: this.params.canvasHeight,
-							transformPositionY: this.params.transform.position.y,
-							scale: this.params.transform.scale,
-							visualRect: candidateVisualRect,
-						anchorToSafeAreaBottom:
-								this.params.captionStyle?.anchorToSafeAreaBottom ?? true,
-							safeAreaBottomOffset:
-								this.params.captionStyle?.safeAreaBottomOffset ?? 0,
-							anchorToSafeAreaTop:
-								this.params.captionStyle?.anchorToSafeAreaTop ?? false,
-							safeAreaTopOffset:
-								this.params.captionStyle?.safeAreaTopOffset ?? 0,
-						}),
+						transformPositionY: this.params.transform.position.y,
 						scale: this.params.transform.scale,
 						visualRect: candidateVisualRect,
-						fitInCanvas,
-					});
+						anchorToSafeAreaBottom:
+							this.params.captionStyle?.anchorToSafeAreaBottom ?? true,
+						safeAreaBottomOffset:
+							this.params.captionStyle?.safeAreaBottomOffset ?? 0,
+						anchorToSafeAreaTop:
+							this.params.captionStyle?.anchorToSafeAreaTop ?? false,
+						safeAreaTopOffset: this.params.captionStyle?.safeAreaTopOffset ?? 0,
+					}),
+					scale: this.params.transform.scale,
+					visualRect: candidateVisualRect,
+					fitInCanvas,
+				});
 				if (
 					candidatePlacement.effectiveScale >=
 					this.params.transform.scale - 0.001
@@ -489,7 +489,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 					captionWords.length - pageStart,
 				);
 				const maxPageSize = resolveSentenceBoundedPageSize({
-					words: captionWords,
+					words: captionWords.map((token) => token.word),
 					start: pageStart,
 					maxPageSize: unsnappedMaxPageSize,
 				});
@@ -512,34 +512,41 @@ export class TextNode extends BaseNode<TextNodeParams> {
 				pageSize: getFitPageSize({
 					start: fallbackStart,
 					maxWords: resolveSentenceBoundedPageSize({
-						words: captionWords,
+						words: captionWords.map((token) => token.word),
 						start: fallbackStart,
 						maxPageSize: Math.min(
-						cappedWordsOnScreen,
-						captionWords.length - fallbackStart,
-					),
+							cappedWordsOnScreen,
+							captionWords.length - fallbackStart,
+						),
 					}),
 				}),
 			};
 		};
 
 		const windowed = getWindow();
-		const renderWords =
+		const renderWords: CaptionRenderToken[] =
 			captionWords.length > 0
 				? captionWords.slice(
 						windowed.chunkStart,
 						windowed.chunkStart + windowed.pageSize,
 					)
 				: [];
-		const renderContent =
+		const renderTokenLines =
 			renderWords.length > 0
-				? buildLinesFromWords({
-						words: renderWords,
+				? buildLineTokenGroups({
+						tokens: renderWords,
 						maxLines: maxLinesOnScreen,
-					}).join("\n")
+					})
+				: [];
+		const renderContent =
+			renderTokenLines.length > 0
+				? renderTokenLines
+						.map((lineTokens) => stringifyVisibleLineTokens(lineTokens))
+						.join("\n")
 				: this.params.content;
 		const maxWrapWidth =
-			this.params.canvasWidth - Math.min(this.params.canvasWidth, this.params.canvasHeight) * 0.08;
+			this.params.canvasWidth -
+			Math.min(this.params.canvasWidth, this.params.canvasHeight) * 0.08;
 		const shouldWrapToMaintainFontSize =
 			!hasWordTimings && Boolean(fitInCanvas) && renderWords.length === 0;
 		const wrappedContent = shouldWrapToMaintainFontSize
@@ -555,7 +562,10 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			strictActiveWordIndices.map((index) => index - windowed.chunkStart),
 		);
 
-		const lines = wrappedContent.split("\n");
+		const lines =
+			renderTokenLines.length > 0
+				? renderContent.split("\n")
+				: wrappedContent.split("\n");
 		const baseline = this.params.textBaseline ?? "middle";
 
 		renderer.context.textBaseline = baseline;
@@ -590,7 +600,8 @@ export class TextNode extends BaseNode<TextNodeParams> {
 				visualRect,
 				anchorToSafeAreaBottom:
 					this.params.captionStyle?.anchorToSafeAreaBottom ?? true,
-				safeAreaBottomOffset: this.params.captionStyle?.safeAreaBottomOffset ?? 0,
+				safeAreaBottomOffset:
+					this.params.captionStyle?.safeAreaBottomOffset ?? 0,
 				anchorToSafeAreaTop:
 					this.params.captionStyle?.anchorToSafeAreaTop ?? false,
 				safeAreaTopOffset: this.params.captionStyle?.safeAreaTopOffset ?? 0,
@@ -686,7 +697,15 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		for (let i = 0; i < lineCount; i++) {
 			const lineY = i * lineHeightPx - block.visualCenterOffset;
 			const line = lines[i];
-			const lineWords = line.match(/\S+/g) ?? [];
+			const lineTokens: CaptionRenderToken[] =
+				renderTokenLines.length > 0
+					? (renderTokenLines[i] ?? [])
+					: (line.match(/\S+/g) ?? []).map(
+							(word) => ({ word }) as CaptionRenderToken,
+						);
+			const visibleLineWords = lineTokens
+				.filter((token) => !token.hidden)
+				.map((token) => token.word);
 			const lineRect = lineBackgroundRects[i];
 			const isLineFitRow =
 				backgroundMode === "line-fit" && lineRect && lineRect.width > 0;
@@ -701,20 +720,31 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			}
 			renderer.context.fillText(line, lineX, lineY);
 
-			if (karaokeWordHighlight && lineWords.length > 0) {
-				for (let localWordIndex = 0; localWordIndex < lineWords.length; localWordIndex++) {
+			if (karaokeWordHighlight && lineTokens.length > 0) {
+				let visibleWordIndex = 0;
+				for (
+					let localWordIndex = 0;
+					localWordIndex < lineTokens.length;
+					localWordIndex++
+				) {
+					const token = lineTokens[localWordIndex];
 					const windowWordIndex = globalWordIndex + localWordIndex;
+					if (!token || token.hidden) {
+						continue;
+					}
 					if (
 						!renderActiveWordIndices.has(windowWordIndex) &&
 						windowWordIndex !== renderActiveWordIndex
 					) {
+						visibleWordIndex += 1;
 						continue;
 					}
-					const range = getWordRange({ line, wordIndex: localWordIndex });
-					if (!range) continue;
-					const word = line.slice(range.start, range.end);
-					const prefix = line.slice(0, range.start);
-					const prefixWidth = renderer.context.measureText(prefix).width;
+					const word = token.word;
+					const prefix = visibleLineWords.slice(0, visibleWordIndex).join(" ");
+					const prefixWithSpacing =
+						visibleWordIndex > 0 ? `${prefix} ` : prefix;
+					const prefixWidth =
+						renderer.context.measureText(prefixWithSpacing).width;
 					const wordMetrics = renderer.context.measureText(word);
 					const wordWidth = wordMetrics.width;
 					const lineLeft = getLineLeft({
@@ -887,10 +917,11 @@ export class TextNode extends BaseNode<TextNodeParams> {
 						renderer.context.fillStyle = this.params.color;
 					}
 					renderer.context.globalAlpha = this.params.opacity;
+					visibleWordIndex += 1;
 				}
 			}
 
-			globalWordIndex += lineWords.length;
+			globalWordIndex += lineTokens.length;
 			drawTextDecoration({
 				ctx: renderer.context,
 				textDecoration: this.params.textDecoration ?? "none",

@@ -13,6 +13,7 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import { FolderOpen } from "lucide-react";
 import { PanelView } from "@/components/editor/panels/assets/views/base-view";
+import { DraggableItem } from "@/components/editor/panels/assets/draggable-item";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -27,40 +28,24 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useEditor } from "@/hooks/use-editor";
+import {
+	importLocalMusicToTimeline,
+	type LocalMusicSourceFile,
+} from "@/lib/music/import-local-music";
 import { useAssetsPanelStore } from "@/stores/assets-panel-store";
 import { cn } from "@/utils/ui";
 
 const STORAGE_KEY = "opencut.music.sourceRoot";
 const DEFAULT_MUSIC_ROOT = "C:\\Users\\Design\\Music";
 
-type LocalMusicFile = {
-	name: string;
-	relativePath: string;
+type LocalMusicFile = LocalMusicSourceFile & {
 	directory: string;
-	extension: string;
 	sizeBytes: number;
-	modifiedAt: string;
 };
 
-function formatBytes(bytes: number): string {
-	if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-	const units = ["B", "KB", "MB", "GB"];
-	let value = bytes;
-	let unitIndex = 0;
-	while (value >= 1024 && unitIndex < units.length - 1) {
-		value /= 1024;
-		unitIndex += 1;
-	}
-	return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
-}
-
-function formatDate(value: string): string {
-	const date = new Date(value);
-	if (Number.isNaN(date.getTime())) return value;
-	return date.toLocaleDateString();
-}
-
 export function MusicView() {
+	const editor = useEditor();
 	const { mediaViewMode, setMediaViewMode } = useAssetsPanelStore();
 	const [root, setRoot] = useState(DEFAULT_MUSIC_ROOT);
 	const [rootInput, setRootInput] = useState(DEFAULT_MUSIC_ROOT);
@@ -221,8 +206,8 @@ export function MusicView() {
 				valueA = a.sizeBytes;
 				valueB = b.sizeBytes;
 			} else {
-				valueA = new Date(a.modifiedAt).getTime();
-				valueB = new Date(b.modifiedAt).getTime();
+				valueA = new Date(a.modifiedAt ?? 0).getTime();
+				valueB = new Date(b.modifiedAt ?? 0).getTime();
 			}
 			if (valueA < valueB) return sortOrder === "asc" ? -1 : 1;
 			if (valueA > valueB) return sortOrder === "asc" ? 1 : -1;
@@ -230,6 +215,35 @@ export function MusicView() {
 		});
 		return next;
 	}, [files, sortBy, sortOrder]);
+
+	const addToTimeline = useCallback(
+		async ({
+			file,
+			startTime,
+		}: {
+			file: LocalMusicFile;
+			startTime: number;
+		}) => {
+			try {
+				await importLocalMusicToTimeline({
+					editor,
+					root,
+					file,
+					target: {
+						mode: "auto",
+						startTime,
+					},
+				});
+			} catch (error) {
+				toast.error(
+					error instanceof Error
+						? error.message
+						: `Failed to add ${file.name} to timeline`,
+				);
+			}
+		},
+		[editor, root],
+	);
 
 	const actions = (
 		<div>
@@ -348,11 +362,10 @@ export function MusicView() {
 						{sortedFiles.map((file) => {
 							const isPlaying = activePreviewPath === file.relativePath;
 							return (
-								<div
+								<DraggableItem
 									key={file.relativePath}
-									className="group relative flex h-auto w-full flex-col gap-1 p-1"
-								>
-									<div className="bg-accent relative aspect-video overflow-hidden rounded-sm border">
+									name={file.name}
+									preview={
 										<div className="text-muted-foreground flex size-full flex-col items-center justify-center">
 											<HugeiconsIcon
 												icon={MusicNote03Icon}
@@ -362,10 +375,12 @@ export function MusicView() {
 												{file.extension.toUpperCase()}
 											</span>
 										</div>
+									}
+									thumbnailTopRightControl={
 										<Button
 											size="icon"
 											variant="secondary"
-											className="absolute top-2 right-2 size-6"
+											className="size-6"
 											onClick={() => void togglePreview({ file })}
 										>
 											<HugeiconsIcon
@@ -373,17 +388,24 @@ export function MusicView() {
 												className="size-3.5"
 											/>
 										</Button>
-									</div>
-									<div className="text-muted-foreground text-[0.7rem]">
-										<div className="truncate" title={file.name}>
-											{file.name}
-										</div>
-										<div className="truncate" title={file.directory}>
-											{file.directory || "Music"} -{" "}
-											{formatBytes(file.sizeBytes)}
-										</div>
-									</div>
-								</div>
+									}
+									dragData={{
+										id: `${root}:${file.relativePath}`,
+										type: "local-music",
+										name: file.name,
+										root,
+										relativePath: file.relativePath,
+										extension: file.extension,
+									}}
+									onAddToTimeline={({ currentTime }) =>
+										void addToTimeline({ file, startTime: currentTime })
+									}
+									className="w-full"
+									containerClassName="w-full"
+									shouldShowPlusOnDrag={false}
+									isRounded={false}
+									variant="card"
+								/>
 							);
 						})}
 					</div>
@@ -392,39 +414,45 @@ export function MusicView() {
 						{sortedFiles.map((file) => {
 							const isPlaying = activePreviewPath === file.relativePath;
 							return (
-								<div
+								<DraggableItem
 									key={file.relativePath}
-									className={cn(
-										"group flex h-8 w-full items-center gap-3 px-1 rounded-sm",
-										"hover:bg-accent/40",
-									)}
-								>
-									<div className="relative size-6 flex-shrink-0 overflow-hidden rounded-[0.35rem] border">
+									name={file.name}
+									preview={
 										<div className="text-muted-foreground flex size-full items-center justify-center">
 											<HugeiconsIcon
 												icon={MusicNote03Icon}
 												className="size-4"
 											/>
 										</div>
-									</div>
-									<div className="min-w-0 flex-1 truncate text-sm">
-										{file.name}
-									</div>
-									<div className="text-muted-foreground w-28 text-xs text-right">
-										{formatDate(file.modifiedAt)}
-									</div>
-									<Button
-										size="icon"
-										variant="ghost"
-										className="size-7"
-										onClick={() => void togglePreview({ file })}
-									>
-										<HugeiconsIcon
-											icon={isPlaying ? PauseIcon : PlayIcon}
-											className="size-4"
-										/>
-									</Button>
-								</div>
+									}
+									thumbnailTopRightControl={
+										<Button
+											size="icon"
+											variant="ghost"
+											className="size-7"
+											onClick={() => void togglePreview({ file })}
+										>
+											<HugeiconsIcon
+												icon={isPlaying ? PauseIcon : PlayIcon}
+												className="size-4"
+											/>
+										</Button>
+									}
+									dragData={{
+										id: `${root}:${file.relativePath}`,
+										type: "local-music",
+										name: file.name,
+										root,
+										relativePath: file.relativePath,
+										extension: file.extension,
+									}}
+									onAddToTimeline={({ currentTime }) =>
+										void addToTimeline({ file, startTime: currentTime })
+									}
+									variant="compact"
+									className={cn("rounded-sm hover:bg-accent/40")}
+									containerClassName="w-full"
+								/>
 							);
 						})}
 					</div>

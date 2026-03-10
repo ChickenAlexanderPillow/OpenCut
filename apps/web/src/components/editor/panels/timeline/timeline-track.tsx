@@ -8,11 +8,13 @@ import type { SnapPoint } from "@/lib/timeline/snap-utils";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
 import { useEdgeAutoScroll } from "@/hooks/timeline/use-edge-auto-scroll";
 import type { ElementDragState } from "@/types/timeline";
-import { useEditor } from "@/hooks/use-editor";
+import type { TimelineVisualModel } from "@/lib/transcript-editor/visual-timeline";
 
 interface TimelineTrackContentProps {
 	track: TimelineTrack;
+	tracks: TimelineTrack[];
 	zoomLevel: number;
+	visualModel: TimelineVisualModel;
 	dragState: ElementDragState;
 	rulerScrollRef: React.RefObject<HTMLDivElement | null>;
 	tracksScrollRef: React.RefObject<HTMLDivElement | null>;
@@ -36,7 +38,9 @@ interface TimelineTrackContentProps {
 
 export function TimelineTrackContent({
 	track,
+	tracks,
 	zoomLevel,
+	visualModel,
 	dragState,
 	rulerScrollRef,
 	tracksScrollRef,
@@ -49,17 +53,16 @@ export function TimelineTrackContent({
 	onTrackClick,
 	shouldIgnoreClick,
 }: TimelineTrackContentProps) {
-	const editor = useEditor({ subscribeTo: ["timeline"] });
 	const { isElementSelected, clearElementSelection } = useElementSelection();
-
-	const duration = editor.timeline.getTotalDuration();
+	const visualDuration = visualModel.totalVisualDuration;
 
 	useEdgeAutoScroll({
 		isActive: dragState.isDragging,
 		getMouseClientX: () => lastMouseXRef.current ?? 0,
 		rulerScrollRef,
 		tracksScrollRef,
-		contentWidth: duration * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel,
+		contentWidth:
+			visualDuration * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel,
 	});
 
 	return (
@@ -91,7 +94,9 @@ export function TimelineTrackContent({
 								key={element.id}
 								element={element}
 								track={track}
+								tracks={tracks}
 								zoomLevel={zoomLevel}
+								visualModel={visualModel}
 								isSelected={isSelected}
 								onSnapPointChange={onSnapPointChange}
 								onResizeStateChange={onResizeStateChange}

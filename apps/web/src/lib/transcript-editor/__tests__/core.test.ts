@@ -201,6 +201,30 @@ describe("transcript editor core", () => {
 		expect(payload?.wordTimings[1]?.word).toBe("world");
 	});
 
+	test("caption payload keeps hidden word timing without showing or highlighting it", () => {
+		const words = [
+			{ id: "w1", text: "hello", startTime: 0.0, endTime: 0.3, removed: false },
+			{
+				id: "w2",
+				text: "secret",
+				startTime: 0.3,
+				endTime: 0.6,
+				removed: false,
+				hidden: true,
+			},
+			{ id: "w3", text: "world", startTime: 0.6, endTime: 1.0, removed: false },
+		];
+
+		const payload = buildCaptionPayloadFromTranscriptWords({ words });
+		expect(payload).not.toBeNull();
+		expect(payload?.content).toBe("hello world");
+		expect(payload?.wordTimings).toHaveLength(3);
+		expect(payload?.wordTimings[1]?.word).toBe("secret");
+		expect(payload?.wordTimings[1]?.hidden).toBe(true);
+		expect(payload?.wordTimings[1]?.startTime).toBeCloseTo(0.3, 3);
+		expect(payload?.wordTimings[2]?.startTime).toBeCloseTo(0.6, 3);
+	});
+
 	test("projects transcript edit to trimmed source window and re-bases timing", () => {
 		const transcriptEdit = {
 			version: 1 as const,
