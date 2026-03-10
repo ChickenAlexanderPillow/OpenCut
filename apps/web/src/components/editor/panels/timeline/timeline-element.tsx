@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ComponentProps } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { useEditor } from "@/hooks/use-editor";
 import { useAssetsPanelStore } from "@/stores/assets-panel-store";
 import { useTimelineStore } from "@/stores/timeline-store";
@@ -553,6 +553,9 @@ function ElementInner({
 	const [containerElement, setContainerElement] = useState<HTMLDivElement | null>(
 		null,
 	);
+	const laneButtonElementsRef = useRef(
+		new Map<AnimationPropertyPath, HTMLButtonElement>(),
+	);
 	const [easingMenu, setEasingMenu] = useState<{
 		x: number;
 		y: number;
@@ -638,7 +641,11 @@ function ElementInner({
 			);
 
 		const onMouseMove = (event: MouseEvent) => {
-			const rect = containerElement.getBoundingClientRect();
+			const rect =
+				laneButtonElementsRef.current
+					.get(draggingKeyframe.propertyPath)
+					?.getBoundingClientRect() ??
+				containerElement.getBoundingClientRect();
 			let nextTime = toLocalTimeFromClientX({
 				clientX: event.clientX,
 				containerRect: rect,
@@ -729,9 +736,12 @@ function ElementInner({
 		event.preventDefault();
 		event.stopPropagation();
 		if (!isVisual || !containerElement) return;
+		const laneElement = laneButtonElementsRef.current.get(propertyPath);
 		const rawTime = toLocalTimeFromClientX({
 			clientX: event.clientX,
-			containerRect: containerElement.getBoundingClientRect(),
+			containerRect:
+				laneElement?.getBoundingClientRect() ??
+				containerElement.getBoundingClientRect(),
 			duration: element.duration,
 		});
 		const localTime = snapTimeToFrame({ time: rawTime, fps: projectFps });
@@ -980,6 +990,13 @@ function ElementInner({
 								</div>
 								<button
 									type="button"
+									ref={(node) => {
+										if (node) {
+											laneButtonElementsRef.current.set(propertyPath, node);
+											return;
+										}
+										laneButtonElementsRef.current.delete(propertyPath);
+									}}
 									className={`pointer-events-auto relative h-1.5 flex-1 rounded ${isSelected ? "bg-black/35" : "bg-black/25"}`}
 									onMouseDown={(event) =>
 										onLaneMouseDown({ event, propertyPath })

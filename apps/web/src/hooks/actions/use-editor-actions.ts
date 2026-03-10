@@ -39,10 +39,6 @@ import type {
 	TranscriptionModelId,
 	TranscriptionSegment,
 } from "@/types/transcription";
-import type {
-	AnimationInterpolation,
-	AnimationPropertyPath,
-} from "@/types/animation";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 import { useClipGenerationStore } from "@/stores/clip-generation-store";
@@ -63,10 +59,13 @@ import {
 	isVisualElement,
 } from "@/lib/timeline/element-utils";
 import {
-	buildTransitionKeyframeSpecs,
 	getTransitionPreset,
 	type TransitionSide,
 } from "@/lib/transitions/presets";
+import {
+	buildApplyTransitionCommand,
+	buildRemoveTransitionCommand,
+} from "@/lib/transitions/commands";
 import type { MediaAsset } from "@/types/assets";
 import type { TProject } from "@/types/project";
 import type { ClipCandidate } from "@/types/clip-generation";
@@ -102,11 +101,6 @@ import {
 	syncCaptionsFromTranscriptEdits,
 	validateAndHealCaptionDriftInTracks,
 } from "@/lib/transcript-editor/sync-captions";
-import {
-	getElementBaseValueForProperty,
-	resolveNumberAtTime,
-} from "@/lib/animation";
-
 const MIN_VIRAL_CLIP_SCORE = 56;
 const MAX_VIRAL_CLIP_COUNT = 5;
 const VIRAL_CLIP_MIN_SECONDS = 18;
@@ -2452,8 +2446,7 @@ export function useEditorActions() {
 			toast.error("Transition preset is required");
 			return;
 		}
-		const preset = getTransitionPreset({ presetId });
-		if (!preset) {
+		if (!getTransitionPreset({ presetId })) {
 			toast.error("Transition preset not found");
 			return;
 		}
@@ -2482,99 +2475,19 @@ export function useEditorActions() {
 			return;
 		}
 
-		const keyframesToRemove = visualTargets.flatMap(({ track, element }) =>
-			(element.transitions?.[side]?.ownedKeyframes ?? []).map((owned) => ({
+		const command = buildApplyTransitionCommand({
+			targets: visualTargets.map(({ track, element }) => ({
 				trackId: track.id,
-				elementId: element.id,
-				propertyPath: owned.propertyPath,
-				keyframeId: owned.keyframeId,
-			})),
-		);
-		if (keyframesToRemove.length > 0) {
-			editor.timeline.removeKeyframes({ keyframes: keyframesToRemove });
-		}
-
-		const transitionTime = new Date().toISOString();
-		const keyframesToInsert: Array<{
-			trackId: string;
-			elementId: string;
-			propertyPath: AnimationPropertyPath;
-			time: number;
-			value: number;
-			interpolation?: AnimationInterpolation;
-			keyframeId: string;
-		}> = [];
-		const metadataUpdates: Array<{
-			trackId: string;
-			elementId: string;
-			updates: Partial<Record<string, unknown>>;
-		}> = [];
-
-		for (const { track, element } of visualTargets) {
-			const resolvedDuration = Math.max(
-				0.04,
-				Math.min(durationSeconds ?? preset.defaultDuration, element.duration),
-			);
-			const specs = buildTransitionKeyframeSpecs({
 				element,
-				preset,
-				side,
-				duration: resolvedDuration,
-				getBaseValueForPath: ({ propertyPath, time }) => {
-					const baseValue = getElementBaseValueForProperty({
-						element,
-						propertyPath,
-					});
-					if (typeof baseValue !== "number") return null;
-					return resolveNumberAtTime({
-						baseValue,
-						animations: element.animations,
-						propertyPath,
-						localTime: time,
-					});
-				},
-			});
-			const ownedKeyframes = specs.map((spec) => ({
-				propertyPath: spec.propertyPath,
-				keyframeId: generateUUID(),
-			}));
-			for (let index = 0; index < specs.length; index++) {
-				const spec = specs[index];
-				const keyframeId = ownedKeyframes[index]?.keyframeId;
-				if (!keyframeId) continue;
-				keyframesToInsert.push({
-					trackId: track.id,
-					elementId: element.id,
-					propertyPath: spec.propertyPath,
-					time: spec.time,
-					value: spec.value,
-					interpolation: spec.interpolation,
-					keyframeId,
-				});
-			}
-
-			metadataUpdates.push({
-				trackId: track.id,
-				elementId: element.id,
-				updates: {
-					transitions: {
-						...(element.transitions ?? {}),
-						[side]: {
-							presetId: preset.id,
-							duration: resolvedDuration,
-							ownedKeyframes,
-							appliedAt: transitionTime,
-						},
-					},
-				},
-			});
-		}
-
-		if (keyframesToInsert.length > 0) {
-			editor.timeline.upsertKeyframes({ keyframes: keyframesToInsert });
-		}
-		if (metadataUpdates.length > 0) {
-			editor.timeline.updateElements({ updates: metadataUpdates });
+			})),
+			side,
+			presetId,
+			durationSeconds,
+			generateId: generateUUID,
+			appliedAt: new Date().toISOString(),
+		});
+		if (command) {
+			editor.command.execute({ command });
 		}
 	};
 
@@ -2604,31 +2517,16 @@ export function useEditorActions() {
 			);
 		if (visualTargets.length === 0) return;
 
-		const keyframesToRemove = visualTargets.flatMap(({ track, element }) =>
-			(element.transitions?.[side]?.ownedKeyframes ?? []).map((owned) => ({
+		const command = buildRemoveTransitionCommand({
+			targets: visualTargets.map(({ track, element }) => ({
 				trackId: track.id,
-				elementId: element.id,
-				propertyPath: owned.propertyPath,
-				keyframeId: owned.keyframeId,
+				element,
 			})),
-		);
-		if (keyframesToRemove.length > 0) {
-			editor.timeline.removeKeyframes({ keyframes: keyframesToRemove });
-		}
-
-		editor.timeline.updateElements({
-			updates: visualTargets.map(({ track, element }) => {
-				const nextTransitions = {
-					...(element.transitions ?? {}),
-				};
-				delete nextTransitions[side];
-				return {
-					trackId: track.id,
-					elementId: element.id,
-					updates: { transitions: nextTransitions },
-				};
-			}),
+			side,
 		});
+		if (command) {
+			editor.command.execute({ command });
+		}
 	};
 
 	useActionHandler(
