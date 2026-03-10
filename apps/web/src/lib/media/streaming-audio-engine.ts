@@ -51,6 +51,12 @@ export interface AudioHealthSnapshot {
 	reschedules: number;
 }
 
+export interface PreparedAudioGraph {
+	clips: StreamingClip[];
+	diff: AudioGraphDiff;
+	revision: AudioGraphRevision;
+}
+
 type ScheduledNode = {
 	key: string;
 	clipId: string;
@@ -202,7 +208,7 @@ export class StreamingTimelineAudioEngine {
 		tracks: TimelineTrack[];
 		mediaAssets: MediaAsset[];
 		playhead: number;
-	}): Promise<{ diff: AudioGraphDiff; revision: AudioGraphRevision }> {
+	}): Promise<PreparedAudioGraph> {
 		const previousClipsById = new Map(
 			this.clips.map((clip) => [clip.id, clip]),
 		);
@@ -243,8 +249,27 @@ export class StreamingTimelineAudioEngine {
 			}
 		}
 
+		return {
+			clips,
+			diff: {
+				...diff,
+				structuralChangedClipIds,
+				gainOnlyClipIds,
+			},
+			revision: nextRevision,
+		};
+	}
+
+	applyPreparedGraph({
+		clips,
+		diff,
+		revision,
+		playhead,
+	}: PreparedAudioGraph & {
+		playhead: number;
+	}): void {
 		this.clips = clips;
-		this.revision = nextRevision;
+		this.revision = revision;
 		if (typeof window !== "undefined") {
 			window.dispatchEvent(
 				new CustomEvent("opencut:audio-prepared-clips", {
@@ -270,14 +295,10 @@ export class StreamingTimelineAudioEngine {
 				}),
 			);
 		}
-		return {
-			diff: {
-				...diff,
-				structuralChangedClipIds,
-				gainOnlyClipIds,
-			},
-			revision: nextRevision,
-		};
+		this.updateGraph({
+			diff,
+			playhead,
+		});
 	}
 
 	start({ atTime }: { atTime: number }): void {
@@ -297,9 +318,11 @@ export class StreamingTimelineAudioEngine {
 		time: number;
 		immediate?: boolean;
 	}): void {
+		this.transportGeneration += 1;
 		this.timelineAnchorTime = clampTime(time);
 		this.contextAnchorTime = this.audioContext.currentTime;
 		this.clearScheduledNodes({ immediate });
+		this.pendingTick = false;
 		void this.tick();
 	}
 
@@ -566,6 +589,9 @@ export class StreamingTimelineAudioEngine {
 				});
 				if (!decodedWindow) {
 					continue;
+				}
+				if (!this.isPlaying || runGeneration !== this.transportGeneration) {
+					break;
 				}
 
 				const scheduledForClip = this.scheduleClipWindow({

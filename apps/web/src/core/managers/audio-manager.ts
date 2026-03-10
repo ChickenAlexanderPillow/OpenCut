@@ -356,10 +356,14 @@ export class AudioManager {
 		const tracks = this.editor.timeline.getTracks();
 		const mediaAssets = this.editor.media.getAssets();
 		try {
-			const result = await engine.prepare({ tracks, mediaAssets, playhead });
+			const preparedGraph = await engine.prepare({
+				tracks,
+				mediaAssets,
+				playhead,
+			});
 			if (prepareSequence !== this.prepareGraphSequence) return;
-			engine.updateGraph({
-				diff: result.diff,
+			engine.applyPreparedGraph({
+				...preparedGraph,
 				playhead,
 			});
 			this.setAudioGraphDirty({
@@ -462,7 +466,6 @@ export class AudioManager {
 			if (!this.editor.playback.getIsPlaying()) return;
 			this.streamingEngine?.stop();
 			this.streamingEngine?.start({ atTime: time });
-			this.streamingEngine?.seek({ time, immediate: true });
 			this.setAudioGraphDirty({
 				dirty: false,
 				reason: "playback-restarted",

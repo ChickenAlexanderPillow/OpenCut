@@ -29,6 +29,24 @@ function scaleFontSize({
 	return fontSize * (canvasHeight / FONT_SIZE_SCALE_REFERENCE);
 }
 
+function getBackgroundFontSizeRatio({
+	fontSize,
+	canvasHeight,
+	referenceCanvasHeight,
+}: {
+	fontSize: number;
+	canvasHeight: number;
+	referenceCanvasHeight?: number;
+}): number {
+	const referenceHeight =
+		referenceCanvasHeight && referenceCanvasHeight > 0
+			? referenceCanvasHeight
+			: canvasHeight;
+	return (
+		(fontSize / DEFAULT_TEXT_ELEMENT.fontSize) * (canvasHeight / referenceHeight)
+	);
+}
+
 function quoteFontFamily({ fontFamily }: { fontFamily: string }): string {
 	return `"${fontFamily.replace(/"/g, '\\"')}"`;
 }
@@ -229,6 +247,7 @@ export type TextNodeParams = TextElement & {
 	canvasCenter: { x: number; y: number };
 	canvasWidth: number;
 	canvasHeight: number;
+	backgroundReferenceCanvasHeight?: number;
 	textBaseline?: CanvasTextBaseline;
 };
 
@@ -400,7 +419,11 @@ export class TextNode extends BaseNode<TextNodeParams> {
 						? latestStartedWordIndex
 						: 0;
 		const lineHeightPx = scaledFontSize * lineHeight;
-		const fontSizeRatio = this.params.fontSize / DEFAULT_TEXT_ELEMENT.fontSize;
+		const fontSizeRatio = getBackgroundFontSizeRatio({
+			fontSize: this.params.fontSize,
+			canvasHeight: this.params.canvasHeight,
+			referenceCanvasHeight: this.params.backgroundReferenceCanvasHeight,
+		});
 		const backgroundMode =
 			this.params.captionStyle?.backgroundFitMode ?? "block";
 

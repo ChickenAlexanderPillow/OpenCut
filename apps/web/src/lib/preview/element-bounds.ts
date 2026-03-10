@@ -70,6 +70,24 @@ if (sharedMeasureCanvas) {
 	sharedMeasureCanvas.height = 4096;
 }
 
+function getBackgroundFontSizeRatio({
+	fontSize,
+	canvasHeight,
+	referenceCanvasHeight,
+}: {
+	fontSize: number;
+	canvasHeight: number;
+	referenceCanvasHeight?: number;
+}): number {
+	const referenceHeight =
+		referenceCanvasHeight && referenceCanvasHeight > 0
+			? referenceCanvasHeight
+			: canvasHeight;
+	return (
+		(fontSize / DEFAULT_TEXT_ELEMENT.fontSize) * (canvasHeight / referenceHeight)
+	);
+}
+
 function evictOldestEntry<T>(cache: Map<string, T>): void {
 	while (cache.size > MAX_PREVIEW_CACHE_ENTRIES) {
 		const oldestKey = cache.keys().next().value as string | undefined;
@@ -243,11 +261,13 @@ function getVisualElementBounds({
 export function getElementBounds({
 	element,
 	canvasSize,
+	backgroundReferenceCanvasSize,
 	mediaAsset,
 	currentTime = element.startTime,
 }: {
 	element: TimelineElement;
 	canvasSize: { width: number; height: number };
+	backgroundReferenceCanvasSize?: { width: number; height: number };
 	mediaAsset?: MediaAsset | null;
 	currentTime?: number;
 }): ElementBounds | null {
@@ -389,8 +409,11 @@ export function getElementBounds({
 						lineHeightPx,
 						fallbackFontSize: scaledFontSize,
 					});
-					const fontSizeRatio =
-						element.fontSize / DEFAULT_TEXT_ELEMENT.fontSize;
+					const fontSizeRatio = getBackgroundFontSizeRatio({
+						fontSize: element.fontSize,
+						canvasHeight,
+						referenceCanvasHeight: backgroundReferenceCanvasSize?.height,
+					});
 					const candidateVisualRect = getTextVisualRectForBackgroundMode({
 						textAlign: element.textAlign,
 						block: candidateBlock,
@@ -535,7 +558,11 @@ export function getElementBounds({
 				lineHeightPx,
 				fallbackFontSize: scaledFontSize,
 			});
-			const fontSizeRatio = element.fontSize / DEFAULT_TEXT_ELEMENT.fontSize;
+			const fontSizeRatio = getBackgroundFontSizeRatio({
+				fontSize: element.fontSize,
+				canvasHeight,
+				referenceCanvasHeight: backgroundReferenceCanvasSize?.height,
+			});
 			const visualRect = getTextVisualRectForBackgroundMode({
 				textAlign: element.textAlign,
 				block,
@@ -611,11 +638,13 @@ export function getVisibleElementsWithBounds({
 	tracks,
 	currentTime,
 	canvasSize,
+	backgroundReferenceCanvasSize,
 	mediaAssets,
 }: {
 	tracks: TimelineTrack[];
 	currentTime: number;
 	canvasSize: { width: number; height: number };
+	backgroundReferenceCanvasSize?: { width: number; height: number };
 	mediaAssets: MediaAsset[];
 }): ElementWithBounds[] {
 	const mediaMap = new Map(mediaAssets.map((m) => [m.id, m]));
@@ -651,6 +680,7 @@ export function getVisibleElementsWithBounds({
 			const bounds = getElementBounds({
 				element,
 				canvasSize,
+				backgroundReferenceCanvasSize,
 				mediaAsset,
 				currentTime,
 			});
