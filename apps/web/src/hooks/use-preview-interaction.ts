@@ -121,6 +121,7 @@ export function usePreviewInteraction({
 				tracks: previewTracks,
 				currentTime,
 				canvasSize,
+				backgroundReferenceCanvasSize: projectCanvas,
 				mediaAssets,
 			});
 
@@ -192,6 +193,7 @@ export function usePreviewInteraction({
 				tracks: previewTracks,
 				currentTime,
 				canvasSize,
+				backgroundReferenceCanvasSize: projectCanvas,
 				mediaAssets,
 			});
 

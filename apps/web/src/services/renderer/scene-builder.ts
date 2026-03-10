@@ -175,6 +175,7 @@ export function resolveLiveCaptionElementFromTranscriptSource({
 
 export type BuildSceneParams = {
 	canvasSize: TCanvasSize;
+	backgroundReferenceCanvasSize?: TCanvasSize;
 	tracks: TimelineTrack[];
 	mediaAssets: MediaAsset[];
 	duration: number;
@@ -334,6 +335,8 @@ export function buildScene(params: BuildSceneParams) {
 						canvasCenter: { x: canvasSize.width / 2, y: canvasSize.height / 2 },
 						canvasWidth: canvasSize.width,
 						canvasHeight: canvasSize.height,
+						backgroundReferenceCanvasHeight:
+							params.backgroundReferenceCanvasSize?.height ?? canvasSize.height,
 						textBaseline: "middle",
 					}),
 				);

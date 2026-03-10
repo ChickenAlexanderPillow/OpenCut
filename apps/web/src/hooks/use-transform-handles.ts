@@ -152,6 +152,7 @@ export function useTransformHandles({
 				tracks: previewTracks,
 				currentTime,
 				canvasSize,
+				backgroundReferenceCanvasSize: projectCanvas,
 				mediaAssets,
 			})
 		: [];

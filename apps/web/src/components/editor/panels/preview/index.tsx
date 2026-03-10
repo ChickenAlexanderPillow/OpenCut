@@ -411,6 +411,7 @@ function RenderTreeController() {
 			mediaAssets,
 			duration,
 			canvasSize: { width, height },
+			backgroundReferenceCanvasSize: activeProject.settings.canvasSize,
 			background: previewBackground,
 			brandOverlays: activeProject.brandOverlays,
 			isPreview: true,
