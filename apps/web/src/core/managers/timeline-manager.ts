@@ -12,6 +12,7 @@ import type {
 	TextElement,
 	VideoElement,
 	AudioElement,
+	TimelineGapSelection,
 } from "@/types/timeline";
 import { calculateTotalDuration } from "@/lib/timeline";
 import {
@@ -23,6 +24,7 @@ import {
 	UpdateElementTrimCommand,
 	UpdateElementDurationCommand,
 	DeleteElementsCommand,
+	DeleteGapCommand,
 	DuplicateElementsCommand,
 	ToggleElementsVisibilityCommand,
 	ToggleElementsMutedCommand,
@@ -321,6 +323,11 @@ export class TimelineManager {
 		rippleEnabled?: boolean;
 	}): void {
 		const command = new DeleteElementsCommand({ elements, rippleEnabled });
+		this.editor.command.execute({ command });
+	}
+
+	deleteGap({ gap }: { gap: TimelineGapSelection }): void {
+		const command = new DeleteGapCommand({ gap });
 		this.editor.command.execute({ command });
 	}
 

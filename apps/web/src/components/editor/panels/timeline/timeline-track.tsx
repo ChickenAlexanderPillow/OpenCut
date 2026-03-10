@@ -1,14 +1,25 @@
 "use client";
 
+import { invokeAction } from "@/lib/actions";
+import {
+	ContextMenu,
+	ContextMenuContent,
+	ContextMenuItem,
+	ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { useElementSelection } from "@/hooks/timeline/element/use-element-selection";
 import { TimelineElement } from "./timeline-element";
 import type { TimelineTrack } from "@/types/timeline";
-import type { TimelineElement as TimelineElementType } from "@/types/timeline";
+import type {
+	TimelineElement as TimelineElementType,
+	TimelineGapSelection,
+} from "@/types/timeline";
 import type { SnapPoint } from "@/lib/timeline/snap-utils";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
 import { useEdgeAutoScroll } from "@/hooks/timeline/use-edge-auto-scroll";
 import type { ElementDragState } from "@/types/timeline";
 import type { TimelineVisualModel } from "@/lib/transcript-editor/visual-timeline";
+import { getTrackGaps } from "@/lib/timeline";
 
 interface TimelineTrackContentProps {
 	track: TimelineTrack;
@@ -53,8 +64,14 @@ export function TimelineTrackContent({
 	onTrackClick,
 	shouldIgnoreClick,
 }: TimelineTrackContentProps) {
-	const { isElementSelected, clearElementSelection } = useElementSelection();
+	const {
+		isElementSelected,
+		isGapSelected,
+		selectGap,
+		clearElementSelection,
+	} = useElementSelection();
 	const visualDuration = visualModel.totalVisualDuration;
+	const trackGaps = getTrackGaps({ track });
 
 	useEdgeAutoScroll({
 		isActive: dragState.isDragging,
@@ -79,6 +96,15 @@ export function TimelineTrackContent({
 			}}
 		>
 			<div className="relative h-full min-w-full">
+				{trackGaps.map((gap) => (
+					<GapRegion
+						key={`${gap.trackId}:${gap.startTime}:${gap.endTime}`}
+						gap={gap}
+						zoomLevel={zoomLevel}
+						isSelected={isGapSelected({ gap })}
+						onSelect={(nextGap) => selectGap({ gap: nextGap })}
+					/>
+				))}
 				{track.elements.length === 0 ? (
 					<div className="text-muted-foreground border-muted/30 flex size-full items-center justify-center rounded-sm border-2 border-dashed text-xs" />
 				) : (
@@ -112,5 +138,70 @@ export function TimelineTrackContent({
 				)}
 			</div>
 		</div>
+	);
+}
+
+function GapRegion({
+	gap,
+	zoomLevel,
+	isSelected,
+	onSelect,
+}: {
+	gap: TimelineGapSelection;
+	zoomLevel: number;
+	isSelected: boolean;
+	onSelect: (gap: TimelineGapSelection) => void;
+}) {
+	const left =
+		gap.startTime * TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
+	const width = Math.max(
+		2,
+		(gap.endTime - gap.startTime) *
+			TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
+			zoomLevel,
+	);
+
+	return (
+		<ContextMenu>
+			<ContextMenuTrigger asChild>
+				<button
+					type="button"
+					className={`absolute top-0 bottom-0 z-[1] cursor-pointer rounded-sm border transition-colors ${
+						isSelected
+							? "border-primary/70 bg-primary/15"
+							: "border-transparent bg-foreground/5 hover:border-border/60 hover:bg-foreground/8"
+					}`}
+					style={{ left: `${left}px`, width: `${width}px` }}
+					onMouseDown={(event) => {
+						event.preventDefault();
+						event.stopPropagation();
+						onSelect(gap);
+					}}
+					onClick={(event) => {
+						event.preventDefault();
+						event.stopPropagation();
+						onSelect(gap);
+					}}
+					onContextMenu={(event) => {
+						event.stopPropagation();
+						onSelect(gap);
+					}}
+					aria-label={`Gap from ${gap.startTime.toFixed(2)} to ${gap.endTime.toFixed(2)} seconds`}
+					title={`Gap ${gap.startTime.toFixed(2)}s - ${gap.endTime.toFixed(2)}s`}
+				/>
+			</ContextMenuTrigger>
+			<ContextMenuContent className="w-44">
+				<ContextMenuItem
+					variant="destructive"
+					onSelect={(event) => {
+						event.preventDefault();
+						event.stopPropagation();
+						invokeAction("ripple-delete-gap", gap);
+					}}
+				>
+					Ripple delete gap
+				</ContextMenuItem>
+			</ContextMenuContent>
+		</ContextMenu>
 	);
 }

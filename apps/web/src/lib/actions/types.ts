@@ -78,6 +78,13 @@ export type TActionArgsMap = {
 	"caption-run-drift-check": undefined;
 	"select-all-captions": { trackId?: string } | undefined;
 	"clear-viral-clips-session": undefined;
+	"ripple-delete-gap":
+		| {
+				trackId: string;
+				startTime: number;
+				endTime: number;
+		  }
+		| undefined;
 };
 
 type TKeysWithValueUndefined<T> = {

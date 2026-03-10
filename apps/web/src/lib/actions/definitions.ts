@@ -215,6 +215,15 @@ export const ACTIONS = {
 		category: "editing",
 		defaultShortcuts: ["backspace", "delete"],
 	},
+	"ripple-delete-gap": {
+		description: "Ripple delete selected gap",
+		category: "editing",
+		args: {
+			trackId: "string",
+			startTime: "number",
+			endTime: "number",
+		},
+	},
 	"copy-selected": {
 		description: "Copy selected elements",
 		category: "editing",

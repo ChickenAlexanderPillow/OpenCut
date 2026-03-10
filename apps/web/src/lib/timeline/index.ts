@@ -5,6 +5,7 @@ export * from "./element-utils";
 export * from "./zoom-utils";
 export * from "./ruler-utils";
 export * from "./ripple-utils";
+export * from "./gap-utils";
 export * from "./track-element-update";
 
 export function calculateTotalDuration({

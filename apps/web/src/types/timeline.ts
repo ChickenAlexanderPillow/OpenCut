@@ -65,6 +65,12 @@ export interface StickerTrack extends BaseTrack {
 
 export type TimelineTrack = VideoTrack | TextTrack | AudioTrack | StickerTrack;
 
+export interface TimelineGapSelection {
+	trackId: string;
+	startTime: number;
+	endTime: number;
+}
+
 export type { Transform } from "./rendering";
 
 interface BaseAudioElement extends BaseTimelineElement {

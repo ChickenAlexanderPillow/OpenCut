@@ -1,5 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { useEditor } from "@/hooks/use-editor";
+import type { TimelineGapSelection } from "@/types/timeline";
 
 type ElementRef = { trackId: string; elementId: string };
 
@@ -8,6 +9,10 @@ export function useElementSelection() {
 	const selectedElements = useSyncExternalStore(
 		(listener) => editor.selection.subscribe(listener),
 		() => editor.selection.getSelectedElements(),
+	);
+	const selectedGap = useSyncExternalStore(
+		(listener) => editor.selection.subscribe(listener),
+		() => editor.selection.getSelectedGap(),
 	);
 
 	const isElementSelected = useCallback(
@@ -75,6 +80,26 @@ export function useElementSelection() {
 		editor.selection.clearSelection();
 	}, [editor]);
 
+	const selectGap = useCallback(
+		({ gap }: { gap: TimelineGapSelection }) => {
+			editor.selection.setSelectedGap({ gap });
+		},
+		[editor],
+	);
+
+	const clearGapSelection = useCallback(() => {
+		editor.selection.setSelectedGap({ gap: null });
+	}, [editor]);
+
+	const isGapSelected = useCallback(
+		({ gap }: { gap: TimelineGapSelection }) =>
+			selectedGap !== null &&
+			selectedGap.trackId === gap.trackId &&
+			Math.abs(selectedGap.startTime - gap.startTime) < 1e-6 &&
+			Math.abs(selectedGap.endTime - gap.endTime) < 1e-6,
+		[selectedGap],
+	);
+
 	const setElementSelection = useCallback(
 		({ elements }: { elements: ElementRef[] }) => {
 			editor.selection.setSelectedElements({ elements });
@@ -104,13 +129,17 @@ export function useElementSelection() {
 
 	return {
 		selectedElements,
+		selectedGap,
 		isElementSelected,
+		isGapSelected,
 		selectElement,
+		selectGap,
 		setElementSelection,
 		addElementToSelection,
 		removeElementFromSelection,
 		toggleElementSelection,
 		clearElementSelection,
+		clearGapSelection,
 		handleElementClick,
 	};
 }

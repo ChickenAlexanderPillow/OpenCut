@@ -2362,7 +2362,8 @@ export function useEditorActions() {
 	const transcriptionStatus = useTranscriptionStatusStore();
 	const { registerProcess, updateProcessLabel, removeProcess } =
 		useProjectProcessStore();
-	const { selectedElements, setElementSelection } = useElementSelection();
+	const { selectedElements, selectedGap, setElementSelection } =
+		useElementSelection();
 	const {
 		clipboard,
 		setClipboard,
@@ -4154,8 +4155,30 @@ export function useEditorActions() {
 	);
 
 	useActionHandler(
+		"ripple-delete-gap",
+		(args) => {
+			const gap =
+				args &&
+				typeof args.trackId === "string" &&
+				Number.isFinite(args.startTime) &&
+				Number.isFinite(args.endTime)
+					? args
+					: selectedGap;
+			if (!gap) return;
+			editor.timeline.deleteGap({ gap });
+			editor.selection.clearSelection();
+		},
+		undefined,
+	);
+
+	useActionHandler(
 		"delete-selected",
 		() => {
+			if (selectedGap) {
+				editor.timeline.deleteGap({ gap: selectedGap });
+				editor.selection.clearSelection();
+				return;
+			}
 			if (selectedElements.length === 0) {
 				return;
 			}
