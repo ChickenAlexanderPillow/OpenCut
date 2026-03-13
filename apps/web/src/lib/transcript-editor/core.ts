@@ -1,5 +1,4 @@
 import {
-	CAPTION_TAIL_PAD_SECONDS,
 	DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS,
 	PAUSE_REMOVAL_CUT_END_PADDING_SECONDS,
 	PAUSE_REMOVAL_CUT_START_PADDING_SECONDS,
@@ -537,7 +536,7 @@ export function buildCaptionPayloadFromTranscriptWords({
 	return {
 		content,
 		startTime,
-		duration: Math.max(0.04, endTime - startTime + CAPTION_TAIL_PAD_SECONDS),
+		duration: Math.max(0.04, endTime - startTime),
 		wordTimings: timings,
 	};
 }

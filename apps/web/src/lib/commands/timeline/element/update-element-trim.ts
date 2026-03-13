@@ -4,7 +4,6 @@ import { EditorCore } from "@/core";
 import { clampAnimationsToDuration } from "@/lib/animation";
 import { rippleShiftElements } from "@/lib/timeline";
 import { projectTranscriptEditToWindow } from "@/lib/transcript-editor/core";
-import { CAPTION_TAIL_PAD_SECONDS } from "@/lib/transcript-editor/constants";
 import {
 	syncCaptionsFromTranscriptEdits,
 	reconcileLinkedCaptionIntegrityInTracks,
@@ -135,10 +134,7 @@ function trimLinkedCaptionsForMedia({
 							.join(" ")
 							.trim(),
 						startTime: nextStart,
-						duration: Math.max(
-							0.04,
-							nextEnd - nextStart + CAPTION_TAIL_PAD_SECONDS,
-						),
+						duration: Math.max(0.04, nextEnd - nextStart),
 						captionWordTimings: trimmedTimings,
 					},
 				];

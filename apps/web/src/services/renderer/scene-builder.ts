@@ -64,13 +64,24 @@ function isAlignedTranscriptCompanion({
 	const candidateTimelineEnd = candidate.startTime + candidate.duration;
 	const targetSourceEnd = target.trimStart + target.duration;
 	const candidateSourceEnd = candidate.trimStart + candidate.duration;
-	const timelineOverlap =
-		targetTimelineEnd > candidate.startTime - 0.05 &&
-		candidateTimelineEnd > target.startTime - 0.05;
-	const sourceOverlap =
-		targetSourceEnd > candidate.trimStart - 0.05 &&
-		candidateSourceEnd > target.trimStart - 0.05;
-	return timelineOverlap && sourceOverlap;
+	const timelineOverlap = Math.max(
+		0,
+		Math.min(targetTimelineEnd, candidateTimelineEnd) -
+			Math.max(target.startTime, candidate.startTime),
+	);
+	const sourceOverlap = Math.max(
+		0,
+		Math.min(targetSourceEnd, candidateSourceEnd) -
+			Math.max(target.trimStart, candidate.trimStart),
+	);
+	const minDuration = Math.max(
+		0.001,
+		Math.min(target.duration, candidate.duration),
+	);
+	return (
+		timelineOverlap / minDuration >= 0.8 &&
+		sourceOverlap / minDuration >= 0.8
+	);
 }
 
 function resolveTranscriptCompanionForCaptionSource({

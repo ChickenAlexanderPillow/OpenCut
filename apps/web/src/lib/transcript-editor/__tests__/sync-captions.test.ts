@@ -22,6 +22,7 @@ function createAudioElement({
 		text: string;
 		startTime: number;
 		endTime: number;
+		hidden?: boolean;
 		removed?: boolean;
 	}>;
 }): AudioElement {
@@ -96,6 +97,7 @@ function createVideoElement({
 		text: string;
 		startTime: number;
 		endTime: number;
+		hidden?: boolean;
 		removed?: boolean;
 	}>;
 }): VideoElement {

@@ -113,7 +113,7 @@ describe("TextNode caption gap rendering", () => {
 		const node = createCaptionNode();
 		const { operations, renderer } = createFakeRenderer();
 
-		await node.render({ renderer, time: 10.4 });
+		await node.render({ renderer, time: 10.39 });
 
 		expect(operations).toContain("fillText");
 		expect(operations.at(-1)).toBe("restore");
@@ -142,4 +142,5 @@ describe("TextNode caption gap rendering", () => {
 
 		expect(operations).toEqual([]);
 	});
+
 });

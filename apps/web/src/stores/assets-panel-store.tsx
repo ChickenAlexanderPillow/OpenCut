@@ -33,7 +33,7 @@ const createHugeiconsIcon =
 		<HugeiconsIcon icon={icon} className={className} />
 	);
 
-function OcGradientSquareIcon({ className }: { className?: string }) {
+function OcTransitionsIcon({ className }: { className?: string }) {
 	return (
 		<svg
 			viewBox="0 0 24 24"
@@ -42,32 +42,25 @@ function OcGradientSquareIcon({ className }: { className?: string }) {
 			className={className}
 		>
 			<title>Transitions</title>
-			<defs>
-				<linearGradient id="transitions-tab-gradient" x1="4" y1="4" x2="20" y2="20">
-					<stop offset="0%" stopColor="#fb7185" />
-					<stop offset="55%" stopColor="#f59e0b" />
-					<stop offset="100%" stopColor="#22c55e" />
-				</linearGradient>
-			</defs>
 			<rect
 				x="3.5"
 				y="3.5"
 				width="17"
 				height="17"
 				rx="4.5"
-				fill="url(#transitions-tab-gradient)"
+				fill="currentColor"
 				fillOpacity="0.22"
-				stroke="url(#transitions-tab-gradient)"
+				stroke="currentColor"
 				strokeWidth="1.5"
 			/>
 			<path
 				d="M7.5 15.5L11 12L13.2 14.2L16.8 8.8"
-				stroke="url(#transitions-tab-gradient)"
+				stroke="currentColor"
 				strokeWidth="1.8"
 				strokeLinecap="round"
 				strokeLinejoin="round"
 			/>
-			<circle cx="16.8" cy="8.8" r="1.2" fill="url(#transitions-tab-gradient)" />
+			<circle cx="16.8" cy="8.8" r="1.2" fill="currentColor" />
 		</svg>
 	);
 }
@@ -98,7 +91,7 @@ export const tabs = {
 		label: "Stickers",
 	},
 	transitions: {
-		icon: OcGradientSquareIcon,
+		icon: OcTransitionsIcon,
 		label: "Transitions",
 	},
 	overlay: {

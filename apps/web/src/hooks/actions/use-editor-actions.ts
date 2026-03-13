@@ -114,7 +114,6 @@ const CLIP_TRANSCRIPTION_MIN_DURATION_SECONDS = 0.35;
 const CLIP_TRANSCRIPTION_MAX_DURATION_SECONDS = 240;
 const CLIP_TRANSCRIPTION_MAX_FILE_BYTES = 20 * 1024 * 1024;
 const CLIP_WORD_TRANSCRIPTION_CACHE_VERSION = 7;
-const CAPTION_TAIL_PAD_SECONDS = 1 / 30;
 const SMART_CUT_WORD_JOIN_GAP_SECONDS = 0.45;
 const clipTranscriptionInFlight = new Map<
 	string,
@@ -1766,7 +1765,7 @@ function buildContinuousCaptionForClip({
 	return {
 		content,
 		startTime,
-		duration: Math.max(0.04, endTime - startTime + CAPTION_TAIL_PAD_SECONDS),
+		duration: Math.max(0.04, endTime - startTime),
 		wordTimings: normalizedWordTimings,
 	};
 }

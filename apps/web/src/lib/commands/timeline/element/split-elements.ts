@@ -7,7 +7,6 @@ import { splitAnimationsAtTime } from "@/lib/animation";
 import {
 	projectTranscriptEditToWindow,
 } from "@/lib/transcript-editor/core";
-import { CAPTION_TAIL_PAD_SECONDS } from "@/lib/transcript-editor/constants";
 import {
 	syncCaptionsFromTranscriptEdits,
 	reconcileLinkedCaptionIntegrityInTracks,
@@ -50,8 +49,10 @@ function resolveSplitTranscriptProjectionContext({
 		VideoElement["transcriptDraft"] | AudioElement["transcriptDraft"]
 	>;
 	projectionSource: NonNullable<
-		VideoElement["transcriptDraft"] | AudioElement["transcriptDraft"]
-	>["projectionSource"];
+		NonNullable<
+			VideoElement["transcriptDraft"] | AudioElement["transcriptDraft"]
+		>["projectionSource"]
+	>;
 } {
 	const projectionSource = transcriptDraft.projectionSource;
 	if (projectionSource) {
@@ -108,12 +109,16 @@ function splitTranscriptState({
 		transcriptDraft,
 		baseTrimStart: element.trimStart,
 	});
+	const sourceWindowStart = Math.max(
+		0,
+		element.trimStart - projectionContext.projectionSource.baseTrimStart,
+	);
 	const leftDraft = {
 		...projectTranscriptEditToWindow({
 			transcriptEdit: projectionContext.sourceTranscript,
 			elementId: leftElementId,
-			sourceStart: 0,
-			sourceEnd: leftDuration,
+			sourceStart: sourceWindowStart,
+			sourceEnd: sourceWindowStart + leftDuration,
 		}),
 		projectionSource: projectionContext.projectionSource,
 	};
@@ -121,8 +126,8 @@ function splitTranscriptState({
 		...projectTranscriptEditToWindow({
 			transcriptEdit: projectionContext.sourceTranscript,
 			elementId: rightElementId,
-			sourceStart: leftDuration,
-			sourceEnd: leftDuration + rightDuration,
+			sourceStart: sourceWindowStart + leftDuration,
+			sourceEnd: sourceWindowStart + leftDuration + rightDuration,
 		}),
 		projectionSource: projectionContext.projectionSource,
 	};
@@ -211,7 +216,7 @@ function buildCaptionFromTimings({
 		id,
 		content: timings.map((timing) => timing.word).join(" ").trim(),
 		startTime,
-		duration: Math.max(0.04, endTime - startTime + CAPTION_TAIL_PAD_SECONDS),
+		duration: Math.max(0.04, endTime - startTime),
 		captionWordTimings: timings,
 		captionSourceRef: {
 			mediaElementId: sourceMediaElementId,

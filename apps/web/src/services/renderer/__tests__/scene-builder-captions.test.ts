@@ -4,7 +4,7 @@ import {
 	buildScene,
 	resolveLiveCaptionElementFromTranscriptSource,
 } from "@/services/renderer/scene-builder";
-import type { AudioElement, TextElement } from "@/types/timeline";
+import type { AudioElement, TextElement, UploadAudioElement } from "@/types/timeline";
 
 function createAudioElement({
 	id,
@@ -20,9 +20,10 @@ function createAudioElement({
 		text: string;
 		startTime: number;
 		endTime: number;
+		hidden?: boolean;
 		removed?: boolean;
 	}>;
-}): AudioElement {
+}): UploadAudioElement {
 	return {
 		id,
 		type: "audio",
@@ -375,5 +376,98 @@ describe("scene builder live caption source resolution", () => {
 		expect(resolved?.captionVisibilityWindows).toEqual([
 			{ startTime: 20, endTime: 21 },
 		]);
+	});
+
+	test("uses the strongly aligned split companion transcript instead of an adjacent sibling", () => {
+		const leftVideo = {
+			id: "video-left",
+			type: "video" as const,
+			name: "Left",
+			mediaId: "shared-media",
+			startTime: 0,
+			duration: 1,
+			trimStart: 0,
+			trimEnd: 0,
+			transform: DEFAULT_TEXT_ELEMENT.transform,
+			opacity: 1,
+		};
+		const rightVideo = {
+			id: "video-right",
+			type: "video" as const,
+			name: "Right",
+			mediaId: "shared-media",
+			startTime: 1,
+			duration: 1,
+			trimStart: 1,
+			trimEnd: 0,
+			transform: DEFAULT_TEXT_ELEMENT.transform,
+			opacity: 1,
+		};
+		const leftAudio: AudioElement = {
+			...createAudioElement({
+				id: "audio-left",
+				startTime: 0,
+				duration: 1,
+				words: [{ id: "w-left", text: "left", startTime: 0.0, endTime: 0.4 }],
+			}),
+			mediaId: "shared-media",
+			trimStart: 0,
+		};
+		const rightAudio: AudioElement = {
+			...createAudioElement({
+				id: "audio-right",
+				startTime: 1,
+				duration: 1,
+				words: [{ id: "w-right", text: "right", startTime: 0.0, endTime: 0.4 }],
+			}),
+			mediaId: "shared-media",
+			trimStart: 1,
+		};
+		const caption = createCaption({ sourceMediaElementId: rightVideo.id });
+
+		const scene = buildScene({
+			tracks: [
+				{
+					id: "video-track",
+					type: "video",
+					name: "Video",
+					isMain: true,
+					muted: false,
+					hidden: false,
+					elements: [leftVideo, rightVideo],
+				},
+				{
+					id: "audio-track",
+					type: "audio",
+					name: "Audio",
+					muted: false,
+					elements: [leftAudio, rightAudio],
+				},
+				{
+					id: "text-track",
+					type: "text",
+					name: "Captions",
+					hidden: false,
+					elements: [caption],
+				},
+			],
+			mediaAssets: [],
+			duration: 20,
+			canvasSize: { width: 1280, height: 720 },
+			background: { type: "color", color: "#000000" },
+		});
+
+		const textNode = scene.children.find(
+			(node) => node.constructor.name === "TextNode",
+		) as
+			| {
+					params?: {
+						content?: string;
+						captionWordTimings?: Array<{ startTime: number; endTime: number }>;
+					};
+			  }
+			| undefined;
+		expect(textNode?.params?.content).toBe("right");
+		expect(textNode?.params?.captionWordTimings?.[0]?.startTime).toBeCloseTo(1, 3);
 	});
 });

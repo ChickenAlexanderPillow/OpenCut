@@ -401,4 +401,58 @@ describe("SplitElementsCommand", () => {
 			"delta",
 		]);
 	});
+
+	test("splitting an already split right clip keeps transcript-driven captions aligned", () => {
+		const editor = initializeEditor();
+
+		const firstRightSide = editor.timeline.splitElements({
+			elements: [{ trackId: "track-audio-1", elementId: "audio-1" }],
+			splitTime: 1,
+		});
+		const firstRightClipId = firstRightSide[0]?.elementId;
+		expect(firstRightClipId).toBeDefined();
+		if (!firstRightClipId) return;
+
+		editor.timeline.splitElements({
+			elements: [{ trackId: "track-audio-1", elementId: firstRightClipId }],
+			splitTime: 1.4,
+		});
+
+		const audioTrack = editor.timeline.getTrackById({ trackId: "track-audio-1" });
+		expect(audioTrack?.type).toBe("audio");
+		if (audioTrack?.type !== "audio") return;
+		expect(audioTrack.elements).toHaveLength(3);
+
+		const [leftAudio, middleAudio, rightAudio] = audioTrack.elements;
+		expect(leftAudio.transcriptDraft?.words.map((word) => word.text)).toEqual([
+			"alpha",
+			"beta",
+		]);
+		expect(middleAudio.transcriptDraft?.words.map((word) => word.text)).toEqual([
+			"gamma",
+		]);
+		expect(rightAudio.transcriptDraft?.words.map((word) => word.text)).toEqual([
+			"delta",
+		]);
+
+		const textTrack = editor.timeline.getTrackById({ trackId: "track-text-1" });
+		expect(textTrack?.type).toBe("text");
+		if (textTrack?.type !== "text") return;
+		expect(textTrack.elements).toHaveLength(3);
+
+		const [leftCaption, middleCaption, rightCaption] = textTrack.elements;
+		expect(leftCaption.content).toBe("alpha beta");
+		expect(middleCaption.content).toBe("gamma");
+		expect(rightCaption.content).toBe("delta");
+		expect(middleCaption.captionSourceRef?.mediaElementId).toBe(middleAudio.id);
+		expect(rightCaption.captionSourceRef?.mediaElementId).toBe(rightAudio.id);
+		expect(middleCaption.startTime).toBeCloseTo(middleAudio.startTime, 3);
+		expect(middleCaption.duration).toBeCloseTo(middleAudio.duration, 3);
+		expect(middleCaption.captionWordTimings?.[0]?.startTime).toBeCloseTo(1.05, 3);
+		expect(middleCaption.captionWordTimings?.[0]?.endTime).toBeCloseTo(1.35, 3);
+		expect(rightCaption.startTime).toBeCloseTo(rightAudio.startTime, 3);
+		expect(rightCaption.duration).toBeCloseTo(rightAudio.duration, 3);
+		expect(rightCaption.captionWordTimings?.[0]?.startTime).toBeCloseTo(1.4, 3);
+		expect(rightCaption.captionWordTimings?.[0]?.endTime).toBeCloseTo(1.8, 3);
+	});
 });
