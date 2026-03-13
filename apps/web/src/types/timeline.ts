@@ -205,6 +205,10 @@ export interface TextElement extends BaseTimelineElement {
 		endTime: number;
 		hidden?: boolean;
 	}>;
+	captionVisibilityWindows?: Array<{
+		startTime: number;
+		endTime: number;
+	}>;
 	captionSourceRef?: {
 		mediaElementId: string;
 		transcriptVersion: number;

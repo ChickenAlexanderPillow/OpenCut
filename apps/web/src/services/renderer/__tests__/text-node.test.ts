@@ -1,0 +1,145 @@
+import { describe, expect, test } from "bun:test";
+import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
+import { TextNode } from "@/services/renderer/nodes/text-node";
+import type { CanvasRenderer } from "@/services/renderer/canvas-renderer";
+
+type FakeContext = {
+	save: () => void;
+	restore: () => void;
+	measureText: (text: string) => TextMetrics;
+	fillText: (...args: unknown[]) => void;
+	strokeText: (...args: unknown[]) => void;
+	fillRect: (...args: unknown[]) => void;
+	roundRect: (...args: unknown[]) => void;
+	beginPath: () => void;
+	closePath: () => void;
+	fill: () => void;
+	stroke: () => void;
+	translate: (...args: unknown[]) => void;
+	scale: (...args: unknown[]) => void;
+	setTransform: (...args: unknown[]) => void;
+	font: string;
+	textAlign: CanvasTextAlign;
+	fillStyle: string;
+	strokeStyle: string;
+	lineWidth: number;
+	lineJoin: CanvasLineJoin;
+	miterLimit: number;
+	textBaseline: CanvasTextBaseline;
+	globalAlpha: number;
+	letterSpacing?: string;
+};
+
+function createFakeRenderer() {
+	const operations: string[] = [];
+	const context: FakeContext = {
+		save: () => operations.push("save"),
+		restore: () => operations.push("restore"),
+		measureText: (text) =>
+			({
+				width: text.length * 10,
+				actualBoundingBoxAscent: 10,
+				actualBoundingBoxDescent: 2,
+			}) as TextMetrics,
+		fillText: () => operations.push("fillText"),
+		strokeText: () => operations.push("strokeText"),
+		fillRect: () => operations.push("fillRect"),
+		roundRect: () => operations.push("roundRect"),
+		beginPath: () => operations.push("beginPath"),
+		closePath: () => operations.push("closePath"),
+		fill: () => operations.push("fill"),
+		stroke: () => operations.push("stroke"),
+		translate: () => operations.push("translate"),
+		scale: () => operations.push("scale"),
+		setTransform: () => operations.push("setTransform"),
+		font: "",
+		textAlign: "center",
+		fillStyle: "#ffffff",
+		strokeStyle: "#000000",
+		lineWidth: 0,
+		lineJoin: "round",
+		miterLimit: 0,
+		textBaseline: "alphabetic",
+		globalAlpha: 1,
+	};
+
+	return {
+		operations,
+		renderer: {
+			context,
+			width: 1280,
+			height: 720,
+			fps: 30,
+		} as CanvasRenderer,
+	};
+}
+
+function createCaptionNode() {
+	return new TextNode({
+		...DEFAULT_TEXT_ELEMENT,
+		id: "caption-1",
+		name: "Caption 1",
+		content: "hello world again",
+		startTime: 10,
+		duration: 2,
+		canvasCenter: { x: 640, y: 360 },
+		canvasWidth: 1280,
+		canvasHeight: 720,
+		captionWordTimings: [
+			{ word: "hello", startTime: 10.0, endTime: 10.4 },
+			{ word: "world", startTime: 10.8, endTime: 11.2 },
+			{ word: "again", startTime: 11.2, endTime: 11.6 },
+		],
+	});
+}
+
+describe("TextNode caption gap rendering", () => {
+	test("hides captions when timeline time falls inside an explicit visibility gap", async () => {
+		const node = new TextNode({
+			...createCaptionNode().params,
+			captionVisibilityWindows: [
+				{ startTime: 10.0, endTime: 10.45 },
+				{ startTime: 10.8, endTime: 11.6 },
+			],
+		});
+		const { operations, renderer } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.6 });
+
+		expect(operations).toEqual([]);
+	});
+
+	test("still renders captions at word boundaries without a visibility gap", async () => {
+		const node = createCaptionNode();
+		const { operations, renderer } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.4 });
+
+		expect(operations).toContain("fillText");
+		expect(operations.at(-1)).toBe("restore");
+	});
+
+	test("falls back to the last caption word end when no visibility windows are present", async () => {
+		const node = createCaptionNode();
+		const { operations, renderer } = createFakeRenderer();
+
+		await node.render({ renderer, time: 11.8 });
+
+		expect(operations).toEqual([]);
+	});
+
+	test("does not keep the last visible caption on screen for trailing hidden timings", async () => {
+		const node = new TextNode({
+			...createCaptionNode().params,
+			captionWordTimings: [
+				{ word: "hello", startTime: 10.0, endTime: 10.4 },
+				{ word: "ghost", startTime: 10.4, endTime: 11.2, hidden: true },
+			],
+		});
+		const { operations, renderer } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.8 });
+
+		expect(operations).toEqual([]);
+	});
+});

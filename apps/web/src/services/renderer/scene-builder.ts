@@ -159,6 +159,14 @@ export function resolveLiveCaptionElementFromTranscriptSource({
 	}
 	const startTime = snapshot.captionPayload.startTime;
 	const timings = snapshot.captionPayload.wordTimings;
+	const clipStartTime = sourceMedia.startTime;
+	const clipEndTime = sourceMedia.startTime + sourceMedia.duration;
+	const visibilityWindows = transcriptApplied.keptSegments
+		.map((segment) => ({
+			startTime: Math.max(clipStartTime, sourceMedia.startTime + segment.start),
+			endTime: Math.min(clipEndTime, sourceMedia.startTime + segment.end),
+		}))
+		.filter((segment) => segment.endTime - segment.startTime > 0.001);
 
 	return {
 		...element,
@@ -166,6 +174,7 @@ export function resolveLiveCaptionElementFromTranscriptSource({
 		startTime,
 		duration: snapshot.captionPayload.duration,
 		captionWordTimings: timings,
+		captionVisibilityWindows: visibilityWindows,
 		captionSourceRef: {
 			mediaElementId: sourceMedia.id,
 			transcriptVersion: transcriptDraft.version,

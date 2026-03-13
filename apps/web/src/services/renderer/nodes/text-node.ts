@@ -305,6 +305,26 @@ export class TextNode extends BaseNode<TextNodeParams> {
 	}
 
 	isInRange({ time }: { time: number }) {
+		const visibilityWindows = this.params.captionVisibilityWindows ?? [];
+		if (visibilityWindows.length > 0) {
+			return visibilityWindows.some(
+				(window) => time >= window.startTime && time < window.endTime,
+			);
+		}
+		const captionWordTimings = this.getTimelineCaptionTimings();
+		if (captionWordTimings.length > 0) {
+			const visibleCaptionWordTimings = captionWordTimings.filter(
+				(timing) => !timing.hidden,
+			);
+			const lastCaptionEndTime =
+				visibleCaptionWordTimings[visibleCaptionWordTimings.length - 1]?.endTime ??
+				captionWordTimings[captionWordTimings.length - 1]?.endTime ??
+				this.params.startTime + this.params.duration;
+			return (
+				time >= this.params.startTime &&
+				time < Math.min(this.params.startTime + this.params.duration, lastCaptionEndTime)
+			);
+		}
 		return (
 			time >= this.params.startTime &&
 			time < this.params.startTime + this.params.duration
@@ -353,18 +373,6 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		const visibleCaptionWordTimings = captionWordTimings.filter(
 			(timing) => !timing.hidden,
 		);
-		if (visibleCaptionWordTimings.length > 0) {
-			const firstWordStart =
-				visibleCaptionWordTimings[0]?.startTime ?? this.params.startTime;
-			const lastWordEnd =
-				visibleCaptionWordTimings[visibleCaptionWordTimings.length - 1]?.endTime ??
-				this.params.startTime + this.params.duration;
-			const hasActiveWordWindow = time >= firstWordStart && time < lastWordEnd;
-			if (!hasActiveWordWindow) {
-				renderer.context.restore();
-				return;
-			}
-		}
 		const latestStartedWordIndex = resolveLatestStartedWordIndex({
 			captionWordTimings: visibleCaptionWordTimings,
 			time,

@@ -84,6 +84,9 @@ describe("scene builder live caption source resolution", () => {
 		expect(resolved.startTime).toBeCloseTo(10.0, 3);
 		expect(resolved.captionWordTimings?.[0]?.startTime).toBeCloseTo(10.0, 3);
 		expect(resolved.captionWordTimings?.[0]?.endTime).toBeCloseTo(10.4, 3);
+		expect(resolved.captionVisibilityWindows).toEqual([
+			{ startTime: 10.5, endTime: 12 },
+		]);
 	});
 
 	test("returns null when transcript no longer has active words", () => {
@@ -327,5 +330,50 @@ describe("scene builder live caption source resolution", () => {
 		expect(first.captionWordTimings?.[0]?.startTime).toBeCloseTo(10, 3);
 		expect(moved.startTime).toBeCloseTo(14, 3);
 		expect(moved.captionWordTimings?.[0]?.startTime).toBeCloseTo(14, 3);
+	});
+
+	test("clamps caption visibility windows to clip bounds for projected transcript clips", () => {
+		const source: AudioElement = {
+			...createAudioElement({
+				id: "audio-1",
+				startTime: 20,
+				duration: 1,
+				words: [
+					{ id: "w0", text: "hello", startTime: 0, endTime: 0.4 },
+					{ id: "w1", text: "world", startTime: 0.45, endTime: 0.8 },
+				],
+			}),
+			transcriptApplied: {
+				version: 1,
+				revisionKey: "projected",
+				updatedAt: "2026-03-13T12:00:00.000Z",
+				removedRanges: [],
+				keptSegments: [{ start: 0, end: 3, duration: 3 }],
+				timeMap: {
+					cutBoundaries: [],
+					sourceDuration: 3,
+					playableDuration: 3,
+				},
+				captionPayload: {
+					content: "hello world",
+					startTime: 20,
+					duration: 1,
+					wordTimings: [
+						{ word: "hello", startTime: 20, endTime: 20.4 },
+						{ word: "world", startTime: 20.45, endTime: 20.8 },
+					],
+				},
+			},
+		};
+		const caption = createCaption({ sourceMediaElementId: source.id });
+
+		const resolved = resolveLiveCaptionElementFromTranscriptSource({
+			element: caption,
+			sourceMedia: source,
+		});
+
+		expect(resolved?.captionVisibilityWindows).toEqual([
+			{ startTime: 20, endTime: 21 },
+		]);
 	});
 });
