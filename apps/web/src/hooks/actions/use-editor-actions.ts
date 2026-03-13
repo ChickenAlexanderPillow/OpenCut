@@ -341,7 +341,7 @@ function getSmartCutSegmentsForElement({
 	const clipEnd = element.startTime + element.duration;
 
 	const sourceMediaId = getSmartCutMediaSourceId({ element });
-	const transcriptWordTimings = (element.transcriptEdit?.words ?? [])
+	const transcriptWordTimings = (getTranscriptDraft(element)?.words ?? [])
 		.filter((word) => !word.removed)
 		.map((word) => ({
 			startTime: element.startTime + (word.startTime - element.trimStart),
@@ -357,11 +357,17 @@ function getSmartCutSegmentsForElement({
 							getSmartCutMediaSourceId({ element: candidate }) === sourceMediaId
 						);
 					})
-					.flatMap((candidate) => candidate.transcriptEdit?.words ?? [])
-					.filter((word) => !word.removed)
-					.map((word) => ({
-						startTime: element.startTime + (word.startTime - element.trimStart),
-						endTime: element.startTime + (word.endTime - element.trimStart),
+					.flatMap((candidate) =>
+						(getTranscriptDraft(candidate)?.words ?? []).map((word) => ({
+							word,
+							candidate,
+						})),
+					)
+					.filter(({ word }) => !word.removed)
+					.map(({ word, candidate }) => ({
+						startTime:
+							candidate.startTime + (word.startTime - candidate.trimStart),
+						endTime: candidate.startTime + (word.endTime - candidate.trimStart),
 					}));
 	const fromTranscriptEdit = [
 		...transcriptWordTimings,
@@ -1013,9 +1019,8 @@ function buildCompactTranscriptPatch({
 	beforeElement: VideoElement | AudioElement;
 	afterElement: VideoElement | AudioElement;
 }): CompactTranscriptPatch | null {
-	const beforeEdit = beforeElement.transcriptEdit;
-	const afterEdit = afterElement.transcriptDraft ?? afterElement.transcriptEdit;
-	const beforeDraft = beforeElement.transcriptDraft ?? beforeEdit;
+	const beforeDraft = getTranscriptDraft(beforeElement);
+	const afterEdit = getTranscriptDraft(afterElement);
 	if (!beforeDraft || !afterEdit) return null;
 	if (beforeDraft.words.length !== afterEdit.words.length) return null;
 	const segmentsChanged = !areTranscriptSegmentsEqual({
@@ -3180,20 +3185,35 @@ export function useEditorActions() {
 				toast.error("Select a video/audio clip first");
 				return;
 			}
-			const transcriptEdit =
-				target.transcriptEdit ??
+			const transcriptDraft =
+				getTranscriptDraft(target) ??
 				initializeTranscriptEditFromExistingCaption({
 					tracks,
 					mediaElementId: target.id,
 				});
-			if (!transcriptEdit) {
+			if (!transcriptDraft) {
 				toast.error("No transcript data available to rebuild captions");
 				return;
 			}
 			const preparedTracks = tracks.map((track) => {
 				if (track.type !== "video" && track.type !== "audio") return track;
 				const nextElements = track.elements.map((element) =>
-					element.id === target.id ? { ...element, transcriptEdit } : element,
+					element.id === target.id && isTranscriptEditableMediaElement(element)
+						? withTranscriptState({
+								element,
+								draft: transcriptDraft,
+								applied: compileTranscriptDraft({
+									mediaElementId: target.id,
+									draft: transcriptDraft,
+									mediaStartTime: element.startTime,
+									mediaDuration: element.duration,
+								}),
+								compileState: {
+									status: "idle",
+									updatedAt: transcriptDraft.updatedAt,
+								},
+						  })
+						: element,
 				);
 				return { ...track, elements: nextElements } as TimelineTrack;
 			});
@@ -3989,21 +4009,33 @@ export function useEditorActions() {
 									})),
 								});
 								if (boundMediaTrackId) {
+									const transcriptDraft = {
+										version: 1 as const,
+										source: "word-level" as const,
+										words: transcriptWords,
+										cuts: buildTranscriptCutsFromWords({
+											words: transcriptWords,
+										}),
+										cutTimeDomain: "clip-local-source" as const,
+										updatedAt: new Date().toISOString(),
+									};
 									editor.timeline.updateElements({
 										updates: [
 											{
 												trackId: boundMediaTrackId,
 												elementId: boundMediaElementId,
 												updates: {
-													transcriptEdit: {
-														version: 1,
-														source: "word-level",
-														words: transcriptWords,
-														cuts: buildTranscriptCutsFromWords({
-															words: transcriptWords,
-														}),
-														cutTimeDomain: "clip-local-source",
-														updatedAt: new Date().toISOString(),
+													transcriptDraft,
+													transcriptEdit: transcriptDraft,
+													transcriptApplied: compileTranscriptDraft({
+														mediaElementId: boundMediaElementId,
+														draft: transcriptDraft,
+														mediaStartTime: 0,
+														mediaDuration: candidate.duration,
+													}),
+													transcriptCompileState: {
+														status: "idle",
+														updatedAt: transcriptDraft.updatedAt,
 													},
 												},
 											},

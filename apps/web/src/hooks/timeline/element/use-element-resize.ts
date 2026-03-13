@@ -15,6 +15,7 @@ import {
 	type SnapPoint,
 } from "@/lib/timeline/snap-utils";
 import { useTimelineStore } from "@/stores/timeline-store";
+import { getTranscriptDraft } from "@/lib/transcript-editor/state";
 
 export interface ResizeState {
 	elementId: string;
@@ -25,8 +26,8 @@ export interface ResizeState {
 	initialStartTime: number;
 	initialDuration: number;
 	initialTranscriptEdit?:
-		| VideoElement["transcriptEdit"]
-		| AudioElement["transcriptEdit"];
+		| VideoElement["transcriptDraft"]
+		| AudioElement["transcriptDraft"];
 }
 
 interface UseTimelineElementResizeProps {
@@ -99,7 +100,7 @@ export function useTimelineElementResize({
 			initialStartTime: element.startTime,
 			initialDuration: element.duration,
 			initialTranscriptEdit: isTranscriptEditableElement(element)
-				? element.transcriptEdit
+				? getTranscriptDraft(element)
 				: undefined,
 		});
 

@@ -12,6 +12,11 @@ import {
 	syncCaptionsFromTranscriptEdits,
 	reconcileLinkedCaptionIntegrityInTracks,
 } from "@/lib/transcript-editor/sync-captions";
+import {
+	compileTranscriptDraft,
+	getTranscriptDraft,
+	withTranscriptState,
+} from "@/lib/transcript-editor/state";
 import type { AudioElement, VideoElement, TextElement } from "@/types/timeline";
 
 function isTranscriptEditableElement(
@@ -22,39 +27,132 @@ function isTranscriptEditableElement(
 	return candidate.type === "video" || candidate.type === "audio";
 }
 
-function splitTranscriptEdit({
+type SplitTranscriptState = {
+	draft: NonNullable<VideoElement["transcriptDraft"] | AudioElement["transcriptDraft"]>;
+	applied: NonNullable<
+		VideoElement["transcriptApplied"] | AudioElement["transcriptApplied"]
+	>;
+	compileState: NonNullable<
+		VideoElement["transcriptCompileState"] | AudioElement["transcriptCompileState"]
+	>;
+};
+
+function resolveSplitTranscriptProjectionContext({
+	transcriptDraft,
+	baseTrimStart,
+}: {
+	transcriptDraft: NonNullable<
+		VideoElement["transcriptDraft"] | AudioElement["transcriptDraft"]
+	>;
+	baseTrimStart: number;
+}): {
+	sourceTranscript: NonNullable<
+		VideoElement["transcriptDraft"] | AudioElement["transcriptDraft"]
+	>;
+	projectionSource: NonNullable<
+		VideoElement["transcriptDraft"] | AudioElement["transcriptDraft"]
+	>["projectionSource"];
+} {
+	const projectionSource = transcriptDraft.projectionSource;
+	if (projectionSource) {
+		return {
+			sourceTranscript: {
+				...transcriptDraft,
+				words: projectionSource.words,
+				cuts: projectionSource.cuts,
+				updatedAt: projectionSource.updatedAt,
+			},
+			projectionSource,
+		};
+	}
+	return {
+		sourceTranscript: transcriptDraft,
+		projectionSource: {
+			words: transcriptDraft.words,
+			cuts: transcriptDraft.cuts,
+			updatedAt: transcriptDraft.updatedAt,
+			baseTrimStart,
+		},
+	};
+}
+
+function splitTranscriptState({
 	element,
+	leftElementId,
+	rightElementId,
+	leftStartTime,
+	rightStartTime,
 	leftDuration,
 	rightDuration,
 }: {
 	element: VideoElement | AudioElement;
+	leftElementId: string;
+	rightElementId: string;
+	leftStartTime: number;
+	rightStartTime: number;
 	leftDuration: number;
 	rightDuration: number;
 }): {
-	left: VideoElement["transcriptEdit"] | AudioElement["transcriptEdit"];
-	right: VideoElement["transcriptEdit"] | AudioElement["transcriptEdit"];
+	left: SplitTranscriptState | undefined;
+	right: SplitTranscriptState | undefined;
 } {
-	const transcriptEdit = element.transcriptEdit;
-	if (!transcriptEdit || transcriptEdit.words.length === 0) {
+	const transcriptDraft = getTranscriptDraft(element);
+	if (!transcriptDraft || transcriptDraft.words.length === 0) {
 		return {
-			left: transcriptEdit,
-			right: transcriptEdit,
+			left: undefined,
+			right: undefined,
 		};
 	}
 
-	return {
-		left: projectTranscriptEditToWindow({
-			transcriptEdit,
-			elementId: element.id,
+	const projectionContext = resolveSplitTranscriptProjectionContext({
+		transcriptDraft,
+		baseTrimStart: element.trimStart,
+	});
+	const leftDraft = {
+		...projectTranscriptEditToWindow({
+			transcriptEdit: projectionContext.sourceTranscript,
+			elementId: leftElementId,
 			sourceStart: 0,
 			sourceEnd: leftDuration,
 		}),
-		right: projectTranscriptEditToWindow({
-			transcriptEdit,
-			elementId: element.id,
+		projectionSource: projectionContext.projectionSource,
+	};
+	const rightDraft = {
+		...projectTranscriptEditToWindow({
+			transcriptEdit: projectionContext.sourceTranscript,
+			elementId: rightElementId,
 			sourceStart: leftDuration,
 			sourceEnd: leftDuration + rightDuration,
 		}),
+		projectionSource: projectionContext.projectionSource,
+	};
+	return {
+		left: {
+			draft: leftDraft,
+			applied: compileTranscriptDraft({
+				mediaElementId: leftElementId,
+				draft: leftDraft,
+				mediaStartTime: leftStartTime,
+				mediaDuration: leftDuration,
+			}),
+			compileState: {
+				status: "idle",
+				updatedAt: leftDraft.updatedAt,
+			},
+		},
+		right: {
+			draft: rightDraft,
+			applied: compileTranscriptDraft({
+				mediaElementId: rightElementId,
+				draft: rightDraft,
+				mediaStartTime: rightStartTime,
+				mediaDuration: rightDuration,
+			}),
+			compileState: {
+				status: "idle",
+				updatedAt: rightDraft.updatedAt,
+			},
+		},
 	};
 }
 
@@ -291,7 +389,7 @@ export class SplitElementsCommand extends Command {
 				if (this.retainSide === "left") {
 					const canSplitLinkedCaptionsWithoutTranscript =
 						isTranscriptEditableElement(element) &&
-						(!element.transcriptEdit || element.transcriptEdit.words.length === 0);
+						((getTranscriptDraft(element)?.words.length ?? 0) === 0);
 					if (canSplitLinkedCaptionsWithoutTranscript) {
 						captionSplitOperations.push({
 							sourceMediaElementId: element.id,
@@ -300,8 +398,12 @@ export class SplitElementsCommand extends Command {
 						});
 					}
 					const leftTranscriptEdit = isTranscriptEditableElement(element)
-						? splitTranscriptEdit({
+						? splitTranscriptState({
 								element,
+								leftElementId: element.id,
+								rightElementId: element.id,
+								leftStartTime: element.startTime,
+								rightStartTime: this.splitTime,
 								leftDuration: leftVisibleDuration,
 								rightDuration: rightVisibleDuration,
 						  }).left
@@ -310,15 +412,25 @@ export class SplitElementsCommand extends Command {
 						mediaElementIdsForCaptionSync.add(element.id);
 					}
 					return [
-						{
+						leftTranscriptEdit
+							? withTranscriptState({
+									element: {
+										...element,
+										duration: leftVisibleDuration,
+										trimEnd: element.trimEnd + rightVisibleDuration,
+										name: `${element.name} (left)`,
+										animations: leftAnimations,
+									} as VideoElement | AudioElement,
+									draft: leftTranscriptEdit.draft,
+									applied: leftTranscriptEdit.applied,
+									compileState: leftTranscriptEdit.compileState,
+							  })
+							: {
 							...element,
 							duration: leftVisibleDuration,
 							trimEnd: element.trimEnd + rightVisibleDuration,
 							name: `${element.name} (left)`,
 							animations: leftAnimations,
-							...(leftTranscriptEdit !== undefined
-								? { transcriptEdit: leftTranscriptEdit }
-								: {}),
 						},
 					];
 				}
@@ -330,7 +442,7 @@ export class SplitElementsCommand extends Command {
 					const newId = generateUUID();
 					const canSplitLinkedCaptionsWithoutTranscript =
 						isTranscriptEditableElement(element) &&
-						(!element.transcriptEdit || element.transcriptEdit.words.length === 0);
+						((getTranscriptDraft(element)?.words.length ?? 0) === 0);
 					if (canSplitLinkedCaptionsWithoutTranscript) {
 						captionSplitOperations.push({
 							sourceMediaElementId: element.id,
@@ -344,8 +456,12 @@ export class SplitElementsCommand extends Command {
 						elementId: newId,
 					});
 					const rightTranscriptEdit = isTranscriptEditableElement(element)
-						? splitTranscriptEdit({
+						? splitTranscriptState({
 								element,
+								leftElementId: element.id,
+								rightElementId: newId,
+								leftStartTime: element.startTime,
+								rightStartTime: this.splitTime,
 								leftDuration: leftVisibleDuration,
 								rightDuration: rightVisibleDuration,
 						  }).right
@@ -354,7 +470,22 @@ export class SplitElementsCommand extends Command {
 						mediaElementIdsForCaptionSync.add(newId);
 					}
 					return [
-						{
+						rightTranscriptEdit
+							? withTranscriptState({
+									element: {
+										...element,
+										id: newId,
+										startTime: this.splitTime,
+										duration: rightVisibleDuration,
+										trimStart: element.trimStart + leftVisibleDuration,
+										name: `${element.name} (right)`,
+										animations: rightAnimations,
+									} as VideoElement | AudioElement,
+									draft: rightTranscriptEdit.draft,
+									applied: rightTranscriptEdit.applied,
+									compileState: rightTranscriptEdit.compileState,
+							  })
+							: {
 							...element,
 							id: newId,
 							startTime: this.splitTime,
@@ -362,9 +493,6 @@ export class SplitElementsCommand extends Command {
 							trimStart: element.trimStart + leftVisibleDuration,
 							name: `${element.name} (right)`,
 							animations: rightAnimations,
-							...(rightTranscriptEdit !== undefined
-								? { transcriptEdit: rightTranscriptEdit }
-								: {}),
 						},
 					];
 				}
@@ -373,7 +501,7 @@ export class SplitElementsCommand extends Command {
 				const secondElementId = generateUUID();
 				const canSplitLinkedCaptionsWithoutTranscript =
 					isTranscriptEditableElement(element) &&
-					(!element.transcriptEdit || element.transcriptEdit.words.length === 0);
+					((getTranscriptDraft(element)?.words.length ?? 0) === 0);
 				if (canSplitLinkedCaptionsWithoutTranscript) {
 					captionSplitOperations.push({
 						sourceMediaElementId: element.id,
@@ -387,8 +515,12 @@ export class SplitElementsCommand extends Command {
 					elementId: secondElementId,
 				});
 				const splitTranscript = isTranscriptEditableElement(element)
-					? splitTranscriptEdit({
+					? splitTranscriptState({
 							element,
+							leftElementId: element.id,
+							rightElementId: secondElementId,
+							leftStartTime: element.startTime,
+							rightStartTime: this.splitTime,
 							leftDuration: leftVisibleDuration,
 							rightDuration: rightVisibleDuration,
 					  })
@@ -399,15 +531,42 @@ export class SplitElementsCommand extends Command {
 				}
 
 				return [
-					{
+					splitTranscript?.left
+						? withTranscriptState({
+								element: {
+									...element,
+									duration: leftVisibleDuration,
+									trimEnd: element.trimEnd + rightVisibleDuration,
+									name: `${element.name} (left)`,
+									animations: leftAnimations,
+								} as VideoElement | AudioElement,
+								draft: splitTranscript.left.draft,
+								applied: splitTranscript.left.applied,
+								compileState: splitTranscript.left.compileState,
+						  })
+						: {
 						...element,
 						duration: leftVisibleDuration,
 						trimEnd: element.trimEnd + rightVisibleDuration,
 						name: `${element.name} (left)`,
 						animations: leftAnimations,
-						...(splitTranscript ? { transcriptEdit: splitTranscript.left } : {}),
 					},
-					{
+					splitTranscript?.right
+						? withTranscriptState({
+								element: {
+									...element,
+									id: secondElementId,
+									startTime: this.splitTime,
+									duration: rightVisibleDuration,
+									trimStart: element.trimStart + leftVisibleDuration,
+									name: `${element.name} (right)`,
+									animations: rightAnimations,
+								} as VideoElement | AudioElement,
+								draft: splitTranscript.right.draft,
+								applied: splitTranscript.right.applied,
+								compileState: splitTranscript.right.compileState,
+						  })
+						: {
 						...element,
 						id: secondElementId,
 						startTime: this.splitTime,
@@ -415,7 +574,6 @@ export class SplitElementsCommand extends Command {
 						trimStart: element.trimStart + leftVisibleDuration,
 						name: `${element.name} (right)`,
 						animations: rightAnimations,
-						...(splitTranscript ? { transcriptEdit: splitTranscript.right } : {}),
 					},
 				];
 			});

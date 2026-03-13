@@ -21,6 +21,7 @@ import {
 import { usePreviewStore } from "@/stores/preview-store";
 
 const MIN_DRAG_DISTANCE = 0.5;
+type DragAxisLock = "x" | "y" | null;
 
 interface DragState {
 	startX: number;
@@ -55,7 +56,30 @@ export function usePreviewInteraction({
 	const dragStateRef = useRef<DragState | null>(null);
 	const wasPlayingRef = useRef(editor.playback.getIsPlaying());
 	const editingTextRef = useRef(editingText);
+	const dragAxisLockRef = useRef<DragAxisLock>(null);
+	const axisLockSnapshotRef = useRef<{ deltaX: number; deltaY: number } | null>(
+		null,
+	);
 	editingTextRef.current = editingText;
+
+	const syncDragAxisLock = useCallback(
+		({ deltaX, deltaY }: { deltaX: number; deltaY: number }) => {
+			if (!isShiftHeldRef.current) {
+				dragAxisLockRef.current = null;
+				axisLockSnapshotRef.current = null;
+				return null;
+			}
+
+			if (dragAxisLockRef.current === null) {
+				dragAxisLockRef.current =
+					Math.abs(deltaX) >= Math.abs(deltaY) ? "x" : "y";
+				axisLockSnapshotRef.current = { deltaX, deltaY };
+			}
+
+			return dragAxisLockRef.current;
+		},
+		[isShiftHeldRef],
+	);
 
 	const commitTextEdit = useCallback(() => {
 		const current = editingTextRef.current;
@@ -235,6 +259,8 @@ export function usePreviewInteraction({
 					initialTransform: (element as { transform: Transform }).transform,
 				})),
 			};
+			dragAxisLockRef.current = null;
+			axisLockSnapshotRef.current = null;
 
 			setIsDragging(true);
 			currentTarget.setPointerCapture(pointerId);
@@ -261,9 +287,15 @@ export function usePreviewInteraction({
 
 			const deltaX = currentPos.x - dragStateRef.current.startX;
 			const deltaY = currentPos.y - dragStateRef.current.startY;
+			const dragAxisLock = syncDragAxisLock({ deltaX, deltaY });
+			const axisLockSnapshot = axisLockSnapshotRef.current;
+			const constrainedDeltaX =
+				dragAxisLock === "y" ? (axisLockSnapshot?.deltaX ?? 0) : deltaX;
+			const constrainedDeltaY =
+				dragAxisLock === "x" ? (axisLockSnapshot?.deltaY ?? 0) : deltaY;
 			const hasMovement =
-				Math.abs(deltaX) > MIN_DRAG_DISTANCE ||
-				Math.abs(deltaY) > MIN_DRAG_DISTANCE;
+				Math.abs(constrainedDeltaX) > MIN_DRAG_DISTANCE ||
+				Math.abs(constrainedDeltaY) > MIN_DRAG_DISTANCE;
 			if (!hasMovement) {
 				setSnapLines([]);
 				return;
@@ -271,8 +303,8 @@ export function usePreviewInteraction({
 
 			const firstElement = dragStateRef.current.elements[0];
 			const proposedPosition = {
-				x: firstElement.initialTransform.position.x + deltaX,
-				y: firstElement.initialTransform.position.y + deltaY,
+				x: firstElement.initialTransform.position.x + constrainedDeltaX,
+				y: firstElement.initialTransform.position.y + constrainedDeltaY,
 			};
 
 			const shouldSnap = !isShiftHeldRef.current;
@@ -317,7 +349,14 @@ export function usePreviewInteraction({
 
 			editor.timeline.previewElements({ updates });
 		},
-		[isDragging, canvasRef, editor, isShiftHeldRef, previewFormatVariant],
+		[
+			isDragging,
+			canvasRef,
+			editor,
+			isShiftHeldRef,
+			previewFormatVariant,
+			syncDragAxisLock,
+		],
 	);
 
 	const handlePointerUp = useCallback(
@@ -332,10 +371,16 @@ export function usePreviewInteraction({
 
 			const deltaX = currentPos.x - dragStateRef.current.startX;
 			const deltaY = currentPos.y - dragStateRef.current.startY;
+			const dragAxisLock = syncDragAxisLock({ deltaX, deltaY });
+			const axisLockSnapshot = axisLockSnapshotRef.current;
+			const constrainedDeltaX =
+				dragAxisLock === "y" ? (axisLockSnapshot?.deltaX ?? 0) : deltaX;
+			const constrainedDeltaY =
+				dragAxisLock === "x" ? (axisLockSnapshot?.deltaY ?? 0) : deltaY;
 
 			const hasMovement =
-				Math.abs(deltaX) > MIN_DRAG_DISTANCE ||
-				Math.abs(deltaY) > MIN_DRAG_DISTANCE;
+				Math.abs(constrainedDeltaX) > MIN_DRAG_DISTANCE ||
+				Math.abs(constrainedDeltaY) > MIN_DRAG_DISTANCE;
 
 			if (!hasMovement) {
 				editor.timeline.discardPreview();
@@ -344,11 +389,13 @@ export function usePreviewInteraction({
 			}
 
 			dragStateRef.current = null;
+			dragAxisLockRef.current = null;
+			axisLockSnapshotRef.current = null;
 			setIsDragging(false);
 			setSnapLines([]);
 			currentTarget.releasePointerCapture(pointerId);
 		},
-		[isDragging, canvasRef, editor],
+		[isDragging, canvasRef, editor, syncDragAxisLock],
 	);
 
 	return {

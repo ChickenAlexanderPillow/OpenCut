@@ -9,7 +9,14 @@ import {
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
 import { DEFAULT_FPS } from "@/constants/project-constants";
 import { useEditor } from "@/hooks/use-editor";
+import { useShiftKey } from "@/hooks/use-shift-key";
+import { useTimelineStore } from "@/stores/timeline-store";
 import { getRulerConfig, shouldShowLabel } from "@/lib/timeline/ruler-utils";
+import {
+	findSnapPoints,
+	snapToNearestPoint,
+	type SnapPoint,
+} from "@/lib/timeline/snap-utils";
 import { useScrollPosition } from "@/hooks/timeline/use-scroll-position";
 import { TimelineTick } from "./timeline-tick";
 import { invokeAction } from "@/lib/actions";
@@ -23,6 +30,7 @@ interface TimelineRulerProps {
 	mapVisualTimeToRealTime: (time: number) => number;
 	rulerRef: React.RefObject<HTMLDivElement | null>;
 	tracksScrollRef: React.RefObject<HTMLElement | null>;
+	onSnapPointChange?: (snapPoint: SnapPoint | null) => void;
 	handleWheel: (e: React.WheelEvent) => void;
 	handleTimelineContentClick: (e: React.MouseEvent) => void;
 	handleRulerTrackingMouseDown: (e: React.MouseEvent) => void;
@@ -37,13 +45,19 @@ export function TimelineRuler({
 	mapVisualTimeToRealTime,
 	rulerRef,
 	tracksScrollRef,
+	onSnapPointChange,
 	handleWheel,
 	handleTimelineContentClick,
 	handleRulerTrackingMouseDown,
 	handleRulerMouseDown,
 }: TimelineRulerProps) {
 	const editor = useEditor();
+	const snappingEnabled = useTimelineStore((state) => state.snappingEnabled);
+	const isShiftHeldRef = useShiftKey();
 	const duration = editor.timeline.getTotalDuration();
+	const tracks = editor.timeline.getTracks();
+	const bookmarks = editor.scenes.getActiveScene()?.bookmarks ?? [];
+	const playheadTime = editor.playback.getCurrentTime();
 	const pixelsPerSecond = TIMELINE_CONSTANTS.PIXELS_PER_SECOND * zoomLevel;
 	const visibleDuration = Math.max(
 		0,
@@ -77,7 +91,12 @@ export function TimelineRuler({
 		fps,
 	});
 	const tickCount = Math.ceil(effectiveDuration / tickIntervalSeconds) + 1;
-	const dragTypeRef = useRef<"in" | "out" | null>(null);
+	const dragTypeRef = useRef<"in" | "out" | "range" | null>(null);
+	const rangeDragStartRef = useRef<{
+		mouseTime: number;
+		inPoint: number;
+		outPoint: number;
+	} | null>(null);
 	const contextMenuRef = useRef<HTMLDivElement | null>(null);
 	const [contextMenu, setContextMenu] = useState<{
 		open: boolean;
@@ -158,11 +177,16 @@ export function TimelineRuler({
 			if (!rulerNode) return false;
 			const rect = rulerNode.getBoundingClientRect();
 			const x = clientX - rect.left;
-			const markerHitThreshold = 8;
+			const markerHitThreshold = 12;
+			const insideHitSlop = 12;
 			const hitInMarker =
-				inPoint !== null && Math.abs(x - startPx) <= markerHitThreshold;
+				inPoint !== null &&
+				x >= startPx - markerHitThreshold &&
+				x <= startPx + insideHitSlop;
 			const hitOutMarker =
-				outPoint !== null && Math.abs(x - endPx) <= markerHitThreshold;
+				outPoint !== null &&
+				x >= endPx - insideHitSlop &&
+				x <= endPx + markerHitThreshold;
 			const hitRegion = hasValidRange && x >= startPx && x <= endPx;
 			return hitInMarker || hitOutMarker || hitRegion;
 		},
@@ -199,21 +223,104 @@ export function TimelineRuler({
 		dragTypeRef.current = type;
 	};
 
+	const handleRangeMouseDown = (event: React.MouseEvent) => {
+		if (!hasValidRange || inPoint === null || outPoint === null) return;
+		if (event.button !== 0) return;
+		const mouseTime = getTimeFromClientX({ clientX: event.clientX });
+		if (mouseTime === null) return;
+		event.preventDefault();
+		event.stopPropagation();
+		dragTypeRef.current = "range";
+		rangeDragStartRef.current = {
+			mouseTime,
+			inPoint,
+			outPoint,
+		};
+	};
+
+	const getSnapResult = useCallback(
+		({
+			targetTime,
+		}: {
+			targetTime: number;
+		}): { snappedTime: number; snapPoint: SnapPoint | null; snapDistance: number } => {
+			const shouldSnap = snappingEnabled && !isShiftHeldRef.current;
+			if (!shouldSnap) {
+				return {
+					snappedTime: targetTime,
+					snapPoint: null,
+					snapDistance: Number.POSITIVE_INFINITY,
+				};
+			}
+			return snapToNearestPoint({
+				targetTime,
+				snapPoints: findSnapPoints({
+					tracks,
+					playheadTime,
+					bookmarks,
+				}),
+				zoomLevel,
+			});
+		},
+		[
+			snappingEnabled,
+			isShiftHeldRef,
+			tracks,
+			playheadTime,
+			bookmarks,
+			zoomLevel,
+		],
+	);
+
 	useEffect(() => {
 		const onMouseMove = (event: MouseEvent) => {
 			const dragType = dragTypeRef.current;
 			if (!dragType) return;
 			const time = getTimeFromClientX({ clientX: event.clientX });
 			if (time === null) return;
-			if (dragType === "in") {
-				editor.playback.setInPoint({ time });
-			} else {
-				editor.playback.setOutPoint({ time });
+			if (dragType === "range") {
+				const dragStart = rangeDragStartRef.current;
+				if (!dragStart) return;
+				const rangeDuration = dragStart.outPoint - dragStart.inPoint;
+				if (rangeDuration <= 1e-6) return;
+				const delta = time - dragStart.mouseTime;
+				const unclampedStart = dragStart.inPoint + delta;
+				const startSnap = getSnapResult({ targetTime: unclampedStart });
+				const endSnap = getSnapResult({
+					targetTime: unclampedStart + rangeDuration,
+				});
+				const snappedStart =
+					startSnap.snapDistance <= endSnap.snapDistance
+						? startSnap.snappedTime
+						: endSnap.snappedTime - rangeDuration;
+				const nextStart = Math.max(
+					0,
+					Math.min(duration - rangeDuration, snappedStart),
+				);
+				editor.playback.setPlaybackRange({
+					inPoint: nextStart,
+					outPoint: nextStart + rangeDuration,
+				});
+				onSnapPointChange?.(
+					startSnap.snapDistance <= endSnap.snapDistance
+						? startSnap.snapPoint
+						: endSnap.snapPoint,
+				);
+				return;
 			}
+			const { snappedTime, snapPoint } = getSnapResult({ targetTime: time });
+			if (dragType === "in") {
+				editor.playback.setInPoint({ time: snappedTime });
+			} else {
+				editor.playback.setOutPoint({ time: snappedTime });
+			}
+			onSnapPointChange?.(snapPoint);
 		};
 
 		const onMouseUp = () => {
 			dragTypeRef.current = null;
+			rangeDragStartRef.current = null;
+			onSnapPointChange?.(null);
 		};
 
 		window.addEventListener("mousemove", onMouseMove);
@@ -222,7 +329,13 @@ export function TimelineRuler({
 			window.removeEventListener("mousemove", onMouseMove);
 			window.removeEventListener("mouseup", onMouseUp);
 		};
-	}, [editor.playback, getTimeFromClientX]);
+	}, [
+		duration,
+		editor.playback,
+		getTimeFromClientX,
+		getSnapResult,
+		onSnapPointChange,
+	]);
 
 	useEffect(() => {
 		if (!contextMenu.open) return;
@@ -287,20 +400,32 @@ export function TimelineRuler({
 					}}
 				/>
 				{hasValidRange && (
-					<div
-						className="pointer-events-none absolute top-0 h-full border-y border-cyan-500/70 bg-cyan-400/30"
+					<button
+						type="button"
+						aria-label="Drag playback range"
+						className="absolute top-0 h-full cursor-grab border-y border-cyan-500/70 bg-cyan-400/30 active:cursor-grabbing"
 						style={{
 							left: `${startPx}px`,
 							width: `${Math.max(0, endPx - startPx)}px`,
 						}}
-					/>
+						onMouseDown={handleRangeMouseDown}
+						onContextMenu={handleRangeContextMenu}
+					>
+						<span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+							<span className="flex items-center gap-1 opacity-85">
+								<span className="bg-foreground/55 h-2.5 w-px" />
+								<span className="bg-foreground/55 h-2.5 w-px" />
+								<span className="bg-foreground/55 h-2.5 w-px" />
+							</span>
+						</span>
+					</button>
 				)}
 				{inPoint !== null && (
 					<button
 						type="button"
 						aria-label="In point marker"
 						className={cn(
-							"absolute top-0 h-full w-2 -translate-x-1/2 cursor-ew-resize",
+							"absolute top-0 h-full w-6 -translate-x-1/2 cursor-ew-resize",
 							"hover:bg-emerald-500/15",
 						)}
 						style={{ left: `${startPx}px` }}
@@ -316,7 +441,7 @@ export function TimelineRuler({
 						type="button"
 						aria-label="Out point marker"
 						className={cn(
-							"absolute top-0 h-full w-2 -translate-x-1/2 cursor-ew-resize",
+							"absolute top-0 h-full w-6 -translate-x-1/2 cursor-ew-resize",
 							"hover:bg-rose-500/15",
 						)}
 						style={{ left: `${endPx}px` }}

@@ -104,6 +104,8 @@ describe("normalizeLegacyCompanionAudioInScenes", () => {
 		expect(videoTrack.elements[0]?.type).toBe("video");
 		if (videoTrack.elements[0]?.type !== "video") return;
 		expect(videoTrack.elements[0].muted).toBe(false);
+		expect(videoTrack.elements[0].transcriptDraft).toBeDefined();
+		expect(videoTrack.elements[0].transcriptApplied).toBeDefined();
 		expect(videoTrack.elements[0].transcriptEdit).toBeDefined();
 
 		const audioTrack = nextScene.tracks.find((track) => track.type === "audio");

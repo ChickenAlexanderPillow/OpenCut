@@ -15,6 +15,7 @@ import type {
 	TimelineGapSelection,
 } from "@/types/timeline";
 import { calculateTotalDuration } from "@/lib/timeline";
+import { expandElementIdsWithAlignedCompanions } from "@/lib/timeline/companion-media";
 import {
 	AddTrackCommand,
 	RemoveTrackCommand,
@@ -107,8 +108,8 @@ export class TimelineManager {
 		rippleEnabled?: boolean;
 		transcriptProjectionBase?: {
 			transcriptEdit:
-				| VideoElement["transcriptEdit"]
-				| AudioElement["transcriptEdit"];
+				| VideoElement["transcriptDraft"]
+				| AudioElement["transcriptDraft"];
 			trimStart: number;
 		};
 		captionSyncMode?: "full" | "trim-only";
@@ -263,8 +264,20 @@ export class TimelineManager {
 		retainSide?: "both" | "left" | "right";
 		rippleEnabled?: boolean;
 	}): { trackId: string; elementId: string }[] {
+		const companionExpandedIds = expandElementIdsWithAlignedCompanions({
+			tracks: this.getTracks(),
+			elementIds: elements.map((element) => element.elementId),
+		});
+		const expandedElements = this.getTracks().flatMap((track) =>
+			track.elements
+				.filter((element) => companionExpandedIds.has(element.id))
+				.map((element) => ({
+					trackId: track.id,
+					elementId: element.id,
+				})),
+		);
 		const command = new SplitElementsCommand({
-			elements,
+			elements: expandedElements,
 			splitTime,
 			retainSide,
 			rippleEnabled,

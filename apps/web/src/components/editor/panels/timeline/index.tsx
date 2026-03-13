@@ -488,6 +488,7 @@ export function Timeline() {
 										}
 										rulerRef={rulerRef}
 										tracksScrollRef={tracksScrollRef}
+										onSnapPointChange={handleSnapPointChange}
 										handleWheel={handleWheel}
 										handleTimelineContentClick={handleRulerClick}
 										handleRulerTrackingMouseDown={handleRulerMouseDown}

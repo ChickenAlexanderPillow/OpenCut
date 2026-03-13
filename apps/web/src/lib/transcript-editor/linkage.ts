@@ -1,4 +1,9 @@
-import type { TimelineElement } from "@/types/timeline";
+import type { TimelineElement, AudioElement, VideoElement } from "@/types/timeline";
+import {
+	compileTranscriptDraft,
+	getTranscriptDraft,
+	withTranscriptState,
+} from "@/lib/transcript-editor/state";
 
 const WORD_ID_MARKER = ":word:";
 
@@ -92,14 +97,32 @@ export function remapLinkedReferencesForClonedElement({
 	clonedIdMap: Map<string, string>;
 }): TimelineElement {
 	if (element.type === "audio" || element.type === "video") {
-		return {
+		const transcriptDraft = getTranscriptDraft(element);
+		const remappedTranscriptDraft = remapTranscriptEditForClonedMedia({
+			transcriptEdit: transcriptDraft,
+			newMediaElementId: newElementId,
+		});
+		const clonedElement = {
 			...element,
 			id: newElementId,
-			transcriptEdit: remapTranscriptEditForClonedMedia({
-				transcriptEdit: element.transcriptEdit,
-				newMediaElementId: newElementId,
+		} as VideoElement | AudioElement;
+		if (!remappedTranscriptDraft) {
+			return clonedElement;
+		}
+		return withTranscriptState({
+			element: clonedElement,
+			draft: remappedTranscriptDraft,
+			applied: compileTranscriptDraft({
+				mediaElementId: newElementId,
+				draft: remappedTranscriptDraft,
+				mediaStartTime: clonedElement.startTime,
+				mediaDuration: clonedElement.duration,
 			}),
-		};
+			compileState: {
+				status: "idle",
+				updatedAt: remappedTranscriptDraft.updatedAt,
+			},
+		});
 	}
 
 	if (element.type === "text") {

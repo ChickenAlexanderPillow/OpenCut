@@ -311,6 +311,49 @@ describe("transcript editor core", () => {
 		expect(projected.words[1]?.endTime).toBeCloseTo(0.5, 3);
 	});
 
+	test("projects transcript edit preserves overlapping segment ui ranges", () => {
+		const transcriptEdit = {
+			version: 1 as const,
+			source: "word-level" as const,
+			words: [
+				{ id: "w1", text: "alpha", startTime: 0.0, endTime: 0.3, removed: false },
+				{ id: "w2", text: "beta", startTime: 0.35, endTime: 0.6, removed: false },
+				{ id: "w3", text: "gamma", startTime: 0.9, endTime: 1.2, removed: false },
+				{ id: "w4", text: "delta", startTime: 1.25, endTime: 1.5, removed: false },
+			],
+			cuts: [],
+			segmentsUi: [
+				{
+					id: "clip-1:seg:0",
+					wordStartIndex: 0,
+					wordEndIndex: 1,
+					label: "Intro",
+				},
+				{
+					id: "clip-1:seg:1",
+					wordStartIndex: 2,
+					wordEndIndex: 3,
+					label: "Outro",
+				},
+			],
+			updatedAt: "2026-03-05T00:00:00.000Z",
+		};
+
+		const projected = projectTranscriptEditToWindow({
+			transcriptEdit,
+			elementId: "clip-1-right",
+			sourceStart: 0.8,
+			sourceEnd: 1.6,
+		});
+
+		expect(projected.words).toHaveLength(2);
+		expect(projected.segmentsUi).toHaveLength(1);
+		expect(projected.segmentsUi?.[0]?.label).toBe("Outro");
+		expect(projected.segmentsUi?.[0]?.wordStartIndex).toBe(0);
+		expect(projected.segmentsUi?.[0]?.wordEndIndex).toBe(1);
+		expect(projected.segmentsUi?.[0]?.id).toBe("clip-1-right:seg:1");
+	});
+
 	test("projects transcript edit rebases timings when extending backward from trimmed window", () => {
 		const transcriptEdit = {
 			version: 1 as const,

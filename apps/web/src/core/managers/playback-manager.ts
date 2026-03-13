@@ -166,6 +166,31 @@ export class PlaybackManager {
 		});
 	}
 
+	setPlaybackRange({
+		inPoint,
+		outPoint,
+	}: {
+		inPoint: number | null;
+		outPoint: number | null;
+	}): void {
+		const duration = this.editor.timeline.getTotalDuration();
+		const nextInPoint =
+			inPoint === null ? null : this.clampToDuration({ value: inPoint, duration });
+		const nextOutPoint =
+			outPoint === null ? null : this.clampToDuration({ value: outPoint, duration });
+		if (
+			nextInPoint !== null &&
+			nextOutPoint !== null &&
+			nextOutPoint <= nextInPoint + 1e-6
+		) {
+			return;
+		}
+		this.updateStoredRange({
+			inPoint: nextInPoint,
+			outPoint: nextOutPoint,
+		});
+	}
+
 	setInPointAtCurrentTime(): void {
 		this.setInPoint({ time: this.currentTime });
 	}

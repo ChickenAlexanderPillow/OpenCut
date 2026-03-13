@@ -5,6 +5,11 @@ import type {
 	TimelineTrack,
 	VideoElement,
 } from "@/types/timeline";
+import {
+	compileTranscriptDraft,
+	getTranscriptDraft,
+	withTranscriptState,
+} from "@/lib/transcript-editor/state";
 
 const COMPANION_TOLERANCE_SECONDS = 0.05;
 
@@ -124,11 +129,31 @@ export function normalizeLegacyCompanionAudioInScene({
 
 		videoTrack.elements = videoTrack.elements.map((candidate, index) => {
 			if (index !== match.videoElementIndex || !isVideoElement(candidate)) return candidate;
-			return {
-				...candidate,
-				muted: false,
-				transcriptEdit: candidate.transcriptEdit ?? audioElement.transcriptEdit,
-			};
+			const transcriptDraft =
+				getTranscriptDraft(candidate) ?? getTranscriptDraft(audioElement);
+			if (!transcriptDraft) {
+				return {
+					...candidate,
+					muted: false,
+				};
+			}
+			return withTranscriptState({
+				element: {
+					...candidate,
+					muted: false,
+				},
+				draft: transcriptDraft,
+				applied: compileTranscriptDraft({
+					mediaElementId: candidate.id,
+					draft: transcriptDraft,
+					mediaStartTime: candidate.startTime,
+					mediaDuration: candidate.duration,
+				}),
+				compileState: {
+					status: "idle",
+					updatedAt: transcriptDraft.updatedAt,
+				},
+			});
 		});
 	}
 

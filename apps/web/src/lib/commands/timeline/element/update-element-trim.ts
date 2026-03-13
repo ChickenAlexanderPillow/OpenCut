@@ -9,8 +9,14 @@ import {
 	syncCaptionsFromTranscriptEdits,
 	reconcileLinkedCaptionIntegrityInTracks,
 } from "@/lib/transcript-editor/sync-captions";
+import {
+	compileTranscriptDraft,
+	getTranscriptDraft,
+	withTranscriptState,
+} from "@/lib/transcript-editor/state";
 import type { AudioElement, VideoElement, TextElement } from "@/types/timeline";
 import { normalizeElementTiming } from "@/lib/timeline/element-timing";
+import { expandElementIdsWithAlignedCompanions } from "@/lib/timeline/companion-media";
 
 function isTranscriptEditableElement(
 	element: unknown,
@@ -31,16 +37,16 @@ function resolveTranscriptProjectionContext({
 	defaultBaseTrimStart,
 }: {
 	transcriptEdit: NonNullable<
-		VideoElement["transcriptEdit"] | AudioElement["transcriptEdit"]
+		VideoElement["transcriptDraft"] | AudioElement["transcriptDraft"]
 	>;
 	defaultBaseTrimStart: number;
 }): {
 	sourceTranscript: NonNullable<
-		VideoElement["transcriptEdit"] | AudioElement["transcriptEdit"]
+		VideoElement["transcriptDraft"] | AudioElement["transcriptDraft"]
 	>;
 	baseTrimStart: number;
 	projectionSource: NonNullable<
-		VideoElement["transcriptEdit"] | AudioElement["transcriptEdit"]
+		VideoElement["transcriptDraft"] | AudioElement["transcriptDraft"]
 	>["projectionSource"];
 } {
 	const projectionSource = transcriptEdit.projectionSource;
@@ -166,8 +172,8 @@ export class UpdateElementTrimCommand extends Command {
 	private readonly transcriptProjectionBase:
 		| {
 				transcriptEdit:
-					| VideoElement["transcriptEdit"]
-					| AudioElement["transcriptEdit"];
+					| VideoElement["transcriptDraft"]
+					| AudioElement["transcriptDraft"];
 				trimStart: number;
 		  }
 		| undefined;
@@ -191,8 +197,8 @@ export class UpdateElementTrimCommand extends Command {
 		rippleEnabled?: boolean;
 		transcriptProjectionBase?: {
 			transcriptEdit:
-				| VideoElement["transcriptEdit"]
-				| AudioElement["transcriptEdit"];
+				| VideoElement["transcriptDraft"]
+				| AudioElement["transcriptDraft"];
 			trimStart: number;
 		};
 		captionSyncMode?: "full" | "trim-only";
@@ -211,6 +217,10 @@ export class UpdateElementTrimCommand extends Command {
 	execute(): void {
 		const editor = EditorCore.getInstance();
 		this.savedState = editor.timeline.getTracks();
+		const targetElementIds = expandElementIdsWithAlignedCompanions({
+			tracks: this.savedState,
+			elementIds: [this.elementId],
+		});
 		const projectFps = editor.project.getActive().settings.fps;
 		const minDuration = 1 / projectFps;
 		const mediaElementIdsForCaptionSync = new Set<string>();
@@ -218,96 +228,126 @@ export class UpdateElementTrimCommand extends Command {
 		const shouldRunFullCaptionSync = this.captionSyncMode === "full";
 
 		const updatedTracks = this.savedState.map((track) => {
-			const targetElement = track.elements.find(
-				(element) => element.id === this.elementId,
+			const targetedElements = track.elements.filter((element) =>
+				targetElementIds.has(element.id),
 			);
-			if (!targetElement) return track;
+			if (targetedElements.length === 0) return track;
 
-			const normalizedTiming = normalizeElementTiming({
-				startTime: this.startTime ?? targetElement.startTime,
-				duration: this.duration ?? targetElement.duration,
-				trimStart: this.trimStart,
-				trimEnd: this.trimEnd,
-				minDuration,
-			});
-			const nextTrimStart = normalizedTiming.trimStart;
-			const nextDuration = normalizedTiming.duration;
-			const nextStartTime = normalizedTiming.startTime;
+			const updatedElementIds = new Set<string>();
+			let rippleAfterTime: number | null = null;
+			let rippleShiftAmount = 0;
+			const nextElements = track.elements.map((targetElement) => {
+				if (!targetElementIds.has(targetElement.id)) return targetElement;
 
-			const oldEndTime = targetElement.startTime + targetElement.duration;
-			const newEndTime = nextStartTime + nextDuration;
-			const shiftAmount = oldEndTime - newEndTime;
+				const normalizedTiming = normalizeElementTiming({
+					startTime: this.startTime ?? targetElement.startTime,
+					duration: this.duration ?? targetElement.duration,
+					trimStart: this.trimStart,
+					trimEnd: this.trimEnd,
+					minDuration,
+				});
+				const nextTrimStart = normalizedTiming.trimStart;
+				const nextDuration = normalizedTiming.duration;
+				const nextStartTime = normalizedTiming.startTime;
 
-			const updatedElement = {
-				...targetElement,
-				trimStart: nextTrimStart,
-				trimEnd: normalizedTiming.trimEnd,
-				startTime: nextStartTime,
-				duration: nextDuration,
-				animations: clampAnimationsToDuration({
-					animations: targetElement.animations,
+				const oldEndTime = targetElement.startTime + targetElement.duration;
+				const newEndTime = nextStartTime + nextDuration;
+				const shiftAmount = oldEndTime - newEndTime;
+				if (rippleAfterTime === null) {
+					rippleAfterTime = oldEndTime;
+					rippleShiftAmount = shiftAmount;
+				}
+
+				const updatedElement = {
+					...targetElement,
+					trimStart: nextTrimStart,
+					trimEnd: normalizedTiming.trimEnd,
+					startTime: nextStartTime,
 					duration: nextDuration,
-				}),
-			};
-			const updatedElementWithTranscript = isTranscriptEditableElement(
-				targetElement,
-			)
-				? (() => {
-						if (
-							!shouldRunFullCaptionSync ||
-							!targetElement.transcriptEdit ||
-							targetElement.transcriptEdit.words.length === 0
-						) {
-							captionTrimOperations.push({
-								mediaElementId: targetElement.id,
-								startTime: nextStartTime,
-								endTime: nextStartTime + nextDuration,
-							});
-							return updatedElement;
-						}
-						const projectionBaseTranscript =
-							this.transcriptProjectionBase?.transcriptEdit ??
-							targetElement.transcriptEdit;
-						const projectionBaseTrimStartCandidate =
-							this.transcriptProjectionBase?.trimStart ??
-							targetElement.trimStart;
-						const projectionContext = resolveTranscriptProjectionContext({
-							transcriptEdit: projectionBaseTranscript,
-							defaultBaseTrimStart: projectionBaseTrimStartCandidate,
-						});
-						mediaElementIdsForCaptionSync.add(targetElement.id);
-						const projectedTranscript = projectTranscriptEditToWindow({
-							transcriptEdit: projectionContext.sourceTranscript,
-							elementId: targetElement.id,
-							sourceStart: nextTrimStart - projectionContext.baseTrimStart,
-							sourceEnd:
-								nextTrimStart - projectionContext.baseTrimStart + nextDuration,
-						});
-						return {
-							...updatedElement,
-							transcriptEdit: {
-								...projectedTranscript,
-								projectionSource: projectionContext.projectionSource,
-							},
-						};
-					})()
-				: (() => {
-						return updatedElement;
-					})();
+					animations: clampAnimationsToDuration({
+						animations: targetElement.animations,
+						duration: nextDuration,
+					}),
+				};
+				updatedElementIds.add(targetElement.id);
+				if (!isTranscriptEditableElement(targetElement)) {
+					return updatedElement;
+				}
 
-			if (this.rippleEnabled && Math.abs(shiftAmount) > 0) {
+				const transcriptDraft = getTranscriptDraft(targetElement);
+				if (
+					!shouldRunFullCaptionSync ||
+					!transcriptDraft ||
+					transcriptDraft.words.length === 0
+				) {
+					captionTrimOperations.push({
+						mediaElementId: targetElement.id,
+						startTime: nextStartTime,
+						endTime: nextStartTime + nextDuration,
+					});
+					return updatedElement;
+				}
+				const projectionBaseTranscript =
+					targetElement.id === this.elementId &&
+					this.transcriptProjectionBase?.transcriptEdit
+						? this.transcriptProjectionBase.transcriptEdit
+						: transcriptDraft;
+				const projectionBaseTrimStartCandidate =
+					targetElement.id === this.elementId &&
+					typeof this.transcriptProjectionBase?.trimStart === "number"
+						? this.transcriptProjectionBase.trimStart
+						: targetElement.trimStart;
+				const projectionContext = resolveTranscriptProjectionContext({
+					transcriptEdit: projectionBaseTranscript,
+					defaultBaseTrimStart: projectionBaseTrimStartCandidate,
+				});
+				mediaElementIdsForCaptionSync.add(targetElement.id);
+				const projectedTranscript = projectTranscriptEditToWindow({
+					transcriptEdit: projectionContext.sourceTranscript,
+					elementId: targetElement.id,
+					sourceStart: nextTrimStart - projectionContext.baseTrimStart,
+					sourceEnd:
+						nextTrimStart - projectionContext.baseTrimStart + nextDuration,
+				});
+				return withTranscriptState({
+					element: updatedElement as VideoElement | AudioElement,
+					draft: {
+						...projectedTranscript,
+						projectionSource: projectionContext.projectionSource,
+					},
+					applied: compileTranscriptDraft({
+						mediaElementId: targetElement.id,
+						draft: {
+							...projectedTranscript,
+							projectionSource: projectionContext.projectionSource,
+						},
+						mediaStartTime: nextStartTime,
+						mediaDuration: nextDuration,
+					}),
+					compileState: {
+						status: "idle",
+						updatedAt: projectedTranscript.updatedAt,
+					},
+				});
+			});
+
+			if (
+				this.rippleEnabled &&
+				rippleAfterTime !== null &&
+				Math.abs(rippleShiftAmount) > 0
+			) {
 				const shiftedOthers = rippleShiftElements({
-					elements: track.elements.filter(
-						(element) => element.id !== this.elementId,
+					elements: nextElements.filter(
+						(element) => !updatedElementIds.has(element.id),
 					),
-					afterTime: oldEndTime,
-					shiftAmount,
+					afterTime: rippleAfterTime,
+					shiftAmount: rippleShiftAmount,
 				});
 				return {
 					...track,
-					elements: track.elements.map((element) =>
-						element.id === this.elementId
-							? updatedElementWithTranscript
+					elements: nextElements.map((element) =>
+						updatedElementIds.has(element.id)
+							? element
 							: (shiftedOthers.find((shifted) => shifted.id === element.id) ??
 								element),
 					),
@@ -316,11 +356,7 @@ export class UpdateElementTrimCommand extends Command {
 
 			return {
 				...track,
-				elements: track.elements.map((element) =>
-					element.id === this.elementId
-						? updatedElementWithTranscript
-						: element,
-				),
+				elements: nextElements,
 			} as typeof track;
 		});
 

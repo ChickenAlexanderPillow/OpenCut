@@ -12,6 +12,7 @@ import {
 	buildTranscriptCutsFromWords,
 	normalizeTranscriptWords,
 } from "@/lib/transcript-editor/core";
+import { compileTranscriptDraft } from "@/lib/transcript-editor/state";
 import { storageService } from "@/services/storage/service";
 import type { MediaAsset } from "@/types/assets";
 import type { TProject } from "@/types/project";
@@ -301,19 +302,31 @@ export async function autoLinkTranscriptAndCaptionsForMediaElement({
 		mediaElementId: element.id,
 		segments: sourceWindowSegments,
 	});
+	const transcriptDraft = {
+		version: 1 as const,
+		source: "word-level" as const,
+		words: wordsForEdit,
+		cuts: buildTranscriptCutsFromWords({ words: wordsForEdit }),
+		cutTimeDomain: "clip-local-source" as const,
+		updatedAt: new Date().toISOString(),
+	};
 	editor.timeline.updateElements({
 		updates: [
 			{
 				trackId,
 				elementId,
 				updates: {
-					transcriptEdit: {
-						version: 1,
-						source: "word-level",
-						words: wordsForEdit,
-						cuts: buildTranscriptCutsFromWords({ words: wordsForEdit }),
-						cutTimeDomain: "clip-local-source",
-						updatedAt: new Date().toISOString(),
+					transcriptDraft,
+					transcriptEdit: transcriptDraft,
+					transcriptApplied: compileTranscriptDraft({
+						mediaElementId: element.id,
+						draft: transcriptDraft,
+						mediaStartTime: element.startTime,
+						mediaDuration: element.duration,
+					}),
+					transcriptCompileState: {
+						status: "idle",
+						updatedAt: transcriptDraft.updatedAt,
 					},
 				},
 			},

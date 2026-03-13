@@ -67,6 +67,8 @@ interface PendingDragState {
 	clickOffsetTime: number;
 }
 
+type DragAxisLock = "x" | "y" | null;
+
 function isVideoElement(element: TimelineElement): element is VideoElement {
 	return element.type === "video";
 }
@@ -233,9 +235,19 @@ export function useElementInteraction({
 	const [dragDropTarget, setDragDropTarget] = useState<DropTarget | null>(null);
 	const [isPendingDrag, setIsPendingDrag] = useState(false);
 	const pendingDragRef = useRef<PendingDragState | null>(null);
+	const dragStateRef = useRef(dragState);
 	const lastMouseXRef = useRef(0);
 	const mouseDownLocationRef = useRef<{ x: number; y: number } | null>(null);
 	const lastProcessedMoveTsRef = useRef(0);
+	const dragAxisLockRef = useRef<DragAxisLock>(null);
+	const axisLockSnapshotRef = useRef<{
+		currentTime: number;
+		currentMouseY: number;
+	} | null>(null);
+
+	useEffect(() => {
+		dragStateRef.current = dragState;
+	}, [dragState]);
 
 	const startDrag = useCallback(
 		({
@@ -248,6 +260,8 @@ export function useElementInteraction({
 			initialCurrentTime,
 			initialCurrentMouseY,
 		}: StartDragParams) => {
+			dragAxisLockRef.current = null;
+			axisLockSnapshotRef.current = null;
 			setDragState({
 				isDragging: true,
 				elementId,
@@ -264,6 +278,8 @@ export function useElementInteraction({
 	);
 
 	const endDrag = useCallback(() => {
+		dragAxisLockRef.current = null;
+		axisLockSnapshotRef.current = null;
 		setDragState(initialDragState);
 		setDragDropTarget(null);
 	}, []);
@@ -316,6 +332,37 @@ export function useElementInteraction({
 			};
 		},
 		[snappingEnabled, editor.playback, tracks, zoomLevel, isShiftHeldRef],
+	);
+
+	const syncDragAxisLock = useCallback(
+		({
+			clientX,
+			clientY,
+			dragState,
+		}: {
+			clientX: number;
+			clientY: number;
+			dragState: ElementDragState;
+		}) => {
+			if (!isShiftHeldRef.current) {
+				dragAxisLockRef.current = null;
+				axisLockSnapshotRef.current = null;
+				return null;
+			}
+
+			if (dragAxisLockRef.current === null) {
+				const deltaX = Math.abs(clientX - dragState.startMouseX);
+				const deltaY = Math.abs(clientY - dragState.startMouseY);
+				dragAxisLockRef.current = deltaX >= deltaY ? "x" : "y";
+				axisLockSnapshotRef.current = {
+					currentTime: dragState.currentTime,
+					currentMouseY: dragState.currentMouseY,
+				};
+			}
+
+			return dragAxisLockRef.current;
+		},
+		[isShiftHeldRef],
 	);
 
 	useEffect(() => {
@@ -374,15 +421,16 @@ export function useElementInteraction({
 				return;
 			}
 
-			if (dragState.elementId && dragState.trackId) {
+			const liveDragState = dragStateRef.current;
+			if (liveDragState.elementId && liveDragState.trackId) {
 				const alreadySelected = isElementSelected({
-					trackId: dragState.trackId,
-					elementId: dragState.elementId,
+					trackId: liveDragState.trackId,
+					elementId: liveDragState.elementId,
 				});
 				if (!alreadySelected) {
 					selectElement({
-						trackId: dragState.trackId,
-						elementId: dragState.elementId,
+						trackId: liveDragState.trackId,
+						elementId: liveDragState.elementId,
 					});
 				}
 			}
@@ -398,41 +446,55 @@ export function useElementInteraction({
 				scrollLeft,
 				mapVisualTimeToRealTime,
 			});
-			const adjustedTime = Math.max(0, mouseTime - dragState.clickOffsetTime);
+			const adjustedTime = Math.max(0, mouseTime - liveDragState.clickOffsetTime);
 			const fps = activeProject.settings.fps;
 			const frameSnappedTime = snapTimeToFrame({ time: adjustedTime, fps });
 
-			const sourceTrack = tracks.find(({ id }) => id === dragState.trackId);
+			const sourceTrack = tracks.find(({ id }) => id === liveDragState.trackId);
 			const movingElement = sourceTrack?.elements.find(
-				({ id }) => id === dragState.elementId,
+				({ id }) => id === liveDragState.elementId,
 			);
-			const { snappedTime, snapPoint } = getDragSnapResult({
+			const { snappedTime: unconstrainedSnappedTime, snapPoint } = getDragSnapResult({
 				frameSnappedTime,
 				movingElement,
 			});
+			const dragAxisLock = syncDragAxisLock({
+				clientX,
+				clientY,
+				dragState: liveDragState,
+			});
+			const axisLockSnapshot = axisLockSnapshotRef.current;
+			const constrainedMouseY =
+				dragAxisLock === "x"
+					? axisLockSnapshot?.currentMouseY ?? liveDragState.currentMouseY
+					: clientY;
+			const constrainedTime =
+				dragAxisLock === "y"
+					? axisLockSnapshot?.currentTime ?? liveDragState.currentTime
+					: unconstrainedSnappedTime;
 			setDragState((previousDragState) => ({
 				...previousDragState,
-				currentTime: snappedTime,
-				currentMouseY: clientY,
+				currentTime: constrainedTime,
+				currentMouseY: constrainedMouseY,
 			}));
 			onSnapPointChange?.(snapPoint);
 
-			if (dragState.elementId && dragState.trackId) {
+			if (liveDragState.elementId && liveDragState.trackId) {
 				const verticalDragDirection = getVerticalDragDirection({
-					startMouseY: dragState.startMouseY,
-					currentMouseY: clientY,
+					startMouseY: liveDragState.startMouseY,
+					currentMouseY: constrainedMouseY,
 				});
 				const dropTarget = getDragDropTarget({
 					clientX,
-					clientY,
-					elementId: dragState.elementId,
-					trackId: dragState.trackId,
+					clientY: constrainedMouseY,
+					elementId: liveDragState.elementId,
+					trackId: liveDragState.trackId,
 					tracks,
 					tracksContainerRef,
 					tracksScrollRef,
 					headerRef,
 					zoomLevel,
-					snappedTime,
+					snappedTime: constrainedTime,
 					verticalDragDirection,
 				});
 				setDragDropTarget(dropTarget?.isNewTrack ? dropTarget : null);
@@ -443,10 +505,6 @@ export function useElementInteraction({
 		return () => document.removeEventListener("mousemove", handleMouseMove);
 	}, [
 		dragState.isDragging,
-		dragState.clickOffsetTime,
-		dragState.elementId,
-		dragState.startMouseY,
-		dragState.trackId,
 		zoomLevel,
 		isElementSelected,
 		selectElement,
@@ -462,13 +520,15 @@ export function useElementInteraction({
 		getDragSnapResult,
 		onSnapPointChange,
 		mapVisualTimeToRealTime,
+		syncDragAxisLock,
 	]);
 
 	useEffect(() => {
 		if (!dragState.isDragging) return;
 
 		const handleMouseUp = ({ clientX, clientY }: MouseEvent) => {
-			if (!dragState.elementId || !dragState.trackId) return;
+			const liveDragState = dragStateRef.current;
+			if (!liveDragState.elementId || !liveDragState.trackId) return;
 
 			if (mouseDownLocationRef.current) {
 				const deltaX = Math.abs(clientX - mouseDownLocationRef.current.x);
@@ -481,20 +541,34 @@ export function useElementInteraction({
 				}
 			}
 
-			const dropTarget = getDragDropTarget({
+			const dragAxisLock = syncDragAxisLock({
 				clientX,
 				clientY,
-				elementId: dragState.elementId,
-				trackId: dragState.trackId,
+				dragState: liveDragState,
+			});
+			const axisLockSnapshot = axisLockSnapshotRef.current;
+			const constrainedMouseY =
+				dragAxisLock === "x"
+					? axisLockSnapshot?.currentMouseY ?? liveDragState.currentMouseY
+					: clientY;
+			const constrainedTime =
+				dragAxisLock === "y"
+					? axisLockSnapshot?.currentTime ?? liveDragState.currentTime
+					: liveDragState.currentTime;
+			const dropTarget = getDragDropTarget({
+				clientX,
+				clientY: constrainedMouseY,
+				elementId: liveDragState.elementId,
+				trackId: liveDragState.trackId,
 				tracks,
 				tracksContainerRef,
 				tracksScrollRef,
 				headerRef,
 				zoomLevel,
-				snappedTime: dragState.currentTime,
+				snappedTime: constrainedTime,
 				verticalDragDirection: getVerticalDragDirection({
-					startMouseY: dragState.startMouseY,
-					currentMouseY: clientY,
+					startMouseY: liveDragState.startMouseY,
+					currentMouseY: constrainedMouseY,
 				}),
 			});
 			if (!dropTarget) {
@@ -502,9 +576,9 @@ export function useElementInteraction({
 				onSnapPointChange?.(null);
 				return;
 			}
-			const snappedTime = dragState.currentTime;
+			const snappedTime = constrainedTime;
 
-			const sourceTrack = tracks.find(({ id }) => id === dragState.trackId);
+			const sourceTrack = tracks.find(({ id }) => id === liveDragState.trackId);
 			if (!sourceTrack) {
 				endDrag();
 				onSnapPointChange?.(null);
@@ -513,12 +587,12 @@ export function useElementInteraction({
 
 			const companionElements = getDragCompanionElements({
 				tracks,
-				draggedTrackId: dragState.trackId,
-				draggedElementId: dragState.elementId,
+				draggedTrackId: liveDragState.trackId,
+				draggedElementId: liveDragState.elementId,
 			});
 			if (companionElements.length > 0) {
 				const selection = [
-					{ trackId: dragState.trackId, elementId: dragState.elementId },
+					{ trackId: liveDragState.trackId, elementId: liveDragState.elementId },
 					...companionElements,
 				];
 				const records = selection
@@ -533,8 +607,8 @@ export function useElementInteraction({
 
 				const draggedRecord = records.find(
 					(record) =>
-						record.track.id === dragState.trackId &&
-						record.element.id === dragState.elementId,
+						record.track.id === liveDragState.trackId &&
+						record.element.id === liveDragState.elementId,
 				);
 				if (!draggedRecord) {
 					endDrag();
@@ -612,9 +686,9 @@ export function useElementInteraction({
 				const newTrackId = generateUUID();
 
 				editor.timeline.moveElement({
-					sourceTrackId: dragState.trackId,
+					sourceTrackId: liveDragState.trackId,
 					targetTrackId: newTrackId,
-					elementId: dragState.elementId,
+					elementId: liveDragState.elementId,
 					newStartTime: snappedTime,
 					createTrack: { type: sourceTrack.type, index: dropTarget.trackIndex },
 					rippleEnabled: rippleEditingEnabled,
@@ -623,9 +697,9 @@ export function useElementInteraction({
 				const targetTrack = tracks[dropTarget.trackIndex];
 				if (targetTrack) {
 					editor.timeline.moveElement({
-						sourceTrackId: dragState.trackId,
+						sourceTrackId: liveDragState.trackId,
 						targetTrackId: targetTrack.id,
-						elementId: dragState.elementId,
+						elementId: liveDragState.elementId,
 						newStartTime: snappedTime,
 						rippleEnabled: rippleEditingEnabled,
 					});
@@ -640,10 +714,6 @@ export function useElementInteraction({
 		return () => document.removeEventListener("mouseup", handleMouseUp);
 	}, [
 		dragState.isDragging,
-		dragState.elementId,
-		dragState.startMouseY,
-		dragState.trackId,
-		dragState.currentTime,
 		zoomLevel,
 		tracks,
 		endDrag,
@@ -654,6 +724,7 @@ export function useElementInteraction({
 		tracksScrollRef,
 		headerRef,
 		rippleEditingEnabled,
+		syncDragAxisLock,
 	]);
 
 	useEffect(() => {

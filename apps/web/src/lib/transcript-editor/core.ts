@@ -260,19 +260,24 @@ export function projectTranscriptEditToWindow({
 }): TranscriptEditState {
 	const windowStart = Math.min(sourceStart, sourceEnd);
 	const windowEnd = Math.max(windowStart, Math.max(sourceStart, sourceEnd));
-	const projectedWords = normalizeTranscriptWords({
-		words: transcriptEdit.words
-			.filter(
-				(word) => word.endTime > windowStart && word.startTime < windowEnd,
-			)
-			.map((word) => ({
+	const projectedWordEntries = transcriptEdit.words
+		.map((word, index) => ({ word, index }))
+		.filter(
+			({ word }) => word.endTime > windowStart && word.startTime < windowEnd,
+		)
+		.map(({ word, index }) => ({
+			index,
+			word: {
 				...word,
 				startTime: Math.max(
 					0,
 					Math.min(windowEnd, word.startTime) - windowStart,
 				),
 				endTime: Math.max(0, Math.min(windowEnd, word.endTime) - windowStart),
-			})),
+			},
+		}));
+	const projectedWords = normalizeTranscriptWords({
+		words: projectedWordEntries.map(({ word }) => word),
 	});
 	const projectedCuts =
 		transcriptEdit.cuts.length > 0
@@ -291,16 +296,49 @@ export function projectTranscriptEditToWindow({
 						})),
 				})
 			: buildTranscriptCutsFromWords({ words: projectedWords });
-	const segmentsUi =
+	const projectedIndexByOriginalIndex = new Map<number, number>();
+	projectedWordEntries.forEach(({ index }, projectedIndex) => {
+		projectedIndexByOriginalIndex.set(index, projectedIndex);
+	});
+	const preservedSegmentsUi =
 		projectedWords.length === 0
 			? []
-			: [
-					{
-						id: `${elementId}:seg:0`,
-						wordStartIndex: 0,
-						wordEndIndex: projectedWords.length - 1,
-					},
-				];
+			: (transcriptEdit.segmentsUi ?? [])
+					.map((segment, index) => {
+						const projectedIndices: number[] = [];
+						for (
+							let originalIndex = segment.wordStartIndex;
+							originalIndex <= segment.wordEndIndex;
+							originalIndex++
+						) {
+							const projectedIndex =
+								projectedIndexByOriginalIndex.get(originalIndex);
+							if (projectedIndex !== undefined) {
+								projectedIndices.push(projectedIndex);
+							}
+						}
+						if (projectedIndices.length === 0) return null;
+						return {
+							id: `${elementId}:seg:${index}`,
+							wordStartIndex: projectedIndices[0] ?? 0,
+							wordEndIndex:
+								projectedIndices[projectedIndices.length - 1] ?? 0,
+							label: segment.label,
+						};
+					})
+					.filter((segment): segment is NonNullable<typeof segment> => Boolean(segment));
+	const segmentsUi =
+		preservedSegmentsUi.length > 0
+			? preservedSegmentsUi
+			: projectedWords.length === 0
+				? []
+				: [
+						{
+							id: `${elementId}:seg:0`,
+							wordStartIndex: 0,
+							wordEndIndex: projectedWords.length - 1,
+						},
+					];
 
 	return {
 		...transcriptEdit,
