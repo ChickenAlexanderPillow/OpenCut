@@ -12,7 +12,7 @@ import {
 	resolveTextPlacement,
 	wrapTextToWidth,
 } from "@/lib/text/layout";
-import { resolveTransformAtTime } from "@/lib/animation";
+import { resolveElementTransformAtTime } from "@/lib/animation";
 import { resolveSafeAreaAnchoredPositionY } from "@/constants/safe-area-constants";
 import { toTimelineCaptionWordTimings } from "@/lib/captions/timing";
 
@@ -276,9 +276,8 @@ export function getElementBounds({
 
 	const { width: canvasWidth, height: canvasHeight } = canvasSize;
 	const localTime = Math.max(0, currentTime - element.startTime);
-	const resolvedTransform = resolveTransformAtTime({
-		baseTransform: element.transform,
-		animations: element.animations,
+	const resolvedTransform = resolveElementTransformAtTime({
+		element,
 		localTime,
 	});
 

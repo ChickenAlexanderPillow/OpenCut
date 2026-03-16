@@ -723,8 +723,8 @@ export function Timeline() {
 							</div>
 						</ScrollArea>
 					</div>
-					<div className="relative w-[4.25rem] shrink-0 border-l bg-background">
-						<div className="pointer-events-none absolute top-0 right-full bottom-0 z-0 w-[13.75rem] overflow-hidden">
+					<div className="relative z-20 w-[4.25rem] shrink-0 border-l bg-background">
+						<div className="pointer-events-none absolute top-0 right-full bottom-0 z-20 w-[13.75rem] overflow-hidden">
 							<div
 								className={`pointer-events-auto flex h-full w-[13.75rem] flex-col border-l bg-background shadow-sm transition-[transform,opacity] duration-200 ease-out will-change-transform ${
 									mixerCollapsed
@@ -746,16 +746,21 @@ export function Timeline() {
 											className="flex flex-col gap-1 p-2 pr-1 pb-3"
 											style={{ paddingTop: TIMELINE_CONSTANTS.PADDING_TOP_PX }}
 										>
-											{tracks
-												.filter((track) => canTracktHaveAudio(track))
-												.map((track) => (
+											{tracks.map((track) =>
+												canTracktHaveAudio(track) ? (
 													<TrackLevelStrip
 														key={track.id}
 														track={track}
 														level={trackLevels[track.id]}
 														height={getTrackHeight({ type: track.type })}
 													/>
-												))}
+												) : (
+													<TrackLevelSpacer
+														key={track.id}
+														height={getTrackHeight({ type: track.type })}
+													/>
+												),
+											)}
 										</div>
 									</ScrollArea>
 								</div>
@@ -1080,14 +1085,14 @@ function TrackLevelStrip({
 			className="flex items-center"
 			style={{ minHeight: `${height}px`, height: `${height}px` }}
 		>
-			<div className="bg-muted/20 flex h-6 w-full items-center gap-2 rounded-md border px-2 py-1">
-				<div className="text-muted-foreground flex items-center text-[9px] font-medium leading-none">
+			<div className="bg-muted/20 flex h-6 w-full items-center gap-1.5 rounded-sm border px-2 py-1">
+				<div className="text-muted-foreground flex w-3 shrink-0 items-center justify-center text-[9px] font-medium leading-none">
 					{track.type === "audio" ? "A" : "V"}
 				</div>
-				<div className="relative flex h-3 flex-1 items-stretch overflow-hidden rounded-md bg-black/10">
+				<div className="relative flex h-3 flex-1 items-stretch overflow-hidden rounded-sm bg-black/10">
 					<HorizontalLevelGuides />
 					<div
-						className={`relative z-[1] h-full rounded-md transition-all ${getLevelColorClass({
+						className={`relative z-[1] h-full rounded-sm transition-all ${getLevelColorClass({
 							fillPercent: meterPercent,
 							silent: level?.silent ?? true,
 							muted: track.muted,
@@ -1098,6 +1103,10 @@ function TrackLevelStrip({
 			</div>
 		</div>
 	);
+}
+
+function TrackLevelSpacer({ height }: { height: number }) {
+	return <div aria-hidden="true" style={{ minHeight: `${height}px`, height: `${height}px` }} />;
 }
 
 function MasterLevelStrip({
@@ -1112,14 +1121,14 @@ function MasterLevelStrip({
 	});
 
 	return (
-		<div className="flex h-full min-h-0 flex-col items-center gap-2 py-1">
+		<div className="flex h-full min-h-0 flex-col items-center gap-2 pt-1 pb-3">
 			<div className="text-muted-foreground text-[9px] font-medium uppercase tracking-[0.18em]">
 				Out
 			</div>
-			<div className="bg-muted/20 relative flex h-full min-h-0 w-8 items-end overflow-hidden rounded-xl border p-1">
+			<div className="bg-muted/20 relative flex h-full min-h-0 w-8 items-end overflow-hidden rounded-sm border p-1">
 				<LevelGuides />
 				<div
-					className={`relative z-[1] w-full rounded-lg transition-all ${getLevelColorClass({
+					className={`relative z-[1] w-full rounded-sm transition-all ${getLevelColorClass({
 						fillPercent: meterPercent,
 						silent: level.silent,
 						muted: false,

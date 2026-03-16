@@ -1,5 +1,9 @@
 FROM oven/bun:alpine AS base
 
+RUN apk add --no-cache \
+	libc6-compat \
+	libstdc++
+
 FROM base AS builder
 
 WORKDIR /app
@@ -15,7 +19,7 @@ COPY apps/web/package.json apps/web/package.json
 COPY packages/env/package.json packages/env/package.json
 COPY packages/ui/package.json packages/ui/package.json
 
-RUN bun install
+RUN bun install --frozen-lockfile
 
 COPY apps/web/ apps/web/
 COPY packages/env/ packages/env/
@@ -51,6 +55,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_OPTIONS="--max-old-space-size=1024"
+
+RUN apk add --no-cache \
+	libc6-compat \
+	libstdc++
 
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs

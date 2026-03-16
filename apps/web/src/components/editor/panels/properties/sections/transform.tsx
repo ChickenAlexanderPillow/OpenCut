@@ -23,8 +23,9 @@ import { DEFAULT_TRANSFORM } from "@/constants/timeline-constants";
 import { KeyframeToggle } from "../keyframe-toggle";
 import { useKeyframedNumberProperty } from "../hooks/use-keyframed-number-property";
 import { useElementPlayhead } from "../hooks/use-element-playhead";
-import { getElementKeyframes, resolveTransformAtTime } from "@/lib/animation";
+import { getElementKeyframes, resolveElementTransformAtTime } from "@/lib/animation";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useAssetsPanelStore } from "@/stores/assets-panel-store";
 
 export function parseNumericInput({ input }: { input: string }): number | null {
 	const parsed = parseFloat(input);
@@ -61,6 +62,7 @@ export function TransformSection({
 	trackId: string;
 }) {
 	const editor = useEditor();
+	const setActiveTab = useAssetsPanelStore((state) => state.setActiveTab);
 	const [isScaleLocked, setIsScaleLocked] = useState(false);
 	const mediaAsset = useMemo(() => {
 		if (element.type !== "video" && element.type !== "image") return null;
@@ -88,11 +90,12 @@ export function TransformSection({
 		startTime: element.startTime,
 		duration: element.duration,
 	});
-	const resolvedTransform = resolveTransformAtTime({
-		baseTransform: element.transform,
-		animations: element.animations,
+	const resolvedTransform = resolveElementTransformAtTime({
+		element,
 		localTime,
 	});
+	const isReframeManagedVideo =
+		element.type === "video" && (element.reframePresets?.length ?? 0) > 0;
 	const fitMode = useMemo<"height" | "width" | null>(() => {
 		if (!fitScales) return null;
 		if (
@@ -343,124 +346,149 @@ export function TransformSection({
 			<SectionHeader title="Transform" />
 			<SectionContent>
 				<SectionFields>
-					<SectionField
-						label="Scale"
-						beforeLabel={
-							<KeyframeToggle
-								isActive={scale.isKeyframedAtTime}
-								isDisabled={!isPlayheadWithinElementRange}
-								title="Toggle scale keyframe"
-								onToggle={scale.toggleKeyframe}
-							/>
-						}
-					>
-						<div className="flex items-center gap-2">
-							{isScaleLocked ? (
-								<>
-									<NumberField icon="W" {...scaleFieldProps} />
-									<NumberField icon="H" {...scaleFieldProps} />
-								</>
-							) : (
-								<NumberField
-									icon={<HugeiconsIcon icon={ArrowExpandIcon} />}
-									{...scaleFieldProps}
-									className="flex-1"
-								/>
-							)}
+					{isReframeManagedVideo ? (
+						<div className="rounded-sm border px-3 py-3">
+							<div className="text-sm font-medium">Reframe-managed clip</div>
+							<div className="text-muted-foreground mt-1 text-xs">
+								Position and scale are driven by clip reframe presets and switch
+								markers.
+							</div>
 							<Button
 								type="button"
-								variant={isScaleLocked ? "secondary" : "ghost"}
-								size="icon"
-								aria-pressed={isScaleLocked}
-								onClick={() => setIsScaleLocked((isLocked) => !isLocked)}
+								size="sm"
+								variant="secondary"
+								className="mt-3"
+								onClick={() => setActiveTab("reframe")}
 							>
-								<HugeiconsIcon icon={Link05Icon} />
+								Open Reframe Panel
 							</Button>
-							{fitScales && (
-								<Button
-									type="button"
-									variant={fitMode ? "secondary" : "ghost"}
-									size="icon"
-									title={
-										fitMode === "height" ? "Fit full width" : "Fit full height"
-									}
-									aria-label={
-										fitMode === "height"
-											? "Fit media to full width"
-											: "Fit media to full height"
-									}
-									onClick={() =>
-										commitScaleFromFit({
-											value:
-												fitMode === "height"
-													? fitScales.width
-													: fitScales.height,
-										})
-									}
-								>
-									{fitMode === "height" ? (
-										<Monitor className="size-4" />
+						</div>
+					) : (
+						<>
+							<SectionField
+								label="Scale"
+								beforeLabel={
+									<KeyframeToggle
+										isActive={scale.isKeyframedAtTime}
+										isDisabled={!isPlayheadWithinElementRange}
+										title="Toggle scale keyframe"
+										onToggle={scale.toggleKeyframe}
+									/>
+								}
+							>
+								<div className="flex items-center gap-2">
+									{isScaleLocked ? (
+										<>
+											<NumberField icon="W" {...scaleFieldProps} />
+											<NumberField icon="H" {...scaleFieldProps} />
+										</>
 									) : (
-										<Smartphone className="size-4" />
+										<NumberField
+											icon={<HugeiconsIcon icon={ArrowExpandIcon} />}
+											{...scaleFieldProps}
+											className="flex-1"
+										/>
 									)}
-								</Button>
-							)}
-						</div>
-					</SectionField>
-					<SectionField
-						label="Position"
-						beforeLabel={
-							<KeyframeToggle
-								isActive={hasPositionKeyframe}
-								isDisabled={!isPlayheadWithinElementRange}
-								title="Toggle position keyframe"
-								onToggle={togglePositionKeyframe}
-							/>
-						}
-					>
-						<div className="flex items-center gap-2">
-							<NumberField
-								icon="X"
-								className="flex-1"
-								value={positionX.displayValue}
-								onFocus={positionX.onFocus}
-								onChange={positionX.onChange}
-								onBlur={positionX.onBlur}
-								onScrub={positionX.scrubTo}
-								onScrubEnd={positionX.commitScrub}
-								onReset={() =>
-									positionX.commitValue({ value: DEFAULT_TRANSFORM.position.x })
+									<Button
+										type="button"
+										variant={isScaleLocked ? "secondary" : "ghost"}
+										size="icon"
+										aria-pressed={isScaleLocked}
+										onClick={() => setIsScaleLocked((isLocked) => !isLocked)}
+									>
+										<HugeiconsIcon icon={Link05Icon} />
+									</Button>
+									{fitScales && (
+										<Button
+											type="button"
+											variant={fitMode ? "secondary" : "ghost"}
+											size="icon"
+											title={
+												fitMode === "height" ? "Fit full width" : "Fit full height"
+											}
+											aria-label={
+												fitMode === "height"
+													? "Fit media to full width"
+													: "Fit media to full height"
+											}
+											onClick={() =>
+												commitScaleFromFit({
+													value:
+														fitMode === "height"
+															? fitScales.width
+															: fitScales.height,
+												})
+											}
+										>
+											{fitMode === "height" ? (
+												<Monitor className="size-4" />
+											) : (
+												<Smartphone className="size-4" />
+											)}
+										</Button>
+									)}
+								</div>
+							</SectionField>
+							<SectionField
+								label="Position"
+								beforeLabel={
+									<KeyframeToggle
+										isActive={hasPositionKeyframe}
+										isDisabled={!isPlayheadWithinElementRange}
+										title="Toggle position keyframe"
+										onToggle={togglePositionKeyframe}
+									/>
 								}
-								isDefault={isPropertyAtDefault({
-									hasAnimatedKeyframes: positionX.hasAnimatedKeyframes,
-									isPlayheadWithinElementRange,
-									resolvedValue: resolvedTransform.position.x,
-									staticValue: element.transform.position.x,
-									defaultValue: DEFAULT_TRANSFORM.position.x,
-								})}
-							/>
-							<NumberField
-								icon="Y"
-								className="flex-1"
-								value={positionY.displayValue}
-								onFocus={positionY.onFocus}
-								onChange={positionY.onChange}
-								onBlur={positionY.onBlur}
-								onScrub={positionY.scrubTo}
-								onScrubEnd={positionY.commitScrub}
-								onReset={() =>
-									positionY.commitValue({ value: DEFAULT_TRANSFORM.position.y })
-								}
-								isDefault={isPropertyAtDefault({
-									hasAnimatedKeyframes: positionY.hasAnimatedKeyframes,
-									isPlayheadWithinElementRange,
-									resolvedValue: resolvedTransform.position.y,
-									staticValue: element.transform.position.y,
-									defaultValue: DEFAULT_TRANSFORM.position.y,
-								})}
-							/>
-						</div>
-					</SectionField>
+							>
+								<div className="flex items-center gap-2">
+									<NumberField
+										icon="X"
+										className="flex-1"
+										value={positionX.displayValue}
+										onFocus={positionX.onFocus}
+										onChange={positionX.onChange}
+										onBlur={positionX.onBlur}
+										onScrub={positionX.scrubTo}
+										onScrubEnd={positionX.commitScrub}
+										onReset={() =>
+											positionX.commitValue({
+												value: DEFAULT_TRANSFORM.position.x,
+											})
+										}
+										isDefault={isPropertyAtDefault({
+											hasAnimatedKeyframes: positionX.hasAnimatedKeyframes,
+											isPlayheadWithinElementRange,
+											resolvedValue: resolvedTransform.position.x,
+											staticValue: element.transform.position.x,
+											defaultValue: DEFAULT_TRANSFORM.position.x,
+										})}
+									/>
+									<NumberField
+										icon="Y"
+										className="flex-1"
+										value={positionY.displayValue}
+										onFocus={positionY.onFocus}
+										onChange={positionY.onChange}
+										onBlur={positionY.onBlur}
+										onScrub={positionY.scrubTo}
+										onScrubEnd={positionY.commitScrub}
+										onReset={() =>
+											positionY.commitValue({
+												value: DEFAULT_TRANSFORM.position.y,
+											})
+										}
+										isDefault={isPropertyAtDefault({
+											hasAnimatedKeyframes: positionY.hasAnimatedKeyframes,
+											isPlayheadWithinElementRange,
+											resolvedValue: resolvedTransform.position.y,
+											staticValue: element.transform.position.y,
+											defaultValue: DEFAULT_TRANSFORM.position.y,
+										})}
+									/>
+								</div>
+							</SectionField>
+						</>
+					)}
 					<SectionField
 						label="Rotation"
 						beforeLabel={

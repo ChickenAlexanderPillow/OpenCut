@@ -106,6 +106,7 @@ import {
 	PREPARING_PLAYBACK_REASON,
 	startPlaybackWhenReady,
 } from "@/lib/playback/start-playback";
+import { analyzeGeneratedClipReframes } from "@/lib/reframe/subject-aware";
 const MIN_VIRAL_CLIP_SCORE = 56;
 const MAX_VIRAL_CLIP_COUNT = 5;
 const VIRAL_CLIP_MIN_SECONDS = 18;
@@ -1599,12 +1600,16 @@ function buildClipElement({
 	endTime,
 	canvasSize,
 	scaleOverride,
+	reframeSeed,
 }: {
 	asset: MediaAsset;
 	startTime: number;
 	endTime: number;
 	canvasSize: { width: number; height: number };
 	scaleOverride?: number;
+	reframeSeed?:
+		| Awaited<ReturnType<typeof analyzeGeneratedClipReframes>>
+		| null;
 }) {
 	const duration = Math.max(0.1, endTime - startTime);
 	const sourceDuration = Math.max(endTime, asset.duration ?? endTime);
@@ -1648,6 +1653,13 @@ function buildClipElement({
 					? Math.max(1, effectiveScale)
 					: 1,
 			},
+			reframePresets: reframeSeed?.presets ?? [],
+			reframeSwitches: reframeSeed?.switches ?? [],
+			defaultReframePresetId: reframeSeed?.defaultPresetId ?? null,
+			reframeSeededBy:
+				(reframeSeed?.presets.length ?? 0) > 0
+					? ("subject-aware-v1" as const)
+					: undefined,
 			opacity: DEFAULT_OPACITY,
 			blendMode: DEFAULT_BLEND_MODE,
 		};
@@ -3797,6 +3809,9 @@ export function useEditorActions() {
 						clipAudioBuffer: AudioBuffer | null;
 						continuousCaption: ReturnType<typeof buildContinuousCaptionForClip>;
 						captionSource: "local-word" | "transcript-cache" | null;
+						reframeSeed:
+							| Awaited<ReturnType<typeof analyzeGeneratedClipReframes>>
+							| null;
 					};
 					const preparedImports: PreparedClipImport[] = [];
 					const updatedWordTranscriptionCacheEntries: Record<
@@ -3904,6 +3919,16 @@ export function useEditorActions() {
 								wordLevelSegments ?? [];
 							const captionSource: PreparedClipImport["captionSource"] =
 								"local-word";
+							const reframeSeed =
+								mediaAsset.type === "video"
+									? await analyzeGeneratedClipReframes({
+											asset: mediaAsset,
+											startTime: candidate.startTime,
+											endTime: candidate.endTime,
+											canvasSize: projectCanvas,
+											baseScale: resolvedVideoScale,
+										})
+									: null;
 							preparedImports.push({
 								candidate,
 								clipAudioBuffer,
@@ -3926,6 +3951,7 @@ export function useEditorActions() {
 									return caption;
 								})(),
 								captionSource,
+								reframeSeed,
 							});
 						}
 						if (Object.keys(updatedWordTranscriptionCacheEntries).length > 0) {
@@ -3999,6 +4025,7 @@ export function useEditorActions() {
 										endTime: candidate.endTime,
 										canvasSize: projectCanvas,
 										scaleOverride: resolvedVideoScale,
+										reframeSeed: prepared.reframeSeed,
 									}),
 								});
 								const refreshedMainTrack = editor.timeline.getTrackById({

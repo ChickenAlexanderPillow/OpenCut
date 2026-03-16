@@ -6,6 +6,7 @@ import {
 	getVisibleElementsWithBounds,
 	type ElementWithBounds,
 } from "@/lib/preview/element-bounds";
+import { resolveElementTransformAtTime } from "@/lib/animation";
 import {
 	screenPixelsToLogicalThreshold,
 	screenToCanvas,
@@ -24,6 +25,12 @@ import {
 import { isVisualElement } from "@/lib/timeline/element-utils";
 import type { Transform } from "@/types/timeline";
 import { usePreviewStore } from "@/stores/preview-store";
+import {
+	applySelectedReframePresetPreviewToTracks,
+	getSelectedOrActiveReframePresetId,
+	normalizeVideoReframeState,
+} from "@/lib/reframe/video-reframe";
+import { useReframeStore } from "@/stores/reframe-store";
 
 type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 type HandleType = Corner | "rotation";
@@ -32,6 +39,7 @@ interface ScaleState {
 	trackId: string;
 	elementId: string;
 	initialTransform: Transform;
+	reframePresetId: string | null;
 	initialDistance: number;
 	initialBoundsCx: number;
 	initialBoundsCy: number;
@@ -43,6 +51,8 @@ interface RotationState {
 	trackId: string;
 	elementId: string;
 	initialTransform: Transform;
+	baseTransform: Transform;
+	baseRotate: number;
 	initialAngle: number;
 	initialBoundsCx: number;
 	initialBoundsCy: number;
@@ -145,11 +155,20 @@ export function useTransformHandles({
 					previewCanvas: canvasSize,
 				})
 			: tracks;
+	const previewTracksWithSelectedReframe =
+		applySelectedReframePresetPreviewToTracks({
+			tracks: previewTracks,
+			selectedPresetIdByElementId:
+				useReframeStore.getState().selectedPresetIdByElementId,
+			selectedElementIds: new Set(
+				selectedElements.map((selection) => selection.elementId),
+			),
+		});
 	const shouldComputeBounds = selectedElements.length === 1 && !isPlaying;
 
 	const elementsWithBounds = shouldComputeBounds
 		? getVisibleElementsWithBounds({
-				tracks: previewTracks,
+				tracks: previewTracksWithSelectedReframe,
 				currentTime,
 				canvasSize,
 				backgroundReferenceCanvasSize: projectCanvas,
@@ -176,15 +195,37 @@ export function useTransformHandles({
 
 			const { bounds, trackId, elementId, element } = selectedWithBounds;
 			if (!isVisualElement(element)) return;
+			const normalizedElement =
+				element.type === "video"
+					? normalizeVideoReframeState({ element })
+					: element;
+			const clipLocalTime = Math.max(0, currentTime - normalizedElement.startTime);
+			const reframePresetId =
+				normalizedElement.type === "video"
+					? getSelectedOrActiveReframePresetId({
+							element: normalizedElement,
+							localTime: clipLocalTime,
+							selectedPresetId:
+								useReframeStore.getState().selectedPresetIdByElementId[
+									normalizedElement.id
+								] ?? null,
+						})
+					: null;
+			const initialTransform = resolveElementTransformAtTime({
+				element: normalizedElement as never,
+				localTime: clipLocalTime,
+				baseTransformLocalTime: clipLocalTime,
+			});
 
 			const initialDistance = getCornerDistance({ bounds, corner });
-			const baseWidth = bounds.width / element.transform.scale;
-			const baseHeight = bounds.height / element.transform.scale;
+			const baseWidth = bounds.width / initialTransform.scale;
+			const baseHeight = bounds.height / initialTransform.scale;
 
 			scaleStateRef.current = {
 				trackId,
 				elementId,
-				initialTransform: element.transform,
+				initialTransform,
+				reframePresetId,
 				initialDistance,
 				initialBoundsCx: bounds.cx,
 				initialBoundsCy: bounds.cy,
@@ -204,6 +245,16 @@ export function useTransformHandles({
 
 			const { bounds, trackId, elementId, element } = selectedWithBounds;
 			if (!isVisualElement(element)) return;
+			const normalizedElement =
+				element.type === "video"
+					? normalizeVideoReframeState({ element })
+					: element;
+			const clipLocalTime = Math.max(0, currentTime - normalizedElement.startTime);
+			const initialTransform = resolveElementTransformAtTime({
+				element: normalizedElement as never,
+				localTime: clipLocalTime,
+				baseTransformLocalTime: clipLocalTime,
+			});
 
 			const position = screenToCanvas({
 				clientX: event.clientX,
@@ -217,7 +268,9 @@ export function useTransformHandles({
 			rotationStateRef.current = {
 				trackId,
 				elementId,
-				initialTransform: element.transform,
+				initialTransform,
+				baseTransform: element.transform,
+				baseRotate: element.transform.rotate,
 				initialAngle,
 				initialBoundsCx: bounds.cx,
 				initialBoundsCy: bounds.cy,
@@ -248,6 +301,7 @@ export function useTransformHandles({
 					trackId,
 					elementId,
 					initialTransform,
+					reframePresetId,
 					initialDistance,
 					initialBoundsCx,
 					initialBoundsCy,
@@ -291,17 +345,32 @@ export function useTransformHandles({
 					setSnapLines(activeLines);
 				}
 
-				editor.timeline.previewElements({
-					updates: [
-						{
-							trackId,
-							elementId,
-							updates: {
-								transform: { ...initialTransform, scale: snappedScale },
+				if (reframePresetId) {
+					editor.timeline.updateVideoReframePreset({
+						trackId,
+						elementId,
+						presetId: reframePresetId,
+						updates: {
+							transform: {
+								position: initialTransform.position,
+								scale: snappedScale,
 							},
 						},
-					],
-				});
+						pushHistory: false,
+					});
+				} else {
+					editor.timeline.previewElements({
+						updates: [
+							{
+								trackId,
+								elementId,
+								updates: {
+									transform: { ...initialTransform, scale: snappedScale },
+								},
+							},
+						],
+					});
+				}
 				return;
 			}
 
@@ -309,7 +378,8 @@ export function useTransformHandles({
 				const {
 					trackId,
 					elementId,
-					initialTransform,
+					baseTransform,
+					baseRotate,
 					initialAngle,
 					initialBoundsCx,
 					initialBoundsCy,
@@ -321,7 +391,7 @@ export function useTransformHandles({
 				let deltaAngle = currentAngle - initialAngle;
 				if (deltaAngle > 180) deltaAngle -= 360;
 				if (deltaAngle < -180) deltaAngle += 360;
-				const newRotate = initialTransform.rotate + deltaAngle;
+				const newRotate = baseRotate + deltaAngle;
 				const shouldSnapRotation = !isShiftHeldRef.current;
 				const { snappedRotation } = shouldSnapRotation
 					? snapRotation({ proposedRotation: newRotate })
@@ -333,7 +403,7 @@ export function useTransformHandles({
 							trackId,
 							elementId,
 							updates: {
-								transform: { ...initialTransform, rotate: snappedRotation },
+								transform: { ...baseTransform, rotate: snappedRotation },
 							},
 						},
 					],

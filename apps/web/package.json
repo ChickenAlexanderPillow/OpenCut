@@ -23,6 +23,7 @@
 		"@hugeicons/core-free-icons": "^3.1.1",
 		"@hugeicons/react": "^1.1.4",
 		"@huggingface/transformers": "^3.8.1",
+		"@mediapipe/tasks-vision": "^0.10.32",
 		"@opencut/env": "workspace:*",
 		"@opencut/ui": "workspace:*",
 		"@radix-ui/react-accordion": "^1.2.12",

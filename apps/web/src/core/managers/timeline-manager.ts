@@ -14,6 +14,7 @@ import type {
 	AudioElement,
 	TimelineGapSelection,
 	TrackAudioEffects,
+	VideoReframePreset,
 } from "@/types/timeline";
 import { calculateTotalDuration } from "@/lib/timeline";
 import { expandElementIdsWithAlignedCompanions } from "@/lib/timeline/companion-media";
@@ -44,6 +45,13 @@ import { BatchCommand, PreviewTracker } from "@/lib/commands";
 import type { InsertElementParams } from "@/lib/commands/timeline/element/insert-element";
 import { applyBlueHighlightCaptionPreset } from "@/constants/caption-presets";
 import { normalizeTimelineTracksForInvariants } from "@/lib/timeline/element-timing";
+import {
+	buildVideoReframePreset,
+	getReframePresetById,
+	normalizeVideoReframeState,
+	replaceOrInsertReframeSwitch,
+} from "@/lib/reframe/video-reframe";
+import { generateUUID } from "@/utils/id";
 
 export class TimelineManager {
 	private listeners = new Set<() => void>();
@@ -315,6 +323,337 @@ export class TimelineManager {
 					...updates,
 				},
 			} as TrackAudioEffects,
+			pushHistory,
+		});
+	}
+
+	createVideoReframePreset({
+		trackId,
+		elementId,
+		name,
+		transform,
+		autoSeeded = false,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		elementId: string;
+		name: string;
+		transform: VideoReframePreset["transform"];
+		autoSeeded?: boolean;
+		pushHistory?: boolean;
+	}): string | null {
+		const element = this.getVideoElement({ trackId, elementId });
+		if (!element) return null;
+		const preset = buildVideoReframePreset({
+			name,
+			transform,
+			autoSeeded,
+		});
+		const nextElement = normalizeVideoReframeState({
+			element: {
+				...element,
+				reframePresets: [...(element.reframePresets ?? []), preset],
+				defaultReframePresetId:
+					element.defaultReframePresetId ?? preset.id,
+			},
+		});
+		this.updateSingleVideoElement({
+			trackId,
+			elementId,
+			nextElement,
+			pushHistory,
+		});
+		return preset.id;
+	}
+
+	updateVideoReframePreset({
+		trackId,
+		elementId,
+		presetId,
+		updates,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		elementId: string;
+		presetId: string;
+		updates: Partial<VideoReframePreset>;
+		pushHistory?: boolean;
+	}): void {
+		const element = this.getVideoElement({ trackId, elementId });
+		if (!element) return;
+		const nextElement = normalizeVideoReframeState({
+			element: {
+				...element,
+				reframePresets: (element.reframePresets ?? []).map((preset) =>
+					preset.id === presetId
+						? {
+								...preset,
+								...updates,
+								transform: {
+									...preset.transform,
+									...(updates.transform ?? {}),
+									position: {
+										...preset.transform.position,
+										...(updates.transform?.position ?? {}),
+									},
+								},
+						  }
+						: preset,
+				),
+			},
+		});
+		this.updateSingleVideoElement({
+			trackId,
+			elementId,
+			nextElement,
+			pushHistory,
+		});
+	}
+
+	duplicateVideoReframePreset({
+		trackId,
+		elementId,
+		presetId,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		elementId: string;
+		presetId: string;
+		pushHistory?: boolean;
+	}): string | null {
+		const element = this.getVideoElement({ trackId, elementId });
+		if (!element) return null;
+		const sourcePreset = getReframePresetById({ element, presetId });
+		if (!sourcePreset) return null;
+		const duplicatedPreset = {
+			...sourcePreset,
+			id: generateUUID(),
+			name: `${sourcePreset.name} Copy`,
+			autoSeeded: false,
+		};
+		const nextElement = normalizeVideoReframeState({
+			element: {
+				...element,
+				reframePresets: [...(element.reframePresets ?? []), duplicatedPreset],
+			},
+		});
+		this.updateSingleVideoElement({
+			trackId,
+			elementId,
+			nextElement,
+			pushHistory,
+		});
+		return duplicatedPreset.id;
+	}
+
+	deleteVideoReframePreset({
+		trackId,
+		elementId,
+		presetId,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		elementId: string;
+		presetId: string;
+		pushHistory?: boolean;
+	}): void {
+		const element = this.getVideoElement({ trackId, elementId });
+		if (!element) return;
+		const remainingPresets = (element.reframePresets ?? []).filter(
+			(preset) => preset.id !== presetId,
+		);
+		const fallbackPresetId = remainingPresets[0]?.id ?? null;
+		const nextSwitches = (element.reframeSwitches ?? []).flatMap((entry) => {
+			if (entry.presetId !== presetId) {
+				return [entry];
+			}
+			if (!fallbackPresetId) {
+				return [];
+			}
+			return [{ ...entry, presetId: fallbackPresetId }];
+		});
+		const nextElement = normalizeVideoReframeState({
+			element: {
+				...element,
+				reframePresets: remainingPresets,
+				reframeSwitches: nextSwitches,
+				defaultReframePresetId:
+					element.defaultReframePresetId === presetId
+						? fallbackPresetId
+						: element.defaultReframePresetId,
+			},
+		});
+		this.updateSingleVideoElement({
+			trackId,
+			elementId,
+			nextElement,
+			pushHistory,
+		});
+	}
+
+	setVideoDefaultReframePreset({
+		trackId,
+		elementId,
+		presetId,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		elementId: string;
+		presetId: string;
+		pushHistory?: boolean;
+	}): void {
+		const element = this.getVideoElement({ trackId, elementId });
+		if (!element) return;
+		const nextElement = normalizeVideoReframeState({
+			element: {
+				...element,
+				defaultReframePresetId: presetId,
+			},
+		});
+		this.updateSingleVideoElement({
+			trackId,
+			elementId,
+			nextElement,
+			pushHistory,
+		});
+	}
+
+	upsertVideoReframeSwitch({
+		trackId,
+		elementId,
+		time,
+		presetId,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		elementId: string;
+		time: number;
+		presetId: string;
+		pushHistory?: boolean;
+	}): string | null {
+		const element = this.getVideoElement({ trackId, elementId });
+		if (!element) return null;
+		const switchId = generateUUID();
+		const nextElement = normalizeVideoReframeState({
+			element: {
+				...element,
+				reframeSwitches: replaceOrInsertReframeSwitch({
+					switches: element.reframeSwitches,
+					nextSwitch: {
+						id: switchId,
+						time,
+						presetId,
+					},
+					duration: element.duration,
+				}),
+			},
+		});
+		this.updateSingleVideoElement({
+			trackId,
+			elementId,
+			nextElement,
+			pushHistory,
+		});
+		return (
+			nextElement.reframeSwitches?.find(
+				(entry) => Math.abs(entry.time - time) < 1 / 1000,
+			)?.id ?? switchId
+		);
+	}
+
+	updateVideoReframeSwitch({
+		trackId,
+		elementId,
+		switchId,
+		updates,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		elementId: string;
+		switchId: string;
+		updates: Partial<NonNullable<VideoElement["reframeSwitches"]>[number]>;
+		pushHistory?: boolean;
+	}): void {
+		const element = this.getVideoElement({ trackId, elementId });
+		if (!element) return;
+		const existing = (element.reframeSwitches ?? []).find(
+			(entry) => entry.id === switchId,
+		);
+		if (!existing) return;
+		const remaining = (element.reframeSwitches ?? []).filter(
+			(entry) => entry.id !== switchId,
+		);
+		const nextElement = normalizeVideoReframeState({
+			element: {
+				...element,
+				reframeSwitches: replaceOrInsertReframeSwitch({
+					switches: remaining,
+					nextSwitch: {
+						...existing,
+						...updates,
+					},
+					duration: element.duration,
+				}),
+			},
+		});
+		this.updateSingleVideoElement({
+			trackId,
+			elementId,
+			nextElement,
+			pushHistory,
+		});
+	}
+
+	removeVideoReframeSwitch({
+		trackId,
+		elementId,
+		switchId,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		elementId: string;
+		switchId: string;
+		pushHistory?: boolean;
+	}): void {
+		const element = this.getVideoElement({ trackId, elementId });
+		if (!element) return;
+		const nextElement = normalizeVideoReframeState({
+			element: {
+				...element,
+				reframeSwitches: (element.reframeSwitches ?? []).filter(
+					(entry) => entry.id !== switchId,
+				),
+			},
+		});
+		this.updateSingleVideoElement({
+			trackId,
+			elementId,
+			nextElement,
+			pushHistory,
+		});
+	}
+
+	clearVideoReframeSwitches({
+		trackId,
+		elementId,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		elementId: string;
+		pushHistory?: boolean;
+	}): void {
+		const element = this.getVideoElement({ trackId, elementId });
+		if (!element || (element.reframeSwitches?.length ?? 0) === 0) return;
+		const nextElement = normalizeVideoReframeState({
+			element: {
+				...element,
+				reframeSwitches: [],
+			},
+		});
+		this.updateSingleVideoElement({
+			trackId,
+			elementId,
+			nextElement,
 			pushHistory,
 		});
 	}
@@ -611,6 +950,59 @@ export class TimelineManager {
 			// During initial boot (including SSR/prerender), no active scene may exist yet.
 			return [];
 		}
+	}
+
+	private getVideoElement({
+		trackId,
+		elementId,
+	}: {
+		trackId: string;
+		elementId: string;
+	}): VideoElement | null {
+		const track = this.getTrackById({ trackId });
+		if (!track || track.type !== "video") return null;
+		const element = track.elements.find((entry) => entry.id === elementId);
+		return element?.type === "video" ? normalizeVideoReframeState({ element }) : null;
+	}
+
+	private updateSingleVideoElement({
+		trackId,
+		elementId,
+		nextElement,
+		pushHistory,
+	}: {
+		trackId: string;
+		elementId: string;
+		nextElement: VideoElement;
+		pushHistory: boolean;
+	}): void {
+		const currentTracks = this.getTracks();
+		const updatedTracks = currentTracks.map((track) => {
+			if (track.id !== trackId || track.type !== "video") return track;
+			return {
+				...track,
+				elements: track.elements.map((element) =>
+					element.id === elementId ? nextElement : element,
+				),
+			} as TimelineTrack;
+		});
+
+		if (!pushHistory) {
+			this.previewTracker.begin({ state: currentTracks });
+			this.updateTracks(updatedTracks);
+			return;
+		}
+
+		const previewSnapshot = this.previewTracker.end();
+		if (previewSnapshot !== null) {
+			this.updateTracks(updatedTracks);
+			const command = new TracksSnapshotCommand(previewSnapshot, updatedTracks);
+			this.editor.command.push({ command });
+			return;
+		}
+
+		const command = new TracksSnapshotCommand(currentTracks, updatedTracks);
+		this.editor.command.execute({ command });
 	}
 
 	subscribe(listener: () => void): () => void {

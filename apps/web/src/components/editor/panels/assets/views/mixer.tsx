@@ -54,10 +54,6 @@ export function MixerView() {
 
 	return (
 		<PanelView title="Mixer" contentClassName="space-y-3 pb-3">
-			<div className="text-muted-foreground rounded-md border p-2.5 text-xs">
-				Channel-strip effects live here. The right side of the timeline stays as
-				a live level meter for each audio-capable track.
-			</div>
 			<div className="space-y-3">
 				{tracks.length === 0 ? (
 					<div className="text-muted-foreground rounded-md border p-3 text-sm">
@@ -132,9 +128,9 @@ function TrackMixerStrip({
 						{track.type} channel
 					</div>
 				</div>
-				<div className="flex h-12 w-2 items-end overflow-hidden rounded-full bg-black/10">
+				<div className="flex h-12 w-2 items-end overflow-hidden rounded-sm bg-black/10">
 					<div
-						className={`w-full rounded-full transition-all ${
+						className={`w-full rounded-sm transition-all ${
 							level?.silent ? "bg-muted-foreground/30" : "bg-emerald-500"
 						}`}
 						style={{ height: `${peakPercent}%` }}

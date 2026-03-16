@@ -1,8 +1,9 @@
 import type { AnimationPropertyPath, ElementAnimations } from "@/types/animation";
-import type { Transform } from "@/types/timeline";
+import type { Transform, VideoElement, VisualElement } from "@/types/timeline";
 import { getColorValueAtTime, getNumberChannelValueAtTime } from "./interpolation";
 import { getColorChannelForPath } from "./color-channel";
 import { getNumberChannelForPath } from "./number-channel";
+import { resolveVideoBaseTransformAtTime } from "@/lib/reframe/video-reframe";
 
 export function getElementLocalTime({
 	timelineTime,
@@ -71,6 +72,29 @@ export function resolveTransformAtTime({
 			fallbackValue: baseTransform.rotate,
 		}),
 	};
+}
+
+export function resolveElementTransformAtTime({
+	element,
+	localTime,
+	baseTransformLocalTime = localTime,
+}: {
+	element: VisualElement;
+	localTime: number;
+	baseTransformLocalTime?: number;
+}): Transform {
+	const baseTransform =
+		element.type === "video"
+			? resolveVideoBaseTransformAtTime({
+					element: element as VideoElement,
+					localTime: baseTransformLocalTime,
+				})
+			: element.transform;
+	return resolveTransformAtTime({
+		baseTransform,
+		animations: element.animations,
+		localTime,
+	});
 }
 
 export function resolveOpacityAtTime({

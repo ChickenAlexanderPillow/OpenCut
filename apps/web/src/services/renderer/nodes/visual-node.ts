@@ -1,16 +1,26 @@
 import type { CanvasRenderer } from "../canvas-renderer";
 import { BaseNode } from "./base-node";
 import type { BlendMode } from "@/types/rendering";
-import type { Transform } from "@/types/timeline";
-import type { ElementTransitions } from "@/types/timeline";
+import type {
+	ElementTransitions,
+	Transform,
+	VideoReframePreset,
+	VideoReframeSwitch,
+} from "@/types/timeline";
 import type { ElementAnimations } from "@/types/animation";
-import { resolveOpacityAtTime, resolveTransformAtTime } from "@/lib/animation";
+import {
+	resolveOpacityAtTime,
+	resolveTransformAtTime,
+} from "@/lib/animation";
 import {
 	buildCompressedCutBoundaryTimes,
 	mapCompressedTimeToSourceTime,
 } from "@/lib/transcript-editor/core";
 import { TRANSCRIPT_CUT_VISUAL_BOUNDARY_GUARD_SECONDS } from "@/lib/transcript-editor/constants";
 import type { TranscriptEditCutRange } from "@/types/transcription";
+import {
+	resolveVideoReframeTransform,
+} from "@/lib/reframe/video-reframe";
 
 const VISUAL_EPSILON = 1 / 1000;
 
@@ -25,6 +35,9 @@ export interface VisualNodeParams {
 	blendMode?: BlendMode;
 	animations?: ElementAnimations;
 	transitions?: ElementTransitions;
+	reframePresets?: VideoReframePreset[];
+	reframeSwitches?: VideoReframeSwitch[];
+	defaultReframePresetId?: string | null;
 }
 
 export interface VisualPlacement {
@@ -254,8 +267,12 @@ export abstract class VisualNode<
 		renderer.context.save();
 
 		const localTime = this.getLocalTime(time);
+		const clipElapsed = this.getClipElapsedTime(time);
+		const baseTransform = this.getBaseTransformForTime({
+			clipElapsed,
+		});
 		const transform = resolveTransformAtTime({
-			baseTransform: this.params.transform,
+			baseTransform,
 			animations: this.params.animations,
 			localTime,
 		});
@@ -415,9 +432,10 @@ export abstract class VisualNode<
 		opacity: number;
 	} {
 		const localTime = this.getLocalTime(time);
+		const clipElapsed = this.getClipElapsedTime(time);
 		return {
 			transform: resolveTransformAtTime({
-				baseTransform: this.params.transform,
+				baseTransform: this.getBaseTransformForTime({ clipElapsed }),
 				animations: this.params.animations,
 				localTime,
 			}),
@@ -427,6 +445,21 @@ export abstract class VisualNode<
 				localTime,
 			}),
 		};
+	}
+
+	private getBaseTransformForTime({
+		clipElapsed,
+	}: {
+		clipElapsed: number;
+	}): Transform {
+		return resolveVideoReframeTransform({
+			baseTransform: this.params.transform,
+			duration: this.params.duration,
+			reframePresets: this.params.reframePresets,
+			reframeSwitches: this.params.reframeSwitches,
+			defaultReframePresetId: this.params.defaultReframePresetId,
+			localTime: clipElapsed,
+		});
 	}
 
 	protected getVisualPlacement({

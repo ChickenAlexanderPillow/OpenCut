@@ -41,6 +41,11 @@ export function getTrackClasses({ type }: { type: TrackType }) {
 }
 
 export function getTrackHeight({ type }: { type: TrackType }): number {
+	// Keep media tracks visually aligned in the editor rail.
+	if (type === "video") {
+		return TRACK_HEIGHTS.audio;
+	}
+
 	return TRACK_HEIGHTS[type];
 }
 

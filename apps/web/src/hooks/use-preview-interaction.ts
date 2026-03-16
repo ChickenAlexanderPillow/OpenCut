@@ -19,6 +19,13 @@ import {
 	type SnapLine,
 } from "@/lib/preview/preview-snap";
 import { usePreviewStore } from "@/stores/preview-store";
+import { resolveElementTransformAtTime } from "@/lib/animation";
+import {
+	applySelectedReframePresetPreviewToTracks,
+	getSelectedOrActiveReframePresetId,
+	normalizeVideoReframeState,
+} from "@/lib/reframe/video-reframe";
+import { useReframeStore } from "@/stores/reframe-store";
 
 const MIN_DRAG_DISTANCE = 0.5;
 type DragAxisLock = "x" | "y" | null;
@@ -34,6 +41,7 @@ interface DragState {
 		trackId: string;
 		elementId: string;
 		initialTransform: Transform;
+		reframePresetId: string | null;
 	}>;
 }
 
@@ -134,6 +142,17 @@ export function usePreviewInteraction({
 							previewCanvas: canvasSize,
 						})
 					: tracks;
+			const previewTracksWithSelectedReframe =
+				applySelectedReframePresetPreviewToTracks({
+					tracks: previewTracks,
+					selectedPresetIdByElementId:
+						useReframeStore.getState().selectedPresetIdByElementId,
+					selectedElementIds: new Set(
+						editor.selection
+							.getSelectedElements()
+							.map((selection) => selection.elementId),
+					),
+				});
 
 			const startPos = screenToCanvas({
 				clientX,
@@ -142,7 +161,7 @@ export function usePreviewInteraction({
 			});
 
 			const elementsWithBounds = getVisibleElementsWithBounds({
-				tracks: previewTracks,
+				tracks: previewTracksWithSelectedReframe,
 				currentTime,
 				canvasSize,
 				backgroundReferenceCanvasSize: projectCanvas,
@@ -206,6 +225,17 @@ export function usePreviewInteraction({
 							previewCanvas: canvasSize,
 						})
 					: tracks;
+			const previewTracksWithSelectedReframe =
+				applySelectedReframePresetPreviewToTracks({
+					tracks: previewTracks,
+					selectedPresetIdByElementId:
+						useReframeStore.getState().selectedPresetIdByElementId,
+					selectedElementIds: new Set(
+						editor.selection
+							.getSelectedElements()
+							.map((selection) => selection.elementId),
+					),
+				});
 
 			const startPos = screenToCanvas({
 				clientX,
@@ -214,7 +244,7 @@ export function usePreviewInteraction({
 			});
 
 			const elementsWithBounds = getVisibleElementsWithBounds({
-				tracks: previewTracks,
+				tracks: previewTracksWithSelectedReframe,
 				currentTime,
 				canvasSize,
 				backgroundReferenceCanvasSize: projectCanvas,
@@ -253,11 +283,48 @@ export function usePreviewInteraction({
 					width: hit.bounds.width,
 					height: hit.bounds.height,
 				},
-				elements: draggableElements.map(({ track, element }) => ({
-					trackId: track.id,
-					elementId: element.id,
-					initialTransform: (element as { transform: Transform }).transform,
-				})),
+				elements: draggableElements.map(({ track, element }) => {
+					const normalizedElement =
+						element.type === "video"
+							? normalizeVideoReframeState({ element })
+							: element;
+					const reframePresetId =
+						normalizedElement.type === "video"
+							? getSelectedOrActiveReframePresetId({
+									element: normalizedElement,
+									localTime: Math.max(
+										0,
+										Math.min(
+											normalizedElement.duration,
+											currentTime - normalizedElement.startTime,
+										),
+									),
+									selectedPresetId:
+										useReframeStore.getState().selectedPresetIdByElementId[
+											normalizedElement.id
+										] ?? null,
+								})
+							: null;
+					return {
+						trackId: track.id,
+						elementId: element.id,
+						initialTransform: resolveElementTransformAtTime({
+							element: normalizedElement as never,
+							localTime: Math.max(
+								0,
+								currentTime - normalizedElement.startTime,
+							),
+							baseTransformLocalTime: Math.max(
+								0,
+								Math.min(
+									normalizedElement.duration,
+									currentTime - normalizedElement.startTime,
+								),
+							),
+						}),
+						reframePresetId,
+					};
+				}),
 			};
 			dragAxisLockRef.current = null;
 			axisLockSnapshotRef.current = null;
@@ -331,8 +398,9 @@ export function usePreviewInteraction({
 			const deltaSnappedY =
 				snappedPosition.y - firstElement.initialTransform.position.y;
 
-			const updates = dragStateRef.current.elements.map(
-				({ trackId, elementId, initialTransform }) => ({
+			const standardUpdates = dragStateRef.current.elements
+				.filter((entry) => !entry.reframePresetId)
+				.map(({ trackId, elementId, initialTransform }) => ({
 					trackId,
 					elementId,
 					updates: {
@@ -344,10 +412,29 @@ export function usePreviewInteraction({
 							},
 						},
 					},
-				}),
-			);
+				}));
 
-			editor.timeline.previewElements({ updates });
+			for (const entry of dragStateRef.current.elements) {
+				if (!entry.reframePresetId) continue;
+				editor.timeline.updateVideoReframePreset({
+					trackId: entry.trackId,
+					elementId: entry.elementId,
+					presetId: entry.reframePresetId,
+					updates: {
+						transform: {
+							position: {
+								x: entry.initialTransform.position.x + deltaSnappedX,
+								y: entry.initialTransform.position.y + deltaSnappedY,
+							},
+							scale: entry.initialTransform.scale,
+						},
+					},
+					pushHistory: false,
+				});
+			}
+			if (standardUpdates.length > 0) {
+				editor.timeline.previewElements({ updates: standardUpdates });
+			}
 		},
 		[
 			isDragging,

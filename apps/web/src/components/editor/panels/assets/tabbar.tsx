@@ -8,11 +8,22 @@ import {
 } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/ui";
-import {
-	TAB_KEYS,
-	tabs,
-	useAssetsPanelStore,
-} from "@/stores/assets-panel-store";
+import { tabs, type Tab, useAssetsPanelStore } from "@/stores/assets-panel-store";
+
+const TAB_BAR_PRIMARY_KEYS: Tab[] = [
+	"media",
+	"music",
+	"clips",
+	"transcript",
+	"text",
+];
+
+const TAB_BAR_SECONDARY_KEYS: Tab[] = [
+	"mixer",
+	"transitions",
+	"overlay",
+	"settings",
+];
 
 export function TabBar() {
 	const { activeTab, setActiveTab } = useAssetsPanelStore();
@@ -51,42 +62,73 @@ export function TabBar() {
 				ref={scrollRef}
 				className="scrollbar-hidden relative flex size-full p-2 flex-col items-center justify-start gap-1.5 overflow-y-auto"
 			>
-				{TAB_KEYS.map((tabKey) => {
-					const tab = tabs[tabKey];
-					return (
-						<Tooltip key={tabKey} delayDuration={10}>
-							<TooltipTrigger asChild>
-								<Button
-									variant={activeTab === tabKey ? "secondary" : "text"}
-									aria-label={tab.label}
-									className={cn(
-										"flex-col !p-1.5 !rounded-sm !h-auto [&_svg]:size-4.5",
-										activeTab !== tabKey &&
-											"border border-transparent text-muted-foreground",
-									)}
-									onClick={() => setActiveTab(tabKey)}
-								>
-									<tab.icon />
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent
-								side="right"
-								align="center"
-								variant="sidebar"
-								sideOffset={8}
-							>
-								<div className="text-foreground text-sm leading-none font-medium">
-									{tab.label}
-								</div>
-							</TooltipContent>
-						</Tooltip>
-					);
-				})}
+				{TAB_BAR_PRIMARY_KEYS.map((tabKey) => (
+					<TabButton
+						key={tabKey}
+						tabKey={tabKey}
+						activeTab={activeTab}
+						onSelect={setActiveTab}
+					/>
+				))}
+				<TabButton
+					tabKey="reframe"
+					activeTab={activeTab}
+					onSelect={setActiveTab}
+				/>
+				{TAB_BAR_SECONDARY_KEYS.map((tabKey) => (
+					<TabButton
+						key={tabKey}
+						tabKey={tabKey}
+						activeTab={activeTab}
+						onSelect={setActiveTab}
+					/>
+				))}
 			</div>
 
 			<FadeOverlay direction="top" show={showTopFade} />
 			<FadeOverlay direction="bottom" show={showBottomFade} />
 		</div>
+	);
+}
+
+function TabButton({
+	tabKey,
+	activeTab,
+	onSelect,
+}: {
+	tabKey: Tab;
+	activeTab: Tab;
+	onSelect: (tab: Tab) => void;
+}) {
+	const tab = tabs[tabKey];
+
+	return (
+		<Tooltip delayDuration={10}>
+			<TooltipTrigger asChild>
+				<Button
+					variant={activeTab === tabKey ? "secondary" : "text"}
+					aria-label={tab.label}
+					className={cn(
+						"flex-col !p-1.5 !rounded-sm !h-auto [&_svg]:size-4.5",
+						activeTab !== tabKey &&
+							"border border-transparent text-muted-foreground",
+					)}
+					onClick={() => onSelect(tabKey)}
+				>
+					<tab.icon />
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent
+				side="right"
+				align="center"
+				variant="sidebar"
+				sideOffset={8}
+			>
+				<div className="text-foreground text-sm leading-none font-medium">
+					{tab.label}
+				</div>
+			</TooltipContent>
+		</Tooltip>
 	);
 }
 

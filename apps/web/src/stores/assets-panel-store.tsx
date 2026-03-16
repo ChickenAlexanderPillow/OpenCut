@@ -18,6 +18,7 @@ export const TAB_KEYS = [
 	"clips",
 	"transcript",
 	"text",
+	"reframe",
 	"mixer",
 	"transitions",
 	"overlay",
@@ -98,6 +99,41 @@ function OcMixerIcon({ className }: { className?: string }) {
 	);
 }
 
+function OcReframeIcon({ className }: { className?: string }) {
+	return (
+		<svg
+			viewBox="0 0 24 24"
+			fill="none"
+			xmlns="http://www.w3.org/2000/svg"
+			className={className}
+		>
+			<title>Reframe</title>
+			<rect
+				x="3.5"
+				y="5"
+				width="17"
+				height="14"
+				rx="3.5"
+				stroke="currentColor"
+				strokeWidth="1.5"
+			/>
+			<circle cx="12" cy="12" r="3.2" stroke="currentColor" strokeWidth="1.5" />
+			<path
+				d="M12 3V6"
+				stroke="currentColor"
+				strokeWidth="1.5"
+				strokeLinecap="round"
+			/>
+			<path
+				d="M12 18V21"
+				stroke="currentColor"
+				strokeWidth="1.5"
+				strokeLinecap="round"
+			/>
+		</svg>
+	);
+}
+
 export const tabs = {
 	media: {
 		icon: createHugeiconsIcon({ icon: Folder03Icon }),
@@ -118,6 +154,10 @@ export const tabs = {
 	text: {
 		icon: createHugeiconsIcon({ icon: TextIcon }),
 		label: "Text",
+	},
+	reframe: {
+		icon: OcReframeIcon,
+		label: "Reframe",
 	},
 	mixer: {
 		icon: OcMixerIcon,

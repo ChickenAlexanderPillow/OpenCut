@@ -2,11 +2,7 @@
 
 import { useEffect } from "react";
 import { Separator } from "@/components/ui/separator";
-import {
-	TAB_KEYS,
-	type Tab,
-	useAssetsPanelStore,
-} from "@/stores/assets-panel-store";
+import { type Tab, useAssetsPanelStore } from "@/stores/assets-panel-store";
 import { TabBar } from "./tabbar";
 import { Clips } from "./views/clips";
 import { TransitionsView } from "./views/transitions";
@@ -17,11 +13,25 @@ import { OverlayView } from "./views/overlay";
 import { TranscriptView } from "./views/transcript";
 import { MusicView } from "./views/music";
 import { MixerView } from "./views/mixer";
+import { ReframeView } from "./views/reframe";
 import { cn } from "@/utils/ui";
+
+const ASSET_PANEL_TABS: Tab[] = [
+	"media",
+	"music",
+	"clips",
+	"transcript",
+	"text",
+	"reframe",
+	"mixer",
+	"transitions",
+	"overlay",
+	"settings",
+];
 
 export function AssetsPanel() {
 	const { activeTab, setActiveTab } = useAssetsPanelStore();
-	const resolvedActiveTab = TAB_KEYS.includes(activeTab) ? activeTab : "media";
+	const resolvedActiveTab = ASSET_PANEL_TABS.includes(activeTab) ? activeTab : "media";
 
 	useEffect(() => {
 		if (activeTab !== resolvedActiveTab) {
@@ -35,6 +45,7 @@ export function AssetsPanel() {
 		clips: <Clips />,
 		transcript: <TranscriptView />,
 		text: <TextView />,
+		reframe: <ReframeView />,
 		mixer: <MixerView />,
 		transitions: <TransitionsView />,
 		overlay: <OverlayView />,
@@ -49,7 +60,7 @@ export function AssetsPanel() {
 			<TabBar />
 			<Separator orientation="vertical" />
 			<div className="flex-1 overflow-hidden relative">
-				{TAB_KEYS.map((tab) => (
+				{ASSET_PANEL_TABS.map((tab) => (
 					<div
 						key={tab}
 						className={cn(

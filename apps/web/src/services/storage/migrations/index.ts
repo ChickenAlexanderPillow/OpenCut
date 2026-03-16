@@ -9,10 +9,11 @@ import { V6toV7Migration } from "./v6-to-v7";
 import { V7toV8Migration } from "./v7-to-v8";
 import { V8toV9Migration } from "./v8-to-v9";
 import { V9toV10Migration } from "./v9-to-v10";
+import { V10toV11Migration } from "./v10-to-v11";
 export { runStorageMigrations } from "./runner";
 export type { MigrationProgress } from "./runner";
 
-export const CURRENT_PROJECT_VERSION = 10;
+export const CURRENT_PROJECT_VERSION = 11;
 
 export const migrations = [
 	new V0toV1Migration(),
@@ -25,4 +26,5 @@ export const migrations = [
 	new V7toV8Migration(),
 	new V8toV9Migration(),
 	new V9toV10Migration(),
+	new V10toV11Migration(),
 ];

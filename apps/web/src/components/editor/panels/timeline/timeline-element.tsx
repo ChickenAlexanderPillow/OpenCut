@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { useEditor } from "@/hooks/use-editor";
 import { useAssetsPanelStore } from "@/stores/assets-panel-store";
+import { useReframeStore } from "@/stores/reframe-store";
 import { useTimelineStore } from "@/stores/timeline-store";
 import AudioWaveform from "./audio-waveform";
 import { useTimelineElementResize } from "@/hooks/timeline/element/use-element-resize";
@@ -59,7 +60,15 @@ import {
 	Exchange01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { Clapperboard, Sparkles } from "lucide-react";
 import { uppercase } from "@/utils/string";
+import { cn } from "@/utils/ui";
+import {
+	deriveVideoReframeSections,
+	getActiveReframePresetId,
+	getSelectedOrActiveReframePresetId,
+	normalizeVideoReframeState,
+} from "@/lib/reframe/video-reframe";
 
 const MAX_PERSISTED_WAVEFORM_ENTRIES = 200;
 const MAX_PERSISTED_PEAKS = 768;
@@ -201,9 +210,19 @@ export function TimelineElement({
 	dragState,
 }: TimelineElementProps) {
 	const editor = useEditor({ subscribeTo: ["media", "project", "timeline"] });
+	const openReframeTab = useAssetsPanelStore((state) => state.setActiveTab);
+	const setSelectedPresetId = useReframeStore(
+		(state) => state.setSelectedPresetId,
+	);
+	const selectedSectionStartTimeByElementId = useReframeStore(
+		(state) => state.selectedSectionStartTimeByElementId,
+	);
+	const setSelectedSectionStartTime = useReframeStore(
+		(state) => state.setSelectedSectionStartTime,
+	);
 	const { selectedElements } = useElementSelection();
 	const snappingEnabled = useTimelineStore((state) => state.snappingEnabled);
-	const { requestRevealMedia } = useAssetsPanelStore();
+	const requestRevealMedia = useAssetsPanelStore((state) => state.requestRevealMedia);
 	const activeProject = editor.project.getActive();
 
 	const mediaAssets = editor.media.getAssets();
@@ -269,6 +288,8 @@ export function TimelineElement({
 	};
 
 	const isMuted = canElementHaveAudio(element) && element.muted === true;
+	const normalizedVideoElement =
+		element.type === "video" ? normalizeVideoReframeState({ element }) : null;
 	const waveformPeaksCache = activeProject.waveformPeaksCache ?? {};
 
 	const getPersistedWaveformPeaks = ({
@@ -434,6 +455,53 @@ export function TimelineElement({
 						</ContextMenuItem>
 					</>
 				)}
+				{normalizedVideoElement &&
+					(normalizedVideoElement.reframePresets?.length ?? 0) > 0 && (
+						<>
+							<ContextMenuSeparator />
+							<ContextMenuItem
+								icon={<Sparkles className="size-4" />}
+								onSelect={(event) => {
+									event.preventDefault();
+									event.stopPropagation();
+									openReframeTab("reframe");
+									setSelectedPresetId({
+										elementId: normalizedVideoElement.id,
+										presetId:
+											getSelectedOrActiveReframePresetId({
+												element: normalizedVideoElement,
+												localTime: Math.max(
+													0,
+													Math.min(
+														normalizedVideoElement.duration,
+														editor.playback.getCurrentTime() -
+															normalizedVideoElement.startTime,
+													),
+												),
+											}) ?? null,
+									});
+								}}
+							>
+								Open reframe controls
+							</ContextMenuItem>
+							<ContextMenuItem
+								icon={<Clapperboard className="size-4" />}
+								disabled={
+									(normalizedVideoElement.reframeSwitches?.length ?? 0) === 0
+								}
+								onSelect={(event) => {
+									event.preventDefault();
+									event.stopPropagation();
+									editor.timeline.clearVideoReframeSwitches({
+										trackId: track.id,
+										elementId: normalizedVideoElement.id,
+									});
+								}}
+							>
+								Clear angles
+							</ContextMenuItem>
+						</>
+					)}
 				{isVisualTimelineElement(element) && element.transitions?.in && (
 					<ContextMenuItem
 						onSelect={(event) => {
@@ -526,6 +594,17 @@ function ElementInner({
 		side: "left" | "right";
 	}) => void;
 }) {
+	const playbackTime = editor.playback.getCurrentTime();
+	const openReframeTab = useAssetsPanelStore((state) => state.setActiveTab);
+	const setSelectedPresetId = useReframeStore(
+		(state) => state.setSelectedPresetId,
+	);
+	const selectedSectionStartTimeByElementId = useReframeStore(
+		(state) => state.selectedSectionStartTimeByElementId,
+	);
+	const setSelectedSectionStartTime = useReframeStore(
+		(state) => state.setSelectedSectionStartTime,
+	);
 	const showMutedOverlay = element.type === "audio" && hasAudio && isMuted;
 	const showHiddenOverlay = canElementBeHidden(element) && element.hidden;
 	const transcriptCutMarkers = getElementVisualLayout({
@@ -557,7 +636,7 @@ function ElementInner({
 		null,
 	);
 	const laneButtonElementsRef = useRef(
-		new Map<AnimationPropertyPath, HTMLButtonElement>(),
+		new Map<AnimationPropertyPath, HTMLDivElement>(),
 	);
 	const [easingMenu, setEasingMenu] = useState<{
 		x: number;
@@ -565,6 +644,53 @@ function ElementInner({
 		propertyPath: AnimationPropertyPath;
 		keyframeId?: string;
 	} | null>(null);
+	const [draggingReframeSwitch, setDraggingReframeSwitch] = useState<{
+		switchId: string;
+		time: number;
+		pointerOffsetPx: number;
+	} | null>(null);
+	const normalizedVideoElement = useMemo(
+		() =>
+			element.type === "video" ? normalizeVideoReframeState({ element }) : null,
+		[element],
+	);
+	const displayedReframeSwitches = useMemo(() => {
+		if (!normalizedVideoElement) return [];
+		return (normalizedVideoElement.reframeSwitches ?? []).map((entry) =>
+			entry.id === draggingReframeSwitch?.switchId
+				? { ...entry, time: draggingReframeSwitch.time }
+				: entry,
+		);
+	}, [normalizedVideoElement, draggingReframeSwitch]);
+	const activeReframePresetId = useMemo(() => {
+		if (!normalizedVideoElement) return null;
+		return getActiveReframePresetId({
+			element: {
+				...normalizedVideoElement,
+				reframeSwitches: displayedReframeSwitches,
+			},
+			localTime: Math.max(
+				0,
+				Math.min(
+					normalizedVideoElement.duration,
+					playbackTime - normalizedVideoElement.startTime,
+				),
+			),
+		});
+	}, [normalizedVideoElement, displayedReframeSwitches, playbackTime]);
+	const displayedReframeSections = useMemo(() => {
+		if (!normalizedVideoElement) return [];
+		return deriveVideoReframeSections({
+			element: {
+				...normalizedVideoElement,
+				reframeSwitches: displayedReframeSwitches,
+			},
+		});
+	}, [normalizedVideoElement, displayedReframeSwitches]);
+	const selectedReframeSectionStartTime =
+		normalizedVideoElement
+			? selectedSectionStartTimeByElementId[normalizedVideoElement.id] ?? null
+			: null;
 	const laneKeyframes = useMemo(() => {
 		const laneMap = new Map<AnimationPropertyPath, ElementKeyframe[]>();
 		for (const path of TIMELINE_KEYFRAME_PATHS) {
@@ -726,6 +852,96 @@ function ElementInner({
 		editor.timeline,
 		track.id,
 		element.id,
+	]);
+
+	useEffect(() => {
+		if (!draggingReframeSwitch || !containerElement || !normalizedVideoElement) {
+			return;
+		}
+
+		const onMouseMove = (event: MouseEvent) => {
+			const rect = containerElement.getBoundingClientRect();
+			let nextTime = snapTimeToFrame({
+				time: toLocalTimeFromClientX({
+					clientX: event.clientX - draggingReframeSwitch.pointerOffsetPx,
+					containerRect: rect,
+					duration: normalizedVideoElement.duration,
+				}),
+				fps: projectFps,
+			});
+			if (snappingEnabled) {
+				const thresholdTime =
+					rect.width > 0 ? (8 / rect.width) * normalizedVideoElement.duration : 0;
+				const playheadLocalTime = Math.max(
+					0,
+					Math.min(
+						normalizedVideoElement.duration,
+						playbackTime - normalizedVideoElement.startTime,
+					),
+				);
+				const playheadDistance = Math.abs(playheadLocalTime - nextTime);
+				if (playheadDistance <= thresholdTime) {
+					nextTime = playheadLocalTime;
+				} else {
+					const nearbyTimes = (normalizedVideoElement.reframeSwitches ?? [])
+						.filter((entry) => entry.id !== draggingReframeSwitch.switchId)
+						.map((entry) => entry.time);
+					let best = nextTime;
+					let bestDistance = Number.POSITIVE_INFINITY;
+					for (const candidate of nearbyTimes) {
+					const distance = Math.abs(candidate - nextTime);
+					if (distance <= thresholdTime && distance < bestDistance) {
+						best = candidate;
+						bestDistance = distance;
+					}
+				}
+					nextTime = best;
+				}
+			}
+			setDraggingReframeSwitch((previous) =>
+				previous
+					? {
+							...previous,
+							time: Math.max(
+								0,
+								Math.min(normalizedVideoElement.duration, nextTime),
+							),
+					  }
+					: previous,
+			);
+		};
+
+		const onMouseUp = () => {
+			const current = draggingReframeSwitch;
+			if (current) {
+				editor.timeline.updateVideoReframeSwitch({
+					trackId: track.id,
+					elementId: element.id,
+					switchId: current.switchId,
+					updates: {
+						time: current.time,
+					},
+				});
+			}
+			setDraggingReframeSwitch(null);
+		};
+
+		window.addEventListener("mousemove", onMouseMove);
+		window.addEventListener("mouseup", onMouseUp);
+		return () => {
+			window.removeEventListener("mousemove", onMouseMove);
+			window.removeEventListener("mouseup", onMouseUp);
+		};
+	}, [
+		containerElement,
+		draggingReframeSwitch,
+		editor.timeline,
+		element.id,
+		normalizedVideoElement,
+		playbackTime,
+		projectFps,
+		snappingEnabled,
+		track.id,
 	]);
 
 	const onLaneMouseDown = ({
@@ -923,14 +1139,20 @@ function ElementInner({
 			)} ${canElementBeHidden(element) && element.hidden ? "opacity-50" : ""}`}
 			style={{ marginInline: 1 }}
 		>
-			<button
-				type="button"
+			<div
+				role="button"
+				tabIndex={0}
 				data-timeline-element-hit-target={element.id}
 				data-visual-start-time={visualStartTime}
 				data-visual-duration={visualDuration}
 				className="absolute inset-0 size-full cursor-pointer"
 				onClick={(e) => onElementClick(e, element)}
 				onMouseDown={(e) => onElementMouseDown(e, element)}
+				onKeyDown={(event) => {
+					if (event.key !== "Enter" && event.key !== " ") return;
+					event.preventDefault();
+					onElementClick(event as unknown as React.MouseEvent, element);
+				}}
 			>
 				<div className="absolute inset-0 flex h-full items-center">
 					<ElementContent
@@ -951,6 +1173,35 @@ function ElementInner({
 						}}
 					/>
 				))}
+				{normalizedVideoElement &&
+					isSelected &&
+					normalizedVideoElement.reframePresets &&
+					normalizedVideoElement.reframePresets.length > 0 && (
+						<ReframeSwitchLane
+							element={normalizedVideoElement}
+							sections={displayedReframeSections}
+							switches={displayedReframeSwitches}
+							activePresetId={activeReframePresetId}
+							selectedSectionStartTime={selectedReframeSectionStartTime}
+							onMarkerMouseDown={({ switchId, time, pointerOffsetPx }) =>
+								setDraggingReframeSwitch({ switchId, time, pointerOffsetPx })
+							}
+							onMarkerClick={({ presetId }) => {
+								setSelectedPresetId({
+									elementId: normalizedVideoElement.id,
+									presetId,
+								});
+								openReframeTab("reframe");
+							}}
+							onSectionClick={({ startTime, presetId }) => {
+								setSelectedSectionStartTime({
+									elementId: normalizedVideoElement.id,
+									startTime,
+								});
+								openReframeTab("reframe");
+							}}
+						/>
+					)}
 
 				{(showMutedOverlay || showHiddenOverlay) && (
 					<div className="bg-opacity-50 pointer-events-none absolute inset-0 flex items-center justify-center bg-black">
@@ -967,7 +1218,7 @@ function ElementInner({
 						)}
 					</div>
 				)}
-			</button>
+			</div>
 
 			{isVisual && hasAnyKeyframes && (
 				<div className="pointer-events-none absolute inset-x-1 bottom-0 top-0 z-[2] flex flex-col justify-end gap-0.5 pb-1">
@@ -991,8 +1242,9 @@ function ElementInner({
 								<div className="pointer-events-none w-3 text-[8px] leading-none text-white/70">
 									{label}
 								</div>
-								<button
-									type="button"
+								<div
+									role="button"
+									tabIndex={0}
 									ref={(node) => {
 										if (node) {
 											laneButtonElementsRef.current.set(propertyPath, node);
@@ -1007,6 +1259,10 @@ function ElementInner({
 									onContextMenu={(event) =>
 										onLaneContextMenu({ event, propertyPath })
 									}
+									onKeyDown={(event) => {
+										if (event.key !== "Enter" && event.key !== " ") return;
+										event.preventDefault();
+									}}
 									title={`Add keyframe on ${propertyPath}`}
 								>
 									{keyframes.map((keyframe) => {
@@ -1047,7 +1303,7 @@ function ElementInner({
 											/>
 										);
 									})}
-								</button>
+								</div>
 							</div>
 						);
 					})}
@@ -1139,6 +1395,122 @@ function ResizeHandle({
 		>
 			<div className="bg-foreground h-[1.5rem] w-[0.2rem] rounded-full" />
 		</button>
+	);
+}
+
+function ReframeSwitchLane({
+	element,
+	sections,
+	switches,
+	activePresetId,
+	selectedSectionStartTime,
+	onMarkerMouseDown,
+	onMarkerClick,
+	onSectionClick,
+}: {
+	element: Extract<TimelineElementType, { type: "video" }>;
+	sections: Array<{
+		startTime: number;
+		endTime: number;
+		presetId: string | null;
+		switchId: string | null;
+	}>;
+	switches: NonNullable<Extract<TimelineElementType, { type: "video" }>["reframeSwitches"]>;
+	activePresetId: string | null;
+	selectedSectionStartTime: number | null;
+	onMarkerMouseDown: (params: {
+		switchId: string;
+		time: number;
+		pointerOffsetPx: number;
+	}) => void;
+	onMarkerClick: (params: { presetId: string }) => void;
+	onSectionClick: (params: { startTime: number; presetId: string | null }) => void;
+}) {
+	const sortedSwitches = [...switches].sort((left, right) => left.time - right.time);
+
+	return (
+		<div className="pointer-events-none absolute inset-x-0 top-1 z-[3] h-5">
+			<div className="relative h-full bg-black/20">
+				{sections.map((section) => {
+					const leftPercent =
+						(section.startTime / Math.max(element.duration, 0.001)) * 100;
+					const rightPercent =
+						100 -
+						(section.endTime / Math.max(element.duration, 0.001)) * 100;
+					const isSelected =
+						selectedSectionStartTime !== null &&
+						Math.abs(selectedSectionStartTime - section.startTime) <= 1 / 1000;
+					const isActive = section.presetId === activePresetId;
+					const presetName =
+						element.reframePresets?.find(
+							(preset) => preset.id === section.presetId,
+						)?.name ?? "Section";
+					return (
+						<button
+							key={`${section.startTime}:${section.switchId ?? "default"}`}
+							type="button"
+							className={cn(
+								"pointer-events-auto absolute top-0 bottom-0 overflow-hidden border text-left",
+								isSelected
+									? "border-white/80 bg-white/18"
+									: isActive
+										? "border-white/35 bg-white/12"
+										: "border-white/15 bg-black/10",
+							)}
+							style={{
+								left: `${leftPercent}%`,
+								right: `${rightPercent}%`,
+							}}
+							onClick={(event) => {
+								event.preventDefault();
+								event.stopPropagation();
+								onSectionClick({
+									startTime: section.startTime,
+									presetId: section.presetId,
+								});
+							}}
+							title={presetName}
+						>
+							<div className="flex h-full items-center px-1.5">
+								<span className="truncate text-[9px] font-medium text-white/80">
+									{presetName}
+								</span>
+							</div>
+						</button>
+					);
+				})}
+				{sortedSwitches.map((entry) => (
+					<button
+						key={entry.id}
+						type="button"
+						className="pointer-events-auto absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[2px] border border-white/80 bg-white/80"
+						style={{
+							left: `${(entry.time / Math.max(element.duration, 0.001)) * 100}%`,
+						}}
+						onMouseDown={(event) => {
+							event.preventDefault();
+							event.stopPropagation();
+							const rect = event.currentTarget.getBoundingClientRect();
+							onMarkerMouseDown({
+								switchId: entry.id,
+								time: entry.time,
+								pointerOffsetPx:
+									event.clientX - (rect.left + rect.width / 2),
+							});
+						}}
+						onClick={(event) => {
+							event.preventDefault();
+							event.stopPropagation();
+							onMarkerClick({ presetId: entry.presetId });
+						}}
+						title={
+							element.reframePresets?.find((preset) => preset.id === entry.presetId)
+								?.name ?? "Reframe marker"
+						}
+					/>
+				))}
+			</div>
+		</div>
 	);
 }
 

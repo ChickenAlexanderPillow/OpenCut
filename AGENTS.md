@@ -109,6 +109,45 @@ const handleSplit = () => editor.timeline.splitElements({ ... });
 
 Direct `editor.xxx()` calls are for internal use (commands, tests, complex multi-step operations).
 
+## Reserved Shortcuts
+
+When adding features, do not overwrite these existing shortcuts without explicitly reviewing and updating both `@/lib/actions/definitions.ts` and this section.
+
+Action-backed shortcuts from `@/lib/actions/definitions.ts`:
+
+- `Space`, `K` - Play/Pause
+- `L` - Seek forward 1 second
+- `J` - Seek backward 1 second
+- `Right` - Frame step forward
+- `Left` - Frame step backward
+- `Shift+Right` - Jump forward 5 seconds
+- `Shift+Left` - Jump backward 5 seconds
+- `Home`, `Enter` - Go to timeline start
+- `End` - Go to timeline end
+- `S` - Split at playhead
+- `Q` - Split and remove left
+- `W` - Split and remove right
+- `Backspace`, `Delete` - Delete selected
+- `Ctrl+C` - Copy selected
+- `Ctrl+V` - Paste at playhead
+- `N` - Toggle snapping
+- `Ctrl+A` - Select all
+- `Ctrl+D` - Duplicate selected
+- `I` - Set in point
+- `O` - Set out point
+- `Ctrl+Z` - Undo
+- `Ctrl+Shift+Z`, `Ctrl+Y` - Redo
+
+Custom non-action shortcuts currently implemented directly in UI code:
+
+- `` ` `` - Add/split reframe section at playhead for the selected video clip
+- `1` - Apply the first visible reframe angle in the tray
+- `2` - Apply the second visible reframe angle in the tray
+- `3` - Apply the third visible reframe angle in the tray
+- `4` - Apply the fourth visible reframe angle in the tray, if present
+
+If any shortcut is added, removed, or reassigned, update this section in the same change.
+
 ## Commands System
 
 Commands handle undo/redo. They live in `@/lib/commands/` organized by domain (timeline, media, scene).

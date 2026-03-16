@@ -1,4 +1,5 @@
 import type { TimelineElement, TimelineTrack } from "@/types/timeline";
+import { normalizeVideoReframeState } from "@/lib/reframe/video-reframe";
 
 const FALLBACK_MIN_DURATION_SECONDS = 1 / 120;
 
@@ -91,18 +92,27 @@ export function normalizeTimelineElementForInvariants<
 		normalized.startTime === element.startTime &&
 		normalized.duration === element.duration &&
 		normalized.trimStart === element.trimStart &&
-		normalized.trimEnd === element.trimEnd
+		normalized.trimEnd === element.trimEnd &&
+		element.type !== "video"
 	) {
 		return element;
 	}
 
-	return {
+	const nextElement = {
 		...element,
 		startTime: normalized.startTime,
 		duration: normalized.duration,
 		trimStart: normalized.trimStart,
 		trimEnd: normalized.trimEnd,
 	} as TElement;
+
+	if (nextElement.type !== "video") {
+		return nextElement;
+	}
+
+	return normalizeVideoReframeState({
+		element: nextElement,
+	}) as TElement;
 }
 
 export function normalizeTimelineTracksForInvariants({

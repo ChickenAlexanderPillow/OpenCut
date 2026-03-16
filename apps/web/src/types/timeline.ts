@@ -68,6 +68,24 @@ export interface TrackAudioEffects {
 	limiter: TrackLimiterEffect;
 }
 
+export interface VideoReframePresetTransform {
+	position: Transform["position"];
+	scale: number;
+}
+
+export interface VideoReframePreset {
+	id: string;
+	name: string;
+	transform: VideoReframePresetTransform;
+	autoSeeded?: boolean;
+}
+
+export interface VideoReframeSwitch {
+	id: string;
+	time: number;
+	presetId: string;
+}
+
 interface BaseTrack {
 	id: string;
 	name: string;
@@ -174,6 +192,10 @@ export interface VideoElement extends BaseTimelineElement {
 		updatedAt: string;
 	};
 	transform: Transform;
+	reframePresets?: VideoReframePreset[];
+	reframeSwitches?: VideoReframeSwitch[];
+	defaultReframePresetId?: string | null;
+	reframeSeededBy?: "subject-aware-v1";
 	opacity: number;
 	blendMode?: BlendMode;
 	transitions?: ElementTransitions;

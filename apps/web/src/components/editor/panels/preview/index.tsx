@@ -30,6 +30,7 @@ import {
 	getPreviewCanvasSize,
 	remapCaptionTransformsForPreviewVariant,
 } from "@/lib/preview/preview-format";
+import { applySelectedReframePresetPreviewToTracks } from "@/lib/reframe/video-reframe";
 import { validateAndHealCaptionDriftInTracks } from "@/lib/transcript-editor/sync-captions";
 import {
 	Tooltip,
@@ -37,6 +38,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useReframeStore } from "@/stores/reframe-store";
 
 const PREVIEW_PROFILES = {
 	performance: {
@@ -118,7 +120,10 @@ function remapLandscapeVideoScalesForSquarePreview({
 				const canApplyUnknownFallback =
 					!hasKnownDimensions &&
 					projectIsPortrait &&
-					element.transform.scale > 1;
+					((element.reframePresets?.some(
+						(preset) => preset.transform.scale > 1,
+					) ?? false) ||
+						element.transform.scale > 1);
 				if (!hasKnownLandscape && !canApplyUnknownFallback) {
 					return element;
 				}
@@ -150,6 +155,16 @@ function remapLandscapeVideoScalesForSquarePreview({
 						...element.transform,
 						scale: nextScale,
 					},
+					reframePresets: element.reframePresets?.map((preset) => ({
+						...preset,
+						transform: {
+							...preset.transform,
+							scale: Math.max(
+								0.01,
+								preset.transform.scale * (Number.isFinite(ratio) ? ratio : 1),
+							),
+						},
+					})),
 				};
 			}),
 		};
@@ -185,7 +200,12 @@ function hasMotionBlurTransitionInTracks({
 }
 
 const EDITOR_SUBSCRIBE_PROJECT = ["project"] as const;
-const EDITOR_SUBSCRIBE_RENDER_TREE = ["timeline", "media", "project"] as const;
+const EDITOR_SUBSCRIBE_RENDER_TREE = [
+	"timeline",
+	"media",
+	"project",
+	"selection",
+] as const;
 const EDITOR_SUBSCRIBE_PREVIEW_CANVAS = ["project", "renderer"] as const;
 
 function usePreviewSize() {
@@ -303,11 +323,21 @@ export function PreviewPanel() {
 function RenderTreeController() {
 	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_RENDER_TREE });
 	const tracks = editor.timeline.getTracks();
+	const selectedElements = editor.selection.getSelectedElements();
 	const mediaAssets = editor.media.getAssets();
 	const activeProject = editor.project.getActive();
 	const activeSceneRevision =
 		editor.scenes.getActiveScene()?.updatedAt?.getTime?.() ?? 0;
 	const activeProjectId = activeProject.metadata.id;
+	const selectedPresetIdByElementId = useReframeStore(
+		(state) => state.selectedPresetIdByElementId,
+	);
+	const clearSelectedPresetId = useReframeStore(
+		(state) => state.clearSelectedPresetId,
+	);
+	const clearSelectedSectionStartTime = useReframeStore(
+		(state) => state.clearSelectedSectionStartTime,
+	);
 	const {
 		previewFormatVariant,
 		squareFormatSettings,
@@ -364,6 +394,23 @@ function RenderTreeController() {
 		}
 	}, [activeProject, editor.timeline, tracks]);
 
+	useEffect(() => {
+		const selectedElementIds = new Set(
+			selectedElements.map((selection) => selection.elementId),
+		);
+		for (const elementId of Object.keys(selectedPresetIdByElementId)) {
+			if (!selectedElementIds.has(elementId)) {
+				clearSelectedPresetId({ elementId });
+				clearSelectedSectionStartTime({ elementId });
+			}
+		}
+	}, [
+		selectedElements,
+		selectedPresetIdByElementId,
+		clearSelectedPresetId,
+		clearSelectedSectionStartTime,
+	]);
+
 	useDeepCompareEffect(() => {
 		if (!activeProject) return;
 
@@ -408,8 +455,16 @@ function RenderTreeController() {
 						previewCanvas: { width, height },
 					})
 				: captionMappedTracks;
+		const previewTracksWithSelectedReframe =
+			applySelectedReframePresetPreviewToTracks({
+				tracks: previewTracks,
+				selectedPresetIdByElementId,
+				selectedElementIds: new Set(
+					selectedElements.map((selection) => selection.elementId),
+				),
+			});
 		const renderTree = buildScene({
-			tracks: previewTracks,
+			tracks: previewTracksWithSelectedReframe,
 			mediaAssets,
 			duration,
 			canvasSize: { width, height },
@@ -432,6 +487,8 @@ function RenderTreeController() {
 		squareFormatSettings,
 		hasLandscapeVideoSource,
 		playbackQuality,
+		selectedElements,
+		selectedPresetIdByElementId,
 		width,
 		height,
 		previewVideoFrameRateCap,
