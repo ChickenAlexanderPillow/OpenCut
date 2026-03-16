@@ -1192,11 +1192,15 @@ function ElementContent({
 
 	if (element.type === "audio") {
 		const audioBuffer = element.buffer;
+		const mediaAsset =
+			element.sourceType === "upload"
+				? mediaAssets.find((asset) => asset.id === element.mediaId)
+				: undefined;
 
 		const audioUrl =
 			element.sourceType === "library"
 				? element.sourceUrl
-				: mediaAssets.find((asset) => asset.id === element.mediaId)?.url;
+				: mediaAsset?.url;
 
 		if (audioBuffer || audioUrl) {
 			return (
@@ -1208,6 +1212,7 @@ function ElementContent({
 							trimStart={element.trimStart}
 							trimEnd={element.trimEnd}
 							duration={element.duration}
+							sourceDuration={mediaAsset?.duration ?? audioBuffer?.duration}
 							cacheKey={
 								element.sourceType === "upload"
 									? `media:${element.mediaId}`
@@ -1230,7 +1235,7 @@ function ElementContent({
 							}
 							audioFile={
 								element.sourceType === "upload"
-									? mediaAssets.find((asset) => asset.id === element.mediaId)?.file
+									? mediaAsset?.file
 									: undefined
 							}
 							height={24}
@@ -1292,6 +1297,7 @@ function ElementContent({
 									trimStart={element.trimStart}
 									trimEnd={element.trimEnd}
 									duration={element.duration}
+									sourceDuration={mediaAsset.duration}
 									cacheKey={`media:${mediaAsset.id}`}
 									initialPeaks={getPersistedWaveformPeaks({
 										cacheKey: `media:${mediaAsset.id}`,
@@ -1324,6 +1330,7 @@ function ElementContent({
 							trimStart={element.trimStart}
 							trimEnd={element.trimEnd}
 							duration={element.duration}
+							sourceDuration={mediaAsset.duration}
 							cacheKey={`media:${mediaAsset.id}`}
 							initialPeaks={getPersistedWaveformPeaks({
 								cacheKey: `media:${mediaAsset.id}`,

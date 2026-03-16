@@ -30,8 +30,8 @@ export class AudioManager {
 	private minSeekTimeDeltaSeconds = 1 / 60;
 	private playbackRequestId = 0;
 	private lastDriftCorrectionAt = 0;
-	private driftCorrectionCooldownMs = 120;
-	private driftResyncThresholdSeconds = 0.08;
+	private driftCorrectionCooldownMs = 1000;
+	private driftResyncThresholdSeconds = 0.35;
 	private outputAnalyser: AnalyserNode | null = null;
 	private outputMeterData: Float32Array | null = null;
 	private outputMeterTimer: number | null = null;
@@ -540,6 +540,11 @@ export class AudioManager {
 			staleForMs: graphState.staleForMs,
 			lastGraphRebuildAtMs: graphState.lastRebuildAtMs,
 		};
+	}
+
+	getPlaybackClockTime(): number | null {
+		if (!this.editor.playback.getIsPlaying()) return null;
+		return this.streamingEngine?.getClockTime() ?? null;
 	}
 
 	getAudioGraphState(): {

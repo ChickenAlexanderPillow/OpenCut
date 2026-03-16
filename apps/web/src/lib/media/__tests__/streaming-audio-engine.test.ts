@@ -243,4 +243,266 @@ describe("StreamingTimelineAudioEngine", () => {
 
 		expect(scheduleClipWindow).toHaveBeenCalledTimes(1);
 	});
+
+	test("does not fade out ordinary scheduler windows before a real clip boundary", async () => {
+		const { StreamingTimelineAudioEngine } = await import(
+			"../streaming-audio-engine"
+		);
+
+		Object.defineProperty(globalThis, "window", {
+			value: {
+				setInterval: () => 1,
+				clearInterval: () => {},
+				setTimeout: () => 1,
+				clearTimeout: () => {},
+				dispatchEvent: () => true,
+			},
+			configurable: true,
+		});
+		Object.defineProperty(globalThis, "navigator", {
+			value: { deviceMemory: 8 },
+			configurable: true,
+		});
+		Object.defineProperty(globalThis, "performance", {
+			value: { now: () => 0 },
+			configurable: true,
+		});
+
+		const gainEvents: Array<{ type: string; value: number; time: number }> = [];
+		const fakeAudioContext = {
+			currentTime: 0,
+			sampleRate: 48_000,
+			createBufferSource: () => ({
+				buffer: null,
+				connect: () => {},
+				disconnect: () => {},
+				start: () => {},
+				stop: () => {},
+				addEventListener: () => {},
+			}),
+			createGain: () => ({
+				gain: {
+					value: 1,
+					setValueAtTime: (value: number, time: number) => {
+						gainEvents.push({ type: "set", value, time });
+					},
+					linearRampToValueAtTime: (value: number, time: number) => {
+						gainEvents.push({ type: "ramp", value, time });
+					},
+					cancelScheduledValues: () => {},
+					setTargetAtTime: () => {},
+				},
+				connect: () => {},
+				disconnect: () => {},
+			}),
+		} as unknown as AudioContext;
+
+		const engine = new StreamingTimelineAudioEngine(
+			fakeAudioContext,
+			{} as AudioNode,
+		);
+		const clip = {
+			id: "clip-a",
+			sourceKey: "clip-a",
+			file: new File([new Uint8Array([1])], "clip-a.wav"),
+			mediaIdentity: {
+				id: "media-a",
+				type: "audio" as const,
+				size: 1,
+				lastModified: 1,
+			},
+			startTime: 0,
+			duration: 10,
+			trimStart: 0,
+			trimEnd: 0,
+			muted: false,
+			gain: 1,
+			transcriptRevision: "",
+			transcriptCuts: [],
+		};
+
+		engine.start({ atTime: 0 });
+
+		(
+			engine as unknown as {
+				scheduleClipWindow: (args: {
+					clip: typeof clip;
+					decodedWindow: {
+						buffer: AudioBuffer;
+						sourceWindowStart: number;
+						sourceWindowEnd: number;
+					};
+					timelineNow: number;
+					timelineHorizon: number;
+					contextNow: number;
+					runGeneration: number;
+				}) => boolean;
+			}
+		).scheduleClipWindow({
+			clip,
+			decodedWindow: {
+				buffer: {
+					sampleRate: 48_000,
+					length: 480_000,
+					numberOfChannels: 1,
+					getChannelData: () => new Float32Array(480_000),
+				} as unknown as AudioBuffer,
+				sourceWindowStart: 0,
+				sourceWindowEnd: 10,
+			},
+			timelineNow: 0,
+			timelineHorizon: 2.5,
+			contextNow: 0,
+			runGeneration: 1,
+		});
+
+		expect(gainEvents.some((event) => event.type === "ramp" && event.value === 0)).toBe(
+			false,
+		);
+	});
+
+	test("keeps using the current decoded window while it still covers the playback horizon", async () => {
+		const { StreamingTimelineAudioEngine } = await import(
+			"../streaming-audio-engine"
+		);
+
+		const fakeAudioContext = {
+			currentTime: 0,
+			sampleRate: 48_000,
+		} as unknown as AudioContext;
+
+		const engine = new StreamingTimelineAudioEngine(
+			fakeAudioContext,
+			{} as AudioNode,
+		);
+		const clip = {
+			id: "clip-a",
+			sourceKey: "clip-a",
+			file: new File([new Uint8Array([1])], "clip-a.wav"),
+			mediaIdentity: {
+				id: "media-a",
+				type: "audio" as const,
+				size: 1,
+				lastModified: 1,
+			},
+			startTime: 0,
+			duration: 20,
+			trimStart: 0,
+			trimEnd: 0,
+			muted: false,
+			gain: 1,
+			transcriptRevision: "",
+			transcriptCuts: [],
+		};
+
+		const fallbackWindow = {
+			buffer: {} as AudioBuffer,
+			sourceWindowStart: 0,
+			sourceWindowEnd: 12,
+		};
+		const replacementWindow = {
+			buffer: {} as AudioBuffer,
+			sourceWindowStart: 6,
+			sourceWindowEnd: 18,
+		};
+
+		(
+			engine as unknown as {
+				lastDecodedWindowByClipId: Map<string, typeof fallbackWindow>;
+				decodedWindowByKey: Map<string, typeof replacementWindow>;
+				buildDecodeWindowRequest: (args: {
+					clip: typeof clip;
+					timelineNow: number;
+					timelineHorizon: number;
+				}) => { requestKey: string };
+			}
+		).lastDecodedWindowByClipId.set(clip.id, fallbackWindow);
+		(
+			engine as unknown as {
+				buildDecodeWindowRequest: (args: {
+					clip: typeof clip;
+					timelineNow: number;
+					timelineHorizon: number;
+				}) => { requestKey: string };
+			}
+		).buildDecodeWindowRequest = () => ({ requestKey: "next-window" });
+		(
+			engine as unknown as {
+				decodedWindowByKey: Map<string, typeof replacementWindow>;
+			}
+		).decodedWindowByKey.set("next-window", replacementWindow);
+
+		const selected = (
+			engine as unknown as {
+				getOrQueueDecodedWindow: (args: {
+					clip: typeof clip;
+					timelineNow: number;
+					timelineHorizon: number;
+				}) => typeof fallbackWindow | null;
+			}
+		).getOrQueueDecodedWindow({
+			clip,
+			timelineNow: 5,
+			timelineHorizon: 8,
+		});
+
+		expect(selected).toBe(fallbackWindow);
+	});
+
+	test("decodes short playable clips as a single full window", async () => {
+		const { StreamingTimelineAudioEngine } = await import(
+			"../streaming-audio-engine"
+		);
+
+		const fakeAudioContext = {
+			currentTime: 0,
+			sampleRate: 48_000,
+		} as unknown as AudioContext;
+
+		const engine = new StreamingTimelineAudioEngine(
+			fakeAudioContext,
+			{} as AudioNode,
+		);
+		const clip = {
+			id: "clip-a",
+			sourceKey: "clip-a",
+			file: new File([new Uint8Array([1])], "clip-a.wav"),
+			mediaIdentity: {
+				id: "media-a",
+				type: "audio" as const,
+				size: 1,
+				lastModified: 1,
+			},
+			startTime: 0,
+			duration: 30,
+			trimStart: 5,
+			trimEnd: 0,
+			muted: false,
+			gain: 1,
+			transcriptRevision: "",
+			transcriptCuts: [],
+		};
+
+		const request = (
+			engine as unknown as {
+				buildDecodeWindowRequest: (args: {
+					clip: typeof clip;
+					timelineNow: number;
+					timelineHorizon: number;
+				}) => {
+					decodeMode: "full" | "windowed";
+					sourceWindowStart: number;
+					sourceWindowDuration: number;
+				};
+			}
+		).buildDecodeWindowRequest({
+			clip,
+			timelineNow: 0,
+			timelineHorizon: 2.5,
+		});
+
+		expect(request.decodeMode).toBe("full");
+		expect(request.sourceWindowStart).toBe(5);
+		expect(request.sourceWindowDuration).toBe(30);
+	});
 });

@@ -73,6 +73,7 @@ type DecodedClipWindow = {
 
 type DecodeWindowRequest = {
 	requestKey: string;
+	decodeMode: "full" | "windowed";
 	sourceWindowStart: number;
 	sourceWindowDuration: number;
 };
@@ -179,6 +180,7 @@ export class StreamingTimelineAudioEngine {
 	private readonly decodeSlipThresholdSeconds = 0.004;
 	private readonly decodePaddingSeconds = 1.5;
 	private readonly decodeChunkSeconds = 12;
+	private readonly fullClipDecodeThresholdSeconds = 180;
 	private readonly maxDecodedWindows = 96;
 
 	private isRunStale(runGeneration: number): boolean {
@@ -631,6 +633,33 @@ export class StreamingTimelineAudioEngine {
 			timelineNow,
 			timelineHorizon,
 		});
+		const fallback = this.lastDecodedWindowByClipId.get(clip.id) ?? null;
+		const requestedSourceNow =
+			clip.trimStart +
+			this.mapCompressedLocalTimeToSource({
+				clip,
+				compressedLocal: Math.max(
+					0,
+					Math.min(clip.duration, timelineNow - clip.startTime),
+				),
+			});
+		const requestedSourceHorizon =
+			clip.trimStart +
+			this.mapCompressedLocalTimeToSource({
+				clip,
+				compressedLocal: Math.max(
+					0,
+					Math.min(clip.duration, timelineHorizon - clip.startTime),
+				),
+			});
+		if (
+			fallback &&
+			requestedSourceNow >= fallback.sourceWindowStart &&
+			requestedSourceHorizon <= fallback.sourceWindowEnd
+		) {
+			return fallback;
+		}
+
 		const resolved = this.decodedWindowByKey.get(request.requestKey);
 		if (resolved) return resolved;
 
@@ -653,21 +682,11 @@ export class StreamingTimelineAudioEngine {
 				.catch(() => null)
 				.finally(() => {
 					this.decodeInFlightByKey.delete(request.requestKey);
-				});
+			});
 			this.decodeInFlightByKey.set(request.requestKey, promise);
 		}
 
-		const fallback = this.lastDecodedWindowByClipId.get(clip.id) ?? null;
 		if (!fallback) return null;
-		const requestedSourceNow =
-			clip.trimStart +
-			this.mapCompressedLocalTimeToSource({
-				clip,
-				compressedLocal: Math.max(
-					0,
-					Math.min(clip.duration, timelineNow - clip.startTime),
-				),
-			});
 		return requestedSourceNow >= fallback.sourceWindowStart &&
 			requestedSourceNow < fallback.sourceWindowEnd
 			? fallback
@@ -693,6 +712,29 @@ export class StreamingTimelineAudioEngine {
 		timelineNow: number;
 		timelineHorizon: number;
 	}): DecodeWindowRequest {
+		const clipSourceDuration = this.mapCompressedLocalTimeToSource({
+			clip,
+			compressedLocal: clip.duration,
+		});
+		if (clipSourceDuration <= this.fullClipDecodeThresholdSeconds) {
+			const sourceWindowStart = Math.max(0, clip.trimStart);
+			const sourceWindowDuration = Math.max(0.25, clipSourceDuration);
+			return {
+				requestKey: [
+					clip.id,
+					clip.sourceKey,
+					clip.transcriptRevision,
+					this.audioContext.sampleRate,
+					"full",
+					sourceWindowStart.toFixed(3),
+					sourceWindowDuration.toFixed(3),
+				].join("|"),
+				decodeMode: "full",
+				sourceWindowStart,
+				sourceWindowDuration,
+			};
+		}
+
 		const sourceTimelineWindow = this.computeSourceWindowForTimelineRange({
 			clip,
 			timelineNow,
@@ -712,9 +754,11 @@ export class StreamingTimelineAudioEngine {
 				clip.sourceKey,
 				clip.transcriptRevision,
 				this.audioContext.sampleRate,
+				"windowed",
 				quantizedWindowStart.toFixed(3),
 				quantizedWindowDuration.toFixed(3),
 			].join("|"),
+			decodeMode: "windowed",
 			sourceWindowStart: quantizedWindowStart,
 			sourceWindowDuration: quantizedWindowDuration,
 		};
@@ -735,7 +779,7 @@ export class StreamingTimelineAudioEngine {
 				lastModified: clip.mediaIdentity.lastModified,
 				sampleRate: this.audioContext.sampleRate,
 				channels: 2,
-				decodeMode: "windowed",
+				decodeMode: request.decodeMode,
 				trimStart: request.sourceWindowStart,
 				duration: request.sourceWindowDuration,
 				transcriptRevision: clip.transcriptRevision,
@@ -943,7 +987,7 @@ export class StreamingTimelineAudioEngine {
 				clip,
 				localTime: localPlaybackStart,
 			});
-			const _naturalEndBoundary =
+			const naturalEndBoundary =
 				this.isClipOrTranscriptBoundary({
 					clip,
 					localTime: localPlaybackStart + boundedPlaybackDuration,
@@ -1049,7 +1093,7 @@ export class StreamingTimelineAudioEngine {
 				naturalStartBoundary ||
 				boundaryLeadSeconds > 0 ||
 				previousEndAtContext === null;
-			const hasFadeOut = true;
+			const hasFadeOut = naturalEndBoundary;
 			const fadeSeconds = Math.min(
 				hasFadeIn || hasFadeOut
 					? Math.max(boundaryLeadSeconds, this.boundaryCrossfadeSeconds)

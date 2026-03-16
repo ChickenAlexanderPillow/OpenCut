@@ -57,4 +57,18 @@ describe("selectVisibleWaveformPeaks", () => {
 		expect(sampled).toHaveLength(targetBars);
 		expect(sampled.every((value) => value > 0)).toBe(true);
 	});
+
+	test("prefers the actual source duration over inferred trim math when cropping", () => {
+		const peaks = Array.from({ length: 10 }, (_, index) => index);
+
+		const visible = selectVisibleWaveformPeaks({
+			peaks,
+			trimStart: 2,
+			duration: 4,
+			trimEnd: 0,
+			sourceDuration: 10,
+		});
+
+		expect(visible).toEqual([2, 3, 4, 5]);
+	});
 });

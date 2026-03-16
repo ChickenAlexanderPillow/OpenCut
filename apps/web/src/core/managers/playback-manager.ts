@@ -293,7 +293,11 @@ export class PlaybackManager {
 		const delta = (now - this.lastUpdate) / 1000;
 		this.lastUpdate = now;
 
-		const newTime = this.currentTime + delta;
+		const audioClockTime = this.editor.audio.getPlaybackClockTime();
+		const newTime =
+			typeof audioClockTime === "number" && Number.isFinite(audioClockTime)
+				? audioClockTime
+				: this.currentTime + delta;
 		const duration = this.editor.timeline.getTotalDuration();
 		const playbackBounds = this.getPlaybackBounds({ duration });
 		const loopDuration = Math.max(0, playbackBounds.end - playbackBounds.start);

@@ -19,6 +19,7 @@ interface AudioWaveformProps {
 	trimStart?: number;
 	trimEnd?: number;
 	duration?: number;
+	sourceDuration?: number;
 	height?: number;
 	className?: string;
 }
@@ -133,11 +134,13 @@ export function selectVisibleWaveformPeaks({
 	trimStart = 0,
 	trimEnd = 0,
 	duration,
+	sourceDuration,
 }: {
 	peaks: number[];
 	trimStart?: number;
 	trimEnd?: number;
 	duration?: number;
+	sourceDuration?: number;
 }): number[] {
 	if (peaks.length === 0) return peaks;
 	const safeTrimStart = Math.max(0, trimStart);
@@ -146,7 +149,13 @@ export function selectVisibleWaveformPeaks({
 		typeof duration === "number" && Number.isFinite(duration)
 			? Math.max(0, duration)
 			: 0;
-	const totalDuration = safeTrimStart + visibleDuration + safeTrimEnd;
+	const inferredDuration = safeTrimStart + visibleDuration + safeTrimEnd;
+	const totalDuration =
+		typeof sourceDuration === "number" &&
+		Number.isFinite(sourceDuration) &&
+		sourceDuration >= safeTrimStart + visibleDuration
+			? Math.max(0, sourceDuration)
+			: inferredDuration;
 	if (totalDuration <= 0 || visibleDuration <= 0) return peaks;
 
 	const startRatio = Math.max(0, Math.min(1, safeTrimStart / totalDuration));
@@ -175,6 +184,7 @@ export function AudioWaveform({
 	trimStart = 0,
 	trimEnd = 0,
 	duration,
+	sourceDuration,
 	height = 32,
 	className = "",
 }: AudioWaveformProps) {
@@ -195,6 +205,7 @@ export function AudioWaveform({
 					trimStart,
 					trimEnd,
 					duration,
+					sourceDuration: sourceDuration ?? audioBuffer?.duration,
 				});
 				const drawn = drawPeaksToCanvas({
 					canvas: canvasRef.current,
@@ -301,6 +312,7 @@ export function AudioWaveform({
 				trimStart,
 				trimEnd,
 				duration,
+				sourceDuration: sourceDuration ?? audioBuffer?.duration,
 			});
 
 			const drawn = drawPeaksToCanvas({
@@ -329,6 +341,7 @@ export function AudioWaveform({
 		trimStart,
 		trimEnd,
 		duration,
+		sourceDuration,
 		height,
 	]);
 
