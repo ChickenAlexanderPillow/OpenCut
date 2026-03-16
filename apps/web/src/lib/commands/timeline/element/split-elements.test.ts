@@ -16,6 +16,8 @@ import type {
 	TextElement,
 	TextTrack,
 	TScene,
+	VideoElement,
+	VideoTrack,
 } from "@/types/timeline";
 
 function createAudioElement(): AudioElement {
@@ -96,6 +98,22 @@ function createCaption(audio: AudioElement): TextElement {
 	};
 }
 
+function createVideoElement(): VideoElement {
+	return {
+		id: "video-1",
+		type: "video",
+		name: "Video",
+		startTime: 0,
+		duration: 2,
+		trimStart: 0,
+		trimEnd: 0,
+		mediaId: "video-media-1",
+		muted: false,
+		transform: { scale: 1, position: { x: 0, y: 0 }, rotate: 0 },
+		opacity: 1,
+	};
+}
+
 
 function initializeEditor(): EditorCore {
 	const editor = EditorCore.getInstance();
@@ -128,6 +146,69 @@ function initializeEditor(): EditorCore {
 		metadata: {
 			id: "project-1",
 			name: "Split Captions",
+			duration: 2,
+			createdAt: new Date("2026-03-13T10:00:00.000Z"),
+			updatedAt: new Date("2026-03-13T10:00:00.000Z"),
+		},
+		scenes: [scene],
+		currentSceneId: scene.id,
+		settings: {
+			fps: DEFAULT_FPS,
+			canvasSize: DEFAULT_CANVAS_SIZE,
+			originalCanvasSize: null,
+			background: {
+				type: "color",
+				color: DEFAULT_COLOR,
+			},
+		},
+		brandOverlays: {
+			selectedBrandId: DEFAULT_BRAND_OVERLAYS.selectedBrandId,
+			logo: { ...DEFAULT_BRAND_OVERLAYS.logo },
+		},
+		version: CURRENT_PROJECT_VERSION,
+	};
+
+	editor.project.setActiveProject({ project });
+	editor.scenes.initializeScenes({
+		scenes: project.scenes,
+		currentSceneId: project.currentSceneId,
+	});
+	return editor;
+}
+
+function initializeEditorWithPairedVideoAudio(): EditorCore {
+	const editor = EditorCore.getInstance();
+	const audio = createAudioElement();
+	const video = createVideoElement();
+	const audioTrack: AudioTrack = {
+		id: "track-audio-1",
+		type: "audio",
+		name: "Audio",
+		muted: false,
+		elements: [audio],
+	};
+	const videoTrack: VideoTrack = {
+		id: "track-video-1",
+		type: "video",
+		name: "Video",
+		isMain: true,
+		muted: false,
+		hidden: false,
+		elements: [video],
+	};
+	const scene: TScene = {
+		id: "scene-1",
+		name: "Main scene",
+		isMain: true,
+		tracks: [videoTrack, audioTrack],
+		bookmarks: [],
+		createdAt: new Date("2026-03-13T10:00:00.000Z"),
+		updatedAt: new Date("2026-03-13T10:00:00.000Z"),
+	};
+	const project: TProject = {
+		metadata: {
+			id: "project-1",
+			name: "Paired Trim",
 			duration: 2,
 			createdAt: new Date("2026-03-13T10:00:00.000Z"),
 			updatedAt: new Date("2026-03-13T10:00:00.000Z"),
@@ -333,6 +414,30 @@ describe("SplitElementsCommand", () => {
 		expect(rightCaption.duration).toBeCloseTo(0.8, 3);
 		expect(rightCaption.captionWordTimings?.[0]?.startTime).toBeCloseTo(1.2, 3);
 		expect(rightCaption.captionWordTimings?.[1]?.endTime).toBeCloseTo(1.8, 3);
+	});
+
+	test("trimming a paired video also trims aligned uploaded audio with a different media id", () => {
+		const editor = initializeEditorWithPairedVideoAudio();
+
+		editor.timeline.updateElementTrim({
+			elementId: "video-1",
+			trimStart: 0,
+			trimEnd: 0.5,
+			duration: 1.5,
+		});
+
+		const videoTrack = editor.timeline.getTrackById({ trackId: "track-video-1" });
+		expect(videoTrack?.type).toBe("video");
+		if (videoTrack?.type !== "video") return;
+
+		const audioTrack = editor.timeline.getTrackById({ trackId: "track-audio-1" });
+		expect(audioTrack?.type).toBe("audio");
+		if (audioTrack?.type !== "audio") return;
+
+		expect(videoTrack.elements[0]?.duration).toBeCloseTo(1.5, 3);
+		expect(videoTrack.elements[0]?.trimEnd).toBeCloseTo(0.5, 3);
+		expect(audioTrack.elements[0]?.duration).toBeCloseTo(1.5, 3);
+		expect(audioTrack.elements[0]?.trimEnd).toBeCloseTo(0.5, 3);
 	});
 
 	test("extending the kept left split clip restores captions from original transcript source", () => {

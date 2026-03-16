@@ -305,6 +305,8 @@ function RenderTreeController() {
 	const tracks = editor.timeline.getTracks();
 	const mediaAssets = editor.media.getAssets();
 	const activeProject = editor.project.getActive();
+	const activeSceneRevision =
+		editor.scenes.getActiveScene()?.updatedAt?.getTime?.() ?? 0;
 	const activeProjectId = activeProject.metadata.id;
 	const {
 		previewFormatVariant,
@@ -317,7 +319,7 @@ function RenderTreeController() {
 	const previewVideoFrameRateCap = projectFps;
 	const hasMotionBlurTransition = useMemo(
 		() => hasMotionBlurTransitionInTracks({ tracks }),
-		[tracks],
+		[tracks, activeSceneRevision],
 	);
 	const previewVideoProxyScale = hasMotionBlurTransition
 		? 1
@@ -337,7 +339,7 @@ function RenderTreeController() {
 			}
 		}
 		return false;
-	}, [mediaAssets, tracks]);
+	}, [mediaAssets, tracks, activeSceneRevision]);
 
 	const { width, height } = usePreviewSize();
 
@@ -422,6 +424,7 @@ function RenderTreeController() {
 		editor.renderer.setRenderTree({ renderTree });
 	}, [
 		tracks,
+		activeSceneRevision,
 		mediaAssets,
 		activeProject?.settings.background,
 		activeProject?.brandOverlays,

@@ -26,13 +26,13 @@ import { TracksSnapshotCommand } from "@/lib/commands/timeline";
 import { enforceMainTrackStart } from "@/lib/timeline/track-utils";
 import { reconcileLinkedCaptionIntegrityInTracks } from "@/lib/transcript-editor/sync-captions";
 import { isCaptionTimingRelativeToElement } from "@/lib/captions/timing";
+import { expandElementIdsWithAlignedCompanions } from "@/lib/timeline/companion-media";
 import type {
 	DropTarget,
 	ElementDragState,
 	TextElement,
 	TimelineElement,
 	TimelineTrack,
-	VideoElement,
 } from "@/types/timeline";
 
 interface UseElementInteractionProps {
@@ -69,10 +69,6 @@ interface PendingDragState {
 
 type DragAxisLock = "x" | "y" | null;
 
-function isVideoElement(element: TimelineElement): element is VideoElement {
-	return element.type === "video";
-}
-
 function isTextElement(element: TimelineElement): element is TextElement {
 	return element.type === "text";
 }
@@ -90,15 +86,28 @@ function getDragCompanionElements({
 	const draggedElement = draggedTrack?.elements.find(
 		(element) => element.id === draggedElementId,
 	);
-	if (!draggedElement || !isVideoElement(draggedElement)) return [];
+	if (!draggedElement) return [];
+
+	const movedMediaIds = expandElementIdsWithAlignedCompanions({
+		tracks,
+		elementIds: [draggedElementId],
+	});
+	const draggedMediaElement =
+		draggedElement.type === "video" || draggedElement.type === "audio";
+	if (!draggedMediaElement && movedMediaIds.size <= 1) return [];
 
 	const companions: Array<{ trackId: string; elementId: string }> = [];
 	for (const track of tracks) {
 		for (const element of track.elements) {
 			if (element.id === draggedElementId && track.id === draggedTrackId) continue;
+			if (movedMediaIds.has(element.id)) {
+				companions.push({ trackId: track.id, elementId: element.id });
+				continue;
+			}
 			if (
 				isTextElement(element) &&
-				element.captionSourceRef?.mediaElementId === draggedElement.id
+				element.captionSourceRef?.mediaElementId &&
+				movedMediaIds.has(element.captionSourceRef.mediaElementId)
 			) {
 				companions.push({ trackId: track.id, elementId: element.id });
 			}

@@ -1,5 +1,5 @@
 import { readdir, stat } from "node:fs/promises";
-import { extname, relative, resolve, sep } from "node:path";
+import { extname, posix, relative, resolve, sep, win32 } from "node:path";
 
 const DEFAULT_LOCAL_MUSIC_ROOT = "C:\\Users\\Design\\Music";
 
@@ -30,13 +30,63 @@ export function getLocalMusicRoot(): string {
 	return envRoot && envRoot.length > 0 ? envRoot : DEFAULT_LOCAL_MUSIC_ROOT;
 }
 
+function normalizeWindowsPath(value: string): string {
+	return value.replace(/\//g, "\\");
+}
+
+function isWindowsPathInsideRoot({
+	root,
+	target,
+}: {
+	root: string;
+	target: string;
+}): boolean {
+	const normalizedRoot = normalizeWindowsPath(root).replace(/[\\\/]+$/, "");
+	const normalizedTarget = normalizeWindowsPath(target);
+	const rootLower = normalizedRoot.toLowerCase();
+	const targetLower = normalizedTarget.toLowerCase();
+	return (
+		targetLower === rootLower ||
+		targetLower.startsWith(`${rootLower}\\`)
+	);
+}
+
+function translateDisplayRootToRuntime({
+	rootOverride,
+}: {
+	rootOverride?: string;
+}): string | undefined {
+	const trimmed = rootOverride?.trim();
+	const runtimeRoot = process.env.OPENCUT_LOCAL_MUSIC_DIR?.trim();
+	if (!trimmed || !runtimeRoot || runtimeRoot === DEFAULT_LOCAL_MUSIC_ROOT) {
+		return trimmed;
+	}
+	if (!runtimeRoot.startsWith("/")) {
+		return trimmed;
+	}
+	if (!isWindowsPathInsideRoot({ root: DEFAULT_LOCAL_MUSIC_ROOT, target: trimmed })) {
+		return trimmed;
+	}
+
+	const relativeSuffix = win32.relative(
+		DEFAULT_LOCAL_MUSIC_ROOT,
+		normalizeWindowsPath(trimmed),
+	);
+	if (!relativeSuffix || relativeSuffix === "") {
+		return runtimeRoot;
+	}
+	return posix.join(runtimeRoot, ...relativeSuffix.split(/[\\/]+/));
+}
+
 export function resolveMusicRoot({
 	rootOverride,
 }: {
 	rootOverride?: string;
 }): string {
-	const trimmed = rootOverride?.trim();
-	return trimmed && trimmed.length > 0 ? trimmed : getLocalMusicRoot();
+	const translatedRoot = translateDisplayRootToRuntime({ rootOverride });
+	return translatedRoot && translatedRoot.length > 0
+		? translatedRoot
+		: getLocalMusicRoot();
 }
 
 function toPosixPath(value: string): string {

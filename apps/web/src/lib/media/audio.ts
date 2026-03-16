@@ -29,6 +29,7 @@ const MAX_AUDIO_CHANNELS = 2;
 const EXPORT_SAMPLE_RATE = 44100;
 const SILENCE_FLOOR = 1e-4;
 const COMPANION_ALIGNMENT_TOLERANCE_SECONDS = 0.05;
+const COMPANION_OVERLAP_MIN_RATIO = 0.8;
 const sharedDecodeContexts = new Map<string, AudioContext>();
 
 function getTranscriptDraftLike(
@@ -54,6 +55,30 @@ function getAppliedTranscriptCuts(
 	return getTranscriptApplied(element)?.removedRanges ?? [];
 }
 
+function hasStrongRangeOverlap({
+	startA,
+	endA,
+	startB,
+	endB,
+	minRatio = COMPANION_OVERLAP_MIN_RATIO,
+}: {
+	startA: number;
+	endA: number;
+	startB: number;
+	endB: number;
+	minRatio?: number;
+}): boolean {
+	const aStart = Math.min(startA, endA);
+	const aEnd = Math.max(startA, endA);
+	const bStart = Math.min(startB, endB);
+	const bEnd = Math.max(startB, endB);
+	const overlap = Math.min(aEnd, bEnd) - Math.max(aStart, bStart);
+	if (overlap <= 0) return false;
+	const aDuration = Math.max(0.001, aEnd - aStart);
+	const bDuration = Math.max(0.001, bEnd - bStart);
+	return overlap / Math.min(aDuration, bDuration) >= minRatio;
+}
+
 function isAlignedCompanionAudio({
 	video,
 	audio,
@@ -61,35 +86,47 @@ function isAlignedCompanionAudio({
 	video: VideoElement;
 	audio: UploadAudioElement;
 }): boolean {
-	const videoTimelineEnd = video.startTime + video.duration;
-	const audioTimelineEnd = audio.startTime + audio.duration;
-	const videoSourceEnd = video.trimStart + video.duration;
-	const audioSourceEnd = audio.trimStart + audio.duration;
-	const timelineOverlap =
-		videoTimelineEnd > audio.startTime - COMPANION_ALIGNMENT_TOLERANCE_SECONDS &&
-		audioTimelineEnd > video.startTime - COMPANION_ALIGNMENT_TOLERANCE_SECONDS;
-	const sourceOverlap =
-		videoSourceEnd > audio.trimStart - COMPANION_ALIGNMENT_TOLERANCE_SECONDS &&
-		audioSourceEnd > video.trimStart - COMPANION_ALIGNMENT_TOLERANCE_SECONDS;
+	const startAligned =
+		Math.abs(video.startTime - audio.startTime) <=
+		COMPANION_ALIGNMENT_TOLERANCE_SECONDS;
+	const durationAligned =
+		Math.abs(video.duration - audio.duration) <=
+		COMPANION_ALIGNMENT_TOLERANCE_SECONDS;
+	const trimStartAligned =
+		Math.abs(video.trimStart - audio.trimStart) <=
+		COMPANION_ALIGNMENT_TOLERANCE_SECONDS;
+	const trimEndAligned =
+		Math.abs(video.trimEnd - audio.trimEnd) <=
+		COMPANION_ALIGNMENT_TOLERANCE_SECONDS;
+	if (startAligned && durationAligned && trimStartAligned && trimEndAligned) {
+		return true;
+	}
+
 	return (
-		video.mediaId === audio.mediaId &&
-		((Math.abs(video.startTime - audio.startTime) <=
-			COMPANION_ALIGNMENT_TOLERANCE_SECONDS &&
-			Math.abs(video.duration - audio.duration) <=
-				COMPANION_ALIGNMENT_TOLERANCE_SECONDS &&
-			Math.abs(video.trimStart - audio.trimStart) <=
-				COMPANION_ALIGNMENT_TOLERANCE_SECONDS &&
-			Math.abs(video.trimEnd - audio.trimEnd) <=
-				COMPANION_ALIGNMENT_TOLERANCE_SECONDS) ||
-			(timelineOverlap && sourceOverlap))
+		hasStrongRangeOverlap({
+			startA: video.startTime,
+			endA: video.startTime + video.duration,
+			startB: audio.startTime,
+			endB: audio.startTime + audio.duration,
+		}) &&
+		hasStrongRangeOverlap({
+			startA: video.trimStart,
+			endA: video.trimStart + video.duration,
+			startB: audio.trimStart,
+			endB: audio.trimStart + audio.duration,
+		})
 	);
 }
 
-function collectSuppressedCompanionAudioIds({
+function collectSuppressedCompanionMediaIds({
 	tracks,
 }: {
 	tracks: TimelineTrack[];
-}): Set<string> {
+}): {
+	audioIds: Set<string>;
+	videoIds: Set<string>;
+	preferredVideoMediaIdByAudioId: Map<string, string>;
+} {
 	const videos: VideoElement[] = [];
 	const uploadAudios: UploadAudioElement[] = [];
 
@@ -106,13 +143,27 @@ function collectSuppressedCompanionAudioIds({
 		}
 	}
 
-	const suppressed = new Set<string>();
+	const suppressedAudioIds = new Set<string>();
+	const suppressedVideoIds = new Set<string>();
+	const preferredVideoMediaIdByAudioId = new Map<string, string>();
 	for (const audio of uploadAudios) {
-		if (videos.some((video) => isAlignedCompanionAudio({ video, audio }))) {
-			suppressed.add(audio.id);
+		for (const video of videos) {
+			if (!isAlignedCompanionAudio({ video, audio })) continue;
+			// Prefer the explicit upload audio clip when a paired companion exists.
+			// This avoids preview/export drift from mixing embedded video audio with
+			// a separately tracked companion waveform/clip.
+			suppressedVideoIds.add(video.id);
+			preferredVideoMediaIdByAudioId.set(audio.id, video.mediaId);
+			if (video.mediaId === audio.mediaId) {
+				suppressedAudioIds.add(audio.id);
+			}
 		}
 	}
-	return suppressed;
+	return {
+		audioIds: suppressedAudioIds,
+		videoIds: suppressedVideoIds,
+		preferredVideoMediaIdByAudioId,
+	};
 }
 
 function getSharedDecodeContext({
@@ -267,7 +318,7 @@ export async function collectAudioElements({
 	const mediaMap = new Map<string, MediaAsset>(
 		mediaAssets.map((media) => [media.id, media]),
 	);
-	const suppressedCompanionAudioIds = collectSuppressedCompanionAudioIds({
+	const suppressedCompanionMediaIds = collectSuppressedCompanionMediaIds({
 		tracks,
 	});
 	const pendingElements: Array<Promise<CollectedAudioElement | null>> = [];
@@ -284,7 +335,13 @@ export async function collectAudioElements({
 			if (
 				stableElement.type === "audio" &&
 				stableElement.sourceType === "upload" &&
-				suppressedCompanionAudioIds.has(stableElement.id)
+				suppressedCompanionMediaIds.audioIds.has(stableElement.id)
+			) {
+				continue;
+			}
+			if (
+				stableElement.type === "video" &&
+				suppressedCompanionMediaIds.videoIds.has(stableElement.id)
 			) {
 				continue;
 			}
@@ -298,7 +355,13 @@ export async function collectAudioElements({
 					(async () => {
 						const elementGain = trackGain * clampGain(stableElement.volume ?? 1);
 						if (stableElement.sourceType === "upload") {
-							const mediaAsset = mediaMap.get(stableElement.mediaId);
+							const preferredVideoMediaId =
+								suppressedCompanionMediaIds.preferredVideoMediaIdByAudioId.get(
+									stableElement.id,
+								);
+							const mediaAsset = mediaMap.get(
+								preferredVideoMediaId ?? stableElement.mediaId,
+							);
 							if (!mediaAsset) {
 								// Fallback for transient states where media metadata is not yet available.
 								if (stableElement.buffer) {
@@ -969,7 +1032,7 @@ export async function collectAudioMixSources({
 	const mediaMap = new Map<string, MediaAsset>(
 		mediaAssets.map((asset) => [asset.id, asset]),
 	);
-	const suppressedCompanionAudioIds = collectSuppressedCompanionAudioIds({
+	const suppressedCompanionMediaIds = collectSuppressedCompanionMediaIds({
 		tracks,
 	});
 	const pendingLibrarySources: Array<Promise<AudioMixSource | null>> = [];
@@ -985,7 +1048,13 @@ export async function collectAudioMixSources({
 			if (
 				element.type === "audio" &&
 				element.sourceType === "upload" &&
-				suppressedCompanionAudioIds.has(element.id)
+				suppressedCompanionMediaIds.audioIds.has(element.id)
+			) {
+				continue;
+			}
+			if (
+				element.type === "video" &&
+				suppressedCompanionMediaIds.videoIds.has(element.id)
 			) {
 				continue;
 			}
@@ -996,7 +1065,13 @@ export async function collectAudioMixSources({
 			if (element.type === "audio") {
 				const elementGain = trackGain * clampGain(element.volume ?? 1);
 				if (element.sourceType === "upload") {
-					const mediaAsset = mediaMap.get(element.mediaId);
+					const preferredVideoMediaId =
+						suppressedCompanionMediaIds.preferredVideoMediaIdByAudioId.get(
+							element.id,
+						);
+					const mediaAsset = mediaMap.get(
+						preferredVideoMediaId ?? element.mediaId,
+					);
 					if (!mediaAsset) continue;
 
 					audioMixSources.push(
@@ -1042,7 +1117,7 @@ export async function collectAudioClips({
 	const mediaMap = new Map<string, MediaAsset>(
 		mediaAssets.map((asset) => [asset.id, asset]),
 	);
-	const suppressedCompanionAudioIds = collectSuppressedCompanionAudioIds({
+	const suppressedCompanionMediaIds = collectSuppressedCompanionMediaIds({
 		tracks,
 	});
 	const pendingLibraryClips: Array<Promise<AudioClipSource | null>> = [];
@@ -1059,7 +1134,13 @@ export async function collectAudioClips({
 			if (
 				stableElement.type === "audio" &&
 				stableElement.sourceType === "upload" &&
-				suppressedCompanionAudioIds.has(stableElement.id)
+				suppressedCompanionMediaIds.audioIds.has(stableElement.id)
+			) {
+				continue;
+			}
+			if (
+				stableElement.type === "video" &&
+				suppressedCompanionMediaIds.videoIds.has(stableElement.id)
 			) {
 				continue;
 			}
@@ -1071,7 +1152,13 @@ export async function collectAudioClips({
 			if (stableElement.type === "audio") {
 				const elementGain = trackGain * clampGain(stableElement.volume ?? 1);
 				if (stableElement.sourceType === "upload") {
-					const mediaAsset = mediaMap.get(stableElement.mediaId);
+					const preferredVideoMediaId =
+						suppressedCompanionMediaIds.preferredVideoMediaIdByAudioId.get(
+							stableElement.id,
+						);
+					const mediaAsset = mediaMap.get(
+						preferredVideoMediaId ?? stableElement.mediaId,
+					);
 					if (!mediaAsset) continue;
 
 					clips.push(

@@ -1205,6 +1205,9 @@ function ElementContent({
 						<AudioWaveform
 							audioBuffer={audioBuffer}
 							audioUrl={audioUrl}
+							trimStart={element.trimStart}
+							trimEnd={element.trimEnd}
+							duration={element.duration}
 							cacheKey={
 								element.sourceType === "upload"
 									? `media:${element.mediaId}`
@@ -1286,6 +1289,9 @@ function ElementContent({
 								<AudioWaveform
 									audioUrl={mediaAsset.url}
 									audioFile={mediaAsset.file}
+									trimStart={element.trimStart}
+									trimEnd={element.trimEnd}
+									duration={element.duration}
 									cacheKey={`media:${mediaAsset.id}`}
 									initialPeaks={getPersistedWaveformPeaks({
 										cacheKey: `media:${mediaAsset.id}`,
@@ -1315,6 +1321,9 @@ function ElementContent({
 						<AudioWaveform
 							audioUrl={mediaAsset.url}
 							audioFile={mediaAsset.file}
+							trimStart={element.trimStart}
+							trimEnd={element.trimEnd}
+							duration={element.duration}
 							cacheKey={`media:${mediaAsset.id}`}
 							initialPeaks={getPersistedWaveformPeaks({
 								cacheKey: `media:${mediaAsset.id}`,

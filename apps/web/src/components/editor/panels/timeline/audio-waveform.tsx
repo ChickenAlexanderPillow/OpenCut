@@ -16,6 +16,9 @@ interface AudioWaveformProps {
 	cacheKey?: string;
 	initialPeaks?: number[];
 	onPeaksResolved?: (peaks: number[]) => void;
+	trimStart?: number;
+	trimEnd?: number;
+	duration?: number;
 	height?: number;
 	className?: string;
 }
@@ -102,20 +105,64 @@ function drawPeaksToCanvas({
 	const centerY = pixelHeight / 2;
 	const maxBarHeight = Math.max(2, pixelHeight / 2 - 1);
 	const targetBars = Math.max(64, Math.floor(width / step));
-	const sampleStep = Math.max(1, Math.floor(peaks.length / targetBars));
 
 	ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
-	let barIndex = 0;
-	for (let i = 0; i < peaks.length; i += sampleStep) {
+	for (let barIndex = 0; barIndex < targetBars; barIndex++) {
 		const x = barIndex * step;
 		if (x > width) break;
-		const amplitude = Math.max(0.02, Math.min(1, peaks[i] ?? 0));
+		const startIndex = Math.floor((barIndex / targetBars) * peaks.length);
+		const endIndex = Math.max(
+			startIndex + 1,
+			Math.ceil(((barIndex + 1) / targetBars) * peaks.length),
+		);
+		let sampledPeak = 0;
+		for (let index = startIndex; index < endIndex; index++) {
+			const candidate = peaks[index] ?? 0;
+			if (candidate > sampledPeak) sampledPeak = candidate;
+		}
+		const amplitude = Math.max(0.02, Math.min(1, sampledPeak));
 		const barHeight = Math.max(1, Math.floor(amplitude * maxBarHeight));
 		ctx.fillRect(x, centerY - barHeight, barWidth, barHeight * 2);
-		barIndex += 1;
 	}
 
 	return true;
+}
+
+export function selectVisibleWaveformPeaks({
+	peaks,
+	trimStart = 0,
+	trimEnd = 0,
+	duration,
+}: {
+	peaks: number[];
+	trimStart?: number;
+	trimEnd?: number;
+	duration?: number;
+}): number[] {
+	if (peaks.length === 0) return peaks;
+	const safeTrimStart = Math.max(0, trimStart);
+	const safeTrimEnd = Math.max(0, trimEnd);
+	const visibleDuration =
+		typeof duration === "number" && Number.isFinite(duration)
+			? Math.max(0, duration)
+			: 0;
+	const totalDuration = safeTrimStart + visibleDuration + safeTrimEnd;
+	if (totalDuration <= 0 || visibleDuration <= 0) return peaks;
+
+	const startRatio = Math.max(0, Math.min(1, safeTrimStart / totalDuration));
+	const endRatio = Math.max(
+		startRatio,
+		Math.min(1, (safeTrimStart + visibleDuration) / totalDuration),
+	);
+	const startIndex = Math.min(
+		peaks.length - 1,
+		Math.floor(startRatio * peaks.length),
+	);
+	const endIndex = Math.max(
+		startIndex + 1,
+		Math.min(peaks.length, Math.ceil(endRatio * peaks.length)),
+	);
+	return peaks.slice(startIndex, endIndex);
 }
 
 export function AudioWaveform({
@@ -125,6 +172,9 @@ export function AudioWaveform({
 	cacheKey,
 	initialPeaks,
 	onPeaksResolved,
+	trimStart = 0,
+	trimEnd = 0,
+	duration,
 	height = 32,
 	className = "",
 }: AudioWaveformProps) {
@@ -140,10 +190,16 @@ export function AudioWaveform({
 			if (!waveformRef.current || !canvasRef.current) return;
 			if (!audioBuffer && !audioFile && !audioUrl) return;
 			if (initialPeaks && initialPeaks.length > 0) {
+				const visiblePeaks = selectVisibleWaveformPeaks({
+					peaks: initialPeaks,
+					trimStart,
+					trimEnd,
+					duration,
+				});
 				const drawn = drawPeaksToCanvas({
 					canvas: canvasRef.current,
 					container: waveformRef.current,
-					peaks: initialPeaks,
+					peaks: visiblePeaks,
 					height,
 				});
 				if (cacheKey) {
@@ -240,11 +296,17 @@ export function AudioWaveform({
 				});
 			}
 			onPeaksResolved?.(peaks);
+			const visiblePeaks = selectVisibleWaveformPeaks({
+				peaks,
+				trimStart,
+				trimEnd,
+				duration,
+			});
 
 			const drawn = drawPeaksToCanvas({
 				canvas: canvasRef.current,
 				container: waveformRef.current,
-				peaks,
+				peaks: visiblePeaks,
 				height,
 			});
 
@@ -257,7 +319,18 @@ export function AudioWaveform({
 		return () => {
 			mounted = false;
 		};
-	}, [audioUrl, audioBuffer, audioFile, cacheKey, initialPeaks, onPeaksResolved, height]);
+	}, [
+		audioUrl,
+		audioBuffer,
+		audioFile,
+		cacheKey,
+		initialPeaks,
+		onPeaksResolved,
+		trimStart,
+		trimEnd,
+		duration,
+		height,
+	]);
 
 	if (error) {
 		return (

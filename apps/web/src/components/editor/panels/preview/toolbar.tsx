@@ -11,7 +11,7 @@ import {
 	PlayIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Loader2, Repeat } from "lucide-react";
+import { Loader2, Repeat, SkipBack, SkipForward } from "lucide-react";
 
 export function PreviewToolbar({
 	isFullscreen,
@@ -32,6 +32,8 @@ export function PreviewToolbar({
 	const fps = editor.project.getActive().settings.fps;
 	const { start: playbackStart, end: playbackEnd } =
 		editor.playback.getPlaybackBounds();
+	const hasInPoint = editor.playback.getInPoint() !== null;
+	const hasOutPoint = editor.playback.getOutPoint() !== null;
 
 	return (
 		<div className="grid grid-cols-[1fr_auto_1fr] items-center pb-3 pt-5 px-5">
@@ -63,6 +65,15 @@ export function PreviewToolbar({
 				<Button
 					variant="text"
 					size="sm"
+					className="h-9 w-9 min-w-9 p-0"
+					onClick={() => invokeAction("goto-start")}
+					title={hasInPoint ? "Jump to in point" : "Jump to start"}
+				>
+					<SkipBack className="size-4" />
+				</Button>
+				<Button
+					variant="text"
+					size="sm"
 					className="h-9 w-9 min-w-9 overflow-visible p-0"
 					onClick={() => invokeAction("toggle-play")}
 					disabled={isPlaybackBlocked}
@@ -82,6 +93,15 @@ export function PreviewToolbar({
 					title={isLoopEnabled ? "Disable loop" : "Enable loop"}
 				>
 					<Repeat className="size-4" />
+				</Button>
+				<Button
+					variant="text"
+					size="sm"
+					className="h-9 w-9 min-w-9 p-0"
+					onClick={() => invokeAction("goto-end")}
+					title={hasOutPoint ? "Jump to out point" : "Jump to end"}
+				>
+					<SkipForward className="size-4" />
 				</Button>
 			</div>
 
