@@ -8,6 +8,7 @@ import { cn } from "@/utils/ui";
 import { useEditor } from "@/hooks/use-editor";
 import { useElementSelection } from "@/hooks/timeline/element/use-element-selection";
 import { useReframeStore } from "@/stores/reframe-store";
+import { useAssetsPanelStore } from "@/stores/assets-panel-store";
 import { resolveElementTransformAtTime } from "@/lib/animation";
 import { snapTimeToFrame } from "@/lib/time";
 import {
@@ -36,6 +37,7 @@ import type { VideoReframePreset, VideoReframeSwitch } from "@/types/timeline";
 
 export function ReframeView() {
 	const editor = useEditor({ subscribeTo: ["timeline", "selection", "project", "media"] });
+	const activeTab = useAssetsPanelStore((state) => state.activeTab);
 	const { selectedElements } = useElementSelection();
 	const selectedPresetIdByElementId = useReframeStore(
 		(state) => state.selectedPresetIdByElementId,
@@ -108,7 +110,7 @@ export function ReframeView() {
 	]);
 
 	useEffect(() => {
-		if (!normalizedVideo) return;
+		if (activeTab !== "reframe" || !normalizedVideo) return;
 
 		const syncActiveSection = () => {
 			const activeSection = getVideoReframeSectionAtTime({
@@ -131,7 +133,13 @@ export function ReframeView() {
 
 		syncActiveSection();
 		return editor.playback.subscribe(syncActiveSection);
-	}, [editor.playback, normalizedVideo, projectFps, setSelectedSectionStartTime]);
+	}, [
+		activeTab,
+		editor.playback,
+		normalizedVideo,
+		projectFps,
+		setSelectedSectionStartTime,
+	]);
 
 	const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
 	const [editingName, setEditingName] = useState("");

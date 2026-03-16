@@ -34,7 +34,7 @@ interface TimelineRulerProps {
 	handleWheel: (e: React.WheelEvent) => void;
 	handleTimelineContentClick: (e: React.MouseEvent) => void;
 	handleRulerTrackingMouseDown: (e: React.MouseEvent) => void;
-	handleRulerMouseDown: (e: React.MouseEvent) => void;
+	handleRulerMouseDown: (e: React.PointerEvent<HTMLDivElement>) => void;
 }
 
 export function TimelineRuler({
@@ -157,7 +157,10 @@ export function TimelineRuler({
 		const visualTime = tickIndex * tickIntervalSeconds;
 		if (visualTime > effectiveDuration) break;
 
-		const showLabel = shouldShowLabel({ time: visualTime, labelIntervalSeconds });
+		const showLabel = shouldShowLabel({
+			time: visualTime,
+			labelIntervalSeconds,
+		});
 		timelineTicks.push(
 			<TimelineTick
 				key={tickIndex}
@@ -243,7 +246,11 @@ export function TimelineRuler({
 			targetTime,
 		}: {
 			targetTime: number;
-		}): { snappedTime: number; snapPoint: SnapPoint | null; snapDistance: number } => {
+		}): {
+			snappedTime: number;
+			snapPoint: SnapPoint | null;
+			snapDistance: number;
+		} => {
 			const shouldSnap = snappingEnabled && !isShiftHeldRef.current;
 			if (!shouldSnap) {
 				return {
@@ -387,7 +394,7 @@ export function TimelineRuler({
 				style={{
 					width: `${dynamicTimelineWidth}px`,
 				}}
-				onMouseDown={handleRulerMouseDown}
+				onPointerDown={handleRulerMouseDown}
 				onContextMenu={handleRangeContextMenu}
 			>
 				<div

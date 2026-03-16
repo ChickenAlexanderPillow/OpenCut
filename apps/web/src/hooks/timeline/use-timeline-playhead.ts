@@ -50,6 +50,8 @@ export function useTimelinePlayhead({
 	const lastMouseXRef = useRef<number>(0);
 	const shouldResumeAfterScrubRef = useRef(false);
 	const scrubPauseTokenRef = useRef(0);
+	const activePointerIdRef = useRef<number | null>(null);
+	const activePointerTargetRef = useRef<HTMLElement | null>(null);
 	const scrubResumeDelayMs = 400;
 
 	const playheadPosition =
@@ -64,7 +66,11 @@ export function useTimelinePlayhead({
 			event,
 			snappingEnabled = true,
 		}: {
-			event: MouseEvent | React.MouseEvent;
+			event:
+				| MouseEvent
+				| PointerEvent
+				| React.MouseEvent
+				| React.PointerEvent<HTMLElement>;
 			snappingEnabled?: boolean;
 		}) => {
 			const ruler = rulerRef.current;
@@ -75,8 +81,8 @@ export function useTimelinePlayhead({
 			const timelineContentWidth =
 				TIMELINE_CONSTANTS.START_OFFSET_PX +
 				(displayDuration ?? duration) *
-				TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
-				zoomLevel;
+					TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
+					zoomLevel;
 
 			const clampedMouseX = Math.max(
 				TIMELINE_CONSTANTS.START_OFFSET_PX,
@@ -141,9 +147,13 @@ export function useTimelinePlayhead({
 	);
 
 	const handlePlayheadMouseDown = useCallback(
-		({ event }: { event: React.MouseEvent }) => {
+		({ event }: { event: React.PointerEvent<HTMLElement> }) => {
+			if (event.button !== 0) return;
 			event.preventDefault();
 			event.stopPropagation();
+			activePointerIdRef.current = event.pointerId;
+			activePointerTargetRef.current = event.currentTarget;
+			event.currentTarget.setPointerCapture?.(event.pointerId);
 			shouldResumeAfterScrubRef.current = editor.playback.getIsPlaying();
 			if (shouldResumeAfterScrubRef.current) {
 				editor.playback.pause();
@@ -155,12 +165,14 @@ export function useTimelinePlayhead({
 	);
 
 	const handleRulerMouseDown = useCallback(
-		({ event }: { event: React.MouseEvent }) => {
+		({ event }: { event: React.PointerEvent<HTMLDivElement> }) => {
 			if (event.button !== 0) return;
-
 			if (playheadRef?.current?.contains(event.target as Node)) return;
 
 			event.preventDefault();
+			activePointerIdRef.current = event.pointerId;
+			activePointerTargetRef.current = event.currentTarget;
+			event.currentTarget.setPointerCapture?.(event.pointerId);
 			setIsDraggingRuler(true);
 			setHasDraggedRuler(false);
 			shouldResumeAfterScrubRef.current = editor.playback.getIsPlaying();
@@ -175,12 +187,14 @@ export function useTimelinePlayhead({
 	);
 
 	const handlePlayheadMouseDownEvent = useCallback(
-		(event: React.MouseEvent) => handlePlayheadMouseDown({ event }),
+		(event: React.PointerEvent<HTMLElement>) =>
+			handlePlayheadMouseDown({ event }),
 		[handlePlayheadMouseDown],
 	);
 
 	const handleRulerMouseDownEvent = useCallback(
-		(event: React.MouseEvent) => handleRulerMouseDown({ event }),
+		(event: React.PointerEvent<HTMLDivElement>) =>
+			handleRulerMouseDown({ event }),
 		[handleRulerMouseDown],
 	);
 
@@ -192,21 +206,17 @@ export function useTimelinePlayhead({
 		contentWidth:
 			TIMELINE_CONSTANTS.START_OFFSET_PX +
 			(displayDuration ?? duration) *
-			TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
-			zoomLevel,
+				TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
+				zoomLevel,
 	});
 
 	useEffect(() => {
 		if (!isScrubbing) return;
 
-		const handleMouseMove = ({ event }: { event: MouseEvent }) => {
-			handleScrub({ event });
-			if (isDraggingRuler) {
-				setHasDraggedRuler(true);
+		const finishScrub = ({ event }: { event?: PointerEvent | MouseEvent }) => {
+			if (event) {
+				handleScrub({ event });
 			}
-		};
-
-		const handleMouseUp = ({ event }: { event: MouseEvent }) => {
 			editor.playback.setScrubbing({ isScrubbing: false });
 			if (scrubTime !== null) {
 				seek({ time: scrubTime });
@@ -223,11 +233,22 @@ export function useTimelinePlayhead({
 
 			if (isDraggingRuler) {
 				setIsDraggingRuler(false);
-				if (!hasDraggedRuler) {
+				if (!hasDraggedRuler && event) {
 					handleScrub({ event, snappingEnabled: false });
 				}
 				setHasDraggedRuler(false);
 			}
+			const pointerTarget = activePointerTargetRef.current;
+			const pointerId = activePointerIdRef.current;
+			if (
+				pointerTarget &&
+				pointerId !== null &&
+				pointerTarget.hasPointerCapture?.(pointerId)
+			) {
+				pointerTarget.releasePointerCapture?.(pointerId);
+			}
+			activePointerTargetRef.current = null;
+			activePointerIdRef.current = null;
 
 			if (shouldResumeAfterScrubRef.current) {
 				shouldResumeAfterScrubRef.current = false;
@@ -239,15 +260,34 @@ export function useTimelinePlayhead({
 			}
 		};
 
-		const onMouseMove = (event: MouseEvent) => handleMouseMove({ event });
-		const onMouseUp = (event: MouseEvent) => handleMouseUp({ event });
+		const handlePointerMove = ({ event }: { event: PointerEvent }) => {
+			if (
+				activePointerIdRef.current !== null &&
+				event.pointerId !== activePointerIdRef.current
+			) {
+				return;
+			}
+			handleScrub({ event });
+			if (isDraggingRuler) {
+				setHasDraggedRuler(true);
+			}
+		};
 
-		window.addEventListener("mousemove", onMouseMove);
-		window.addEventListener("mouseup", onMouseUp);
+		const onPointerMove = (event: PointerEvent) => handlePointerMove({ event });
+		const onPointerUp = (event: PointerEvent) => finishScrub({ event });
+		const onPointerCancel = (event: PointerEvent) => finishScrub({ event });
+		const onWindowBlur = () => finishScrub({});
+
+		window.addEventListener("pointermove", onPointerMove);
+		window.addEventListener("pointerup", onPointerUp);
+		window.addEventListener("pointercancel", onPointerCancel);
+		window.addEventListener("blur", onWindowBlur);
 
 		return () => {
-			window.removeEventListener("mousemove", onMouseMove);
-			window.removeEventListener("mouseup", onMouseUp);
+			window.removeEventListener("pointermove", onPointerMove);
+			window.removeEventListener("pointerup", onPointerUp);
+			window.removeEventListener("pointercancel", onPointerCancel);
+			window.removeEventListener("blur", onWindowBlur);
 		};
 	}, [
 		isScrubbing,
