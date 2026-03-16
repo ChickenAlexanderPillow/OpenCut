@@ -12,7 +12,6 @@ import { Clips } from "./views/clips";
 import { TransitionsView } from "./views/transitions";
 import { MediaView } from "./views/assets";
 import { SettingsView } from "./views/settings";
-import { StickersView } from "./views/stickers";
 import { TextView } from "./views/text";
 import { OverlayView } from "./views/overlay";
 import { TranscriptView } from "./views/transcript";
@@ -36,7 +35,6 @@ export function AssetsPanel() {
 		clips: <Clips />,
 		transcript: <TranscriptView />,
 		text: <TextView />,
-		stickers: <StickersView />,
 		mixer: <MixerView />,
 		transitions: <TransitionsView />,
 		overlay: <OverlayView />,

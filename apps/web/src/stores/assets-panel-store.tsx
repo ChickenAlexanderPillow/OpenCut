@@ -4,7 +4,6 @@ import { persist } from "zustand/middleware";
 import {
 	ClosedCaptionIcon,
 	Folder03Icon,
-	Happy01Icon,
 	Image02Icon,
 	Video01Icon,
 	MusicNote03Icon,
@@ -19,7 +18,6 @@ export const TAB_KEYS = [
 	"clips",
 	"transcript",
 	"text",
-	"stickers",
 	"mixer",
 	"transitions",
 	"overlay",
@@ -75,9 +73,24 @@ function OcMixerIcon({ className }: { className?: string }) {
 			className={className}
 		>
 			<title>Mixer</title>
-			<path d="M6 5V19" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-			<path d="M12 5V19" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-			<path d="M18 5V19" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+			<path
+				d="M6 5V19"
+				stroke="currentColor"
+				strokeWidth="1.7"
+				strokeLinecap="round"
+			/>
+			<path
+				d="M12 5V19"
+				stroke="currentColor"
+				strokeWidth="1.7"
+				strokeLinecap="round"
+			/>
+			<path
+				d="M18 5V19"
+				stroke="currentColor"
+				strokeWidth="1.7"
+				strokeLinecap="round"
+			/>
 			<circle cx="6" cy="9" r="2.2" fill="currentColor" />
 			<circle cx="12" cy="15" r="2.2" fill="currentColor" />
 			<circle cx="18" cy="11" r="2.2" fill="currentColor" />
@@ -105,10 +118,6 @@ export const tabs = {
 	text: {
 		icon: createHugeiconsIcon({ icon: TextIcon }),
 		label: "Text",
-	},
-	stickers: {
-		icon: createHugeiconsIcon({ icon: Happy01Icon }),
-		label: "Stickers",
 	},
 	mixer: {
 		icon: OcMixerIcon,
