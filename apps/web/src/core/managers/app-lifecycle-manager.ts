@@ -1,4 +1,5 @@
 import type { EditorCore } from "@/core";
+import { startPlaybackWhenReady } from "@/lib/playback/start-playback";
 
 export class AppLifecycleManager {
 	private isBackgrounded = false;
@@ -51,7 +52,7 @@ export class AppLifecycleManager {
 		void this.editor.audio.resumeContext();
 		if (this.resumePlaybackOnFocus) {
 			this.resumePlaybackOnFocus = false;
-			this.editor.playback.play();
+			void startPlaybackWhenReady({ editor: this.editor });
 		}
 	}
 }

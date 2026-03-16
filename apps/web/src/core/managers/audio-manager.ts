@@ -461,11 +461,18 @@ export class AudioManager {
 		}
 
 		try {
-			await this.prepareStreamingGraph({ playhead: time, prewarm: true });
+			const engine = this.ensureStreamingEngine();
+			if (!engine) return;
+			const hasPreparedClips = engine.getDiagnostics().clipCount > 0;
+			const canReusePreparedGraph =
+				!this.audioGraphDirty && hasPreparedClips && !stopCurrentOutputFirst;
+			if (!canReusePreparedGraph) {
+				await this.prepareStreamingGraph({ playhead: time, prewarm: true });
+			}
 			if (requestId !== this.playbackRequestId) return;
 			if (!this.editor.playback.getIsPlaying()) return;
-			this.streamingEngine?.stop();
-			this.streamingEngine?.start({ atTime: time });
+			engine.stop();
+			engine.start({ atTime: time });
 			this.setAudioGraphDirty({
 				dirty: false,
 				reason: "playback-restarted",

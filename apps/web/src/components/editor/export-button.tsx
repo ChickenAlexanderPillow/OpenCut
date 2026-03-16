@@ -31,6 +31,7 @@ import {
 import { useEditor } from "@/hooks/use-editor";
 import { DEFAULT_EXPORT_OPTIONS } from "@/constants/export-constants";
 import { useProjectProcessStore } from "@/stores/project-process-store";
+import { startPlaybackWhenReady } from "@/lib/playback/start-playback";
 
 const EDITOR_SUBSCRIBE_PROJECT = ["project", "timeline"] as const;
 
@@ -163,7 +164,7 @@ function ExportPopover({
 				processIdRef.current = null;
 			}
 			if (wasPlayingBeforeExport && !cancelRequestedRef.current) {
-				editor.playback.play();
+				void startPlaybackWhenReady({ editor });
 			}
 		}
 

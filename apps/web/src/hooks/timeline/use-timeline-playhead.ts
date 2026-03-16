@@ -5,6 +5,7 @@ import { useEditor } from "../use-editor";
 import { useShiftKey } from "@/hooks/use-shift-key";
 import { findSnapPoints, snapToNearestPoint } from "@/lib/timeline/snap-utils";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
+import { startPlaybackWhenReady } from "@/lib/playback/start-playback";
 
 interface UseTimelinePlayheadProps {
 	zoomLevel: number;
@@ -233,7 +234,7 @@ export function useTimelinePlayhead({
 				const resumeToken = ++scrubPauseTokenRef.current;
 				window.setTimeout(() => {
 					if (scrubPauseTokenRef.current !== resumeToken) return;
-					editor.playback.play();
+					void startPlaybackWhenReady({ editor });
 				}, scrubResumeDelayMs);
 			}
 		};

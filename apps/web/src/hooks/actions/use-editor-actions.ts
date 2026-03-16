@@ -101,6 +101,11 @@ import {
 	syncCaptionsFromTranscriptEdits,
 	validateAndHealCaptionDriftInTracks,
 } from "@/lib/transcript-editor/sync-captions";
+import {
+	cancelPreparedPlaybackStart,
+	PREPARING_PLAYBACK_REASON,
+	startPlaybackWhenReady,
+} from "@/lib/playback/start-playback";
 const MIN_VIRAL_CLIP_SCORE = 56;
 const MAX_VIRAL_CLIP_COUNT = 5;
 const VIRAL_CLIP_MIN_SECONDS = 18;
@@ -2537,7 +2542,16 @@ export function useEditorActions() {
 	useActionHandler(
 		"toggle-play",
 		() => {
-			editor.playback.toggle();
+			if (editor.playback.getIsPlaying()) {
+				cancelPreparedPlaybackStart({ editor });
+				editor.playback.pause();
+				return;
+			}
+			if (editor.playback.getBlockedReason() === PREPARING_PLAYBACK_REASON) {
+				cancelPreparedPlaybackStart({ editor });
+				return;
+			}
+			void startPlaybackWhenReady({ editor });
 		},
 		undefined,
 	);
@@ -2554,7 +2568,12 @@ export function useEditorActions() {
 		"stop-playback",
 		() => {
 			if (editor.playback.getIsPlaying()) {
-				editor.playback.toggle();
+				cancelPreparedPlaybackStart({ editor });
+				editor.playback.pause();
+			} else if (
+				editor.playback.getBlockedReason() === PREPARING_PLAYBACK_REASON
+			) {
+				cancelPreparedPlaybackStart({ editor });
 			}
 			const { start } = editor.playback.getPlaybackBounds();
 			editor.playback.seek({ time: start });
