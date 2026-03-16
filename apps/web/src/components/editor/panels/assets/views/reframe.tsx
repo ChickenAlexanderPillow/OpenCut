@@ -36,8 +36,13 @@ import { toast } from "sonner";
 import type { VideoReframePreset, VideoReframeSwitch } from "@/types/timeline";
 
 export function ReframeView() {
-	const editor = useEditor({ subscribeTo: ["timeline", "selection", "project", "media"] });
 	const activeTab = useAssetsPanelStore((state) => state.activeTab);
+	const editor = useEditor({
+		subscribeTo:
+			activeTab === "reframe"
+				? ["timeline", "selection", "project", "media", "playback"]
+				: ["timeline", "selection", "project", "media"],
+	});
 	const { selectedElements } = useElementSelection();
 	const selectedPresetIdByElementId = useReframeStore(
 		(state) => state.selectedPresetIdByElementId,
@@ -64,26 +69,38 @@ export function ReframeView() {
 		};
 	}, [selectedVideo]);
 	const projectFps = Math.max(1, editor.project.getActive().settings.fps);
-	const getSnappedLocalPlayheadTime = () => {
-		if (!normalizedVideo) return 0;
-		return snapTimeToFrame({
-			time: Math.max(
-				0,
-				Math.min(
-					normalizedVideo.element.duration,
-					editor.playback.getCurrentTime() - normalizedVideo.element.startTime,
+	const localTime = normalizedVideo
+		? snapTimeToFrame({
+				time: Math.max(
+					0,
+					Math.min(
+						normalizedVideo.element.duration,
+						editor.playback.getCurrentTime() - normalizedVideo.element.startTime,
+					),
 				),
-			),
-			fps: projectFps,
+				fps: projectFps,
+			})
+		: 0;
+	const playheadSection = useMemo(() => {
+		if (!normalizedVideo) return null;
+		return getVideoReframeSectionAtTime({
+			element: normalizedVideo.element,
+			localTime,
 		});
-	};
+	}, [normalizedVideo, localTime]);
+	const focusedSectionStartTime = normalizedVideo
+		? editor.playback.getIsPlaying()
+			? playheadSection?.startTime ?? null
+			: (selectedSectionStartTimeByElementId[normalizedVideo.element.id] ??
+				playheadSection?.startTime ??
+				null)
+		: null;
 
 	const selectedPreset = useMemo(() => {
 		if (!normalizedVideo) return null;
 		const selectedSection = getVideoReframeSectionByStartTime({
 			element: normalizedVideo.element,
-			startTime:
-				selectedSectionStartTimeByElementId[normalizedVideo.element.id] ?? null,
+			startTime: focusedSectionStartTime,
 		});
 		if (selectedSection?.presetId) {
 			return (
@@ -94,7 +111,7 @@ export function ReframeView() {
 		}
 		const presetId = getSelectedOrActiveReframePresetId({
 			element: normalizedVideo.element,
-			localTime: getSnappedLocalPlayheadTime(),
+			localTime,
 			selectedPresetId:
 				selectedPresetIdByElementId[normalizedVideo.element.id] ?? null,
 		});
@@ -105,40 +122,9 @@ export function ReframeView() {
 		);
 	}, [
 		normalizedVideo,
+		localTime,
+		focusedSectionStartTime,
 		selectedPresetIdByElementId,
-		selectedSectionStartTimeByElementId,
-	]);
-
-	useEffect(() => {
-		if (activeTab !== "reframe" || !normalizedVideo) return;
-
-		const syncActiveSection = () => {
-			const activeSection = getVideoReframeSectionAtTime({
-				element: normalizedVideo.element,
-				localTime: getSnappedLocalPlayheadTime(),
-			});
-			if (!activeSection) return;
-
-			const currentSelectedSectionStartTime =
-				useReframeStore.getState().selectedSectionStartTimeByElementId[
-					normalizedVideo.element.id
-				] ?? null;
-			if (currentSelectedSectionStartTime === activeSection.startTime) return;
-
-			setSelectedSectionStartTime({
-				elementId: normalizedVideo.element.id,
-				startTime: activeSection.startTime,
-			});
-		};
-
-		syncActiveSection();
-		return editor.playback.subscribe(syncActiveSection);
-	}, [
-		activeTab,
-		editor.playback,
-		normalizedVideo,
-		projectFps,
-		setSelectedSectionStartTime,
 	]);
 
 	const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
@@ -279,8 +265,8 @@ export function ReframeView() {
 							onClick={() => {
 								const resolvedTransform = resolveElementTransformAtTime({
 									element: normalizedVideo.element,
-									localTime: getSnappedLocalPlayheadTime(),
-									baseTransformLocalTime: getSnappedLocalPlayheadTime(),
+									localTime,
+									baseTransformLocalTime: localTime,
 								});
 								const presetId = editor.timeline.createVideoReframePreset({
 									trackId: normalizedVideo.trackId,
@@ -333,7 +319,7 @@ export function ReframeView() {
 								editor.timeline.upsertVideoReframeSwitch({
 									trackId: normalizedVideo.trackId,
 									elementId: normalizedVideo.element.id,
-									time: getSnappedLocalPlayheadTime(),
+									time: localTime,
 									presetId: selectedPreset.id,
 								});
 							}}
@@ -518,9 +504,8 @@ export function ReframeView() {
 													const resolvedTransform =
 														resolveElementTransformAtTime({
 															element: normalizedVideo.element,
-															localTime: getSnappedLocalPlayheadTime(),
-															baseTransformLocalTime:
-																getSnappedLocalPlayheadTime(),
+															localTime,
+															baseTransformLocalTime: localTime,
 														});
 													editor.timeline.updateVideoReframePreset({
 														trackId: normalizedVideo.trackId,
@@ -728,6 +713,8 @@ function ReframeScrubber({
 }) {
 	const [isHovering, setIsHovering] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
+	const [isEditing, setIsEditing] = useState(false);
+	const [draftValue, setDraftValue] = useState("");
 	const startXRef = useRef(0);
 	const startValueRef = useRef(value);
 	const dragDeltaRef = useRef(0);
@@ -742,6 +729,12 @@ function ReframeScrubber({
 			latestDragValueRef.current = value;
 		}
 	}, [isDragging, value]);
+
+	useEffect(() => {
+		if (!isEditing) {
+			setDraftValue(formatValue(value));
+		}
+	}, [formatValue, isEditing, value]);
 
 	useEffect(() => {
 		return () => {
@@ -788,6 +781,9 @@ function ReframeScrubber({
 		}
 		if (hasDraggedRef.current) {
 			onChange(latestDragValueRef.current, true);
+		} else {
+			setDraftValue(formatValue(value));
+			setIsEditing(true);
 		}
 		setIsDragging(false);
 		hasDraggedRef.current = false;
@@ -851,6 +847,26 @@ function ReframeScrubber({
 		};
 	}, [isDragging]);
 
+	const roundToStepString = (nextValue: number) => formatValue(clampValue(nextValue));
+
+	const commitDraft = () => {
+		const parsed = Number.parseFloat(draftValue.trim());
+		if (Number.isNaN(parsed)) {
+			setDraftValue(formatValue(value));
+			setIsEditing(false);
+			return;
+		}
+		const nextValue = clampValue(parsed);
+		onChange(nextValue, true);
+		setDraftValue(roundToStepString(nextValue));
+		setIsEditing(false);
+	};
+
+	const cancelDraft = () => {
+		setDraftValue(formatValue(value));
+		setIsEditing(false);
+	};
+
 	return (
 		<div
 			className="bg-muted/30 rounded-md px-2 py-1"
@@ -859,48 +875,72 @@ function ReframeScrubber({
 			onMouseLeave={() => setIsHovering(false)}
 		>
 			<div className="text-[10px] uppercase tracking-[0.14em]">{label}</div>
-			<button
-				type="button"
-				className={cn(
-					"text-foreground mt-0.5 flex w-full cursor-ew-resize items-center justify-between gap-2 text-xs font-medium",
-					isDragging && "text-primary",
-				)}
-				onPointerDown={(event) => {
-					event.stopPropagation();
-					startXRef.current = event.clientX;
-					startValueRef.current = value;
-					dragDeltaRef.current = 0;
-					hasDraggedRef.current = false;
-					latestDragValueRef.current = value;
-					pointerLockElementRef.current = event.currentTarget;
-					if (
-						typeof event.currentTarget.requestPointerLock === "function"
-					) {
-						try {
-							event.currentTarget.requestPointerLock();
-						} catch {}
-					}
-					setIsDragging(true);
-				}}
-				aria-label={`Adjust ${label}`}
-				title={`Drag left/right to adjust ${label}.`}
-			>
-				<span
-					aria-hidden
-					className={cn(
-						"bg-muted-foreground/60 inline-block h-3 w-[2px] rounded-full transition-opacity",
-						isDragging || isHovering ? "opacity-100" : "opacity-60",
-					)}
+			{isEditing ? (
+				<Input
+					autoFocus
+					value={draftValue}
+					inputMode="decimal"
+					className="mt-1 h-7 text-center text-xs font-medium"
+					onClick={(event) => event.stopPropagation()}
+					onFocus={(event) => event.currentTarget.select()}
+					onChange={(event) => setDraftValue(event.target.value)}
+					onBlur={commitDraft}
+					onKeyDown={(event) => {
+						if (event.key === "Enter") {
+							event.currentTarget.blur();
+							return;
+						}
+						if (event.key === "Escape") {
+							event.preventDefault();
+							cancelDraft();
+						}
+					}}
+					aria-label={`Edit ${label}`}
 				/>
-				<span className="min-w-0 flex-1 text-center">{formatValue(value)}</span>
-				<span
-					aria-hidden
+			) : (
+				<button
+					type="button"
 					className={cn(
-						"bg-muted-foreground/60 inline-block h-3 w-[2px] rounded-full transition-opacity",
-						isDragging || isHovering ? "opacity-100" : "opacity-60",
+						"text-foreground mt-0.5 flex w-full cursor-ew-resize items-center justify-between gap-2 text-xs font-medium",
+						isDragging && "text-primary",
 					)}
-				/>
-			</button>
+					onPointerDown={(event) => {
+						event.stopPropagation();
+						startXRef.current = event.clientX;
+						startValueRef.current = value;
+						dragDeltaRef.current = 0;
+						hasDraggedRef.current = false;
+						latestDragValueRef.current = value;
+						pointerLockElementRef.current = event.currentTarget;
+						if (
+							typeof event.currentTarget.requestPointerLock === "function"
+						) {
+							try {
+								event.currentTarget.requestPointerLock();
+							} catch {}
+						}
+						setIsDragging(true);
+					}}
+					aria-label={`Adjust ${label}`}
+					title={`Click to edit or drag left/right to adjust ${label}.`}
+				>
+					<span
+						aria-hidden
+						className={cn(
+							"bg-muted-foreground/60 inline-block h-3 w-[2px] rounded-full transition-opacity",
+							isDragging || isHovering ? "opacity-100" : "opacity-60",
+						)}
+					/>
+					<span className="min-w-0 flex-1 text-center">{formatValue(value)}</span>
+					<span
+						aria-hidden
+						className={cn(
+							"bg-muted-foreground/60 inline-block h-3 w-[2px] rounded-full transition-opacity",
+							isDragging || isHovering ? "opacity-100" : "opacity-60",
+						)}
+					/>
+				</button>
+			)}
 		</div>
 	);
 }

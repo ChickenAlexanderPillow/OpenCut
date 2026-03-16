@@ -67,6 +67,7 @@ import {
 	deriveVideoReframeSections,
 	getActiveReframePresetId,
 	getSelectedOrActiveReframePresetId,
+	getVideoReframeSectionAtTime,
 	normalizeVideoReframeState,
 } from "@/lib/reframe/video-reframe";
 
@@ -687,10 +688,29 @@ function ElementInner({
 			},
 		});
 	}, [normalizedVideoElement, displayedReframeSwitches]);
-	const selectedReframeSectionStartTime =
-		normalizedVideoElement
-			? selectedSectionStartTimeByElementId[normalizedVideoElement.id] ?? null
-			: null;
+	const playheadReframeSection = useMemo(() => {
+		if (!normalizedVideoElement) return null;
+		return getVideoReframeSectionAtTime({
+			element: {
+				...normalizedVideoElement,
+				reframeSwitches: displayedReframeSwitches,
+			},
+			localTime: Math.max(
+				0,
+				Math.min(
+					normalizedVideoElement.duration,
+					playbackTime - normalizedVideoElement.startTime,
+				),
+			),
+		});
+	}, [normalizedVideoElement, displayedReframeSwitches, playbackTime]);
+	const selectedReframeSectionStartTime = normalizedVideoElement
+		? editor.playback.getIsPlaying()
+			? playheadReframeSection?.startTime ?? null
+			: (selectedSectionStartTimeByElementId[normalizedVideoElement.id] ??
+				playheadReframeSection?.startTime ??
+				null)
+		: null;
 	const laneKeyframes = useMemo(() => {
 		const laneMap = new Map<AnimationPropertyPath, ElementKeyframe[]>();
 		for (const path of TIMELINE_KEYFRAME_PATHS) {

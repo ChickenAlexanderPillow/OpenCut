@@ -592,7 +592,11 @@ export function Timeline() {
 										handleWheel={handleWheel}
 										handleTimelineContentClick={handleRulerClick}
 										handleRulerTrackingMouseDown={handleRulerMouseDown}
-										handleRulerMouseDown={handlePlayheadRulerMouseDown}
+										handleRulerMouseDown={(event) =>
+											handlePlayheadRulerMouseDown(
+												event as unknown as React.PointerEvent<HTMLDivElement>,
+											)
+										}
 									/>
 								</div>
 									<TimelinePlayhead

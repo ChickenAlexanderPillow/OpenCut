@@ -307,12 +307,13 @@ function QuickReframeToolbarControl() {
 	const getLatestTargetSection = () => {
 		const latestSelectedVideo = getLatestSelectedVideo() ?? selectedVideo;
 		if (!latestSelectedVideo) return null;
+		const shouldFollowPlayhead = editor.playback.getIsPlaying();
 		const selectedSection = getVideoReframeSectionByStartTime({
 			element: latestSelectedVideo.element,
 			startTime:
 				selectedSectionStartTimeByElementId[latestSelectedVideo.element.id] ?? null,
 		});
-		if (selectedSection) {
+		if (selectedSection && !shouldFollowPlayhead) {
 			return { selectedVideo: latestSelectedVideo, section: selectedSection };
 		}
 		const playheadSection = getVideoReframeSectionAtTime({
@@ -334,12 +335,13 @@ function QuickReframeToolbarControl() {
 	);
 	const activeSection = useMemo(() => {
 		if (!selectedVideo) return null;
+		const shouldFollowPlayhead = editor.playback.getIsPlaying();
 		const selectedSection = getVideoReframeSectionByStartTime({
 			element: selectedVideo.element,
 			startTime:
 				selectedSectionStartTimeByElementId[selectedVideo.element.id] ?? null,
 		});
-		if (selectedSection) return selectedSection;
+		if (selectedSection && !shouldFollowPlayhead) return selectedSection;
 		const localTime = getSnappedLocalPlayheadTime();
 		return getVideoReframeSectionAtTime({
 			element: selectedVideo.element,
