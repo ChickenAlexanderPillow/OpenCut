@@ -1,5 +1,5 @@
 import type { MediaAsset } from "@/types/assets";
-import type { TimelineTrack } from "@/types/timeline";
+import type { TimelineTrack, TrackAudioEffects } from "@/types/timeline";
 import type { TranscriptEditCutRange } from "@/types/transcription";
 import {
 	buildCompressedCutBoundaryTimes,
@@ -8,7 +8,9 @@ import {
 import { TRANSCRIPT_CUT_AUDIO_OVERLAP_SECONDS } from "@/lib/transcript-editor/constants";
 import {
 	collectAudioClips,
+	connectTrackAudioEffects,
 	decodeMediaFileToAudioBuffer,
+	type TrackAudioLevelSnapshot,
 } from "@/lib/media/audio";
 import {
 	clearAudioDecodeCache,
@@ -25,6 +27,7 @@ import {
 
 export interface StreamingClip {
 	id: string;
+	trackId: string;
 	sourceKey: string;
 	file: File;
 	mediaIdentity: {
@@ -39,6 +42,8 @@ export interface StreamingClip {
 	trimEnd: number;
 	muted: boolean;
 	gain: number;
+	trackGain: number;
+	trackAudioEffects: TrackAudioEffects;
 	transcriptRevision: string;
 	transcriptCuts: TranscriptEditCutRange[];
 }
@@ -60,9 +65,18 @@ export interface PreparedAudioGraph {
 type ScheduledNode = {
 	key: string;
 	clipId: string;
+	trackId: string;
 	source: AudioBufferSourceNode;
 	gain: GainNode;
 	endAtContextTime: number;
+};
+
+type TrackBus = {
+	trackId: string;
+	input: GainNode;
+	output: GainNode;
+	analyser: AnalyserNode;
+	meterData: Float32Array;
 };
 
 type DecodedClipWindow = {
@@ -128,6 +142,7 @@ function hasStructuralClipChange({
 	next: StreamingClip;
 }): boolean {
 	return (
+		previous.trackId !== next.trackId ||
 		previous.sourceKey !== next.sourceKey ||
 		previous.mediaIdentity.id !== next.mediaIdentity.id ||
 		previous.mediaIdentity.type !== next.mediaIdentity.type ||
@@ -137,7 +152,9 @@ function hasStructuralClipChange({
 		previous.duration !== next.duration ||
 		previous.trimStart !== next.trimStart ||
 		previous.trimEnd !== next.trimEnd ||
-		previous.transcriptRevision !== next.transcriptRevision
+		previous.transcriptRevision !== next.transcriptRevision ||
+		JSON.stringify(previous.trackAudioEffects) !==
+			JSON.stringify(next.trackAudioEffects)
 	);
 }
 
@@ -156,6 +173,7 @@ export class StreamingTimelineAudioEngine {
 	>();
 	private decodedWindowByKey = new Map<string, DecodedClipWindow>();
 	private lastDecodedWindowByClipId = new Map<string, DecodedClipWindow>();
+	private trackBuses = new Map<string, TrackBus>();
 	private isPlaying = false;
 	private transportGeneration = 0;
 	private timelineAnchorTime = 0;
@@ -181,6 +199,7 @@ export class StreamingTimelineAudioEngine {
 	private readonly decodePaddingSeconds = 1.5;
 	private readonly decodeChunkSeconds = 12;
 	private readonly fullClipDecodeThresholdSeconds = 180;
+	private readonly fullAudioClipDecodeThresholdSeconds = 600;
 	private readonly maxDecodedWindows = 96;
 
 	private isRunStale(runGeneration: number): boolean {
@@ -200,6 +219,74 @@ export class StreamingTimelineAudioEngine {
 				: 4;
 		const budgetMb = memoryHint <= 4 ? 128 : 192;
 		setAudioDecodeCacheBudget({ maxBytes: budgetMb * 1024 * 1024 });
+	}
+
+	private rebuildTrackBuses(): void {
+		this.clearTrackBuses();
+
+		const seenTrackIds = new Set<string>();
+		for (const clip of this.clips) {
+			if (seenTrackIds.has(clip.trackId)) continue;
+			seenTrackIds.add(clip.trackId);
+			const input = this.audioContext.createGain();
+			const { outputNode, analyserNode } = connectTrackAudioEffects({
+				audioContext: this.audioContext,
+				sourceNode: input,
+				destinationNode: this.destinationNode,
+				effects: clip.trackAudioEffects,
+				trackGain: clip.trackGain,
+			});
+			this.trackBuses.set(clip.trackId, {
+				trackId: clip.trackId,
+				input,
+				output: outputNode,
+				analyser: analyserNode,
+				meterData: new Float32Array(analyserNode.fftSize),
+			});
+		}
+	}
+
+	private clearTrackBuses(): void {
+		for (const bus of this.trackBuses.values()) {
+			try {
+				bus.input.disconnect();
+			} catch {}
+			try {
+				bus.output.disconnect();
+			} catch {}
+			try {
+				bus.analyser.disconnect();
+			} catch {}
+		}
+		this.trackBuses.clear();
+	}
+
+	private getTrackBus(trackId: string): TrackBus | null {
+		return this.trackBuses.get(trackId) ?? null;
+	}
+
+	getTrackLevels(): TrackAudioLevelSnapshot[] {
+		const levels: TrackAudioLevelSnapshot[] = [];
+		for (const bus of this.trackBuses.values()) {
+			bus.analyser.getFloatTimeDomainData(bus.meterData);
+			let peak = 0;
+			let sumSquares = 0;
+			for (let index = 0; index < bus.meterData.length; index++) {
+				const value = bus.meterData[index] ?? 0;
+				const abs = Math.abs(value);
+				if (abs > peak) peak = abs;
+				sumSquares += value * value;
+			}
+			const rms = Math.sqrt(sumSquares / Math.max(1, bus.meterData.length));
+			levels.push({
+				trackId: bus.trackId,
+				peak,
+				rms,
+				rmsDb: rms > 0 ? 20 * Math.log10(rms) : -120,
+				silent: peak < 1e-4,
+			});
+		}
+		return levels;
 	}
 
 	async prepare({
@@ -245,7 +332,8 @@ export class StreamingTimelineAudioEngine {
 			}
 			if (
 				previousClip.gain !== nextClip.gain ||
-				previousClip.muted !== nextClip.muted
+				previousClip.muted !== nextClip.muted ||
+				previousClip.trackGain !== nextClip.trackGain
 			) {
 				gainOnlyClipIds.add(clipId);
 			}
@@ -272,6 +360,7 @@ export class StreamingTimelineAudioEngine {
 	}): void {
 		this.clips = clips;
 		this.revision = revision;
+		this.rebuildTrackBuses();
 		if (typeof window !== "undefined") {
 			window.dispatchEvent(
 				new CustomEvent("opencut:audio-prepared-clips", {
@@ -410,6 +499,10 @@ export class StreamingTimelineAudioEngine {
 		);
 	}
 
+	isTransportActive(): boolean {
+		return this.isPlaying;
+	}
+
 	getHealth(): AudioHealthSnapshot {
 		const total = this.cacheHits + this.cacheMisses;
 		return {
@@ -435,6 +528,7 @@ export class StreamingTimelineAudioEngine {
 
 	dispose(): void {
 		this.stop();
+		this.clearTrackBuses();
 	}
 
 	private startScheduler(): void {
@@ -716,7 +810,12 @@ export class StreamingTimelineAudioEngine {
 			clip,
 			compressedLocal: clip.duration,
 		});
-		if (clipSourceDuration <= this.fullClipDecodeThresholdSeconds) {
+		const fullDecodeThresholdSeconds =
+			clip.mediaIdentity.type === "audio" ||
+			clip.mediaIdentity.type === "library-audio"
+				? this.fullAudioClipDecodeThresholdSeconds
+				: this.fullClipDecodeThresholdSeconds;
+		if (clipSourceDuration <= fullDecodeThresholdSeconds) {
 			const sourceWindowStart = Math.max(0, clip.trimStart);
 			const sourceWindowDuration = Math.max(0.25, clipSourceDuration);
 			return {
@@ -917,17 +1016,28 @@ export class StreamingTimelineAudioEngine {
 		const clipStart = clip.startTime;
 		const clipEnd = clip.startTime + clip.duration;
 		const windowStart = Math.max(clipStart, timelineNow);
-		const extendedHorizon = Math.min(
-			clipEnd,
-			timelineHorizon + this.scheduleQuantumSeconds,
-		);
-		const quantizedWindowEnd =
-			clipStart +
-			Math.min(
-				clip.duration,
-				Math.ceil((extendedHorizon - clipStart) / this.scheduleQuantumSeconds) *
-					this.scheduleQuantumSeconds,
-			);
+		const clipSourceDuration = this.mapCompressedLocalTimeToSource({
+			clip,
+			compressedLocal: clip.duration,
+		});
+		const decodedCoversFullClip =
+			decodedWindow.sourceWindowStart <=
+				clip.trimStart + this.boundaryToleranceSeconds &&
+			decodedWindow.sourceWindowEnd >=
+				clip.trimStart + clipSourceDuration - this.boundaryToleranceSeconds;
+		const canScheduleWholeDecodedClip =
+			clip.transcriptCuts.length === 0 && decodedCoversFullClip;
+		const extendedHorizon = canScheduleWholeDecodedClip
+			? clipEnd
+			: Math.min(clipEnd, timelineHorizon + this.scheduleQuantumSeconds);
+		const quantizedWindowEnd = canScheduleWholeDecodedClip
+			? clipEnd
+			: clipStart +
+				Math.min(
+					clip.duration,
+					Math.ceil((extendedHorizon - clipStart) / this.scheduleQuantumSeconds) *
+						this.scheduleQuantumSeconds,
+				);
 		const windowEnd = Math.min(clipEnd, quantizedWindowEnd);
 		const alreadyScheduledUntil =
 			this.scheduledUntilByClipId.get(clip.id) ?? windowStart;
@@ -1129,7 +1239,9 @@ export class StreamingTimelineAudioEngine {
 			}
 
 			source.connect(gainNode);
-			gainNode.connect(this.destinationNode);
+			const trackBus = this.getTrackBus(clip.trackId);
+			if (!trackBus) continue;
+			gainNode.connect(trackBus.input);
 
 			if (this.isRunStale(runGeneration)) {
 				try {
@@ -1142,6 +1254,7 @@ export class StreamingTimelineAudioEngine {
 			const scheduledNode: ScheduledNode = {
 				key,
 				clipId: clip.id,
+				trackId: clip.trackId,
 				source,
 				gain: gainNode,
 				endAtContextTime: contextStart + boundedPlaybackDuration,

@@ -13,6 +13,7 @@ import type {
 	VideoElement,
 	AudioElement,
 	TimelineGapSelection,
+	TrackAudioEffects,
 } from "@/types/timeline";
 import { calculateTotalDuration } from "@/lib/timeline";
 import { expandElementIdsWithAlignedCompanions } from "@/lib/timeline/companion-media";
@@ -251,6 +252,71 @@ export class TimelineManager {
 
 		const command = new TracksSnapshotCommand(currentTracks, updatedTracks);
 		this.editor.command.execute({ command });
+	}
+
+	setTrackAudioEffects({
+		trackId,
+		audioEffects,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		audioEffects: TrackAudioEffects;
+		pushHistory?: boolean;
+	}): void {
+		const currentTracks = this.getTracks();
+		const updatedTracks = currentTracks.map((track) => {
+			if (track.id !== trackId) return track;
+			if (track.type !== "audio" && track.type !== "video") return track;
+			return {
+				...track,
+				audioEffects,
+			};
+		});
+
+		if (!pushHistory) {
+			this.previewTracker.begin({ state: currentTracks });
+			this.updateTracks(updatedTracks);
+			return;
+		}
+
+		const previewSnapshot = this.previewTracker.end();
+		if (previewSnapshot !== null) {
+			this.updateTracks(updatedTracks);
+			const command = new TracksSnapshotCommand(previewSnapshot, updatedTracks);
+			this.editor.command.push({ command });
+			return;
+		}
+
+		const command = new TracksSnapshotCommand(currentTracks, updatedTracks);
+		this.editor.command.execute({ command });
+	}
+
+	updateTrackAudioEffect<
+		TEffect extends keyof TrackAudioEffects,
+	>({
+		trackId,
+		effect,
+		updates,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		effect: TEffect;
+		updates: Partial<TrackAudioEffects[TEffect]>;
+		pushHistory?: boolean;
+	}): void {
+		const track = this.getTrackById({ trackId });
+		if (!track || (track.type !== "audio" && track.type !== "video")) return;
+		this.setTrackAudioEffects({
+			trackId,
+			audioEffects: {
+				...(track.audioEffects as TrackAudioEffects),
+				[effect]: {
+					...(track.audioEffects?.[effect] ?? {}),
+					...updates,
+				},
+			} as TrackAudioEffects,
+			pushHistory,
+		});
 	}
 
 	splitElements({

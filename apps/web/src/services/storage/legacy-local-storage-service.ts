@@ -14,6 +14,7 @@ import {
 	migrations,
 	runStorageMigrations,
 } from "@/services/storage/migrations";
+import { normalizeTimelineTrackAudioState } from "@/lib/media/track-audio-effects";
 import type { Bookmark, TimelineTrack, TScene } from "@/types/timeline";
 import { DEFAULT_BRAND_OVERLAYS } from "@/constants/brand-overlay-constants";
 
@@ -175,9 +176,11 @@ class LegacyLocalStorageService {
 				name: scene.name,
 				isMain: scene.isMain,
 				tracks: (scene.tracks ?? []).map((track) =>
-					track.type === "video"
-						? { ...track, isMain: track.isMain ?? false } // legacy: isMain was optional
-						: track,
+					normalizeTimelineTrackAudioState(
+						track.type === "video"
+							? { ...track, isMain: track.isMain ?? false }
+							: track,
+					),
 				),
 				bookmarks: normalizeBookmarks({ raw: scene.bookmarks }),
 				createdAt: new Date(scene.createdAt),

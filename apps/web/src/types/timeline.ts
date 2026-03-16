@@ -30,6 +30,44 @@ export interface TScene {
 
 export type TrackType = "video" | "text" | "audio" | "sticker";
 
+export interface TrackEqEffect {
+	enabled: boolean;
+	lowGainDb: number;
+	midGainDb: number;
+	highGainDb: number;
+	midFrequency: number;
+	highFrequency: number;
+}
+
+export interface TrackCompressorEffect {
+	enabled: boolean;
+	thresholdDb: number;
+	ratio: number;
+	attackSeconds: number;
+	releaseSeconds: number;
+	makeupGainDb: number;
+}
+
+export interface TrackDeEsserEffect {
+	enabled: boolean;
+	amountDb: number;
+	frequency: number;
+	q: number;
+}
+
+export interface TrackLimiterEffect {
+	enabled: boolean;
+	ceilingDb: number;
+	releaseSeconds: number;
+}
+
+export interface TrackAudioEffects {
+	eq: TrackEqEffect;
+	compressor: TrackCompressorEffect;
+	deesser: TrackDeEsserEffect;
+	limiter: TrackLimiterEffect;
+}
+
 interface BaseTrack {
 	id: string;
 	name: string;
@@ -41,6 +79,7 @@ export interface VideoTrack extends BaseTrack {
 	isMain: boolean;
 	muted: boolean;
 	volume?: number;
+	audioEffects?: TrackAudioEffects;
 	hidden: boolean;
 }
 
@@ -55,6 +94,7 @@ export interface AudioTrack extends BaseTrack {
 	elements: AudioElement[];
 	muted: boolean;
 	volume?: number;
+	audioEffects?: TrackAudioEffects;
 }
 
 export interface StickerTrack extends BaseTrack {

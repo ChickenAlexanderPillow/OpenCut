@@ -13,6 +13,10 @@ import {
 	TRACK_HEIGHTS,
 	TRACK_GAP,
 } from "@/constants/timeline-constants";
+import {
+	cloneDefaultTrackAudioEffects,
+	normalizeTimelineTrackAudioState,
+} from "@/lib/media/track-audio-effects";
 import { generateUUID } from "@/utils/id";
 
 export function canTracktHaveAudio(
@@ -91,15 +95,17 @@ export function buildEmptyTrack({
 
 	switch (type) {
 		case "video":
-			return {
+			return normalizeTimelineTrackAudioState({
 				id,
 				name: trackName,
 				type: "video",
 				elements: [],
 				hidden: false,
 				muted: false,
+				volume: 1,
+				audioEffects: cloneDefaultTrackAudioEffects(),
 				isMain: false,
-			};
+			});
 		case "text":
 			return {
 				id,
@@ -117,14 +123,15 @@ export function buildEmptyTrack({
 				hidden: false,
 			};
 		case "audio":
-			return {
+			return normalizeTimelineTrackAudioState({
 				id,
 				name: trackName,
 				type: "audio",
 				elements: [],
 				muted: false,
 				volume: 1,
-			};
+				audioEffects: cloneDefaultTrackAudioEffects(),
+			});
 		default:
 			throw new Error(`Unsupported track type: ${type}`);
 	}
@@ -198,6 +205,8 @@ export function ensureMainTrack({
 			type: "video",
 			elements: [],
 			muted: false,
+			volume: 1,
+			audioEffects: cloneDefaultTrackAudioEffects(),
 			isMain: true,
 			hidden: false,
 		};

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { cloneDefaultTrackAudioEffects } from "@/lib/media/track-audio-effects";
 
 describe("StreamingTimelineAudioEngine", () => {
 	beforeEach(() => {
@@ -8,6 +9,7 @@ describe("StreamingTimelineAudioEngine", () => {
 	test("does not let a stale prepare overwrite a newer committed graph", async () => {
 		const firstClip = {
 			id: "clip-a",
+			trackId: "track-1",
 			sourceKey: "clip-a",
 			file: new File([new Uint8Array([1])], "clip-a.wav"),
 			mediaIdentity: {
@@ -22,6 +24,8 @@ describe("StreamingTimelineAudioEngine", () => {
 			trimEnd: 0,
 			muted: false,
 			gain: 1,
+			trackGain: 1,
+			trackAudioEffects: cloneDefaultTrackAudioEffects(),
 			transcriptRevision: "",
 			transcriptCuts: [],
 		};
@@ -50,6 +54,26 @@ describe("StreamingTimelineAudioEngine", () => {
 				return Promise.resolve([secondClip]);
 			}),
 			decodeMediaFileToAudioBuffer: mock(async () => null),
+			connectTrackAudioEffects: mock(
+				({
+					sourceNode,
+				}: {
+					sourceNode: AudioNode;
+				}) => ({
+					inputNode: sourceNode,
+					outputNode: {
+						connect: () => {},
+						disconnect: () => {},
+					},
+					analyserNode: {
+						fftSize: 1024,
+						smoothingTimeConstant: 0.45,
+						connect: () => {},
+						disconnect: () => {},
+						getFloatTimeDomainData: (buffer: Float32Array) => buffer.fill(0),
+					},
+				}),
+			),
 		}));
 
 		const { StreamingTimelineAudioEngine } = await import(
@@ -190,6 +214,7 @@ describe("StreamingTimelineAudioEngine", () => {
 		);
 		const clip = {
 			id: "clip-a",
+			trackId: "track-1",
 			sourceKey: "clip-a",
 			file: new File([new Uint8Array([1])], "clip-a.wav"),
 			mediaIdentity: {
@@ -204,6 +229,8 @@ describe("StreamingTimelineAudioEngine", () => {
 			trimEnd: 0,
 			muted: false,
 			gain: 1,
+			trackGain: 1,
+			trackAudioEffects: cloneDefaultTrackAudioEffects(),
 			transcriptRevision: "",
 			transcriptCuts: [],
 		};
@@ -244,7 +271,7 @@ describe("StreamingTimelineAudioEngine", () => {
 		expect(scheduleClipWindow).toHaveBeenCalledTimes(1);
 	});
 
-	test("does not fade out ordinary scheduler windows before a real clip boundary", async () => {
+	test("fades out when the scheduler reaches a real clip boundary", async () => {
 		const { StreamingTimelineAudioEngine } = await import(
 			"../streaming-audio-engine"
 		);
@@ -303,6 +330,7 @@ describe("StreamingTimelineAudioEngine", () => {
 		);
 		const clip = {
 			id: "clip-a",
+			trackId: "track-1",
 			sourceKey: "clip-a",
 			file: new File([new Uint8Array([1])], "clip-a.wav"),
 			mediaIdentity: {
@@ -317,6 +345,8 @@ describe("StreamingTimelineAudioEngine", () => {
 			trimEnd: 0,
 			muted: false,
 			gain: 1,
+			trackGain: 1,
+			trackAudioEffects: cloneDefaultTrackAudioEffects(),
 			transcriptRevision: "",
 			transcriptCuts: [],
 		};
@@ -357,7 +387,7 @@ describe("StreamingTimelineAudioEngine", () => {
 		});
 
 		expect(gainEvents.some((event) => event.type === "ramp" && event.value === 0)).toBe(
-			false,
+			true,
 		);
 	});
 
@@ -377,6 +407,7 @@ describe("StreamingTimelineAudioEngine", () => {
 		);
 		const clip = {
 			id: "clip-a",
+			trackId: "track-1",
 			sourceKey: "clip-a",
 			file: new File([new Uint8Array([1])], "clip-a.wav"),
 			mediaIdentity: {
@@ -391,6 +422,8 @@ describe("StreamingTimelineAudioEngine", () => {
 			trimEnd: 0,
 			muted: false,
 			gain: 1,
+			trackGain: 1,
+			trackAudioEffects: cloneDefaultTrackAudioEffects(),
 			transcriptRevision: "",
 			transcriptCuts: [],
 		};
@@ -465,6 +498,7 @@ describe("StreamingTimelineAudioEngine", () => {
 		);
 		const clip = {
 			id: "clip-a",
+			trackId: "track-1",
 			sourceKey: "clip-a",
 			file: new File([new Uint8Array([1])], "clip-a.wav"),
 			mediaIdentity: {
@@ -479,6 +513,8 @@ describe("StreamingTimelineAudioEngine", () => {
 			trimEnd: 0,
 			muted: false,
 			gain: 1,
+			trackGain: 1,
+			trackAudioEffects: cloneDefaultTrackAudioEffects(),
 			transcriptRevision: "",
 			transcriptCuts: [],
 		};
@@ -504,5 +540,137 @@ describe("StreamingTimelineAudioEngine", () => {
 		expect(request.decodeMode).toBe("full");
 		expect(request.sourceWindowStart).toBe(5);
 		expect(request.sourceWindowDuration).toBe(30);
+	});
+
+	test("schedules a fully decoded clip as one continuous segment", async () => {
+		const { StreamingTimelineAudioEngine } = await import(
+			"../streaming-audio-engine"
+		);
+
+		Object.defineProperty(globalThis, "window", {
+			value: {
+				setInterval: () => 1,
+				clearInterval: () => {},
+				setTimeout: () => 1,
+				clearTimeout: () => {},
+				dispatchEvent: () => true,
+			},
+			configurable: true,
+		});
+		Object.defineProperty(globalThis, "navigator", {
+			value: { deviceMemory: 8 },
+			configurable: true,
+		});
+		Object.defineProperty(globalThis, "performance", {
+			value: { now: () => 0 },
+			configurable: true,
+		});
+
+		const fakeAudioContext = {
+			currentTime: 0,
+			sampleRate: 48_000,
+			createBufferSource: () => ({
+				buffer: null,
+				connect: () => {},
+				disconnect: () => {},
+				start: () => {},
+				stop: () => {},
+				addEventListener: () => {},
+			}),
+			createGain: () => ({
+				gain: {
+					value: 1,
+					setValueAtTime: () => {},
+					linearRampToValueAtTime: () => {},
+					cancelScheduledValues: () => {},
+					setTargetAtTime: () => {},
+				},
+				connect: () => {},
+				disconnect: () => {},
+			}),
+		} as unknown as AudioContext;
+
+		const engine = new StreamingTimelineAudioEngine(
+			fakeAudioContext,
+			{} as AudioNode,
+		);
+		const clip = {
+			id: "clip-a",
+			trackId: "track-1",
+			sourceKey: "clip-a",
+			file: new File([new Uint8Array([1])], "clip-a.wav"),
+			mediaIdentity: {
+				id: "media-a",
+				type: "audio" as const,
+				size: 1,
+				lastModified: 1,
+			},
+			startTime: 0,
+			duration: 10,
+			trimStart: 0,
+			trimEnd: 0,
+			muted: false,
+			gain: 1,
+			trackGain: 1,
+			trackAudioEffects: cloneDefaultTrackAudioEffects(),
+			transcriptRevision: "",
+			transcriptCuts: [],
+		};
+
+		engine.start({ atTime: 0 });
+		(
+			engine as unknown as {
+				trackBuses: Map<
+					string,
+					{
+						input: AudioNode;
+					}
+				>;
+			}
+		).trackBuses.set("track-1", {
+			input: {} as AudioNode,
+		});
+		(
+			engine as unknown as {
+				scheduleClipWindow: (args: {
+					clip: typeof clip;
+					decodedWindow: {
+						buffer: AudioBuffer;
+						sourceWindowStart: number;
+						sourceWindowEnd: number;
+					};
+					timelineNow: number;
+					timelineHorizon: number;
+					contextNow: number;
+					runGeneration: number;
+				}) => boolean;
+				scheduledByKey: Map<string, unknown>;
+			}
+		).scheduleClipWindow({
+			clip,
+			decodedWindow: {
+				buffer: {
+					sampleRate: 48_000,
+					length: 480_000,
+					numberOfChannels: 1,
+					getChannelData: () => new Float32Array(480_000),
+				} as unknown as AudioBuffer,
+				sourceWindowStart: 0,
+				sourceWindowEnd: 10,
+			},
+			timelineNow: 0,
+			timelineHorizon: 2.5,
+			contextNow: 0,
+			runGeneration: 1,
+		});
+
+		const scheduledKeys = Array.from(
+			(
+				engine as unknown as {
+					scheduledByKey: Map<string, unknown>;
+				}
+			).scheduledByKey.keys(),
+		);
+		expect(scheduledKeys).toEqual(["clip-a:0.0000:10.0000"]);
 	});
 });

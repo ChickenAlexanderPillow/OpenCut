@@ -22,10 +22,6 @@ describe("collectAudioClips companion suppression", () => {
 				duration: 10,
 				width: 1920,
 				height: 1080,
-				size: 4,
-				lastModified: 1,
-				createdAt: new Date("2026-03-01T00:00:00.000Z"),
-				updatedAt: new Date("2026-03-01T00:00:00.000Z"),
 			},
 			{
 				id: "audio-media-1",
@@ -34,12 +30,6 @@ describe("collectAudioClips companion suppression", () => {
 				file: createFile("audio.wav", "audio/wav"),
 				url: "https://example.com/audio.wav",
 				duration: 10,
-				width: null,
-				height: null,
-				size: 4,
-				lastModified: 1,
-				createdAt: new Date("2026-03-01T00:00:00.000Z"),
-				updatedAt: new Date("2026-03-01T00:00:00.000Z"),
 			},
 		];
 

@@ -4,6 +4,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
 	Delete02Icon,
 	TaskAdd02Icon,
+	ArrowLeft01Icon,
+	ArrowRight01Icon,
 	ViewIcon,
 	ViewOffSlashIcon,
 	VolumeLowIcon,
@@ -18,7 +20,13 @@ import {
 	ContextMenuTrigger,
 } from "../../../ui/context-menu";
 import { useTimelineZoom } from "@/hooks/timeline/use-timeline-zoom";
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import {
+	useState,
+	useRef,
+	useCallback,
+	useEffect,
+	useMemo,
+} from "react";
 import { TimelineTrackContent } from "./timeline-track";
 import { TimelinePlayhead } from "./timeline-playhead";
 import { SelectionBox } from "../../selection-box";
@@ -79,12 +87,26 @@ export function Timeline() {
 	const trackLabelsRef = useRef<HTMLDivElement>(null);
 	const playheadRef = useRef<HTMLDivElement>(null);
 	const trackLabelsScrollRef = useRef<HTMLDivElement>(null);
+	const mixerScrollRef = useRef<HTMLDivElement>(null);
 
 	// state
 	const [isResizing, setIsResizing] = useState(false);
+	const [mixerCollapsed, setMixerCollapsed] = useState(false);
 	const [currentSnapPoint, setCurrentSnapPoint] = useState<SnapPoint | null>(
 		null,
 	);
+	const [trackLevels, setTrackLevels] = useState<
+		Record<string, { peak: number; rmsDb: number; silent: boolean }>
+	>({});
+	const [outputLevel, setOutputLevel] = useState<{
+		peak: number;
+		rmsDb: number;
+		silent: boolean;
+	}>({
+		peak: 0,
+		rmsDb: -120,
+		silent: true,
+	});
 
 	const handleSnapPointChange = useCallback((snapPoint: SnapPoint | null) => {
 		setCurrentSnapPoint(snapPoint);
@@ -269,9 +291,76 @@ export function Timeline() {
 		fitTimelineToView();
 	}, [fitViewRequestId, fitTimelineToView]);
 
+	useEffect(() => {
+		const handleTrackLevels = (
+			event: Event,
+		) => {
+			const detail = (
+				event as CustomEvent<{
+					tracks: Array<{
+						trackId: string;
+						peak: number;
+						rmsDb: number;
+						silent: boolean;
+					}>;
+				}>
+			).detail;
+			if (!detail) return;
+			setTrackLevels((current) => {
+				const next: Record<
+					string,
+					{ peak: number; rmsDb: number; silent: boolean }
+				> = {};
+				for (const track of detail.tracks) {
+					next[track.trackId] = {
+						peak: track.peak,
+						rmsDb: track.rmsDb,
+						silent: track.silent,
+					};
+				}
+				return Object.keys(next).length === 0 ? current : next;
+			});
+		};
+		window.addEventListener("opencut:audio-track-levels", handleTrackLevels);
+		return () => {
+			window.removeEventListener(
+				"opencut:audio-track-levels",
+				handleTrackLevels,
+			);
+		};
+	}, []);
+
+	useEffect(() => {
+		const handleOutputLevel = (
+			event: Event,
+		) => {
+			const detail = (
+				event as CustomEvent<{
+					peak: number;
+					rmsDb: number;
+					silent: boolean;
+				}>
+			).detail;
+			if (!detail) return;
+			setOutputLevel({
+				peak: detail.peak,
+				rmsDb: detail.rmsDb,
+				silent: detail.silent,
+			});
+		};
+		window.addEventListener("opencut:audio-output-level", handleOutputLevel);
+		return () => {
+			window.removeEventListener(
+				"opencut:audio-output-level",
+				handleOutputLevel,
+			);
+		};
+	}, []);
+
 	useScrollSync({
 		tracksScrollRef,
 		trackLabelsScrollRef,
+		mixerScrollRef,
 	});
 
 	const timelineHeaderHeight =
@@ -634,6 +723,74 @@ export function Timeline() {
 							</div>
 						</ScrollArea>
 					</div>
+					<div className="relative w-[4.25rem] shrink-0 border-l bg-background">
+						<div className="pointer-events-none absolute top-0 right-full bottom-0 z-0 w-[13.75rem] overflow-hidden">
+							<div
+								className={`pointer-events-auto flex h-full w-[13.75rem] flex-col border-l bg-background shadow-sm transition-[transform,opacity] duration-200 ease-out will-change-transform ${
+									mixerCollapsed
+										? "translate-x-3 opacity-0"
+										: "translate-x-0 opacity-100"
+								}`}
+							>
+								<div
+									className="bg-background flex items-center border-b px-3"
+									style={{ height: `${timelineHeaderHeight || 48}px` }}
+								>
+									<div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em]">
+										Levels
+									</div>
+								</div>
+								<div className="min-h-0 flex-1 pb-2">
+									<ScrollArea className="h-full min-h-0" ref={mixerScrollRef}>
+										<div
+											className="flex flex-col gap-1 p-2 pr-1 pb-3"
+											style={{ paddingTop: TIMELINE_CONSTANTS.PADDING_TOP_PX }}
+										>
+											{tracks
+												.filter((track) => canTracktHaveAudio(track))
+												.map((track) => (
+													<TrackLevelStrip
+														key={track.id}
+														track={track}
+														level={trackLevels[track.id]}
+														height={getTrackHeight({ type: track.type })}
+													/>
+												))}
+										</div>
+									</ScrollArea>
+								</div>
+							</div>
+						</div>
+						{!mixerCollapsed && (
+							<div className="pointer-events-none absolute top-0 bottom-0 left-0 z-10 border-l" />
+						)}
+						<div
+							className="bg-background relative z-10 flex items-center justify-center border-b"
+							style={{ height: `${timelineHeaderHeight || 48}px` }}
+						>
+							<button
+								type="button"
+								className="text-muted-foreground hover:text-foreground flex size-full items-center justify-center"
+								onClick={() => setMixerCollapsed((current) => !current)}
+								aria-label={
+									mixerCollapsed ? "Open mixer rail" : "Collapse mixer rail"
+								}
+								title={
+									mixerCollapsed ? "Open mixer rail" : "Collapse mixer rail"
+								}
+							>
+								<HugeiconsIcon
+									icon={mixerCollapsed ? ArrowLeft01Icon : ArrowRight01Icon}
+									className="size-4"
+								/>
+							</button>
+						</div>
+						<div className="relative z-10 h-full pb-2">
+							<div className="h-full p-2 pl-1 pb-3">
+								<MasterLevelStrip level={outputLevel} />
+							</div>
+						</div>
+					</div>
 				</div>
 			</div>
 		</section>
@@ -901,4 +1058,162 @@ function AudioTrackVolumeScrubber({
 			)}
 		</div>
 	);
+}
+
+function TrackLevelStrip({
+	track,
+	level,
+	height,
+}: {
+	track: Extract<TimelineTrack, { type: "audio" | "video" }>;
+	level?: { peak: number; rmsDb: number; silent: boolean };
+	height: number;
+}) {
+	const meterPercent = getMeterFillPercent({
+		peak: level?.peak ?? 0,
+		rmsDb: level?.rmsDb ?? -120,
+		silent: level?.silent ?? true,
+	});
+
+	return (
+		<div
+			className="flex items-center"
+			style={{ minHeight: `${height}px`, height: `${height}px` }}
+		>
+			<div className="bg-muted/20 flex h-6 w-full items-center gap-2 rounded-md border px-2 py-1">
+				<div className="text-muted-foreground flex items-center text-[9px] font-medium leading-none">
+					{track.type === "audio" ? "A" : "V"}
+				</div>
+				<div className="relative flex h-3 flex-1 items-stretch overflow-hidden rounded-md bg-black/10">
+					<HorizontalLevelGuides />
+					<div
+						className={`relative z-[1] h-full rounded-md transition-all ${getLevelColorClass({
+							fillPercent: meterPercent,
+							silent: level?.silent ?? true,
+							muted: track.muted,
+						})}`}
+						style={{ width: `${meterPercent}%` }}
+					/>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function MasterLevelStrip({
+	level,
+}: {
+	level: { peak: number; rmsDb: number; silent: boolean };
+}) {
+	const meterPercent = getMeterFillPercent({
+		peak: level.peak,
+		rmsDb: level.rmsDb,
+		silent: level.silent,
+	});
+
+	return (
+		<div className="flex h-full min-h-0 flex-col items-center gap-2 py-1">
+			<div className="text-muted-foreground text-[9px] font-medium uppercase tracking-[0.18em]">
+				Out
+			</div>
+			<div className="bg-muted/20 relative flex h-full min-h-0 w-8 items-end overflow-hidden rounded-xl border p-1">
+				<LevelGuides />
+				<div
+					className={`relative z-[1] w-full rounded-lg transition-all ${getLevelColorClass({
+						fillPercent: meterPercent,
+						silent: level.silent,
+						muted: false,
+					})}`}
+					style={{ height: `${meterPercent}%` }}
+				/>
+			</div>
+			<div className="text-muted-foreground text-[9px] leading-none">
+				{Math.round(level.rmsDb)}
+			</div>
+		</div>
+	);
+}
+
+function LevelGuides() {
+	return (
+		<>
+			<div className="pointer-events-none absolute inset-0">
+				{[
+					{ top: "12%", label: "0" },
+					{ top: "28%", label: "-6" },
+					{ top: "44%", label: "-12" },
+					{ top: "62%", label: "-18" },
+					{ top: "80%", label: "-24" },
+				].map((marker) => (
+					<div
+						key={marker.label}
+						className="absolute left-0 right-0 border-t border-white/10"
+						style={{ top: marker.top }}
+					/>
+				))}
+			</div>
+		</>
+	);
+}
+
+function HorizontalLevelGuides() {
+	return (
+		<div className="pointer-events-none absolute inset-0">
+			{["25%", "50%", "75%", "92%"].map((left) => (
+				<div
+					key={left}
+					className="absolute top-0 bottom-0 border-l border-white/10"
+					style={{ left }}
+				/>
+			))}
+		</div>
+	);
+}
+
+function getLevelColorClass({
+	fillPercent,
+	silent,
+	muted,
+}: {
+	fillPercent: number;
+	silent: boolean;
+	muted: boolean;
+}) {
+	if (muted || silent || fillPercent <= 2) {
+		return "bg-muted-foreground/30";
+	}
+	if (fillPercent >= 92) {
+		return "bg-red-500";
+	}
+	if (fillPercent >= 78) {
+		return "bg-orange-500";
+	}
+	if (fillPercent >= 62) {
+		return "bg-amber-400";
+	}
+	if (fillPercent >= 44) {
+		return "bg-lime-400";
+	}
+	return "bg-emerald-500";
+}
+
+function getMeterFillPercent({
+	peak,
+	rmsDb,
+	silent,
+}: {
+	peak: number;
+	rmsDb: number;
+	silent: boolean;
+}) {
+	if (silent || peak < 0.0005) {
+		return 0;
+	}
+
+	const peakDb = peak > 0 ? 20 * Math.log10(peak) : -120;
+	const displayDb = Math.max(rmsDb, peakDb);
+	const meterFloorDb = -48;
+	const clampedDb = Math.max(meterFloorDb, Math.min(0, displayDb));
+	const normalized = (clampedDb - meterFloorDb) / Math.abs(meterFloorDb);
+	return Math.max(2, Math.min(100, Math.round(normalized * 100)));
 }

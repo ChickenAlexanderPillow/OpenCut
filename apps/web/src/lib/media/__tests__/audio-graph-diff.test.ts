@@ -4,11 +4,13 @@ import {
 	diffAudioGraphRevisions,
 } from "@/lib/media/audio-graph-diff";
 import type { AudioClipSource } from "@/lib/media/audio";
+import { cloneDefaultTrackAudioEffects } from "@/lib/media/track-audio-effects";
 
 function createClip(partial: Partial<AudioClipSource> & { id: string }): AudioClipSource {
 	return {
 		id: partial.id,
 		sourceKey: partial.sourceKey ?? partial.id,
+		trackId: partial.trackId ?? "track-1",
 		file: partial.file ?? new File([new Uint8Array([1, 2, 3])], `${partial.id}.mp3`),
 		mediaIdentity: partial.mediaIdentity ?? {
 			id: partial.id,
@@ -22,6 +24,8 @@ function createClip(partial: Partial<AudioClipSource> & { id: string }): AudioCl
 		trimEnd: partial.trimEnd ?? 0,
 		muted: partial.muted ?? false,
 		gain: partial.gain ?? 1,
+		trackGain: partial.trackGain ?? 1,
+		trackAudioEffects: partial.trackAudioEffects ?? cloneDefaultTrackAudioEffects(),
 		transcriptRevision: partial.transcriptRevision ?? "",
 		transcriptCuts: partial.transcriptCuts ?? [],
 	};

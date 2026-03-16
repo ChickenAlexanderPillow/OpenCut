@@ -5,6 +5,7 @@ interface UseScrollSyncProps {
 	tracksScrollRef: React.RefObject<HTMLDivElement | null>;
 	trackLabelsScrollRef?: React.RefObject<HTMLDivElement | null>;
 	bookmarksScrollRef?: React.RefObject<HTMLDivElement | null>;
+	mixerScrollRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 export function useScrollSync({
@@ -12,6 +13,7 @@ export function useScrollSync({
 	rulerScrollRef,
 	trackLabelsScrollRef,
 	bookmarksScrollRef,
+	mixerScrollRef,
 }: UseScrollSyncProps) {
 	const isUpdatingRef = useRef(false);
 	const lastRulerSync = useRef(0);
@@ -24,6 +26,7 @@ export function useScrollSync({
 		const tracksViewport = tracksScrollRef.current;
 		const trackLabelsViewport = trackLabelsScrollRef?.current;
 		const bookmarksViewport = bookmarksScrollRef?.current;
+		const mixerViewport = mixerScrollRef?.current;
 		let handleBookmarksScroll: (() => void) | null = null;
 
 		if (!tracksViewport) return;
@@ -105,6 +108,9 @@ export function useScrollSync({
 				lastVerticalSync.current = now;
 				isUpdatingRef.current = true;
 				tracksViewport.scrollTop = trackLabelsViewport.scrollTop;
+				if (mixerViewport) {
+					mixerViewport.scrollTop = trackLabelsViewport.scrollTop;
+				}
 				isUpdatingRef.current = false;
 			};
 
@@ -115,11 +121,26 @@ export function useScrollSync({
 				lastVerticalSync.current = now;
 				isUpdatingRef.current = true;
 				trackLabelsViewport.scrollTop = tracksViewport.scrollTop;
+				if (mixerViewport) {
+					mixerViewport.scrollTop = tracksViewport.scrollTop;
+				}
+				isUpdatingRef.current = false;
+			};
+
+			const handleMixerScroll = () => {
+				const now = Date.now();
+				if (isUpdatingRef.current || now - lastVerticalSync.current < 16)
+					return;
+				lastVerticalSync.current = now;
+				isUpdatingRef.current = true;
+				tracksViewport.scrollTop = mixerViewport?.scrollTop ?? 0;
+				trackLabelsViewport.scrollTop = mixerViewport?.scrollTop ?? 0;
 				isUpdatingRef.current = false;
 			};
 
 			trackLabelsViewport.addEventListener("scroll", handleTrackLabelsScroll);
 			tracksViewport.addEventListener("scroll", handleTracksVerticalScroll);
+			mixerViewport?.addEventListener("scroll", handleMixerScroll);
 
 			return () => {
 				if (rulerViewport && rulerViewport !== tracksViewport) {
@@ -146,6 +167,7 @@ export function useScrollSync({
 					"scroll",
 					handleTracksVerticalScroll,
 				);
+				mixerViewport?.removeEventListener("scroll", handleMixerScroll);
 			};
 		}
 
@@ -169,5 +191,6 @@ export function useScrollSync({
 		tracksScrollRef,
 		trackLabelsScrollRef,
 		bookmarksScrollRef,
+		mixerScrollRef,
 	]);
 }

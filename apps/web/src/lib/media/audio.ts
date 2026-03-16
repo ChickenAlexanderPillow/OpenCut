@@ -3,6 +3,7 @@ import type {
 	LibraryAudioElement,
 	TimelineElement,
 	TimelineTrack,
+	TrackAudioEffects,
 	UploadAudioElement,
 	VideoElement,
 } from "@/types/timeline";
@@ -24,6 +25,10 @@ import {
 	getTranscriptApplied,
 	getTranscriptDraft,
 } from "@/lib/transcript-editor/state";
+import {
+	getTrackAudioEffectsFingerprint,
+	normalizeTrackAudioEffects,
+} from "@/lib/media/track-audio-effects";
 
 const MAX_AUDIO_CHANNELS = 2;
 const EXPORT_SAMPLE_RATE = 44100;
@@ -31,6 +36,14 @@ const SILENCE_FLOOR = 1e-4;
 const COMPANION_ALIGNMENT_TOLERANCE_SECONDS = 0.05;
 const COMPANION_OVERLAP_MIN_RATIO = 0.8;
 const sharedDecodeContexts = new Map<string, AudioContext>();
+
+export interface TrackAudioLevelSnapshot {
+	trackId: string;
+	peak: number;
+	rms: number;
+	rmsDb: number;
+	silent: boolean;
+}
 
 function getTranscriptDraftLike(
 	element: AudioElement | VideoElement,
@@ -190,10 +203,19 @@ export type CollectedAudioElement = Omit<
 	AudioElement,
 	"type" | "mediaId" | "volume" | "id" | "name" | "sourceType" | "sourceUrl"
 > & {
+	trackId: string;
 	buffer: AudioBuffer;
 	gain: number;
+	trackGain: number;
+	trackAudioEffects: TrackAudioEffects;
 	transcriptCuts?: TranscriptEditCutRange[];
 };
+
+export interface AudioTrackProcessing {
+	trackId: string;
+	trackGain: number;
+	trackAudioEffects: TrackAudioEffects;
+}
 
 export function createAudioContext({
 	sampleRate,
@@ -325,9 +347,7 @@ export async function collectAudioElements({
 
 	for (const track of tracks) {
 		if (canTracktHaveAudio(track) && track.muted) continue;
-		const trackGain = canTracktHaveAudio(track)
-			? mapTrackVolumeToGain(track.volume ?? 1)
-			: 1;
+		const trackProcessing = buildTrackAudioProcessing({ track });
 
 		for (const element of track.elements) {
 			const stableElement = normalizeTimelineElementForInvariants({ element });
@@ -353,7 +373,7 @@ export async function collectAudioElements({
 			if (stableElement.type === "audio") {
 				pendingElements.push(
 					(async () => {
-						const elementGain = trackGain * clampGain(stableElement.volume ?? 1);
+						const elementGain = clampGain(stableElement.volume ?? 1);
 						if (stableElement.sourceType === "upload") {
 							const preferredVideoMediaId =
 								suppressedCompanionMediaIds.preferredVideoMediaIdByAudioId.get(
@@ -366,6 +386,7 @@ export async function collectAudioElements({
 								// Fallback for transient states where media metadata is not yet available.
 								if (stableElement.buffer) {
 									return {
+										trackId: track.id,
 										buffer: stableElement.buffer,
 										startTime: stableElement.startTime,
 										duration: stableElement.duration,
@@ -374,6 +395,8 @@ export async function collectAudioElements({
 										transcriptCuts: effectiveTranscriptCuts,
 										muted: stableElement.muted || isTrackMuted,
 										gain: elementGain,
+										trackGain: trackProcessing.trackGain,
+										trackAudioEffects: trackProcessing.trackAudioEffects,
 									};
 								}
 								return null;
@@ -390,6 +413,7 @@ export async function collectAudioElements({
 								});
 								if (!resolvedAudio) return null;
 								return {
+									trackId: track.id,
 									buffer: resolvedAudio.buffer,
 									startTime: stableElement.startTime,
 									duration: stableElement.duration,
@@ -400,11 +424,14 @@ export async function collectAudioElements({
 									transcriptCuts: effectiveTranscriptCuts,
 									muted: stableElement.muted || isTrackMuted,
 									gain: elementGain,
+									trackGain: trackProcessing.trackGain,
+									trackAudioEffects: trackProcessing.trackAudioEffects,
 								};
 							}
 						}
 						if (stableElement.buffer) {
 							return {
+								trackId: track.id,
 								buffer: stableElement.buffer,
 								startTime: stableElement.startTime,
 								duration: stableElement.duration,
@@ -413,6 +440,8 @@ export async function collectAudioElements({
 								transcriptCuts: effectiveTranscriptCuts,
 								muted: stableElement.muted || isTrackMuted,
 								gain: elementGain,
+								trackGain: trackProcessing.trackGain,
+								trackAudioEffects: trackProcessing.trackAudioEffects,
 							};
 						}
 
@@ -423,6 +452,7 @@ export async function collectAudioElements({
 						});
 						if (!audioBuffer) return null;
 						return {
+							trackId: track.id,
 							buffer: audioBuffer,
 							startTime: stableElement.startTime,
 							duration: stableElement.duration,
@@ -431,6 +461,8 @@ export async function collectAudioElements({
 							transcriptCuts: effectiveTranscriptCuts,
 							muted: stableElement.muted || isTrackMuted,
 							gain: elementGain,
+							trackGain: trackProcessing.trackGain,
+							trackAudioEffects: trackProcessing.trackAudioEffects,
 						};
 					})(),
 				);
@@ -456,6 +488,7 @@ export async function collectAudioElements({
 						// If decode is windowed, trimStart is already baked into the buffer.
 						// For full-file fallback decode, preserve element trimStart.
 						return {
+							trackId: track.id,
 							buffer: resolvedAudio.buffer,
 							startTime: stableElement.startTime,
 							duration: stableElement.duration,
@@ -463,7 +496,9 @@ export async function collectAudioElements({
 							trimEnd: stableElement.trimEnd,
 							transcriptCuts: effectiveTranscriptCuts,
 							muted: elementMuted || isTrackMuted,
-							gain: trackGain,
+							gain: 1,
+							trackGain: trackProcessing.trackGain,
+							trackAudioEffects: trackProcessing.trackAudioEffects,
 						};
 					}),
 				);
@@ -662,18 +697,22 @@ async function resolveAudioBufferForVideoElement({
 }
 
 interface AudioMixSource {
+	trackId: string;
 	file: File;
 	startTime: number;
 	duration: number;
 	trimStart: number;
 	trimEnd: number;
 	gain: number;
+	trackGain: number;
+	trackAudioEffects: TrackAudioEffects;
 	transcriptCuts?: TranscriptEditCutRange[];
 }
 
 export interface AudioClipSource {
 	id: string;
 	sourceKey: string;
+	trackId: string;
 	file: File;
 	mediaIdentity: {
 		id: string;
@@ -687,6 +726,8 @@ export interface AudioClipSource {
 	trimEnd: number;
 	muted: boolean;
 	gain: number;
+	trackGain: number;
+	trackAudioEffects: TrackAudioEffects;
 	transcriptRevision: string;
 	transcriptCuts?: TranscriptEditCutRange[];
 }
@@ -703,13 +744,160 @@ function clampGain(value: number): number {
 	return Math.max(0, Math.min(2, value));
 }
 
-function mapTrackVolumeToGain(trackVolume: number): number {
+export function mapTrackVolumeToGain(trackVolume: number): number {
 	const clamped = clampGain(trackVolume);
 	// Perceptual taper: low control values attenuate more strongly.
 	if (clamped <= 1) {
 		return clamped * clamped * clamped;
 	}
 	return 1 + (clamped - 1);
+}
+
+function dbToGain(value: number): number {
+	return 10 ** (value / 20);
+}
+
+export function buildTrackAudioProcessing({
+	track,
+}: {
+	track: TimelineTrack;
+}): AudioTrackProcessing {
+	const normalizedEffects = normalizeTrackAudioEffects(
+		canTracktHaveAudio(track) ? track.audioEffects : undefined,
+	);
+	return {
+		trackId: track.id,
+		trackGain:
+			canTracktHaveAudio(track) && !track.muted
+				? mapTrackVolumeToGain(track.volume ?? 1)
+				: 0,
+		trackAudioEffects: normalizedEffects,
+	};
+}
+
+export function connectTrackAudioEffects({
+	audioContext,
+	sourceNode,
+	destinationNode,
+	effects,
+	trackGain,
+}: {
+	audioContext: AudioContext | OfflineAudioContext;
+	sourceNode: AudioNode;
+	destinationNode: AudioNode;
+	effects: TrackAudioEffects;
+	trackGain: number;
+}): {
+	inputNode: AudioNode;
+	outputNode: GainNode;
+	analyserNode: AnalyserNode;
+} {
+	let cursor: AudioNode = sourceNode;
+
+	const lowShelf = audioContext.createBiquadFilter();
+	lowShelf.type = "lowshelf";
+	lowShelf.frequency.value = 180;
+	lowShelf.gain.value = effects.eq.enabled ? effects.eq.lowGainDb : 0;
+	cursor.connect(lowShelf);
+	cursor = lowShelf;
+
+	const midPeak = audioContext.createBiquadFilter();
+	midPeak.type = "peaking";
+	midPeak.frequency.value = effects.eq.midFrequency;
+	midPeak.Q.value = 0.9;
+	midPeak.gain.value = effects.eq.enabled ? effects.eq.midGainDb : 0;
+	cursor.connect(midPeak);
+	cursor = midPeak;
+
+	const highShelf = audioContext.createBiquadFilter();
+	highShelf.type = "highshelf";
+	highShelf.frequency.value = effects.eq.highFrequency;
+	highShelf.gain.value = effects.eq.enabled ? effects.eq.highGainDb : 0;
+	cursor.connect(highShelf);
+	cursor = highShelf;
+
+	const deesser = audioContext.createBiquadFilter();
+	deesser.type = "peaking";
+	deesser.frequency.value = effects.deesser.frequency;
+	deesser.Q.value = effects.deesser.q;
+	deesser.gain.value = effects.deesser.enabled ? -effects.deesser.amountDb : 0;
+	cursor.connect(deesser);
+	cursor = deesser;
+
+	const compressor = audioContext.createDynamicsCompressor();
+	compressor.threshold.value = effects.compressor.enabled
+		? effects.compressor.thresholdDb
+		: 0;
+	compressor.knee.value = effects.compressor.enabled ? 12 : 0;
+	compressor.ratio.value = effects.compressor.enabled
+		? effects.compressor.ratio
+		: 1;
+	compressor.attack.value = effects.compressor.attackSeconds;
+	compressor.release.value = effects.compressor.releaseSeconds;
+	cursor.connect(compressor);
+	cursor = compressor;
+
+	const makeupGain = audioContext.createGain();
+	makeupGain.gain.value = effects.compressor.enabled
+		? dbToGain(effects.compressor.makeupGainDb)
+		: 1;
+	cursor.connect(makeupGain);
+	cursor = makeupGain;
+
+	const limiter = audioContext.createDynamicsCompressor();
+	limiter.threshold.value = effects.limiter.enabled
+		? effects.limiter.ceilingDb
+		: 0;
+	limiter.knee.value = effects.limiter.enabled ? 0 : 40;
+	limiter.ratio.value = effects.limiter.enabled ? 20 : 1;
+	limiter.attack.value = effects.limiter.enabled ? 0.001 : 0.01;
+	limiter.release.value = effects.limiter.releaseSeconds;
+	cursor.connect(limiter);
+	cursor = limiter;
+
+	const outputGain = audioContext.createGain();
+	outputGain.gain.value = trackGain;
+	cursor.connect(outputGain);
+
+	const analyserNode = audioContext.createAnalyser();
+	analyserNode.fftSize = 1024;
+	analyserNode.smoothingTimeConstant = 0.45;
+	outputGain.connect(analyserNode);
+	analyserNode.connect(destinationNode);
+
+	return {
+		inputNode: sourceNode,
+		outputNode: outputGain,
+		analyserNode,
+	};
+}
+
+export async function renderTrackAudioEffectsOffline({
+	buffer,
+	effects,
+	trackGain,
+}: {
+	buffer: AudioBuffer;
+	effects: TrackAudioEffects;
+	trackGain: number;
+}): Promise<AudioBuffer> {
+	if (buffer.length === 0) return buffer;
+	const offlineContext = new OfflineAudioContext(
+		buffer.numberOfChannels,
+		buffer.length,
+		buffer.sampleRate,
+	);
+	const source = offlineContext.createBufferSource();
+	source.buffer = buffer;
+	connectTrackAudioEffects({
+		audioContext: offlineContext,
+		sourceNode: source,
+		destinationNode: offlineContext.destination,
+		effects,
+		trackGain,
+	});
+	source.start(0);
+	return offlineContext.startRendering();
 }
 
 function getBoundarySmoothingGain({
@@ -879,9 +1067,15 @@ export async function decodeMediaFileToAudioBuffer({
 async function fetchLibraryAudioSource({
 	element,
 	gain,
+	trackId,
+	trackGain,
+	trackAudioEffects,
 }: {
 	element: LibraryAudioElement;
 	gain: number;
+	trackId: string;
+	trackGain: number;
+	trackAudioEffects: TrackAudioEffects;
 }): Promise<AudioMixSource | null> {
 	try {
 		const response = await fetch(element.sourceUrl);
@@ -895,12 +1089,15 @@ async function fetchLibraryAudioSource({
 		});
 
 		return {
+			trackId,
 			file,
 			startTime: element.startTime,
 			duration: element.duration,
 			trimStart: element.trimStart,
 			trimEnd: element.trimEnd,
 			gain,
+			trackGain,
+			trackAudioEffects,
 		};
 	} catch (error) {
 		console.warn("Failed to fetch library audio:", error);
@@ -912,10 +1109,16 @@ async function fetchLibraryAudioClip({
 	element,
 	muted,
 	gain,
+	trackId,
+	trackGain,
+	trackAudioEffects,
 }: {
 	element: LibraryAudioElement;
 	muted: boolean;
 	gain: number;
+	trackId: string;
+	trackGain: number;
+	trackAudioEffects: TrackAudioEffects;
 }): Promise<AudioClipSource | null> {
 	try {
 		const response = await fetch(element.sourceUrl);
@@ -931,6 +1134,7 @@ async function fetchLibraryAudioClip({
 		return {
 			id: element.id,
 			sourceKey: element.id,
+			trackId,
 			file,
 			mediaIdentity: {
 				id: element.id,
@@ -944,6 +1148,8 @@ async function fetchLibraryAudioClip({
 			trimEnd: element.trimEnd,
 			muted,
 			gain,
+			trackGain,
+			trackAudioEffects,
 			transcriptRevision: buildTranscriptAudioRevision({
 				transcriptRevisionKey: getTranscriptAudioRevisionKey(element),
 			}),
@@ -959,19 +1165,28 @@ function collectMediaAudioSource({
 	element,
 	mediaAsset,
 	gain,
+	trackId,
+	trackGain,
+	trackAudioEffects,
 }: {
 	element: AudioElement | VideoElement;
 	mediaAsset: MediaAsset;
 	gain: number;
+	trackId: string;
+	trackGain: number;
+	trackAudioEffects: TrackAudioEffects;
 }): AudioMixSource {
 	const stableElement = normalizeTimelineElementForInvariants({ element });
 	return {
+		trackId,
 		file: mediaAsset.file,
 		startTime: stableElement.startTime,
 		duration: stableElement.duration,
 		trimStart: stableElement.trimStart,
 		trimEnd: stableElement.trimEnd,
 		gain,
+		trackGain,
+		trackAudioEffects,
 		transcriptCuts: getAppliedTranscriptCuts(stableElement),
 	};
 }
@@ -981,11 +1196,17 @@ function collectMediaAudioClip({
 	mediaAsset,
 	muted,
 	gain,
+	trackId,
+	trackGain,
+	trackAudioEffects,
 }: {
 	element: TimelineElement;
 	mediaAsset: MediaAsset;
 	muted: boolean;
 	gain: number;
+	trackId: string;
+	trackGain: number;
+	trackAudioEffects: TrackAudioEffects;
 }): AudioClipSource {
 	const stableElement = normalizeTimelineElementForInvariants({
 		element,
@@ -993,6 +1214,7 @@ function collectMediaAudioClip({
 	return {
 		id: stableElement.id,
 		sourceKey: mediaAsset.id,
+		trackId,
 		file: mediaAsset.file,
 		mediaIdentity: {
 			id: mediaAsset.id,
@@ -1006,6 +1228,8 @@ function collectMediaAudioClip({
 		trimEnd: stableElement.trimEnd,
 		muted,
 		gain,
+		trackGain,
+		trackAudioEffects,
 		transcriptRevision:
 			"transcriptApplied" in stableElement || "transcriptEdit" in stableElement
 				? buildTranscriptAudioRevision({
@@ -1039,9 +1263,7 @@ export async function collectAudioMixSources({
 
 	for (const track of tracks) {
 		if (canTracktHaveAudio(track) && track.muted) continue;
-		const trackGain = canTracktHaveAudio(track)
-			? mapTrackVolumeToGain(track.volume ?? 1)
-			: 1;
+		const trackProcessing = buildTrackAudioProcessing({ track });
 
 		for (const element of track.elements) {
 			if (!canElementHaveAudio(element)) continue;
@@ -1063,7 +1285,7 @@ export async function collectAudioMixSources({
 			if (isElementMuted) continue;
 
 			if (element.type === "audio") {
-				const elementGain = trackGain * clampGain(element.volume ?? 1);
+				const elementGain = clampGain(element.volume ?? 1);
 				if (element.sourceType === "upload") {
 					const preferredVideoMediaId =
 						suppressedCompanionMediaIds.preferredVideoMediaIdByAudioId.get(
@@ -1075,11 +1297,24 @@ export async function collectAudioMixSources({
 					if (!mediaAsset) continue;
 
 					audioMixSources.push(
-						collectMediaAudioSource({ element, mediaAsset, gain: elementGain }),
+						collectMediaAudioSource({
+							element,
+							mediaAsset,
+							gain: elementGain,
+							trackId: track.id,
+							trackGain: trackProcessing.trackGain,
+							trackAudioEffects: trackProcessing.trackAudioEffects,
+						}),
 					);
 				} else {
 					pendingLibrarySources.push(
-						fetchLibraryAudioSource({ element, gain: elementGain }),
+						fetchLibraryAudioSource({
+							element,
+							gain: elementGain,
+							trackId: track.id,
+							trackGain: trackProcessing.trackGain,
+							trackAudioEffects: trackProcessing.trackAudioEffects,
+						}),
 					);
 				}
 				continue;
@@ -1091,7 +1326,14 @@ export async function collectAudioMixSources({
 
 				if (mediaSupportsAudio({ media: mediaAsset })) {
 					audioMixSources.push(
-						collectMediaAudioSource({ element, mediaAsset, gain: trackGain }),
+						collectMediaAudioSource({
+							element,
+							mediaAsset,
+							gain: 1,
+							trackId: track.id,
+							trackGain: trackProcessing.trackGain,
+							trackAudioEffects: trackProcessing.trackAudioEffects,
+						}),
 					);
 				}
 			}
@@ -1124,9 +1366,7 @@ export async function collectAudioClips({
 
 	for (const track of tracks) {
 		const isTrackMuted = canTracktHaveAudio(track) && track.muted;
-		const trackGain = canTracktHaveAudio(track)
-			? mapTrackVolumeToGain(track.volume ?? 1)
-			: 1;
+		const trackProcessing = buildTrackAudioProcessing({ track });
 
 		for (const element of track.elements) {
 			const stableElement = normalizeTimelineElementForInvariants({ element });
@@ -1150,7 +1390,7 @@ export async function collectAudioClips({
 			const muted = isTrackMuted || isElementMuted;
 
 			if (stableElement.type === "audio") {
-				const elementGain = trackGain * clampGain(stableElement.volume ?? 1);
+				const elementGain = clampGain(stableElement.volume ?? 1);
 				if (stableElement.sourceType === "upload") {
 					const preferredVideoMediaId =
 						suppressedCompanionMediaIds.preferredVideoMediaIdByAudioId.get(
@@ -1167,6 +1407,9 @@ export async function collectAudioClips({
 							mediaAsset,
 							muted,
 							gain: elementGain,
+							trackId: track.id,
+							trackGain: trackProcessing.trackGain,
+							trackAudioEffects: trackProcessing.trackAudioEffects,
 						}),
 					);
 				} else {
@@ -1175,6 +1418,9 @@ export async function collectAudioClips({
 							element: stableElement,
 							muted,
 							gain: elementGain,
+							trackId: track.id,
+							trackGain: trackProcessing.trackGain,
+							trackAudioEffects: trackProcessing.trackAudioEffects,
 						}),
 					);
 				}
@@ -1191,7 +1437,10 @@ export async function collectAudioClips({
 							element: stableElement,
 							mediaAsset,
 							muted,
-							gain: trackGain,
+							gain: 1,
+							trackId: track.id,
+							trackGain: trackProcessing.trackGain,
+							trackAudioEffects: trackProcessing.trackAudioEffects,
 						}),
 					);
 				}
@@ -1235,21 +1484,57 @@ export async function createTimelineAudioBuffer({
 
 		const outputChannels = 2;
 		const outputLength = Math.ceil(duration * sampleRate);
-		const outputBuffer = context.createBuffer(
-			outputChannels,
-			outputLength,
-			sampleRate,
-		);
+		const outputBuffer = context.createBuffer(outputChannels, outputLength, sampleRate);
+		const elementsByTrack = new Map<
+			string,
+			{
+				elements: CollectedAudioElement[];
+				trackGain: number;
+				trackAudioEffects: TrackAudioEffects;
+			}
+		>();
 
 		for (const element of audioElements) {
 			if (element.muted) continue;
+			const existing = elementsByTrack.get(element.trackId);
+			if (existing) {
+				existing.elements.push(element);
+				continue;
+			}
+			elementsByTrack.set(element.trackId, {
+				elements: [element],
+				trackGain: element.trackGain,
+				trackAudioEffects: element.trackAudioEffects,
+			});
+		}
 
-			mixAudioChannels({
-				element,
-				outputBuffer,
+		for (const {
+			elements,
+			trackGain,
+			trackAudioEffects,
+		} of elementsByTrack.values()) {
+			const trackBuffer = context.createBuffer(
+				outputChannels,
 				outputLength,
 				sampleRate,
-				outputStartTime: startTime,
+			);
+			for (const element of elements) {
+				mixAudioChannels({
+					element,
+					outputBuffer: trackBuffer,
+					outputLength,
+					sampleRate,
+					outputStartTime: startTime,
+				});
+			}
+			const processedTrackBuffer = await renderTrackAudioEffectsOffline({
+				buffer: trackBuffer,
+				effects: trackAudioEffects,
+				trackGain,
+			});
+			mixRenderedTrackBuffer({
+				sourceBuffer: processedTrackBuffer,
+				targetBuffer: outputBuffer,
 			});
 		}
 
@@ -1257,6 +1542,27 @@ export async function createTimelineAudioBuffer({
 	} finally {
 		if (ownsContext) {
 			void context.close().catch(() => undefined);
+		}
+	}
+}
+
+function mixRenderedTrackBuffer({
+	sourceBuffer,
+	targetBuffer,
+}: {
+	sourceBuffer: AudioBuffer;
+	targetBuffer: AudioBuffer;
+}): void {
+	const channelCount = Math.min(
+		sourceBuffer.numberOfChannels,
+		targetBuffer.numberOfChannels,
+	);
+	const sampleCount = Math.min(sourceBuffer.length, targetBuffer.length);
+	for (let channelIndex = 0; channelIndex < channelCount; channelIndex++) {
+		const source = sourceBuffer.getChannelData(channelIndex);
+		const target = targetBuffer.getChannelData(channelIndex);
+		for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++) {
+			target[sampleIndex] += source[sampleIndex] ?? 0;
 		}
 	}
 }

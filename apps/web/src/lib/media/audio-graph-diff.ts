@@ -1,4 +1,5 @@
 import type { AudioClipSource } from "@/lib/media/audio";
+import { getTrackAudioEffectsFingerprint } from "@/lib/media/track-audio-effects";
 
 export interface AudioGraphRevision {
 	fingerprint: string;
@@ -26,6 +27,7 @@ function hashString(value: string): string {
 function buildClipSignature(clip: AudioClipSource): string {
 	return [
 		clip.id,
+		clip.trackId,
 		clip.sourceKey,
 		clip.mediaIdentity.id,
 		clip.mediaIdentity.type,
@@ -37,6 +39,8 @@ function buildClipSignature(clip: AudioClipSource): string {
 		clip.trimEnd.toFixed(4),
 		clip.muted ? "1" : "0",
 		clip.gain.toFixed(4),
+		clip.trackGain.toFixed(4),
+		getTrackAudioEffectsFingerprint(clip.trackAudioEffects),
 		clip.transcriptRevision,
 	]
 		.map((part) => String(part))

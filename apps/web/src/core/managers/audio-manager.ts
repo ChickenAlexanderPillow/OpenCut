@@ -1,12 +1,24 @@
 import type { EditorCore } from "@/core";
 import { createAudioContext } from "@/lib/media/audio";
 import { StreamingTimelineAudioEngine } from "@/lib/media/streaming-audio-engine";
+import { getTrackAudioEffectsFingerprint } from "@/lib/media/track-audio-effects";
 import { getTranscriptAudioRevisionKey } from "@/lib/transcript-editor/state";
 
 const AUDIO_MANAGER_GLOBAL_KEY = "__opencut_audio_manager_singleton__";
 
 type GlobalWithAudioManager = typeof globalThis & {
 	[AUDIO_MANAGER_GLOBAL_KEY]?: AudioManager | null;
+};
+
+type MeterLevelSnapshot = {
+	peak: number;
+	rms: number;
+	rmsDb: number;
+	silent: boolean;
+};
+
+type TrackMeterLevelSnapshot = MeterLevelSnapshot & {
+	trackId: string;
 };
 
 function buildTranscriptAudioRevision({
@@ -20,7 +32,6 @@ function buildTranscriptAudioRevision({
 export class AudioManager {
 	private audioContext: AudioContext | null = null;
 	private masterGain: GainNode | null = null;
-	private outputCompressor: DynamicsCompressorNode | null = null;
 	private lastIsPlaying = false;
 	private lastIsScrubbing = false;
 	private lastVolume = 1;
@@ -34,7 +45,17 @@ export class AudioManager {
 	private driftResyncThresholdSeconds = 0.35;
 	private outputAnalyser: AnalyserNode | null = null;
 	private outputMeterData: Float32Array | null = null;
-	private outputMeterTimer: number | null = null;
+	private outputMeterFrame: number | null = null;
+	private previousOutputLevel: MeterLevelSnapshot = {
+		peak: 0,
+		rms: 0,
+		rmsDb: -120,
+		silent: true,
+	};
+	private previousTrackLevels = new Map<string, TrackMeterLevelSnapshot>();
+	private meterReleasePeakPerSecond = 1.35;
+	private meterReleaseDbPerSecond = 26;
+	private meterLastFrameAtMs: number | null = null;
 	private unsubscribers: Array<() => void> = [];
 	private lastAudioFingerprint = "";
 	private rebuildDebounceTimer: number | null = null;
@@ -86,6 +107,7 @@ export class AudioManager {
 			globalScope[AUDIO_MANAGER_GLOBAL_KEY] = null;
 		}
 		this.stopPlaybackOutputs();
+		this.emitSilentMeterLevels();
 		for (const unsub of this.unsubscribers) {
 			unsub();
 		}
@@ -132,6 +154,7 @@ export class AudioManager {
 			} else {
 				this.playbackRequestId += 1;
 				this.stopPlaybackOutputs();
+				this.emitSilentMeterLevels();
 				this.streamingEngine?.dispose();
 				this.streamingEngine = null;
 				void this.resetAudioContext();
@@ -260,33 +283,11 @@ export class AudioManager {
 		this.masterGain.gain.value = this.editor.playback.getIsPlaying()
 			? this.lastVolume
 			: 0;
-		this.outputCompressor = this.audioContext.createDynamicsCompressor();
-		this.outputCompressor.threshold.setValueAtTime(
-			-14,
-			this.audioContext.currentTime,
-		);
-		this.outputCompressor.knee.setValueAtTime(
-			20,
-			this.audioContext.currentTime,
-		);
-		this.outputCompressor.ratio.setValueAtTime(
-			6,
-			this.audioContext.currentTime,
-		);
-		this.outputCompressor.attack.setValueAtTime(
-			0.003,
-			this.audioContext.currentTime,
-		);
-		this.outputCompressor.release.setValueAtTime(
-			0.2,
-			this.audioContext.currentTime,
-		);
 		this.outputAnalyser = this.audioContext.createAnalyser();
-		this.outputAnalyser.fftSize = 1024;
-		this.outputAnalyser.smoothingTimeConstant = 0.5;
+		this.outputAnalyser.fftSize = 512;
+		this.outputAnalyser.smoothingTimeConstant = 0.18;
 		this.outputMeterData = new Float32Array(this.outputAnalyser.fftSize);
-		this.masterGain.connect(this.outputCompressor);
-		this.outputCompressor.connect(this.outputAnalyser);
+		this.masterGain.connect(this.outputAnalyser);
 		this.outputAnalyser.connect(this.audioContext.destination);
 		this.startOutputMetering();
 		return this.audioContext;
@@ -388,10 +389,10 @@ export class AudioManager {
 		const context = this.audioContext;
 		this.audioContext = null;
 		this.masterGain = null;
-		this.outputCompressor = null;
 		this.outputAnalyser = null;
 		this.outputMeterData = null;
 		this.stopOutputMetering();
+		this.emitSilentMeterLevels();
 		try {
 			await context.close();
 		} catch (error) {
@@ -402,10 +403,25 @@ export class AudioManager {
 	private startOutputMetering(): void {
 		this.stopOutputMetering();
 		if (typeof window === "undefined") return;
-		this.outputMeterTimer = window.setInterval(() => {
-			if (!this.audioContext || !this.outputAnalyser || !this.outputMeterData)
+		const tick = (frameAtMs: number) => {
+			const deltaSeconds =
+				this.meterLastFrameAtMs === null
+					? 1 / 60
+					: Math.max(
+							1 / 240,
+							Math.min(0.1, (frameAtMs - this.meterLastFrameAtMs) / 1000),
+						);
+			this.meterLastFrameAtMs = frameAtMs;
+			if (!this.audioContext || !this.outputAnalyser || !this.outputMeterData) {
+				this.emitSilentMeterLevels();
+				this.outputMeterFrame = window.requestAnimationFrame(tick);
 				return;
-			if (this.audioContext.state !== "running") return;
+			}
+			if (this.audioContext.state !== "running") {
+				this.emitSilentMeterLevels();
+				this.outputMeterFrame = window.requestAnimationFrame(tick);
+				return;
+			}
 			this.outputAnalyser.getFloatTimeDomainData(this.outputMeterData);
 			let peak = 0;
 			let sumSquares = 0;
@@ -417,24 +433,156 @@ export class AudioManager {
 			}
 			const rms = Math.sqrt(sumSquares / this.outputMeterData.length);
 			const rmsDb = rms > 0 ? 20 * Math.log10(rms) : -120;
-			window.dispatchEvent(
-				new CustomEvent("opencut:audio-output-level", {
-					detail: {
-						peak,
-						rms,
-						rmsDb,
-						silent: peak < 1e-4,
-						isPlaying: this.editor.playback.getIsPlaying(),
-					},
-				}),
-			);
-		}, 120);
+			this.emitMeterLevels({
+				peak,
+				rms,
+				rmsDb,
+				silent: peak < 1e-4,
+				tracks: this.streamingEngine?.getTrackLevels() ?? [],
+				deltaSeconds,
+			});
+			this.outputMeterFrame = window.requestAnimationFrame(tick);
+		};
+		this.outputMeterFrame = window.requestAnimationFrame(tick);
+	}
+
+	private emitMeterLevels({
+		peak,
+		rms,
+		rmsDb,
+		silent,
+		tracks,
+		deltaSeconds,
+	}: {
+		peak: number;
+		rms: number;
+		rmsDb: number;
+		silent: boolean;
+		tracks: TrackMeterLevelSnapshot[];
+		deltaSeconds?: number;
+	}): void {
+		if (typeof window === "undefined") return;
+		const nextOutputLevel = this.applyMeterRelease({
+			next: {
+				peak,
+				rms,
+				rmsDb,
+				silent,
+			},
+			previous: this.previousOutputLevel,
+			deltaSeconds,
+		});
+		this.previousOutputLevel = nextOutputLevel;
+		const nextTrackLevels = tracks.map((track) => {
+			const smoothedTrack = this.applyMeterRelease({
+				next: track,
+				previous: this.previousTrackLevels.get(track.trackId),
+				deltaSeconds,
+			});
+			const trackLevel = {
+				trackId: track.trackId,
+				...smoothedTrack,
+			};
+			this.previousTrackLevels.set(track.trackId, trackLevel);
+			return trackLevel;
+		});
+		for (const trackId of Array.from(this.previousTrackLevels.keys())) {
+			if (!nextTrackLevels.some((track) => track.trackId === trackId)) {
+				this.previousTrackLevels.delete(trackId);
+			}
+		}
+		window.dispatchEvent(
+			new CustomEvent("opencut:audio-output-level", {
+				detail: {
+					peak: nextOutputLevel.peak,
+					rms: nextOutputLevel.rms,
+					rmsDb: nextOutputLevel.rmsDb,
+					silent: nextOutputLevel.silent,
+					isPlaying: this.editor.playback.getIsPlaying(),
+				},
+			}),
+		);
+		window.dispatchEvent(
+			new CustomEvent("opencut:audio-track-levels", {
+				detail: {
+					tracks: nextTrackLevels,
+					isPlaying: this.editor.playback.getIsPlaying(),
+				},
+			}),
+		);
+	}
+
+	private emitSilentMeterLevels(): void {
+		this.previousOutputLevel = {
+			peak: 0,
+			rms: 0,
+			rmsDb: -120,
+			silent: true,
+		};
+		this.previousTrackLevels.clear();
+		this.meterLastFrameAtMs = null;
+		const silentTracks = this.editor.timeline
+			.getTracks()
+			.filter((track) => track.type === "audio" || track.type === "video")
+			.map((track) => ({
+				trackId: track.id,
+				peak: 0,
+				rms: 0,
+				rmsDb: -120,
+				silent: true,
+			}));
+		this.emitMeterLevels({
+			peak: 0,
+			rms: 0,
+			rmsDb: -120,
+			silent: true,
+			tracks: silentTracks,
+		});
 	}
 
 	private stopOutputMetering(): void {
-		if (this.outputMeterTimer === null || typeof window === "undefined") return;
-		window.clearInterval(this.outputMeterTimer);
-		this.outputMeterTimer = null;
+		if (this.outputMeterFrame === null || typeof window === "undefined") return;
+		window.cancelAnimationFrame(this.outputMeterFrame);
+		this.outputMeterFrame = null;
+		this.meterLastFrameAtMs = null;
+	}
+
+	private applyMeterRelease({
+		next,
+		previous,
+		deltaSeconds,
+	}: {
+		next: MeterLevelSnapshot;
+		previous?: MeterLevelSnapshot;
+		deltaSeconds?: number;
+	}): MeterLevelSnapshot {
+		if (!previous) return next;
+		if (next.silent) {
+			return {
+				peak: 0,
+				rms: 0,
+				rmsDb: -120,
+				silent: true,
+			};
+		}
+
+		const elapsedSeconds = Math.max(1 / 240, deltaSeconds ?? 1 / 60);
+		const peak =
+			next.peak >= previous.peak
+				? next.peak
+				: Math.max(next.peak, previous.peak - this.meterReleasePeakPerSecond * elapsedSeconds);
+		const rmsDb =
+			next.rmsDb >= previous.rmsDb
+				? next.rmsDb
+				: Math.max(next.rmsDb, previous.rmsDb - this.meterReleaseDbPerSecond * elapsedSeconds);
+		const rms = rmsDb <= -120 ? 0 : 10 ** (rmsDb / 20);
+
+		return {
+			peak,
+			rms,
+			rmsDb,
+			silent: peak < 1e-4 && rmsDb <= -110,
+		};
 	}
 
 	private async startPlayback({
@@ -544,7 +692,8 @@ export class AudioManager {
 
 	getPlaybackClockTime(): number | null {
 		if (!this.editor.playback.getIsPlaying()) return null;
-		return this.streamingEngine?.getClockTime() ?? null;
+		if (!this.streamingEngine?.isTransportActive()) return null;
+		return this.streamingEngine.getClockTime();
 	}
 
 	getAudioGraphState(): {
@@ -717,6 +866,9 @@ export class AudioManager {
 			updateHash(track.type);
 			updateHash(muted);
 			updateHash(volume);
+			if (track.type === "audio" || track.type === "video") {
+				updateHash(getTrackAudioEffectsFingerprint(track.audioEffects));
+			}
 			updateHash(String(track.elements.length));
 			for (const element of track.elements) {
 				if (element.type === "audio") {

@@ -20,6 +20,7 @@ export const TAB_KEYS = [
 	"transcript",
 	"text",
 	"stickers",
+	"mixer",
 	"transitions",
 	"overlay",
 	"settings",
@@ -65,6 +66,25 @@ function OcTransitionsIcon({ className }: { className?: string }) {
 	);
 }
 
+function OcMixerIcon({ className }: { className?: string }) {
+	return (
+		<svg
+			viewBox="0 0 24 24"
+			fill="none"
+			xmlns="http://www.w3.org/2000/svg"
+			className={className}
+		>
+			<title>Mixer</title>
+			<path d="M6 5V19" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+			<path d="M12 5V19" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+			<path d="M18 5V19" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+			<circle cx="6" cy="9" r="2.2" fill="currentColor" />
+			<circle cx="12" cy="15" r="2.2" fill="currentColor" />
+			<circle cx="18" cy="11" r="2.2" fill="currentColor" />
+		</svg>
+	);
+}
+
 export const tabs = {
 	media: {
 		icon: createHugeiconsIcon({ icon: Folder03Icon }),
@@ -89,6 +109,10 @@ export const tabs = {
 	stickers: {
 		icon: createHugeiconsIcon({ icon: Happy01Icon }),
 		label: "Stickers",
+	},
+	mixer: {
+		icon: OcMixerIcon,
+		label: "Mixer",
 	},
 	transitions: {
 		icon: OcTransitionsIcon,

@@ -17,6 +17,7 @@ import { TextView } from "./views/text";
 import { OverlayView } from "./views/overlay";
 import { TranscriptView } from "./views/transcript";
 import { MusicView } from "./views/music";
+import { MixerView } from "./views/mixer";
 import { cn } from "@/utils/ui";
 
 export function AssetsPanel() {
@@ -36,6 +37,7 @@ export function AssetsPanel() {
 		transcript: <TranscriptView />,
 		text: <TextView />,
 		stickers: <StickersView />,
+		mixer: <MixerView />,
 		transitions: <TransitionsView />,
 		overlay: <OverlayView />,
 		settings: <SettingsView />,
