@@ -386,6 +386,13 @@ export class SplitElementsCommand extends Command {
 				const relativeTime = this.splitTime - element.startTime;
 				const leftVisibleDuration = relativeTime;
 				const rightVisibleDuration = element.duration - relativeTime;
+				const linkedVideoReframeSourceId =
+					element.type === "video"
+						? (element.linkedReframeSourceId ?? generateUUID())
+						: null;
+				const linkedVideoReframeUpdates = linkedVideoReframeSourceId
+					? { linkedReframeSourceId: linkedVideoReframeSourceId }
+					: {};
 				const splitVideoReframeState =
 					element.type === "video"
 						? splitVideoAngleSectionsAtTime({
@@ -432,6 +439,7 @@ export class SplitElementsCommand extends Command {
 										duration: leftVisibleDuration,
 										trimEnd: element.trimEnd + rightVisibleDuration,
 										name: `${element.name} (left)`,
+										...linkedVideoReframeUpdates,
 										...(splitVideoReframeState?.left ?? {}),
 										animations: leftAnimations,
 									} as VideoElement | AudioElement,
@@ -444,6 +452,7 @@ export class SplitElementsCommand extends Command {
 							duration: leftVisibleDuration,
 							trimEnd: element.trimEnd + rightVisibleDuration,
 							name: `${element.name} (left)`,
+							...linkedVideoReframeUpdates,
 							...(splitVideoReframeState?.left ?? {}),
 							animations: leftAnimations,
 						},
@@ -494,6 +503,7 @@ export class SplitElementsCommand extends Command {
 										duration: rightVisibleDuration,
 										trimStart: element.trimStart + leftVisibleDuration,
 										name: `${element.name} (right)`,
+										...linkedVideoReframeUpdates,
 										...(splitVideoReframeState?.right ?? {}),
 										animations: rightAnimations,
 									} as VideoElement | AudioElement,
@@ -508,6 +518,7 @@ export class SplitElementsCommand extends Command {
 							duration: rightVisibleDuration,
 							trimStart: element.trimStart + leftVisibleDuration,
 							name: `${element.name} (right)`,
+							...linkedVideoReframeUpdates,
 							...(splitVideoReframeState?.right ?? {}),
 							animations: rightAnimations,
 						},
@@ -555,6 +566,7 @@ export class SplitElementsCommand extends Command {
 									duration: leftVisibleDuration,
 									trimEnd: element.trimEnd + rightVisibleDuration,
 									name: `${element.name} (left)`,
+									...linkedVideoReframeUpdates,
 									...(splitVideoReframeState?.left ?? {}),
 									animations: leftAnimations,
 								} as VideoElement | AudioElement,
@@ -567,6 +579,7 @@ export class SplitElementsCommand extends Command {
 						duration: leftVisibleDuration,
 						trimEnd: element.trimEnd + rightVisibleDuration,
 						name: `${element.name} (left)`,
+						...linkedVideoReframeUpdates,
 						...(splitVideoReframeState?.left ?? {}),
 						animations: leftAnimations,
 					},
@@ -579,6 +592,7 @@ export class SplitElementsCommand extends Command {
 									duration: rightVisibleDuration,
 									trimStart: element.trimStart + leftVisibleDuration,
 									name: `${element.name} (right)`,
+									...linkedVideoReframeUpdates,
 									...(splitVideoReframeState?.right ?? {}),
 									animations: rightAnimations,
 								} as VideoElement | AudioElement,
@@ -593,6 +607,7 @@ export class SplitElementsCommand extends Command {
 						duration: rightVisibleDuration,
 						trimStart: element.trimStart + leftVisibleDuration,
 						name: `${element.name} (right)`,
+						...linkedVideoReframeUpdates,
 						...(splitVideoReframeState?.right ?? {}),
 						animations: rightAnimations,
 					},

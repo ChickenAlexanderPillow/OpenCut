@@ -651,6 +651,9 @@ function PreviewCanvas({
 	const [freezeFrameDataUrl, setFreezeFrameDataUrl] = useState<string | null>(
 		null,
 	);
+	const [webgpuDividerRects, setWebgpuDividerRects] = useState<
+		Array<{ x: number; y: number; width: number; height: number }>
+	>([]);
 	const renderReadyRef = useRef(true);
 	const previousDisplaySizeRef = useRef<{ width: number; height: number }>({
 		width: 0,
@@ -795,6 +798,7 @@ function PreviewCanvas({
 							overlayCanvasRef.current.height,
 						);
 					}
+					setWebgpuDividerRects([]);
 					setSurface({ active: "canvas2d" });
 					return renderer.renderToCanvas({
 						node: scene,
@@ -812,6 +816,7 @@ function PreviewCanvas({
 					})
 					.then((result) => {
 						if (!result.usedWebGPU) {
+							setWebgpuDividerRects([]);
 							setSurface({ active: "canvas2d" });
 							if (
 								previewRendererMode === "auto" &&
@@ -826,6 +831,7 @@ function PreviewCanvas({
 								targetCanvas: canvas2d,
 							});
 						}
+						setWebgpuDividerRects(result.dividerRects ?? []);
 						setSurface({ active: "webgpu" });
 					})
 					.catch((error) => {
@@ -842,6 +848,7 @@ function PreviewCanvas({
 						if (fatal && previewRendererMode === "auto") {
 							runtimeFallbackRef.current = message;
 						}
+						setWebgpuDividerRects([]);
 						setSurface({ active: "canvas2d" });
 						return renderer.renderToCanvas({
 							node: scene,
@@ -913,6 +920,7 @@ function PreviewCanvas({
 	useEffect(() => {
 		void previewRendererMode;
 		runtimeFallbackRef.current = null;
+		setWebgpuDividerRects([]);
 		setActiveSurface("canvas2d");
 	}, [previewRendererMode]);
 
@@ -1041,6 +1049,39 @@ function PreviewCanvas({
 								background: "transparent",
 							}}
 						/>
+						{activeSurface === "webgpu" && webgpuDividerRects.length > 0 && (
+							<div
+								className="pointer-events-none absolute inset-0 z-10"
+								aria-hidden
+							>
+								{webgpuDividerRects.map((divider) => {
+									const scaledTop =
+										(divider.y / nativeHeight) * effectiveDisplaySize.height;
+									const scaledHeight =
+										(divider.height / nativeHeight) *
+										effectiveDisplaySize.height;
+									const visibleHeight = Math.max(2, scaledHeight);
+									return (
+										<div
+											key={`${divider.x}:${divider.y}:${divider.width}:${divider.height}`}
+											className="absolute bg-black"
+											style={{
+												left:
+													(divider.x / nativeWidth) *
+													effectiveDisplaySize.width,
+												top:
+													scaledTop -
+													(visibleHeight - scaledHeight) / 2,
+												width:
+													(divider.width / nativeWidth) *
+													effectiveDisplaySize.width,
+												height: visibleHeight,
+											}}
+										/>
+									);
+								})}
+							</div>
+						)}
 						<PreviewInteractionOverlay
 							canvasRef={interactionCanvasRef}
 							containerRef={canvasBoundsRef}

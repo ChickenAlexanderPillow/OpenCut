@@ -691,6 +691,37 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 		return new Float32Array(data);
 	}
 
+	private drawSplitDividerOverlays({
+		draws,
+		overlayCanvas,
+	}: {
+		draws: WebGPUVisualDrawData[];
+		overlayCanvas: HTMLCanvasElement;
+	}) {
+		const overlayCtx = overlayCanvas.getContext("2d");
+		if (!overlayCtx) return;
+		const dividerDraws = draws.filter(
+			(draw) =>
+				draw.solidColor === "#000000" &&
+				!draw.source &&
+				typeof draw.x === "number" &&
+				typeof draw.y === "number" &&
+				typeof draw.width === "number" &&
+				typeof draw.height === "number" &&
+				draw.width > 0 &&
+				draw.height > 0,
+		);
+		if (dividerDraws.length === 0) return;
+		overlayCtx.save();
+		overlayCtx.globalCompositeOperation = "source-over";
+		overlayCtx.globalAlpha = 1;
+		overlayCtx.fillStyle = "#000000";
+		for (const draw of dividerDraws) {
+			overlayCtx.fillRect(draw.x, draw.y, draw.width, draw.height);
+		}
+		overlayCtx.restore();
+	}
+
 	private expandDrawListWithMotionBlur({
 		drawList,
 	}: {
@@ -854,6 +885,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 		usedWebGPU: boolean;
 		reasonIfFallback?: string;
 		shouldDisableWebGPU?: boolean;
+		dividerRects?: Array<{ x: number; y: number; width: number; height: number }>;
 		stats?: {
 			externalVideoFrames: number;
 			copiedTextureUploads: number;
@@ -867,6 +899,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				reasonIfFallback:
 					this.initErrorReason ?? "WebGPU initialization failed",
 				shouldDisableWebGPU: true,
+				dividerRects: [],
 			};
 		}
 		if (!this.ensurePresentationContext({ targetCanvas })) {
@@ -875,6 +908,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				reasonIfFallback:
 					this.initErrorReason ?? "WebGPU presentation setup failed",
 				shouldDisableWebGPU: true,
+				dividerRects: [],
 			};
 		}
 		this.pruneIdleTextures();
@@ -885,6 +919,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				usedWebGPU: false,
 				reasonIfFallback: partition.reasonIfUnsupported,
 				shouldDisableWebGPU: false,
+				dividerRects: [],
 			};
 		}
 
@@ -897,6 +932,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				usedWebGPU: false,
 				reasonIfFallback: "No GPU-eligible frames available at current time",
 				shouldDisableWebGPU: false,
+				dividerRects: [],
 			};
 		}
 
@@ -914,8 +950,27 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				usedWebGPU: false,
 				reasonIfFallback: "WebGPU context unavailable",
 				shouldDisableWebGPU: true,
+				dividerRects: [],
 			};
 		}
+		const dividerRects = draws
+			.filter(
+				(draw) =>
+					draw.solidColor === "#000000" &&
+					!draw.source &&
+					typeof draw.x === "number" &&
+					typeof draw.y === "number" &&
+					typeof draw.width === "number" &&
+					typeof draw.height === "number" &&
+					draw.width > 0 &&
+					draw.height > 0,
+			)
+			.map((draw) => ({
+				x: draw.x,
+				y: draw.y,
+				width: draw.width,
+				height: draw.height,
+			}));
 		const encoder = device.createCommandEncoder();
 		const pass = encoder.beginRenderPass({
 			colorAttachments: [
@@ -1095,6 +1150,10 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				fps: this.fps,
 				clear: true,
 			});
+			this.drawSplitDividerOverlays({
+				draws,
+				overlayCanvas,
+			});
 		} else if (partition.cpuPostNodes.length > 0) {
 			const fallbackCtx = targetCanvas.getContext("2d");
 			if (!fallbackCtx) {
@@ -1102,6 +1161,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 					usedWebGPU: false,
 					reasonIfFallback: "Overlay canvas required for CPU overlay nodes",
 					shouldDisableWebGPU: false,
+					dividerRects: [],
 				};
 			}
 			await this.renderNodesCpu({
@@ -1115,6 +1175,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 
 		return {
 			usedWebGPU: true,
+			dividerRects,
 			stats: {
 				externalVideoFrames,
 				copiedTextureUploads,

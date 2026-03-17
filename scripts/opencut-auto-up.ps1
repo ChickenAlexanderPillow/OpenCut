@@ -26,4 +26,4 @@ if (-not (Test-DockerReady)) {
 	exit 1
 }
 
-docker compose up -d redis serverless-redis-http local-transcribe web
+node scripts/docker-up.mjs full

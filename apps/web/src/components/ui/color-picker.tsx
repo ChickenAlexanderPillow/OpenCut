@@ -207,7 +207,10 @@ const ColorPicker = forwardRef<HTMLDivElement, ColorPickerProps>(
 				format: colorFormat,
 			});
 			if (parsed) {
-				const nextHex = appendAlpha({ rgbHex: parsed, alpha });
+				const hasExplicitAlpha = parsed.length > 6;
+				const nextHex = hasExplicitAlpha
+					? parsed
+					: appendAlpha({ rgbHex: parsed, alpha });
 				onChange?.(nextHex);
 				onChangeEnd?.(nextHex);
 				return;

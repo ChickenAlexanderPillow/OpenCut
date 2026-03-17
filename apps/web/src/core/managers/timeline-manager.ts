@@ -360,7 +360,7 @@ export class TimelineManager {
 					element.defaultReframePresetId ?? preset.id,
 			},
 		});
-		this.updateSingleVideoElement({
+		this.updateVideoElementAndLinkedReframeElements({
 			trackId,
 			elementId,
 			nextElement,
@@ -405,7 +405,7 @@ export class TimelineManager {
 				),
 			},
 		});
-		this.updateSingleVideoElement({
+		this.updateVideoElementAndLinkedReframeElements({
 			trackId,
 			elementId,
 			nextElement,
@@ -440,7 +440,7 @@ export class TimelineManager {
 				reframePresets: [...(element.reframePresets ?? []), duplicatedPreset],
 			},
 		});
-		this.updateSingleVideoElement({
+		this.updateVideoElementAndLinkedReframeElements({
 			trackId,
 			elementId,
 			nextElement,
@@ -486,7 +486,7 @@ export class TimelineManager {
 						: element.defaultReframePresetId,
 			},
 		});
-		this.updateSingleVideoElement({
+		this.updateVideoElementAndLinkedReframeElements({
 			trackId,
 			elementId,
 			nextElement,
@@ -513,7 +513,7 @@ export class TimelineManager {
 				defaultReframePresetId: presetId,
 			},
 		});
-		this.updateSingleVideoElement({
+		this.updateVideoElementAndLinkedReframeElements({
 			trackId,
 			elementId,
 			nextElement,
@@ -691,7 +691,7 @@ export class TimelineManager {
 				splitScreen: nextSplitScreen,
 			},
 		});
-		this.updateSingleVideoElement({
+		this.updateVideoElementAndLinkedReframeElements({
 			trackId,
 			elementId,
 			nextElement,
@@ -1135,6 +1135,139 @@ export class TimelineManager {
 		return element?.type === "video" ? normalizeVideoReframeState({ element }) : null;
 	}
 
+	private buildSharedLinkedVideoReframeElement({
+		targetElement,
+		sourceElement,
+	}: {
+		targetElement: VideoElement;
+		sourceElement: VideoElement;
+	}): VideoElement {
+		const syncedTargetSections =
+			targetElement.splitScreen?.sections?.map((section) => ({
+				...section,
+				slots: sourceElement.splitScreen?.slots ?? section.slots,
+			})) ?? sourceElement.splitScreen?.sections;
+		const nextSplitScreen = sourceElement.splitScreen
+			? {
+					...(targetElement.splitScreen ?? sourceElement.splitScreen),
+					enabled: sourceElement.splitScreen.enabled,
+					layoutPreset: sourceElement.splitScreen.layoutPreset,
+					viewportBalance: sourceElement.splitScreen.viewportBalance,
+					slots: sourceElement.splitScreen.slots,
+					sections: syncedTargetSections ?? [],
+			  }
+			: undefined;
+
+		return normalizeVideoReframeState({
+			element: {
+				...targetElement,
+				reframePresets: sourceElement.reframePresets,
+				defaultReframePresetId: sourceElement.defaultReframePresetId,
+				reframeSeededBy: sourceElement.reframeSeededBy,
+				splitScreen: nextSplitScreen,
+			},
+		});
+	}
+
+	private buildLinkedVideoReframeUpdateForTarget({
+		sourceElement,
+		targetElement,
+		updates,
+	}: {
+		sourceElement: VideoElement;
+		targetElement: VideoElement;
+		updates: Partial<Record<string, unknown>>;
+	}): Partial<Record<string, unknown>> | null {
+		const nextUpdates: Partial<Record<string, unknown>> = {};
+
+		if ("reframePresets" in updates) {
+			nextUpdates.reframePresets = updates.reframePresets;
+		}
+		if ("defaultReframePresetId" in updates) {
+			nextUpdates.defaultReframePresetId = updates.defaultReframePresetId;
+		}
+		if ("reframeSeededBy" in updates) {
+			nextUpdates.reframeSeededBy = updates.reframeSeededBy;
+		}
+		if ("splitScreen" in updates) {
+			const sourceSplitScreen = updates.splitScreen as
+				| VideoElement["splitScreen"]
+				| null
+				| undefined;
+			const syncedTargetSections =
+				targetElement.splitScreen?.sections?.map((section) => ({
+					...section,
+					slots: sourceSplitScreen?.slots ?? section.slots,
+				})) ??
+				sourceElement.splitScreen?.sections ??
+				sourceSplitScreen?.sections;
+			nextUpdates.splitScreen = sourceSplitScreen
+				? {
+						...(targetElement.splitScreen ?? sourceSplitScreen),
+						enabled: sourceSplitScreen.enabled,
+						layoutPreset: sourceSplitScreen.layoutPreset,
+						viewportBalance: sourceSplitScreen.viewportBalance,
+						slots: sourceSplitScreen.slots,
+						sections: syncedTargetSections ?? [],
+				  }
+				: undefined;
+		}
+
+		return Object.keys(nextUpdates).length > 0 ? nextUpdates : null;
+	}
+
+	private updateVideoElementAndLinkedReframeElements({
+		trackId,
+		elementId,
+		nextElement,
+		pushHistory,
+	}: {
+		trackId: string;
+		elementId: string;
+		nextElement: VideoElement;
+		pushHistory: boolean;
+	}): void {
+		if (!nextElement.linkedReframeSourceId) {
+			this.updateSingleVideoElement({
+				trackId,
+				elementId,
+				nextElement,
+				pushHistory,
+			});
+			return;
+		}
+
+		const linkedElementUpdates = this.getTracks().flatMap((track) => {
+			if (track.type !== "video") return [];
+			return track.elements.flatMap((element) => {
+				if (
+					element.type !== "video" ||
+					element.linkedReframeSourceId !== nextElement.linkedReframeSourceId
+				) {
+					return [];
+				}
+				if (track.id === trackId && element.id === elementId) {
+					return [{ trackId, elementId, nextElement }];
+				}
+				return [
+					{
+						trackId: track.id,
+						elementId: element.id,
+						nextElement: this.buildSharedLinkedVideoReframeElement({
+							targetElement: element,
+							sourceElement: nextElement,
+						}),
+					},
+				];
+			});
+		});
+
+		this.updateVideoElements({
+			nextElements: linkedElementUpdates,
+			pushHistory,
+		});
+	}
+
 	private updateSingleVideoElement({
 		trackId,
 		elementId,
@@ -1146,13 +1279,38 @@ export class TimelineManager {
 		nextElement: VideoElement;
 		pushHistory: boolean;
 	}): void {
+		this.updateVideoElements({
+			nextElements: [{ trackId, elementId, nextElement }],
+			pushHistory,
+		});
+	}
+
+	private updateVideoElements({
+		nextElements,
+		pushHistory,
+	}: {
+		nextElements: Array<{
+			trackId: string;
+			elementId: string;
+			nextElement: VideoElement;
+		}>;
+		pushHistory: boolean;
+	}): void {
+		if (nextElements.length === 0) return;
+
+		const nextElementMap = new Map(
+			nextElements.map(({ trackId, elementId, nextElement }) => [
+				`${trackId}:${elementId}`,
+				nextElement,
+			]),
+		);
 		const currentTracks = this.getTracks();
 		const updatedTracks = currentTracks.map((track) => {
-			if (track.id !== trackId || track.type !== "video") return track;
+			if (track.type !== "video") return track;
 			return {
 				...track,
 				elements: track.elements.map((element) =>
-					element.id === elementId ? nextElement : element,
+					nextElementMap.get(`${track.id}:${element.id}`) ?? element,
 				),
 			} as TimelineTrack;
 		});
@@ -1395,6 +1553,54 @@ export class TimelineManager {
 						trackId: captionTrack.id,
 						elementId: captionElement.id,
 						updates: nextUpdates,
+					});
+				}
+			}
+		}
+
+		for (const update of updates) {
+			const track = tracks.find((item) => item.id === update.trackId);
+			const element = track?.elements.find(
+				(item) => item.id === update.elementId,
+			);
+			if (
+				track?.type !== "video" ||
+				element?.type !== "video" ||
+				!element.linkedReframeSourceId
+			) {
+				continue;
+			}
+
+			const nextSharedUpdates = this.buildLinkedVideoReframeUpdateForTarget({
+				sourceElement: element,
+				targetElement: element,
+				updates: update.updates,
+			});
+			if (!nextSharedUpdates) continue;
+
+			for (const videoTrack of tracks.filter((item) => item.type === "video")) {
+				for (const videoElement of videoTrack.elements) {
+					if (
+						videoElement.type !== "video" ||
+						videoElement.linkedReframeSourceId !==
+							element.linkedReframeSourceId ||
+						(videoTrack.id === update.trackId &&
+							videoElement.id === update.elementId)
+					) {
+						continue;
+					}
+
+					const mirroredUpdates = this.buildLinkedVideoReframeUpdateForTarget({
+						sourceElement: element,
+						targetElement: videoElement,
+						updates: update.updates,
+					});
+					if (!mirroredUpdates) continue;
+
+					upsert({
+						trackId: videoTrack.id,
+						elementId: videoElement.id,
+						updates: mirroredUpdates,
 					});
 				}
 			}

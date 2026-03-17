@@ -640,16 +640,29 @@ export function getVideoSplitScreenViewports({
 	height: number;
 }): Map<string, VideoSplitScreenViewport> {
 	if (layoutPreset !== "top-bottom") {
+		const halfHeight = Math.max(0, (height - SPLIT_DIVIDER_THICKNESS) / 2);
+		const topHeight = Math.round(halfHeight);
+		const bottomY = topHeight + SPLIT_DIVIDER_THICKNESS;
 		return new Map([
-			["top", { x: 0, y: 0, width, height: height / 2 }],
-			["bottom", { x: 0, y: height / 2, width, height: height / 2 }],
+			["top", { x: 0, y: 0, width, height: topHeight }],
+			[
+				"bottom",
+				{
+					x: 0,
+					y: bottomY,
+					width,
+					height: Math.max(0, height - bottomY),
+				},
+			],
 		]);
 	}
-	const topHeight =
+	const availableHeight = Math.max(0, height - SPLIT_DIVIDER_THICKNESS);
+	const topHeight = Math.round(
 		viewportBalance === "unbalanced"
-			? height * UNBALANCED_TOP_SPLIT_RATIO
-			: height / 2;
-	const bottomY = topHeight;
+			? availableHeight * UNBALANCED_TOP_SPLIT_RATIO
+			: availableHeight / 2,
+	);
+	const bottomY = topHeight + SPLIT_DIVIDER_THICKNESS;
 	return new Map([
 		["top", { x: 0, y: 0, width, height: topHeight }],
 		[
@@ -680,14 +693,12 @@ export function getVideoSplitScreenDividers({
 	const topViewport = viewports.get("top");
 	const bottomViewport = viewports.get("bottom");
 	if (!topViewport || !bottomViewport) return [];
-	const dividerThickness = SPLIT_DIVIDER_THICKNESS;
-	const centerY = (topViewport.y + topViewport.height + bottomViewport.y) / 2;
 	return [
 		{
 			x: 0,
-			y: Math.round(centerY - dividerThickness / 2),
+			y: Math.round(topViewport.y + topViewport.height),
 			width,
-			height: dividerThickness,
+			height: Math.max(0, bottomViewport.y - (topViewport.y + topViewport.height)),
 		},
 	];
 }

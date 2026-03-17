@@ -114,6 +114,83 @@ function createVideoElement(): VideoElement {
 	};
 }
 
+function createVideoElementWithLinkedReframe({
+	id,
+	name,
+	startTime,
+	mediaId = "video-media-1",
+}: {
+	id: string;
+	name: string;
+	startTime: number;
+	mediaId?: string;
+}): VideoElement {
+	return {
+		id,
+		type: "video",
+		name,
+		startTime,
+		duration: 4,
+		trimStart: 0,
+		trimEnd: 0,
+		mediaId,
+		muted: false,
+		transform: { scale: 1, position: { x: 0, y: 0 }, rotate: 0 },
+		reframePresets: [
+			{
+				id: "preset-subject",
+				name: "Subject",
+				transform: { scale: 1.1, position: { x: 12, y: -8 } },
+				autoSeeded: false,
+			},
+			{
+				id: "preset-guest",
+				name: "Guest",
+				transform: { scale: 1.05, position: { x: -18, y: 6 } },
+				autoSeeded: false,
+			},
+		],
+		defaultReframePresetId: "preset-subject",
+		splitScreen: {
+			enabled: true,
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+			slots: [
+				{
+					slotId: "top",
+					mode: "fixed-preset",
+					presetId: "preset-subject",
+				},
+				{
+					slotId: "bottom",
+					mode: "fixed-preset",
+					presetId: "preset-guest",
+				},
+			],
+			sections: [
+				{
+					id: "split-section-1",
+					startTime: 1,
+					enabled: true,
+					slots: [
+						{
+							slotId: "top",
+							mode: "fixed-preset",
+							presetId: "preset-subject",
+						},
+						{
+							slotId: "bottom",
+							mode: "fixed-preset",
+							presetId: "preset-guest",
+						},
+					],
+				},
+			],
+		},
+		opacity: 1,
+	};
+}
+
 
 function initializeEditor(): EditorCore {
 	const editor = EditorCore.getInstance();
@@ -210,6 +287,71 @@ function initializeEditorWithPairedVideoAudio(): EditorCore {
 			id: "project-1",
 			name: "Paired Trim",
 			duration: 2,
+			createdAt: new Date("2026-03-13T10:00:00.000Z"),
+			updatedAt: new Date("2026-03-13T10:00:00.000Z"),
+		},
+		scenes: [scene],
+		currentSceneId: scene.id,
+		settings: {
+			fps: DEFAULT_FPS,
+			canvasSize: DEFAULT_CANVAS_SIZE,
+			originalCanvasSize: null,
+			background: {
+				type: "color",
+				color: DEFAULT_COLOR,
+			},
+		},
+		brandOverlays: {
+			selectedBrandId: DEFAULT_BRAND_OVERLAYS.selectedBrandId,
+			logo: { ...DEFAULT_BRAND_OVERLAYS.logo },
+		},
+		version: CURRENT_PROJECT_VERSION,
+	};
+
+	editor.project.setActiveProject({ project });
+	editor.scenes.initializeScenes({
+		scenes: project.scenes,
+		currentSceneId: project.currentSceneId,
+	});
+	return editor;
+}
+
+function initializeEditorWithLinkedReframeVideos(): EditorCore {
+	const editor = EditorCore.getInstance();
+	const sourceVideo = createVideoElementWithLinkedReframe({
+		id: "video-source",
+		name: "Source Video",
+		startTime: 0,
+	});
+	const independentVideo = createVideoElementWithLinkedReframe({
+		id: "video-independent",
+		name: "Independent Video",
+		startTime: 5,
+	});
+	const scene: TScene = {
+		id: "scene-1",
+		name: "Main scene",
+		isMain: true,
+		tracks: [
+			{
+				id: "track-video-1",
+				type: "video",
+				name: "Video",
+				isMain: true,
+				muted: false,
+				hidden: false,
+				elements: [sourceVideo, independentVideo],
+			},
+		],
+		bookmarks: [],
+		createdAt: new Date("2026-03-13T10:00:00.000Z"),
+		updatedAt: new Date("2026-03-13T10:00:00.000Z"),
+	};
+	const project: TProject = {
+		metadata: {
+			id: "project-1",
+			name: "Linked Reframe Video",
+			duration: 10,
 			createdAt: new Date("2026-03-13T10:00:00.000Z"),
 			updatedAt: new Date("2026-03-13T10:00:00.000Z"),
 		},
@@ -559,5 +701,132 @@ describe("SplitElementsCommand", () => {
 		expect(rightCaption.duration).toBeCloseTo(rightAudio.duration, 3);
 		expect(rightCaption.captionWordTimings?.[0]?.startTime).toBeCloseTo(1.4, 3);
 		expect(rightCaption.captionWordTimings?.[0]?.endTime).toBeCloseTo(1.8, 3);
+	});
+
+	test("split video descendants keep linked reframe framing in sync without affecting unrelated same-media clips", () => {
+		const editor = initializeEditorWithLinkedReframeVideos();
+
+		const splitResult = editor.timeline.splitElements({
+			elements: [{ trackId: "track-video-1", elementId: "video-source" }],
+			splitTime: 2,
+		});
+		const rightClipId = splitResult[0]?.elementId;
+		expect(rightClipId).toBeDefined();
+		if (!rightClipId) return;
+
+		const videoTrackAfterSplit = editor.timeline.getTrackById({
+			trackId: "track-video-1",
+		});
+		expect(videoTrackAfterSplit?.type).toBe("video");
+		if (videoTrackAfterSplit?.type !== "video") return;
+
+		const leftClip = videoTrackAfterSplit.elements.find(
+			(element) => element.id === "video-source",
+		);
+		const rightClip = videoTrackAfterSplit.elements.find(
+			(element) => element.id === rightClipId,
+		);
+		const independentClip = videoTrackAfterSplit.elements.find(
+			(element) => element.id === "video-independent",
+		);
+		expect(leftClip?.type).toBe("video");
+		expect(rightClip?.type).toBe("video");
+		expect(independentClip?.type).toBe("video");
+		if (
+			leftClip?.type !== "video" ||
+			rightClip?.type !== "video" ||
+			independentClip?.type !== "video"
+		) {
+			return;
+		}
+
+		expect(leftClip.linkedReframeSourceId).toBeDefined();
+		expect(rightClip.linkedReframeSourceId).toBe(leftClip.linkedReframeSourceId);
+		expect(independentClip.linkedReframeSourceId).toBeUndefined();
+
+		editor.timeline.updateVideoReframePreset({
+			trackId: "track-video-1",
+			elementId: leftClip.id,
+			presetId: "preset-subject",
+			updates: {
+				transform: {
+					scale: 1.42,
+					position: { x: 44, y: -26 },
+				},
+			},
+		});
+
+		editor.timeline.updateVideoSplitScreen({
+			trackId: "track-video-1",
+			elementId: leftClip.id,
+			updates: {
+				...(leftClip.splitScreen ?? {
+					enabled: true,
+					layoutPreset: "top-bottom",
+					viewportBalance: "balanced",
+					slots: [],
+					sections: [],
+				}),
+				viewportBalance: "unbalanced",
+				slots: [
+					{
+						slotId: "top",
+						mode: "fixed-preset",
+						presetId: "preset-subject",
+						transformAdjustmentsBySlotId: {
+							"unbalanced:top": {
+								sourceCenterOffset: { x: 24, y: -12 },
+								scaleMultiplier: 1.18,
+							},
+						},
+					},
+					{
+						slotId: "bottom",
+						mode: "fixed-preset",
+						presetId: "preset-guest",
+					},
+				],
+			},
+		});
+
+		const videoTrackAfterUpdate = editor.timeline.getTrackById({
+			trackId: "track-video-1",
+		});
+		expect(videoTrackAfterUpdate?.type).toBe("video");
+		if (videoTrackAfterUpdate?.type !== "video") return;
+
+		const syncedLeftClip = videoTrackAfterUpdate.elements.find(
+			(element) => element.id === leftClip.id,
+		);
+		const syncedRightClip = videoTrackAfterUpdate.elements.find(
+			(element) => element.id === rightClip.id,
+		);
+		const unchangedIndependentClip = videoTrackAfterUpdate.elements.find(
+			(element) => element.id === independentClip.id,
+		);
+		expect(syncedLeftClip?.type).toBe("video");
+		expect(syncedRightClip?.type).toBe("video");
+		expect(unchangedIndependentClip?.type).toBe("video");
+		if (
+			syncedLeftClip?.type !== "video" ||
+			syncedRightClip?.type !== "video" ||
+			unchangedIndependentClip?.type !== "video"
+		) {
+			return;
+		}
+
+		expect(syncedRightClip.reframePresets).toEqual(syncedLeftClip.reframePresets);
+		expect(syncedRightClip.splitScreen?.viewportBalance).toBe("unbalanced");
+		expect(syncedRightClip.splitScreen?.slots).toEqual(
+			syncedLeftClip.splitScreen?.slots,
+		);
+		expect(syncedRightClip.splitScreen?.sections?.map((section) => section.slots)).toEqual(
+			syncedLeftClip.splitScreen?.sections?.map((section) => section.slots),
+		);
+		expect(unchangedIndependentClip.reframePresets?.find((preset) => preset.id === "preset-subject")?.transform).toEqual({
+			scale: 1.1,
+			position: { x: 12, y: -8 },
+		});
+		expect(unchangedIndependentClip.splitScreen?.viewportBalance).toBe("balanced");
 	});
 });

@@ -221,6 +221,7 @@ interface BaseTimelineElement {
 export interface VideoElement extends BaseTimelineElement {
 	type: "video";
 	mediaId: string;
+	linkedReframeSourceId?: string;
 	muted?: boolean;
 	hidden?: boolean;
 	transcriptDraft?: TranscriptDraftState;

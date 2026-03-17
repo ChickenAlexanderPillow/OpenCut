@@ -391,6 +391,9 @@ export abstract class VisualNode<
 				width: renderer.width,
 				height: renderer.height,
 			});
+			renderer.context.save();
+			renderer.context.globalCompositeOperation = "source-over";
+			renderer.context.globalAlpha = 1;
 			renderer.context.fillStyle = "#000000";
 			for (const divider of dividerRects) {
 				renderer.context.fillRect(
@@ -400,6 +403,7 @@ export abstract class VisualNode<
 					divider.height,
 				);
 			}
+			renderer.context.restore();
 			renderer.context.restore();
 			return;
 		}

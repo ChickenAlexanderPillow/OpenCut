@@ -111,16 +111,24 @@ docker compose up -d
 
 The app will be available at [http://localhost:3000](http://localhost:3000).
 
-For this repo, the full stack (web + local transcribe + redis) can be started with:
+For this repo, the Docker helpers are:
 
 ```bash
 bun run docker:up
 ```
 
+Starts the full stack when an NVIDIA GPU is available. If not, it automatically starts the web stack without `local-transcribe` instead of failing the whole bring-up.
+
 Lower-memory Docker option (skips `local-transcribe`):
 
 ```bash
 bun run docker:up:core
+```
+
+Web-only shortcut (same stack as `docker:up:core`):
+
+```bash
+bun run docker:up:web
 ```
 
 Transcription quality/memory tuning (Docker env overrides):

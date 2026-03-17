@@ -252,8 +252,8 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 			width: divider.width,
 			height: divider.height,
 			rotation: 0,
-			opacity: resolved.opacity,
-			blendMode: this.params.blendMode,
+			opacity: 1,
+			blendMode: "normal" as const,
 		}));
 
 		return [...slotDraws, ...dividerDraws];
