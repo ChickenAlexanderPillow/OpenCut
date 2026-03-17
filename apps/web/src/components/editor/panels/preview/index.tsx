@@ -127,7 +127,8 @@ function remapLandscapeVideoScalesForSquarePreview({
 					projectIsPortrait &&
 					((element.reframePresets?.some(
 						(preset) => preset.transform.scale > 1,
-					) ?? false) ||
+					) ??
+						false) ||
 						element.transform.scale > 1);
 				if (!hasKnownLandscape && !canApplyUnknownFallback) {
 					return element;
@@ -340,8 +341,8 @@ function RenderTreeController() {
 	const selectedPresetIdByElementId = useReframeStore(
 		(state) => state.selectedPresetIdByElementId,
 	);
-	const selectedSplitPreviewSlotsByElementId = useReframeStore(
-		(state) => state.selectedSplitPreviewSlotsByElementId,
+	const selectedSplitPreviewByElementId = useReframeStore(
+		(state) => state.selectedSplitPreviewByElementId,
 	);
 	const clearSelectedPresetId = useReframeStore(
 		(state) => state.clearSelectedPresetId,
@@ -429,7 +430,7 @@ function RenderTreeController() {
 		);
 		const previewElementIds = new Set([
 			...Object.keys(selectedPresetIdByElementId),
-			...Object.keys(selectedSplitPreviewSlotsByElementId),
+			...Object.keys(selectedSplitPreviewByElementId),
 		]);
 		for (const elementId of previewElementIds) {
 			if (!selectedElementIds.has(elementId)) {
@@ -441,7 +442,7 @@ function RenderTreeController() {
 	}, [
 		selectedElements,
 		selectedPresetIdByElementId,
-		selectedSplitPreviewSlotsByElementId,
+		selectedSplitPreviewByElementId,
 		clearSelectedSplitPreviewSlots,
 		clearSelectedPresetId,
 		clearSelectedSectionStartTime,
@@ -450,12 +451,13 @@ function RenderTreeController() {
 	useEffect(() => {
 		const previewElementIds = new Set([
 			...Object.keys(selectedPresetIdByElementId),
-			...Object.keys(selectedSplitPreviewSlotsByElementId),
+			...Object.keys(selectedSplitPreviewByElementId),
 		]);
 		for (const elementId of previewElementIds) {
-			const track = tracks.find((candidateTrack) =>
-				candidateTrack.type === "video" &&
-				candidateTrack.elements.some((element) => element.id === elementId),
+			const track = tracks.find(
+				(candidateTrack) =>
+					candidateTrack.type === "video" &&
+					candidateTrack.elements.some((element) => element.id === elementId),
 			);
 			const element =
 				track?.type === "video"
@@ -463,7 +465,7 @@ function RenderTreeController() {
 							(candidateElement) =>
 								candidateElement.type === "video" &&
 								candidateElement.id === elementId,
-					  )
+						)
 					: null;
 			if (!element || element.type !== "video") continue;
 			const normalized = normalizeVideoReframeState({ element });
@@ -487,7 +489,7 @@ function RenderTreeController() {
 		playbackTime,
 		tracks,
 		selectedPresetIdByElementId,
-		selectedSplitPreviewSlotsByElementId,
+		selectedSplitPreviewByElementId,
 		selectedSectionStartTimeByElementId,
 		clearSelectedPresetId,
 		clearSelectedSplitPreviewSlots,
@@ -502,12 +504,15 @@ function RenderTreeController() {
 		}
 		const previousTime = previousPausedPreviewTimeRef.current;
 		previousPausedPreviewTimeRef.current = playbackTime;
-		if (previousTime === null || Math.abs(previousTime - playbackTime) <= 1 / 1000) {
+		if (
+			previousTime === null ||
+			Math.abs(previousTime - playbackTime) <= 1 / 1000
+		) {
 			return;
 		}
 		const previewElementIds = new Set([
 			...Object.keys(selectedPresetIdByElementId),
-			...Object.keys(selectedSplitPreviewSlotsByElementId),
+			...Object.keys(selectedSplitPreviewByElementId),
 		]);
 		for (const elementId of previewElementIds) {
 			clearSelectedPresetId({ elementId });
@@ -517,7 +522,7 @@ function RenderTreeController() {
 		playbackTime,
 		isPlaying,
 		selectedPresetIdByElementId,
-		selectedSplitPreviewSlotsByElementId,
+		selectedSplitPreviewByElementId,
 		clearSelectedPresetId,
 		clearSelectedSplitPreviewSlots,
 	]);
@@ -573,8 +578,8 @@ function RenderTreeController() {
 				selectedPresetIdByElementId: shouldApplyReframePreview
 					? selectedPresetIdByElementId
 					: {},
-				selectedSplitPreviewSlotsByElementId: shouldApplyReframePreview
-					? selectedSplitPreviewSlotsByElementId
+				selectedSplitPreviewByElementId: shouldApplyReframePreview
+					? selectedSplitPreviewByElementId
 					: {},
 				selectedElementIds: new Set(
 					selectedElements.map((selection) => selection.elementId),
@@ -606,7 +611,7 @@ function RenderTreeController() {
 		playbackQuality,
 		selectedElements,
 		selectedPresetIdByElementId,
-		selectedSplitPreviewSlotsByElementId,
+		selectedSplitPreviewByElementId,
 		isPlaying,
 		width,
 		height,

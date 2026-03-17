@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import {
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	type ComponentProps,
+} from "react";
 import { useEditor } from "@/hooks/use-editor";
 import { useAssetsPanelStore } from "@/stores/assets-panel-store";
 import { useReframeStore } from "@/stores/reframe-store";
@@ -65,6 +71,8 @@ import { uppercase } from "@/utils/string";
 import { cn } from "@/utils/ui";
 import {
 	deriveVideoAngleSections,
+	getVideoSplitScreenDividers,
+	getVideoSplitScreenViewports,
 	getActiveReframePresetId,
 	getVideoAngleSectionByStartTime,
 	getVideoAngleSectionAtTime,
@@ -111,6 +119,7 @@ function getTimelineVisualPlacement({
 	transform,
 	offsetX = 0,
 	offsetY = 0,
+	fitMode = "contain",
 }: {
 	rendererWidth: number;
 	rendererHeight: number;
@@ -122,29 +131,17 @@ function getTimelineVisualPlacement({
 	};
 	offsetX?: number;
 	offsetY?: number;
+	fitMode?: "contain" | "cover";
 }) {
-	const containScale = Math.min(
-		rendererWidth / sourceWidth,
-		rendererHeight / sourceHeight,
-	);
-	const width = sourceWidth * containScale * transform.scale;
-	const height = sourceHeight * containScale * transform.scale;
+	const baseScale =
+		fitMode === "cover"
+			? Math.max(rendererWidth / sourceWidth, rendererHeight / sourceHeight)
+			: Math.min(rendererWidth / sourceWidth, rendererHeight / sourceHeight);
+	const width = sourceWidth * baseScale * transform.scale;
+	const height = sourceHeight * baseScale * transform.scale;
 	const x = offsetX + rendererWidth / 2 + transform.position.x - width / 2;
 	const y = offsetY + rendererHeight / 2 + transform.position.y - height / 2;
 	return { x, y, width, height };
-}
-
-function getTimelineSplitViewports({
-	width,
-	height,
-}: {
-	width: number;
-	height: number;
-}) {
-	return new Map([
-		["top", { x: 0, y: 0, width, height: height / 2 }],
-		["bottom", { x: 0, y: height / 2, width, height: height / 2 }],
-	]);
 }
 
 function getTimelineViewportAdjustedTransform({
@@ -348,7 +345,9 @@ export function TimelineElement({
 	);
 	const { selectedElements } = useElementSelection();
 	const snappingEnabled = useTimelineStore((state) => state.snappingEnabled);
-	const requestRevealMedia = useAssetsPanelStore((state) => state.requestRevealMedia);
+	const requestRevealMedia = useAssetsPanelStore(
+		(state) => state.requestRevealMedia,
+	);
 	const activeProject = editor.project.getActive();
 
 	const mediaAssets = editor.media.getAssets();
@@ -402,8 +401,8 @@ export function TimelineElement({
 	const elementLeft =
 		TIMELINE_CONSTANTS.START_OFFSET_PX +
 		visualLayout.visualStartTime *
-		TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
-		zoomLevel;
+			TIMELINE_CONSTANTS.PIXELS_PER_SECOND *
+			zoomLevel;
 	const roundedElementWidth = Math.round(elementWidth);
 	const roundedElementLeft = Math.round(elementLeft);
 
@@ -481,11 +480,11 @@ export function TimelineElement({
 			<ContextMenuTrigger asChild>
 				<div
 					data-timeline-element-id={element.id}
-						data-timeline-track-id={track.id}
-						data-timeline-element-type={element.type}
-						data-visual-start-time={visualLayout.visualStartTime}
-						data-visual-duration={visualLayout.visualDuration}
-						className={`absolute top-0 h-full select-none`}
+					data-timeline-track-id={track.id}
+					data-timeline-element-type={element.type}
+					data-visual-start-time={visualLayout.visualStartTime}
+					data-visual-duration={visualLayout.visualDuration}
+					className={`absolute top-0 h-full select-none`}
 					style={{
 						left: `${roundedElementLeft}px`,
 						width: `${roundedElementWidth}px`,
@@ -701,7 +700,11 @@ function ElementInner({
 	hasAudio: boolean;
 	isMuted: boolean;
 	mediaAssets: MediaAsset[];
-	getPersistedWaveformPeaks: ({ cacheKey }: { cacheKey?: string }) => number[] | undefined;
+	getPersistedWaveformPeaks: ({
+		cacheKey,
+	}: {
+		cacheKey?: string;
+	}) => number[] | undefined;
 	onWaveformPeaksResolved: ({
 		cacheKey,
 		peaks,
@@ -758,9 +761,8 @@ function ElementInner({
 		keyframeId: string;
 		time: number;
 	} | null>(null);
-	const [containerElement, setContainerElement] = useState<HTMLDivElement | null>(
-		null,
-	);
+	const [containerElement, setContainerElement] =
+		useState<HTMLDivElement | null>(null);
 	const laneButtonElementsRef = useRef(
 		new Map<AnimationPropertyPath, HTMLDivElement>(),
 	);
@@ -811,10 +813,14 @@ function ElementInner({
 				? {
 						...normalizedVideoElement.splitScreen,
 						sections: displayedSplitSections,
-				  }
+					}
 				: undefined,
 		};
-	}, [normalizedVideoElement, displayedReframeSwitches, displayedSplitSections]);
+	}, [
+		normalizedVideoElement,
+		displayedReframeSwitches,
+		displayedSplitSections,
+	]);
 	const activeReframePresetId = useMemo(() => {
 		if (!displayedVideoElement) return null;
 		return getActiveReframePresetId({
@@ -873,7 +879,7 @@ function ElementInner({
 	}, [displayedVideoElement, playbackTime]);
 	const selectedReframeSectionStartTime = normalizedVideoElement
 		? editor.playback.getIsPlaying()
-			? playheadAngleSection?.startTime ?? null
+			? (playheadAngleSection?.startTime ?? null)
 			: (() => {
 					const selectedSection = getVideoAngleSectionByStartTime({
 						element: displayedVideoElement ?? normalizedVideoElement,
@@ -893,7 +899,9 @@ function ElementInner({
 							localTime <= selectedSection.endTime
 						: false;
 					return isPlayheadWithinSelectedSection
-						? selectedSection?.startTime ?? playheadAngleSection?.startTime ?? null
+						? (selectedSection?.startTime ??
+								playheadAngleSection?.startTime ??
+								null)
 						: (playheadAngleSection?.startTime ?? null);
 				})()
 		: null;
@@ -949,11 +957,11 @@ function ElementInner({
 			event.preventDefault();
 			editor.timeline.removeKeyframes({
 				keyframes: selectedKeyframes.map((selected) => ({
-						trackId: track.id,
-						elementId: element.id,
-						propertyPath: selected.propertyPath,
-						keyframeId: selected.keyframeId,
-					})),
+					trackId: track.id,
+					elementId: element.id,
+					propertyPath: selected.propertyPath,
+					keyframeId: selected.keyframeId,
+				})),
 			});
 			setSelectedKeyframes([]);
 		};
@@ -979,8 +987,7 @@ function ElementInner({
 			const rect =
 				laneButtonElementsRef.current
 					.get(draggingKeyframe.propertyPath)
-					?.getBoundingClientRect() ??
-				containerElement.getBoundingClientRect();
+					?.getBoundingClientRect() ?? containerElement.getBoundingClientRect();
 			let nextTime = toLocalTimeFromClientX({
 				clientX: event.clientX,
 				containerRect: rect,
@@ -1017,7 +1024,7 @@ function ElementInner({
 					? {
 							...prev,
 							time: Math.max(0, Math.min(element.duration, nextTime)),
-					  }
+						}
 					: prev,
 			);
 		};
@@ -1061,7 +1068,11 @@ function ElementInner({
 	]);
 
 	useEffect(() => {
-		if (!draggingReframeMarker || !containerElement || !normalizedVideoElement) {
+		if (
+			!draggingReframeMarker ||
+			!containerElement ||
+			!normalizedVideoElement
+		) {
 			return;
 		}
 
@@ -1077,7 +1088,9 @@ function ElementInner({
 			});
 			if (snappingEnabled) {
 				const thresholdTime =
-					rect.width > 0 ? (8 / rect.width) * normalizedVideoElement.duration : 0;
+					rect.width > 0
+						? (8 / rect.width) * normalizedVideoElement.duration
+						: 0;
 				const playheadLocalTime = Math.max(
 					0,
 					Math.min(
@@ -1090,28 +1103,23 @@ function ElementInner({
 					nextTime = playheadLocalTime;
 				} else {
 					const nearbyTimes = displayedBoundaryMarkers
-						.filter(
-							(_, index) => index !== draggingReframeMarker.boundaryIndex,
-						)
+						.filter((_, index) => index !== draggingReframeMarker.boundaryIndex)
 						.map((marker) => marker.time);
 					let best = nextTime;
 					let bestDistance = Number.POSITIVE_INFINITY;
 					for (const candidate of nearbyTimes) {
-					const distance = Math.abs(candidate - nextTime);
-					if (distance <= thresholdTime && distance < bestDistance) {
-						best = candidate;
-						bestDistance = distance;
+						const distance = Math.abs(candidate - nextTime);
+						if (distance <= thresholdTime && distance < bestDistance) {
+							best = candidate;
+							bestDistance = distance;
+						}
 					}
-				}
 					nextTime = best;
 				}
 			}
 			nextTime = Math.max(
 				draggingReframeMarker.minTime,
-				Math.min(
-					draggingReframeMarker.maxTime,
-					nextTime,
-				),
+				Math.min(draggingReframeMarker.maxTime, nextTime),
 			);
 			setDraggingReframeMarker((previous) =>
 				previous
@@ -1121,7 +1129,7 @@ function ElementInner({
 								0,
 								Math.min(normalizedVideoElement.duration, nextTime),
 							),
-					  }
+						}
 					: previous,
 			);
 		};
@@ -1349,7 +1357,9 @@ function ElementInner({
 		if (
 			selectedKeyframes.length > 0 &&
 			targetKeyframes.some((keyframe) =>
-				selectedKeyframes.some((selected) => selected.keyframeId === keyframe.id),
+				selectedKeyframes.some(
+					(selected) => selected.keyframeId === keyframe.id,
+				),
 			)
 		) {
 			setSelectedKeyframes((previous) =>
@@ -1392,10 +1402,12 @@ function ElementInner({
 				}}
 			>
 				<div className="absolute inset-0 flex h-full items-center">
-						<ElementContent
-							element={element}
-							captureVideoElement={element.type === "video" ? normalizedVideoElement : null}
-							displayedVideoSections={displayedAngleSections}
+					<ElementContent
+						element={element}
+						captureVideoElement={
+							element.type === "video" ? normalizedVideoElement : null
+						}
+						displayedVideoSections={displayedAngleSections}
 						track={track}
 						isSelected={isSelected}
 						mediaAssets={mediaAssets}
@@ -1416,13 +1428,13 @@ function ElementInner({
 					isSelected &&
 					normalizedVideoElement.reframePresets &&
 					normalizedVideoElement.reframePresets.length > 0 && (
-							<ReframeSwitchLane
-								element={displayedVideoElement ?? normalizedVideoElement}
-								sections={displayedAngleSections}
-								boundaryMarkers={displayedBoundaryMarkers}
-								activePresetId={activeReframePresetId}
-								activeSplitSectionId={activeSplitSection?.id ?? null}
-								selectedSectionStartTime={selectedReframeSectionStartTime}
+						<ReframeSwitchLane
+							element={displayedVideoElement ?? normalizedVideoElement}
+							sections={displayedAngleSections}
+							boundaryMarkers={displayedBoundaryMarkers}
+							activePresetId={activeReframePresetId}
+							activeSplitSectionId={activeSplitSection?.id ?? null}
+							selectedSectionStartTime={selectedReframeSectionStartTime}
 							onMarkerMouseDown={({
 								boundaryIndex,
 								switchId,
@@ -1433,12 +1445,12 @@ function ElementInner({
 								(() => {
 									const previousBoundaryTime =
 										boundaryIndex > 0
-											? displayedBoundaryMarkers[boundaryIndex - 1]?.time ?? 0
+											? (displayedBoundaryMarkers[boundaryIndex - 1]?.time ?? 0)
 											: 0;
 									const nextBoundaryTime =
 										boundaryIndex >= 0
-											? displayedBoundaryMarkers[boundaryIndex + 1]?.time ??
-												normalizedVideoElement.duration
+											? (displayedBoundaryMarkers[boundaryIndex + 1]?.time ??
+												normalizedVideoElement.duration)
 											: normalizedVideoElement.duration;
 									setDraggingReframeMarker({
 										boundaryIndex,
@@ -1536,15 +1548,16 @@ function ElementInner({
 										const activeDrag =
 											draggingKeyframe?.keyframeId === keyframe.id &&
 											draggingKeyframe.propertyPath === propertyPath;
-										const time = activeDrag ? draggingKeyframe.time : keyframe.time;
+										const time = activeDrag
+											? draggingKeyframe.time
+											: keyframe.time;
 										const left = `${
 											element.duration > 0 ? (time / element.duration) * 100 : 0
 										}%`;
-										const isActive =
-											isKeyframeSelected({
-												propertyPath,
-												keyframeId: keyframe.id,
-											});
+										const isActive = isKeyframeSelected({
+											propertyPath,
+											keyframeId: keyframe.id,
+										});
 										return (
 											<button
 												key={keyframe.id}
@@ -1697,7 +1710,10 @@ function ReframeSwitchLane({
 		pointerOffsetPx: number;
 	}) => void;
 	onMarkerClick: (params: { presetId: string }) => void;
-	onSectionClick: (params: { startTime: number; presetId: string | null }) => void;
+	onSectionClick: (params: {
+		startTime: number;
+		presetId: string | null;
+	}) => void;
 }) {
 	return (
 		<div className="pointer-events-none absolute inset-x-0 top-1 z-[3] h-5">
@@ -1706,8 +1722,7 @@ function ReframeSwitchLane({
 					const leftPercent =
 						(section.startTime / Math.max(element.duration, 0.001)) * 100;
 					const rightPercent =
-						100 -
-						(section.endTime / Math.max(element.duration, 0.001)) * 100;
+						100 - (section.endTime / Math.max(element.duration, 0.001)) * 100;
 					const isSelected =
 						selectedSectionStartTime !== null &&
 						Math.abs(selectedSectionStartTime - section.startTime) <= 1 / 1000;
@@ -1719,7 +1734,7 @@ function ReframeSwitchLane({
 						? "Split Screen"
 						: (element.reframePresets?.find(
 								(preset) => preset.id === section.presetId,
-						  )?.name ?? "Section");
+							)?.name ?? "Section");
 					return (
 						<button
 							key={`${section.startTime}:${section.switchId ?? section.splitSectionId ?? "default"}`}
@@ -1778,8 +1793,7 @@ function ReframeSwitchLane({
 								switchId: entry.switchId,
 								splitSectionId: entry.splitSectionId,
 								time: entry.time,
-								pointerOffsetPx:
-									event.clientX - (rect.left + rect.width / 2),
+								pointerOffsetPx: event.clientX - (rect.left + rect.width / 2),
 							});
 						}}
 						onClick={(event) => {
@@ -1793,9 +1807,10 @@ function ReframeSwitchLane({
 							entry.isSplitToggle
 								? "Single view marker"
 								: entry.isSplit
-								? "Split screen marker"
-								: (element.reframePresets?.find((preset) => preset.id === entry.presetId)
-										?.name ?? "Reframe marker")
+									? "Split screen marker"
+									: (element.reframePresets?.find(
+											(preset) => preset.id === entry.presetId,
+										)?.name ?? "Reframe marker")
 						}
 					/>
 				))}
@@ -1825,7 +1840,10 @@ function deriveTimelineBoundaryMarkers({
 		]),
 	);
 	const reframeSwitchByTime = new Map(
-		(element.reframeSwitches ?? []).map((entry) => [entry.time.toFixed(3), entry]),
+		(element.reframeSwitches ?? []).map((entry) => [
+			entry.time.toFixed(3),
+			entry,
+		]),
 	);
 
 	return sections
@@ -1873,6 +1891,7 @@ function drawTimelineThumbnailFrame({
 	transform,
 	offsetX = 0,
 	offsetY = 0,
+	fitMode = "contain",
 }: {
 	context: CanvasRenderingContext2D;
 	source: CanvasImageSource;
@@ -1886,6 +1905,7 @@ function drawTimelineThumbnailFrame({
 	};
 	offsetX?: number;
 	offsetY?: number;
+	fitMode?: "contain" | "cover";
 }) {
 	const placement = getTimelineVisualPlacement({
 		rendererWidth,
@@ -1895,8 +1915,15 @@ function drawTimelineThumbnailFrame({
 		transform,
 		offsetX,
 		offsetY,
+		fitMode,
 	});
-	context.drawImage(source, placement.x, placement.y, placement.width, placement.height);
+	context.drawImage(
+		source,
+		placement.x,
+		placement.y,
+		placement.width,
+		placement.height,
+	);
 }
 
 function SectionThumbnailStrip({
@@ -1956,25 +1983,29 @@ function SectionThumbnailStrip({
 					id: preset.id,
 					transform: preset.transform,
 				})),
-				reframeSwitches: (captureElement.reframeSwitches ?? []).map((entry) => ({
-					time: entry.time,
-					presetId: entry.presetId,
-				})),
+				reframeSwitches: (captureElement.reframeSwitches ?? []).map(
+					(entry) => ({
+						time: entry.time,
+						presetId: entry.presetId,
+					}),
+				),
 				splitScreen: captureElement.splitScreen
 					? {
 							enabled: captureElement.splitScreen.enabled ?? false,
 							layoutPreset: captureElement.splitScreen.layoutPreset,
-							sections: (captureElement.splitScreen.sections ?? []).map((section) => ({
-								startTime: section.startTime,
-								enabled: section.enabled ?? true,
-							})),
+							sections: (captureElement.splitScreen.sections ?? []).map(
+								(section) => ({
+									startTime: section.startTime,
+									enabled: section.enabled ?? true,
+								}),
+							),
 							slots: (captureElement.splitScreen.slots ?? []).map((slot) => ({
 								slotId: slot.slotId,
 								mode: slot.mode,
 								presetId: slot.presetId ?? null,
 								transformOverride: slot.transformOverride ?? null,
 							})),
-					  }
+						}
 					: null,
 				sections: sections.map((section) => ({
 					key: getTimelineSectionThumbnailKey(section),
@@ -1982,7 +2013,14 @@ function SectionThumbnailStrip({
 					isSplit: section.isSplit,
 				})),
 			}),
-		[captureElement, mediaAsset.id, mediaAsset.url, projectCanvas, sections, trackHeight],
+		[
+			captureElement,
+			mediaAsset.id,
+			mediaAsset.url,
+			projectCanvas,
+			sections,
+			trackHeight,
+		],
 	);
 	const [thumbnailUrls, setThumbnailUrls] = useState<Record<string, string>>(
 		() =>
@@ -1991,7 +2029,8 @@ function SectionThumbnailStrip({
 	);
 
 	useEffect(() => {
-		const cachedThumbnailUrls = timelineSectionThumbnailCache.get(thumbnailCacheKey);
+		const cachedThumbnailUrls =
+			timelineSectionThumbnailCache.get(thumbnailCacheKey);
 		if (cachedThumbnailUrls) {
 			setThumbnailUrls(cachedThumbnailUrls);
 			return;
@@ -2013,7 +2052,10 @@ function SectionThumbnailStrip({
 
 		const waitForReady = () =>
 			new Promise<void>((resolve, reject) => {
-				if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0) {
+				if (
+					video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+					video.videoWidth > 0
+				) {
 					resolve();
 					return;
 				}
@@ -2107,7 +2149,11 @@ function SectionThumbnailStrip({
 						);
 						await seekTo(sourceTime);
 						await waitForRenderedFrame();
-						if (cancelled || video.videoWidth === 0 || video.videoHeight === 0) {
+						if (
+							cancelled ||
+							video.videoWidth === 0 ||
+							video.videoHeight === 0
+						) {
 							continue;
 						}
 						const canvas = document.createElement("canvas");
@@ -2123,11 +2169,15 @@ function SectionThumbnailStrip({
 								localTime: sampleTime,
 							});
 							if (split?.slots?.length) {
-								const logicalViewports = getTimelineSplitViewports({
+								const logicalViewports = getVideoSplitScreenViewports({
+									layoutPreset: split.layoutPreset,
+									viewportBalance: split.viewportBalance,
 									width: projectCanvas.width,
 									height: projectCanvas.height,
 								});
-								const viewports = getTimelineSplitViewports({
+								const viewports = getVideoSplitScreenViewports({
+									layoutPreset: split.layoutPreset,
+									viewportBalance: split.viewportBalance,
 									width: canvas.width,
 									height: canvas.height,
 								});
@@ -2151,7 +2201,8 @@ function SectionThumbnailStrip({
 										duration: captureElement.duration,
 										reframePresets: captureElement.reframePresets,
 										reframeSwitches: captureElement.reframeSwitches,
-										defaultReframePresetId: captureElement.defaultReframePresetId,
+										defaultReframePresetId:
+											captureElement.defaultReframePresetId,
 										localTime: sampleTime,
 										slot,
 									});
@@ -2167,7 +2218,7 @@ function SectionThumbnailStrip({
 										projectCanvas,
 										rendererWidth: canvas.width,
 										rendererHeight: canvas.height,
-										});
+									});
 									drawTimelineThumbnailFrame({
 										context,
 										source: video,
@@ -2178,8 +2229,24 @@ function SectionThumbnailStrip({
 										transform: scaledTransform,
 										offsetX: viewport.x,
 										offsetY: viewport.y,
+										fitMode: "cover",
 									});
 									context.restore();
+								}
+								const dividerRects = getVideoSplitScreenDividers({
+									layoutPreset: split.layoutPreset,
+									viewportBalance: split.viewportBalance,
+									width: canvas.width,
+									height: canvas.height,
+								});
+								context.fillStyle = "#000000";
+								for (const divider of dividerRects) {
+									context.fillRect(
+										divider.x,
+										divider.y,
+										divider.width,
+										divider.height,
+									);
 								}
 							}
 						} else {
@@ -2201,13 +2268,12 @@ function SectionThumbnailStrip({
 								}),
 							});
 						}
-						nextUrls[sectionKey] = canvas.toDataURL(
-							"image/jpeg",
-							0.72,
-						);
+						nextUrls[sectionKey] = canvas.toDataURL("image/jpeg", 0.72);
 					} catch {
 						const fallbackUrl =
-							timelineSectionThumbnailCache.get(thumbnailCacheKey)?.[sectionKey] ??
+							timelineSectionThumbnailCache.get(thumbnailCacheKey)?.[
+								sectionKey
+							] ??
 							mediaAsset.thumbnailUrl ??
 							null;
 						if (fallbackUrl) {
@@ -2265,13 +2331,15 @@ function SectionThumbnailStrip({
 				>
 					{sections.map((section) => {
 						const leftPercent =
-							(section.startTime / Math.max(captureElement.duration, 0.001)) * 100;
+							(section.startTime / Math.max(captureElement.duration, 0.001)) *
+							100;
 						const widthPercent =
 							((section.endTime - section.startTime) /
 								Math.max(captureElement.duration, 0.001)) *
 							100;
 						const key = getTimelineSectionThumbnailKey(section);
-						const thumbnailUrl = thumbnailUrls[key] ?? mediaAsset.thumbnailUrl ?? "";
+						const thumbnailUrl =
+							thumbnailUrls[key] ?? mediaAsset.thumbnailUrl ?? "";
 						return (
 							<div
 								key={key}
@@ -2279,7 +2347,9 @@ function SectionThumbnailStrip({
 								style={{
 									left: `${leftPercent}%`,
 									width: `${widthPercent}%`,
-									backgroundImage: thumbnailUrl ? `url(${thumbnailUrl})` : "none",
+									backgroundImage: thumbnailUrl
+										? `url(${thumbnailUrl})`
+										: "none",
 									backgroundSize: `${tileWidth}px ${tileHeight}px`,
 									backgroundRepeat: "repeat-x",
 									backgroundPosition: "left center",
@@ -2316,7 +2386,11 @@ function ElementContent({
 	track: TimelineTrack;
 	isSelected: boolean;
 	mediaAssets: MediaAsset[];
-	getPersistedWaveformPeaks: ({ cacheKey }: { cacheKey?: string }) => number[] | undefined;
+	getPersistedWaveformPeaks: ({
+		cacheKey,
+	}: {
+		cacheKey?: string;
+	}) => number[] | undefined;
 	onWaveformPeaksResolved: ({
 		cacheKey,
 		peaks,
@@ -2360,9 +2434,7 @@ function ElementContent({
 				: undefined;
 
 		const audioUrl =
-			element.sourceType === "library"
-				? element.sourceUrl
-				: mediaAsset?.url;
+			element.sourceType === "library" ? element.sourceUrl : mediaAsset?.url;
 
 		if (audioBuffer || audioUrl) {
 			return (
@@ -2396,9 +2468,7 @@ function ElementContent({
 								})
 							}
 							audioFile={
-								element.sourceType === "upload"
-									? mediaAsset?.file
-									: undefined
+								element.sourceType === "upload" ? mediaAsset?.file : undefined
 							}
 							height={24}
 							className="w-full"
@@ -2481,7 +2551,10 @@ function ElementContent({
 									peaks,
 								})
 							}
-							height={Math.max(14, Math.floor(getTrackHeight({ type: track.type }) * 0.42))}
+							height={Math.max(
+								14,
+								Math.floor(getTrackHeight({ type: track.type }) * 0.42),
+							)}
 							className="w-full opacity-80"
 						/>
 					</div>

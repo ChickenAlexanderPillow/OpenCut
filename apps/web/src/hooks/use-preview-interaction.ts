@@ -147,6 +147,8 @@ export function usePreviewInteraction({
 					tracks: previewTracks,
 					selectedPresetIdByElementId:
 						useReframeStore.getState().selectedPresetIdByElementId,
+					selectedSplitPreviewByElementId:
+						useReframeStore.getState().selectedSplitPreviewByElementId,
 					selectedElementIds: new Set(
 						editor.selection
 							.getSelectedElements()
@@ -230,6 +232,8 @@ export function usePreviewInteraction({
 					tracks: previewTracks,
 					selectedPresetIdByElementId:
 						useReframeStore.getState().selectedPresetIdByElementId,
+					selectedSplitPreviewByElementId:
+						useReframeStore.getState().selectedSplitPreviewByElementId,
 					selectedElementIds: new Set(
 						editor.selection
 							.getSelectedElements()
@@ -310,10 +314,7 @@ export function usePreviewInteraction({
 						elementId: element.id,
 						initialTransform: resolveElementTransformAtTime({
 							element: normalizedElement as never,
-							localTime: Math.max(
-								0,
-								currentTime - normalizedElement.startTime,
-							),
+							localTime: Math.max(0, currentTime - normalizedElement.startTime),
 							baseTransformLocalTime: Math.max(
 								0,
 								Math.min(

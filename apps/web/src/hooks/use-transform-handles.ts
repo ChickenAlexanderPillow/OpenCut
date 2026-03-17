@@ -160,6 +160,8 @@ export function useTransformHandles({
 			tracks: previewTracks,
 			selectedPresetIdByElementId:
 				useReframeStore.getState().selectedPresetIdByElementId,
+			selectedSplitPreviewByElementId:
+				useReframeStore.getState().selectedSplitPreviewByElementId,
 			selectedElementIds: new Set(
 				selectedElements.map((selection) => selection.elementId),
 			),
@@ -199,7 +201,10 @@ export function useTransformHandles({
 				element.type === "video"
 					? normalizeVideoReframeState({ element })
 					: element;
-			const clipLocalTime = Math.max(0, currentTime - normalizedElement.startTime);
+			const clipLocalTime = Math.max(
+				0,
+				currentTime - normalizedElement.startTime,
+			);
 			const reframePresetId =
 				normalizedElement.type === "video"
 					? getSelectedOrActiveReframePresetId({
@@ -249,7 +254,10 @@ export function useTransformHandles({
 				element.type === "video"
 					? normalizeVideoReframeState({ element })
 					: element;
-			const clipLocalTime = Math.max(0, currentTime - normalizedElement.startTime);
+			const clipLocalTime = Math.max(
+				0,
+				currentTime - normalizedElement.startTime,
+			);
 			const initialTransform = resolveElementTransformAtTime({
 				element: normalizedElement as never,
 				localTime: clipLocalTime,

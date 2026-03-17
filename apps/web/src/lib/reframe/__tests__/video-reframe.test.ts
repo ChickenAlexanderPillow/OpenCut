@@ -6,9 +6,12 @@ import {
 	buildDefaultVideoSplitScreenBindings,
 	deriveVideoAngleSections,
 	deriveVideoSplitScreenSectionRanges,
+	getVideoSplitScreenDividers,
+	getVideoSplitScreenViewports,
 	getActiveReframePresetId,
 	getVideoAngleSectionAtTime,
 	getVideoSplitScreenSectionAtTime,
+	remapSplitSlotTransformBetweenViewportBalances,
 	remapSplitSlotTransformBetweenViewports,
 	replaceOrInsertReframeSwitch,
 	resolveVideoSplitScreenAtTime,
@@ -247,6 +250,7 @@ describe("video reframe resolution", () => {
 			selectedPresetIdByElementId: {
 				[baseElement.id]: "subject",
 			},
+			selectedSplitPreviewByElementId: {},
 			selectedElementIds: new Set([baseElement.id]),
 		});
 		const previewElement = previewTracks[0]?.elements[0];
@@ -302,6 +306,7 @@ describe("video reframe resolution", () => {
 				transformOverride: null,
 			},
 		]);
+		expect(resolved?.viewportBalance).toBe("balanced");
 	});
 
 	test("prefers subject left and subject right for default split-screen bindings", () => {
@@ -374,9 +379,9 @@ describe("video reframe resolution", () => {
 			localTime: 3,
 		});
 
-		expect(getVideoSplitScreenSectionAtTime({ element, localTime: 3 })?.id).toBe(
-			"section-1",
-		);
+		expect(
+			getVideoSplitScreenSectionAtTime({ element, localTime: 3 })?.id,
+		).toBe("section-1");
 		expect(resolved?.slots).toEqual([
 			{
 				slotId: "top",
@@ -416,10 +421,46 @@ describe("video reframe resolution", () => {
 			rotate: 12,
 		});
 		expect(
-			baseElement.reframePresets?.find((preset) => preset.id === "subject")?.transform,
+			baseElement.reframePresets?.find((preset) => preset.id === "subject")
+				?.transform,
 		).toEqual({
 			position: { x: 120, y: -40 },
 			scale: 2.5,
+		});
+	});
+
+	test("split-screen binding remembers separate transforms for top and bottom", () => {
+		const resolved = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: baseElement.reframePresets,
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: "subject",
+				transformOverride: {
+					position: { x: 360, y: -120 },
+					scale: 3.4,
+				},
+				transformOverridesBySlotId: {
+					top: {
+						position: { x: 40, y: -160 },
+						scale: 2.2,
+					},
+					bottom: {
+						position: { x: -90, y: 280 },
+						scale: 1.6,
+					},
+				},
+			},
+		});
+
+		expect(resolved).toEqual({
+			position: { x: -90, y: 280 },
+			scale: 1.6,
+			rotate: 12,
 		});
 	});
 
@@ -745,10 +786,13 @@ describe("video reframe resolution", () => {
 					scale: 2.2,
 				},
 				layoutPreset: "top-bottom",
+				viewportBalance: "balanced",
 				fromSlotId: "top",
 				toSlotId: "bottom",
 				canvasWidth: 1080,
 				canvasHeight: 1920,
+				sourceWidth: 1920,
+				sourceHeight: 1080,
 			}),
 		).toEqual({
 			position: { x: 40, y: 840 },
@@ -762,14 +806,185 @@ describe("video reframe resolution", () => {
 					scale: 1.8,
 				},
 				layoutPreset: "top-bottom",
+				viewportBalance: "balanced",
 				fromSlotId: "bottom",
 				toSlotId: "top",
 				canvasWidth: 1080,
 				canvasHeight: 1920,
+				sourceWidth: 1920,
+				sourceHeight: 1080,
 			}),
 		).toEqual({
 			position: { x: -60, y: -450 },
 			scale: 1.8,
 		});
+
+		expect(
+			remapSplitSlotTransformBetweenViewports({
+				transform: {
+					position: { x: 40, y: -120 },
+					scale: 2.2,
+				},
+				layoutPreset: "top-bottom",
+				viewportBalance: "unbalanced",
+				fromSlotId: "top",
+				toSlotId: "bottom",
+				canvasWidth: 1080,
+				canvasHeight: 1920,
+				sourceWidth: 1920,
+				sourceHeight: 1080,
+			}),
+		).toEqual({
+			position: { x: 80, y: 1360 },
+			scale: 2.2,
+		});
+
+		expect(
+			remapSplitSlotTransformBetweenViewports({
+				transform: {
+					position: { x: -60, y: 510 },
+					scale: 1.8,
+				},
+				layoutPreset: "top-bottom",
+				viewportBalance: "unbalanced",
+				fromSlotId: "bottom",
+				toSlotId: "top",
+				canvasWidth: 1080,
+				canvasHeight: 1920,
+				sourceWidth: 1920,
+				sourceHeight: 1080,
+			}),
+		).toEqual({
+			position: { x: -30, y: -545 },
+			scale: 1.8,
+		});
+	});
+
+	test("builds unbalanced top-bottom split viewports and divider geometry", () => {
+		const viewports = getVideoSplitScreenViewports({
+			layoutPreset: "top-bottom",
+			viewportBalance: "unbalanced",
+			width: 1080,
+			height: 1920,
+		});
+		expect(viewports.get("top")).toEqual({
+			x: 0,
+			y: 0,
+			width: 1080,
+			height: 640,
+		});
+		expect(viewports.get("bottom")).toEqual({
+			x: 0,
+			y: 640,
+			width: 1080,
+			height: 1280,
+		});
+		expect(
+			getVideoSplitScreenDividers({
+				layoutPreset: "top-bottom",
+				viewportBalance: "unbalanced",
+				width: 1080,
+				height: 1920,
+			}),
+		).toEqual([{ x: 0, y: 639, width: 1080, height: 2 }]);
+	});
+
+	test("remaps split slot transforms when changing viewport balance", () => {
+		expect(
+			remapSplitSlotTransformBetweenViewportBalances({
+				transform: {
+					position: { x: 40, y: -120 },
+					scale: 2.2,
+				},
+				layoutPreset: "top-bottom",
+				fromViewportBalance: "balanced",
+				toViewportBalance: "unbalanced",
+				slotId: "top",
+				canvasWidth: 1080,
+				canvasHeight: 1920,
+				sourceWidth: 1920,
+				sourceHeight: 1080,
+			}),
+		).toEqual({
+			position: { x: 26.666666666666664, y: -400 },
+			scale: 2.2,
+		});
+
+		expect(
+			remapSplitSlotTransformBetweenViewportBalances({
+				transform: {
+					position: { x: -60, y: 510 },
+					scale: 1.8,
+				},
+				layoutPreset: "top-bottom",
+				fromViewportBalance: "balanced",
+				toViewportBalance: "unbalanced",
+				slotId: "bottom",
+				canvasWidth: 1080,
+				canvasHeight: 1920,
+				sourceWidth: 1920,
+				sourceHeight: 1080,
+			}),
+		).toEqual({
+			position: { x: -80, y: 360 },
+			scale: 1.8,
+		});
+	});
+
+	test("preview split override carries viewport balance into temporary preview tracks", () => {
+		const tracks: TimelineTrack[] = [
+			{
+				id: "track-1",
+				type: "video",
+				name: "Video",
+				isMain: false,
+				muted: false,
+				hidden: false,
+				volume: 1,
+				audioEffects: {
+					eq: {
+						enabled: false,
+						lowGainDb: 0,
+						midGainDb: 0,
+						highGainDb: 0,
+						midFrequency: 1200,
+						highFrequency: 4800,
+					},
+					compressor: {
+						enabled: false,
+						thresholdDb: -18,
+						ratio: 2,
+						makeupGainDb: 0,
+						attackSeconds: 0.01,
+						releaseSeconds: 0.18,
+					},
+					deesser: { enabled: false, amountDb: 0, frequency: 6000, q: 1 },
+					limiter: { enabled: false, ceilingDb: -1, releaseSeconds: 0.12 },
+				},
+				elements: [baseElement],
+			},
+		];
+
+		const previewTracks = applySelectedReframePresetPreviewToTracks({
+			tracks,
+			selectedPresetIdByElementId: {},
+			selectedSplitPreviewByElementId: {
+				[baseElement.id]: {
+					slots: [
+						{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+						{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+					],
+					viewportBalance: "unbalanced",
+				},
+			},
+			selectedElementIds: new Set([baseElement.id]),
+		});
+
+		const previewElement = previewTracks[0]?.elements[0];
+		expect(previewElement?.type).toBe("video");
+		if (!previewElement || previewElement.type !== "video") {
+			throw new Error("Expected video element");
+		}
+		expect(previewElement.splitScreen?.viewportBalance).toBe("unbalanced");
 	});
 });

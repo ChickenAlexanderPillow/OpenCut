@@ -1,9 +1,10 @@
 import type { BlendMode } from "@/types/rendering";
 
 export interface WebGPUVisualDrawData {
-	source: GPUCopyExternalImageSource;
-	sourceWidth: number;
-	sourceHeight: number;
+	source?: GPUCopyExternalImageSource;
+	sourceWidth?: number;
+	sourceHeight?: number;
+	solidColor?: string;
 	x: number;
 	y: number;
 	width: number;

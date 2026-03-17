@@ -87,6 +87,7 @@ export interface VideoReframeSwitch {
 }
 
 export type VideoSplitScreenLayoutPreset = "top-bottom";
+export type VideoSplitScreenViewportBalance = "balanced" | "unbalanced";
 
 export type VideoSplitScreenSlotMode = "follow-active" | "fixed-preset";
 
@@ -100,6 +101,10 @@ export interface VideoSplitScreenSlotBinding {
 	mode: VideoSplitScreenSlotMode;
 	presetId?: string | null;
 	transformOverride?: VideoSplitScreenSlotTransformOverride | null;
+	transformOverridesBySlotId?: Record<
+		string,
+		VideoSplitScreenSlotTransformOverride | null | undefined
+	>;
 }
 
 export interface VideoSplitScreenSection {
@@ -112,6 +117,7 @@ export interface VideoSplitScreenSection {
 export interface VideoSplitScreen {
 	enabled: boolean;
 	layoutPreset: VideoSplitScreenLayoutPreset;
+	viewportBalance?: VideoSplitScreenViewportBalance;
 	slots: VideoSplitScreenSlotBinding[];
 	sections?: VideoSplitScreenSection[];
 }

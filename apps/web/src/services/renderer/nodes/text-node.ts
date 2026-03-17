@@ -18,7 +18,10 @@ import {
 } from "@/lib/text/layout";
 import { resolveSafeAreaAnchoredPositionY } from "@/constants/safe-area-constants";
 import { toTimelineCaptionWordTimings } from "@/lib/captions/timing";
-import { resolveVideoSplitScreenAtTime } from "@/lib/reframe/video-reframe";
+import {
+	getVideoSplitScreenViewports,
+	resolveVideoSplitScreenAtTime,
+} from "@/lib/reframe/video-reframe";
 
 function scaleFontSize({
 	fontSize,
@@ -44,7 +47,8 @@ function getBackgroundFontSizeRatio({
 			? referenceCanvasHeight
 			: canvasHeight;
 	return (
-		(fontSize / DEFAULT_TEXT_ELEMENT.fontSize) * (canvasHeight / referenceHeight)
+		(fontSize / DEFAULT_TEXT_ELEMENT.fontSize) *
+		(canvasHeight / referenceHeight)
 	);
 }
 
@@ -269,29 +273,6 @@ type CaptionSplitViewport = {
 	height: number;
 };
 
-function getSplitScreenViewports({
-	layoutPreset,
-	canvasWidth,
-	canvasHeight,
-}: {
-	layoutPreset: "top-bottom";
-	canvasWidth: number;
-	canvasHeight: number;
-}): Map<string, CaptionSplitViewport> {
-	return new Map([
-		["top", { x: 0, y: 0, width: canvasWidth, height: canvasHeight / 2 }],
-		[
-			"bottom",
-			{
-				x: 0,
-				y: canvasHeight / 2,
-				width: canvasWidth,
-				height: canvasHeight / 2,
-			},
-		],
-	]);
-}
-
 export class TextNode extends BaseNode<TextNodeParams> {
 	private cachedCaptionTimingsRef: Array<{
 		word: string;
@@ -400,19 +381,18 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			localTime,
 		});
 		if (!activeSplitScreen) return null;
-		const viewports = getSplitScreenViewports({
+		const viewports = getVideoSplitScreenViewports({
 			layoutPreset: activeSplitScreen.layoutPreset,
-			canvasWidth: this.params.canvasWidth,
-			canvasHeight: this.params.canvasHeight,
+			viewportBalance: activeSplitScreen.viewportBalance,
+			width: this.params.canvasWidth,
+			height: this.params.canvasHeight,
 		});
 		const preferredAnchor =
 			captionStyle.splitScreenOverrides?.slotAnchor ?? "auto";
 		const resolvedSlotId =
 			preferredAnchor === "auto" ? "bottom" : preferredAnchor;
 		return (
-			viewports.get(resolvedSlotId) ??
-			Array.from(viewports.values())[0] ??
-			null
+			viewports.get(resolvedSlotId) ?? Array.from(viewports.values())[0] ?? null
 		);
 	}
 
@@ -432,24 +412,27 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		captionStyle: CaptionStyleValue;
 		fitInCanvas?: boolean;
 	}): { x: number; y: number; effectiveScale: number } {
-		const splitViewport = this.resolveActiveSplitViewport({ time, captionStyle });
-		const placementCanvasWidth = splitViewport?.width ?? this.params.canvasWidth;
-		const placementCanvasHeight = splitViewport?.height ?? this.params.canvasHeight;
+		const splitViewport = this.resolveActiveSplitViewport({
+			time,
+			captionStyle,
+		});
+		const placementCanvasWidth =
+			splitViewport?.width ?? this.params.canvasWidth;
+		const placementCanvasHeight =
+			splitViewport?.height ?? this.params.canvasHeight;
 		const placementOffsetX = splitViewport?.x ?? 0;
 		const placementOffsetY = splitViewport?.y ?? 0;
 		const placement = resolveTextPlacement({
 			canvasWidth: placementCanvasWidth,
 			canvasHeight: placementCanvasHeight,
-			positionX:
-				this.params.transform.position.x + placementCanvasWidth / 2,
+			positionX: this.params.transform.position.x + placementCanvasWidth / 2,
 			positionY: resolveSafeAreaAnchoredPositionY({
 				canvasWidth: placementCanvasWidth,
 				canvasHeight: placementCanvasHeight,
 				transformPositionY: this.params.transform.position.y,
 				scale: this.params.transform.scale,
 				visualRect,
-				anchorToSafeAreaBottom:
-					captionStyle.anchorToSafeAreaBottom ?? true,
+				anchorToSafeAreaBottom: captionStyle.anchorToSafeAreaBottom ?? true,
 				safeAreaBottomOffset: captionStyle.safeAreaBottomOffset ?? 0,
 				anchorToSafeAreaTop: captionStyle.anchorToSafeAreaTop ?? false,
 				safeAreaTopOffset: captionStyle.safeAreaTopOffset ?? 0,
@@ -478,12 +461,17 @@ export class TextNode extends BaseNode<TextNodeParams> {
 				(timing) => !timing.hidden,
 			);
 			const lastCaptionEndTime =
-				visibleCaptionWordTimings[visibleCaptionWordTimings.length - 1]?.endTime ??
+				visibleCaptionWordTimings[visibleCaptionWordTimings.length - 1]
+					?.endTime ??
 				captionWordTimings[captionWordTimings.length - 1]?.endTime ??
 				this.params.startTime + this.params.duration;
 			return (
 				time >= this.params.startTime &&
-				time < Math.min(this.params.startTime + this.params.duration, lastCaptionEndTime)
+				time <
+					Math.min(
+						this.params.startTime + this.params.duration,
+						lastCaptionEndTime,
+					)
 			);
 		}
 		return (
@@ -951,9 +939,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 						captionStyle.karaokeHighlightColor ?? "#FDE047";
 					const highlightRoundnessRaw = Math.max(
 						0,
-						Math.round(
-							captionStyle.karaokeHighlightRoundness ?? 4,
-						),
+						Math.round(captionStyle.karaokeHighlightRoundness ?? 4),
 					);
 					const highlightTextColor =
 						captionStyle.karaokeHighlightTextColor ?? "#111111";
@@ -1029,9 +1015,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 					} else if (karaokeHighlightMode === "underline") {
 						const underlineThicknessRaw = Math.max(
 							1,
-							Math.round(
-								captionStyle.karaokeUnderlineThickness ?? 3,
-							),
+							Math.round(captionStyle.karaokeUnderlineThickness ?? 3),
 						);
 						const scaleFactor = Math.max(
 							0.01,

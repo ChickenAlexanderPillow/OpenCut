@@ -1,13 +1,18 @@
 import { create } from "zustand";
 
-import type { VideoSplitScreenSlotBinding } from "@/types/timeline";
+import type {
+	VideoSplitScreenSlotBinding,
+	VideoSplitScreenViewportBalance,
+} from "@/types/timeline";
+
+interface SplitPreviewState {
+	slots: VideoSplitScreenSlotBinding[] | null;
+	viewportBalance?: VideoSplitScreenViewportBalance;
+}
 
 interface ReframeStore {
 	selectedPresetIdByElementId: Record<string, string | null>;
-	selectedSplitPreviewSlotsByElementId: Record<
-		string,
-		VideoSplitScreenSlotBinding[] | null
-	>;
+	selectedSplitPreviewByElementId: Record<string, SplitPreviewState | null>;
 	selectedSectionStartTimeByElementId: Record<string, number | null>;
 	setSelectedPresetId: (params: {
 		elementId: string;
@@ -16,6 +21,7 @@ interface ReframeStore {
 	setSelectedSplitPreviewSlots: (params: {
 		elementId: string;
 		slots: VideoSplitScreenSlotBinding[] | null;
+		viewportBalance?: VideoSplitScreenViewportBalance;
 	}) => void;
 	setSelectedSectionStartTime: (params: {
 		elementId: string;
@@ -28,35 +34,42 @@ interface ReframeStore {
 
 export const useReframeStore = create<ReframeStore>((set) => ({
 	selectedPresetIdByElementId: {},
-	selectedSplitPreviewSlotsByElementId: {},
+	selectedSplitPreviewByElementId: {},
 	selectedSectionStartTimeByElementId: {},
 	setSelectedPresetId: ({ elementId, presetId }) =>
 		set((state) => {
 			if (
 				state.selectedPresetIdByElementId[elementId] === presetId &&
-				(!presetId || !(elementId in state.selectedSplitPreviewSlotsByElementId))
+				(!presetId || !(elementId in state.selectedSplitPreviewByElementId))
 			) {
 				return state;
 			}
-			const nextSplitPreviewSlotsByElementId = {
-				...state.selectedSplitPreviewSlotsByElementId,
+			const nextSplitPreviewByElementId = {
+				...state.selectedSplitPreviewByElementId,
 			};
 			if (presetId) {
-				delete nextSplitPreviewSlotsByElementId[elementId];
+				delete nextSplitPreviewByElementId[elementId];
 			}
 			return {
 				selectedPresetIdByElementId: {
 					...state.selectedPresetIdByElementId,
 					[elementId]: presetId,
 				},
-				selectedSplitPreviewSlotsByElementId: nextSplitPreviewSlotsByElementId,
+				selectedSplitPreviewByElementId: nextSplitPreviewByElementId,
 			};
 		}),
-	setSelectedSplitPreviewSlots: ({ elementId, slots }) =>
+	setSelectedSplitPreviewSlots: ({ elementId, slots, viewportBalance }) =>
 		set((state) => {
+			const nextPreview = slots
+				? {
+						slots,
+						viewportBalance: viewportBalance ?? "balanced",
+					}
+				: null;
 			if (
-				state.selectedSplitPreviewSlotsByElementId[elementId] === slots &&
-				(!slots?.length || state.selectedPresetIdByElementId[elementId] === null)
+				state.selectedSplitPreviewByElementId[elementId] === nextPreview &&
+				(!slots?.length ||
+					state.selectedPresetIdByElementId[elementId] === null)
 			) {
 				return state;
 			}
@@ -68,17 +81,15 @@ export const useReframeStore = create<ReframeStore>((set) => ({
 			}
 			return {
 				selectedPresetIdByElementId: nextPresetIdsByElementId,
-				selectedSplitPreviewSlotsByElementId: {
-					...state.selectedSplitPreviewSlotsByElementId,
-					[elementId]: slots,
+				selectedSplitPreviewByElementId: {
+					...state.selectedSplitPreviewByElementId,
+					[elementId]: nextPreview,
 				},
 			};
 		}),
 	setSelectedSectionStartTime: ({ elementId, startTime }) =>
 		set((state) => {
-			if (
-				state.selectedSectionStartTimeByElementId[elementId] === startTime
-			) {
+			if (state.selectedSectionStartTimeByElementId[elementId] === startTime) {
 				return state;
 			}
 			return {
@@ -101,13 +112,13 @@ export const useReframeStore = create<ReframeStore>((set) => ({
 		}),
 	clearSelectedSplitPreviewSlots: ({ elementId }) =>
 		set((state) => {
-			if (!(elementId in state.selectedSplitPreviewSlotsByElementId)) {
+			if (!(elementId in state.selectedSplitPreviewByElementId)) {
 				return state;
 			}
-			const next = { ...state.selectedSplitPreviewSlotsByElementId };
+			const next = { ...state.selectedSplitPreviewByElementId };
 			delete next[elementId];
 			return {
-				selectedSplitPreviewSlotsByElementId: next,
+				selectedSplitPreviewByElementId: next,
 			};
 		}),
 	clearSelectedSectionStartTime: ({ elementId }) =>

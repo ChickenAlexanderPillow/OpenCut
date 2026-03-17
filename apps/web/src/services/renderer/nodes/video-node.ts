@@ -3,6 +3,7 @@ import { VisualNode, type VisualNodeParams } from "./visual-node";
 import { type VideoCache, videoCache } from "@/services/video-cache/service";
 import type { WebGPUVisualDrawData } from "../webgpu-types";
 import {
+	getVideoSplitScreenDividers,
 	resolveVideoSplitScreenAtTimeFromState,
 	resolveVideoSplitScreenSlotTransformFromState,
 } from "@/lib/reframe/video-reframe";
@@ -183,11 +184,12 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 
 		const viewports = this.getSplitScreenViewports({
 			layoutPreset: splitScreen.layoutPreset,
+			viewportBalance: splitScreen.viewportBalance,
 			rendererWidth,
 			rendererHeight,
 		});
 
-		return splitScreen.slots.flatMap((slot) => {
+		const slotDraws = splitScreen.slots.flatMap((slot) => {
 			const viewport = viewports.get(slot.slotId);
 			if (!viewport) return [];
 			const slotTransform = resolveVideoSplitScreenSlotTransformFromState({
@@ -213,6 +215,7 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 				transform: viewportAdjustedTransform,
 				offsetX: viewport.x,
 				offsetY: viewport.y,
+				fitMode: "cover",
 			});
 			return [
 				{
@@ -231,5 +234,22 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 				},
 			];
 		});
+		const dividerDraws = getVideoSplitScreenDividers({
+			layoutPreset: splitScreen.layoutPreset,
+			viewportBalance: splitScreen.viewportBalance,
+			width: rendererWidth,
+			height: rendererHeight,
+		}).map((divider) => ({
+			solidColor: "#000000",
+			x: divider.x,
+			y: divider.y,
+			width: divider.width,
+			height: divider.height,
+			rotation: 0,
+			opacity: resolved.opacity,
+			blendMode: this.params.blendMode,
+		}));
+
+		return [...slotDraws, ...dividerDraws];
 	}
 }

@@ -9,10 +9,7 @@ import type {
 	VideoSplitScreen,
 } from "@/types/timeline";
 import type { ElementAnimations } from "@/types/animation";
-import {
-	resolveOpacityAtTime,
-	resolveTransformAtTime,
-} from "@/lib/animation";
+import { resolveOpacityAtTime, resolveTransformAtTime } from "@/lib/animation";
 import {
 	buildCompressedCutBoundaryTimes,
 	mapCompressedTimeToSourceTime,
@@ -20,6 +17,8 @@ import {
 import { TRANSCRIPT_CUT_VISUAL_BOUNDARY_GUARD_SECONDS } from "@/lib/transcript-editor/constants";
 import type { TranscriptEditCutRange } from "@/types/transcription";
 import {
+	getVideoSplitScreenDividers,
+	getVideoSplitScreenViewports,
 	resolveVideoReframeTransformFromState,
 	resolveVideoSplitScreenSlotTransformFromState,
 	resolveVideoSplitScreenAtTimeFromState,
@@ -85,7 +84,10 @@ export abstract class VisualNode<
 	}
 
 	protected getClipElapsedTime(time: number): number {
-		return Math.max(0, Math.min(this.params.duration, time - this.params.timeOffset));
+		return Math.max(
+			0,
+			Math.min(this.params.duration, time - this.params.timeOffset),
+		);
 	}
 
 	private getActiveMotionBlurSide({
@@ -157,7 +159,10 @@ export abstract class VisualNode<
 		const blurSide = this.getActiveMotionBlurSide({ elapsed });
 		if (!blurSide) return null;
 		const previousElapsed = this.getClipElapsedTime(
-			Math.max(this.params.timeOffset, time - VisualNode.MOTION_BLUR_FRAME_WINDOW_SECONDS),
+			Math.max(
+				this.params.timeOffset,
+				time - VisualNode.MOTION_BLUR_FRAME_WINDOW_SECONDS,
+			),
 		);
 		if (
 			this.crossesTranscriptBoundary({
@@ -234,7 +239,9 @@ export abstract class VisualNode<
 				this.params.transitions?.out?.duration ?? VISUAL_EPSILON,
 			);
 			const outStart = Math.max(0, this.params.duration - outDuration);
-			const outProgress = VisualNode.clamp01((elapsed - outStart) / outDuration);
+			const outProgress = VisualNode.clamp01(
+				(elapsed - outStart) / outDuration,
+			);
 			// Ease blur up smoothly near transition-out instead of abrupt full strength.
 			strength = VisualNode.smoothstep(outProgress);
 		}
@@ -315,6 +322,7 @@ export abstract class VisualNode<
 		if (splitScreen?.slots?.length) {
 			const viewports = this.getSplitScreenViewports({
 				layoutPreset: splitScreen.layoutPreset,
+				viewportBalance: splitScreen.viewportBalance,
 				rendererWidth: renderer.width,
 				rendererHeight: renderer.height,
 			});
@@ -344,6 +352,7 @@ export abstract class VisualNode<
 					transform: viewportAdjustedTransform,
 					offsetX: viewport.x,
 					offsetY: viewport.y,
+					fitMode: "cover",
 				});
 				renderer.context.save();
 				renderer.context.beginPath();
@@ -369,6 +378,21 @@ export abstract class VisualNode<
 					placement.height,
 				);
 				renderer.context.restore();
+			}
+			const dividerRects = getVideoSplitScreenDividers({
+				layoutPreset: splitScreen.layoutPreset,
+				viewportBalance: splitScreen.viewportBalance,
+				width: renderer.width,
+				height: renderer.height,
+			});
+			renderer.context.fillStyle = "#000000";
+			for (const divider of dividerRects) {
+				renderer.context.fillRect(
+					divider.x,
+					divider.y,
+					divider.width,
+					divider.height,
+				);
 			}
 			renderer.context.restore();
 			return;
@@ -409,14 +433,16 @@ export abstract class VisualNode<
 
 		const sampleCount = Math.max(2, motionBlur.samples);
 		const trailSampleCount = Math.max(1, sampleCount - 1);
-		const trailOpacity =
-			opacity * VisualNode.MOTION_BLUR_TRAIL_OPACITY_FACTOR;
+		const trailOpacity = opacity * VisualNode.MOTION_BLUR_TRAIL_OPACITY_FACTOR;
 		const baseCompositeOperation = renderer.context.globalCompositeOperation;
 		const baseFilter = renderer.context.filter;
-		const trailWeights = Array.from({ length: trailSampleCount }, (_, index) => {
-			const progress = (index + 1) / (trailSampleCount + 1);
-			return (1 - progress) ** 1.15;
-		});
+		const trailWeights = Array.from(
+			{ length: trailSampleCount },
+			(_, index) => {
+				const progress = (index + 1) / (trailSampleCount + 1);
+				return (1 - progress) ** 1.15;
+			},
+		);
 		const totalTrailWeight = Math.max(
 			VISUAL_EPSILON,
 			trailWeights.reduce((sum, weight) => sum + weight, 0),
@@ -555,6 +581,7 @@ export abstract class VisualNode<
 		transform = this.params.transform,
 		offsetX = 0,
 		offsetY = 0,
+		fitMode = "contain",
 	}: {
 		rendererWidth: number;
 		rendererHeight: number;
@@ -563,13 +590,14 @@ export abstract class VisualNode<
 		transform?: Transform;
 		offsetX?: number;
 		offsetY?: number;
+		fitMode?: "contain" | "cover";
 	}): VisualPlacement {
-		const containScale = Math.min(
-			rendererWidth / sourceWidth,
-			rendererHeight / sourceHeight,
-		);
-		const scaledWidth = sourceWidth * containScale * transform.scale;
-		const scaledHeight = sourceHeight * containScale * transform.scale;
+		const baseScale =
+			fitMode === "cover"
+				? Math.max(rendererWidth / sourceWidth, rendererHeight / sourceHeight)
+				: Math.min(rendererWidth / sourceWidth, rendererHeight / sourceHeight);
+		const scaledWidth = sourceWidth * baseScale * transform.scale;
+		const scaledHeight = sourceHeight * baseScale * transform.scale;
 		const x =
 			offsetX + rendererWidth / 2 + transform.position.x - scaledWidth / 2;
 		const y =
@@ -602,27 +630,20 @@ export abstract class VisualNode<
 
 	protected getSplitScreenViewports({
 		layoutPreset,
+		viewportBalance,
 		rendererWidth,
 		rendererHeight,
 	}: {
 		layoutPreset: "top-bottom";
+		viewportBalance?: VideoSplitScreen["viewportBalance"];
 		rendererWidth: number;
 		rendererHeight: number;
 	}): Map<string, SplitViewport> {
-		return new Map([
-			[
-				"top",
-				{ x: 0, y: 0, width: rendererWidth, height: rendererHeight / 2 },
-			],
-			[
-				"bottom",
-				{
-					x: 0,
-					y: rendererHeight / 2,
-					width: rendererWidth,
-					height: rendererHeight / 2,
-				},
-			],
-		]);
+		return getVideoSplitScreenViewports({
+			layoutPreset,
+			viewportBalance,
+			width: rendererWidth,
+			height: rendererHeight,
+		});
 	}
 }

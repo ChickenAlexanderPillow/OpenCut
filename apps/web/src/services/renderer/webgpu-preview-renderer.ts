@@ -83,6 +83,10 @@ export class WebGPUPreviewRenderer {
 	private cachedPartition: HybridScenePartition | null = null;
 	private pendingVideoFramesToClose: VideoFrame[] = [];
 	private closeVideoFramesTaskInFlight = false;
+	private solidColorSourceCache = new Map<
+		string,
+		HTMLCanvasElement | OffscreenCanvas
+	>();
 	private static readonly MAX_TEXTURE_CACHE = 10;
 	private static readonly MAX_TEXTURE_CACHE_BYTES = 96 * 1024 * 1024; // 96MB
 	private static readonly TEXTURE_IDLE_TTL_MS = 10_000;
@@ -138,6 +142,39 @@ export class WebGPUPreviewRenderer {
 		this.cachedPartition = null;
 		this.pendingVideoFramesToClose = [];
 		this.closeVideoFramesTaskInFlight = false;
+		this.solidColorSourceCache.clear();
+	}
+
+	private getSolidColorSource({ color }: { color: string }): {
+		source: HTMLCanvasElement | OffscreenCanvas;
+		width: number;
+		height: number;
+	} | null {
+		const cached = this.solidColorSourceCache.get(color);
+		if (cached) {
+			return { source: cached, width: 1, height: 1 };
+		}
+		if (typeof document !== "undefined") {
+			const canvas = document.createElement("canvas");
+			canvas.width = 1;
+			canvas.height = 1;
+			const ctx = canvas.getContext("2d");
+			if (!ctx) return null;
+			ctx.fillStyle = color;
+			ctx.fillRect(0, 0, 1, 1);
+			this.solidColorSourceCache.set(color, canvas);
+			return { source: canvas, width: 1, height: 1 };
+		}
+		if (typeof OffscreenCanvas !== "undefined") {
+			const canvas = new OffscreenCanvas(1, 1);
+			const ctx = canvas.getContext("2d");
+			if (!ctx) return null;
+			ctx.fillStyle = color;
+			ctx.fillRect(0, 0, 1, 1);
+			this.solidColorSourceCache.set(color, canvas);
+			return { source: canvas, width: 1, height: 1 };
+		}
+		return null;
 	}
 
 	private flushPendingVideoFrames(): void {
@@ -671,10 +708,13 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 			const trailSampleCount = Math.max(1, sampleCount - 1);
 			const trailOpacity =
 				draw.opacity * WebGPUPreviewRenderer.MOTION_BLUR_TRAIL_OPACITY_FACTOR;
-			const trailWeights = Array.from({ length: trailSampleCount }, (_, index) => {
-				const progress = (index + 1) / (trailSampleCount + 1);
-				return (1 - progress) ** 1.15;
-			});
+			const trailWeights = Array.from(
+				{ length: trailSampleCount },
+				(_, index) => {
+					const progress = (index + 1) / (trailSampleCount + 1);
+					return (1 - progress) ** 1.15;
+				},
+			);
 			const totalTrailWeight = Math.max(
 				1e-6,
 				trailWeights.reduce((sum, weight) => sum + weight, 0),
@@ -685,10 +725,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				const progress = (sampleIndex + 1) / (trailSampleCount + 1);
 				const trail = 1 - progress;
 				const sampleWeight = trailWeights[sampleIndex] ?? 0;
-				const sampleScale = Math.max(
-					1e-6,
-					1 - blur.deltaScaleRatio * trail,
-				);
+				const sampleScale = Math.max(1e-6, 1 - blur.deltaScaleRatio * trail);
 				const sampleWidth = draw.width * sampleScale;
 				const sampleHeight = draw.height * sampleScale;
 				const sampleCenterX = draw.x + draw.width / 2 - blur.deltaX * trail;
@@ -927,8 +964,21 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 		this.ensureBufferPool({ device, drawCount: effectiveDrawList.length });
 
 		for (const [index, draw] of effectiveDrawList.entries()) {
+			const resolvedSource = draw.solidColor
+				? this.getSolidColorSource({ color: draw.solidColor })
+				: draw.source && draw.sourceWidth && draw.sourceHeight
+					? {
+							source: draw.source,
+							width: draw.sourceWidth,
+							height: draw.sourceHeight,
+						}
+					: null;
+			if (!resolvedSource) {
+				continue;
+			}
 			const isVideoFrameSource =
-				typeof VideoFrame !== "undefined" && draw.source instanceof VideoFrame;
+				typeof VideoFrame !== "undefined" &&
+				resolvedSource.source instanceof VideoFrame;
 			const usePlusBlend = draw.blendMode === "plus-lighter";
 			const clipRect = draw.clipRect;
 			pass.setScissorRect(
@@ -963,11 +1013,12 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 					? externalPipelinePlus
 					: externalPipeline;
 				const videoFrameSource = draw.source as VideoFrame;
+				const videoFrame = resolvedSource.source as VideoFrame;
 				const externalTexture = device.importExternalTexture({
-					source: videoFrameSource,
+					source: videoFrame,
 				});
 				externalVideoFrames += 1;
-				videoFramesToClose.push(videoFrameSource);
+				videoFramesToClose.push(videoFrame);
 				bindGroup = device.createBindGroup({
 					layout: selectedExternalPipeline.getBindGroupLayout(0),
 					entries: [
@@ -979,23 +1030,23 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 			} else {
 				const selectedPipeline = usePlusBlend ? pipelinePlus : pipeline;
 				const textureEntry = this.getOrCreateTexture({
-					source: draw.source,
-					sourceWidth: draw.sourceWidth,
-					sourceHeight: draw.sourceHeight,
+					source: resolvedSource.source as GPUCopyExternalImageSource,
+					sourceWidth: resolvedSource.width,
+					sourceHeight: resolvedSource.height,
 					device,
 				});
 				const sourceIsDynamic = this.sourceNeedsUploadEachFrame({
-					source: draw.source,
+					source: resolvedSource.source as GPUCopyExternalImageSource,
 				});
 				const needsUpload =
 					textureEntry.isStaticUploaded === false || sourceIsDynamic;
 				if (needsUpload) {
 					device.queue.copyExternalImageToTexture(
-						{ source: draw.source },
+						{ source: resolvedSource.source as GPUCopyExternalImageSource },
 						{ texture: textureEntry.texture },
 						{
-							width: Math.max(1, Math.round(draw.sourceWidth)),
-							height: Math.max(1, Math.round(draw.sourceHeight)),
+							width: Math.max(1, Math.round(resolvedSource.width)),
+							height: Math.max(1, Math.round(resolvedSource.height)),
 						},
 					);
 					textureEntry.isStaticUploaded = !sourceIsDynamic;

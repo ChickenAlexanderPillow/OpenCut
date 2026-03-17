@@ -18,12 +18,16 @@ import {
 import {
 	buildDefaultVideoSplitScreenBindings,
 	deriveVideoAngleSections,
+	getVideoAngleSectionAtTime,
+	getVideoAngleSectionByStartTime,
 	getSelectedOrActiveReframePresetId,
+	getEffectiveVideoSplitScreenSlotTransformOverride,
 	getVideoReframeSectionAtTime,
 	getVideoReframeSectionByStartTime,
 	getVideoSplitScreenSectionAtTime,
 	normalizeVideoReframeState,
 	rebuildVideoReframeStateFromAngleSections,
+	remapSplitSlotTransformBetweenViewportBalances,
 	remapSplitSlotTransformBetweenViewports,
 	replaceOrInsertReframeSwitch,
 } from "@/lib/reframe/video-reframe";
@@ -40,6 +44,7 @@ import type {
 	VideoReframePreset,
 	VideoReframeSwitch,
 	VideoSplitScreen,
+	VideoSplitScreenViewportBalance,
 	VideoSplitScreenSlotBinding,
 } from "@/types/timeline";
 
@@ -55,8 +60,8 @@ export function ReframeView() {
 	const selectedPresetIdByElementId = useReframeStore(
 		(state) => state.selectedPresetIdByElementId,
 	);
-	const selectedSplitPreviewSlotsByElementId = useReframeStore(
-		(state) => state.selectedSplitPreviewSlotsByElementId,
+	const selectedSplitPreviewByElementId = useReframeStore(
+		(state) => state.selectedSplitPreviewByElementId,
 	);
 	const selectedSectionStartTimeByElementId = useReframeStore(
 		(state) => state.selectedSectionStartTimeByElementId,
@@ -70,8 +75,12 @@ export function ReframeView() {
 	const setSelectedSectionStartTime = useReframeStore(
 		(state) => state.setSelectedSectionStartTime,
 	);
-	const selected = editor.timeline.getElementsWithTracks({ elements: selectedElements });
-	const selectedVideo = selected.find(({ element }) => element.type === "video");
+	const selected = editor.timeline.getElementsWithTracks({
+		elements: selectedElements,
+	});
+	const selectedVideo = selected.find(
+		({ element }) => element.type === "video",
+	);
 
 	const normalizedVideo = useMemo(() => {
 		if (!selectedVideo || selectedVideo.element.type !== "video") return null;
@@ -89,7 +98,8 @@ export function ReframeView() {
 					0,
 					Math.min(
 						normalizedVideo.element.duration,
-						editor.playback.getCurrentTime() - normalizedVideo.element.startTime,
+						editor.playback.getCurrentTime() -
+							normalizedVideo.element.startTime,
 					),
 				),
 				fps: projectFps,
@@ -106,7 +116,8 @@ export function ReframeView() {
 		? getVideoReframeSectionByStartTime({
 				element: normalizedVideo.element,
 				startTime:
-					selectedSectionStartTimeByElementId[normalizedVideo.element.id] ?? null,
+					selectedSectionStartTimeByElementId[normalizedVideo.element.id] ??
+					null,
 			})
 		: null;
 	const isPlayheadWithinStoredSection = storedFocusedSection
@@ -115,22 +126,24 @@ export function ReframeView() {
 		: false;
 	const focusedSectionStartTime = normalizedVideo
 		? editor.playback.getIsPlaying()
-			? playheadSection?.startTime ?? null
+			? (playheadSection?.startTime ?? null)
 			: isPlayheadWithinStoredSection
-				? storedFocusedSection?.startTime ?? playheadSection?.startTime ?? null
+				? (storedFocusedSection?.startTime ??
+					playheadSection?.startTime ??
+					null)
 				: (playheadSection?.startTime ?? null)
 		: null;
 
 	const selectedPreset = useMemo(() => {
 		if (!normalizedVideo) return null;
-		const explicitlySelectedPresetId =
-			editor.playback.getIsPlaying()
-				? null
-				: (selectedPresetIdByElementId[normalizedVideo.element.id] ?? null);
+		const explicitlySelectedPresetId = editor.playback.getIsPlaying()
+			? null
+			: (selectedPresetIdByElementId[normalizedVideo.element.id] ?? null);
 		if (explicitlySelectedPresetId) {
 			return (
 				normalizedVideo.element.reframePresets?.find(
-					(preset: VideoReframePreset) => preset.id === explicitlySelectedPresetId,
+					(preset: VideoReframePreset) =>
+						preset.id === explicitlySelectedPresetId,
 				) ?? null
 			);
 		}
@@ -141,7 +154,8 @@ export function ReframeView() {
 		if (selectedSection?.presetId) {
 			return (
 				normalizedVideo.element.reframePresets?.find(
-					(preset: VideoReframePreset) => preset.id === selectedSection.presetId,
+					(preset: VideoReframePreset) =>
+						preset.id === selectedSection.presetId,
 				) ?? null
 			);
 		}
@@ -165,9 +179,15 @@ export function ReframeView() {
 	const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
 	const [editingName, setEditingName] = useState("");
 	const [isAnalyzing, setIsAnalyzing] = useState(false);
-	const [selectedSplitSectionId, setSelectedSplitSectionId] = useState<string | null>(null);
-	const [draggingMarkerStartTime, setDraggingMarkerStartTime] = useState<number | null>(null);
-	const [markerDragOrderStartTimes, setMarkerDragOrderStartTimes] = useState<number[] | null>(null);
+	const [selectedSplitSectionId, setSelectedSplitSectionId] = useState<
+		string | null
+	>(null);
+	const [draggingMarkerStartTime, setDraggingMarkerStartTime] = useState<
+		number | null
+	>(null);
+	const [markerDragOrderStartTimes, setMarkerDragOrderStartTimes] = useState<
+		number[] | null
+	>(null);
 	const markerItemElementsRef = useRef<Map<number, HTMLDivElement>>(new Map());
 	const [markerDragState, setMarkerDragState] = useState<{
 		startTime: number;
@@ -208,25 +228,25 @@ export function ReframeView() {
 				baseScale: normalizedVideo.element.transform.scale,
 			});
 
-			const manualPresets = (normalizedVideo.element.reframePresets ?? []).filter(
-				(preset: VideoReframePreset) => !preset.autoSeeded,
-			);
-			const preservedSwitches = (normalizedVideo.element.reframeSwitches ?? []).filter(
-				(entry: VideoReframeSwitch) => {
-					const matchingPreset = normalizedVideo.element.reframePresets?.find(
-						(preset: VideoReframePreset) => preset.id === entry.presetId,
-					);
-					return Boolean(matchingPreset && !matchingPreset.autoSeeded);
-				},
-			);
+			const manualPresets = (
+				normalizedVideo.element.reframePresets ?? []
+			).filter((preset: VideoReframePreset) => !preset.autoSeeded);
+			const preservedSwitches = (
+				normalizedVideo.element.reframeSwitches ?? []
+			).filter((entry: VideoReframeSwitch) => {
+				const matchingPreset = normalizedVideo.element.reframePresets?.find(
+					(preset: VideoReframePreset) => preset.id === entry.presetId,
+				);
+				return Boolean(matchingPreset && !matchingPreset.autoSeeded);
+			});
 			const nextPresets = [...manualPresets, ...result.presets];
-			const nextDefaultPresetId =
-				manualPresets.some(
-					(preset: VideoReframePreset) =>
-						preset.id === normalizedVideo.element.defaultReframePresetId,
-				)
-					? normalizedVideo.element.defaultReframePresetId ?? result.defaultPresetId
-					: result.defaultPresetId;
+			const nextDefaultPresetId = manualPresets.some(
+				(preset: VideoReframePreset) =>
+					preset.id === normalizedVideo.element.defaultReframePresetId,
+			)
+				? (normalizedVideo.element.defaultReframePresetId ??
+					result.defaultPresetId)
+				: result.defaultPresetId;
 
 			const nextSwitches = result.switches.reduce(
 				(currentSwitches, entry) =>
@@ -290,7 +310,9 @@ export function ReframeView() {
 	const combinedMarkerSections = useMemo(() => {
 		if (!normalizedVideo) return [];
 		const splitSectionsByStartTime = new Map(
-			(splitScreen?.sections ?? []).map((section) => [section.startTime, section] as const),
+			(splitScreen?.sections ?? []).map(
+				(section) => [section.startTime, section] as const,
+			),
 		);
 		return deriveVideoAngleSections({
 			element: normalizedVideo.element,
@@ -306,19 +328,24 @@ export function ReframeView() {
 			return combinedMarkerSections;
 		}
 		const sectionByStartTime = new Map(
-			combinedMarkerSections.map((section) => [section.startTime, section] as const),
+			combinedMarkerSections.map(
+				(section) => [section.startTime, section] as const,
+			),
 		);
 		return markerDragOrderStartTimes
 			.map((startTime) => sectionByStartTime.get(startTime) ?? null)
-			.filter((section): section is NonNullable<typeof section> => Boolean(section));
+			.filter((section): section is NonNullable<typeof section> =>
+				Boolean(section),
+			);
 	}, [combinedMarkerSections, markerDragOrderStartTimes]);
 	const draggedMarkerSection = useMemo(
 		() =>
 			markerDragState
-				? orderedCombinedMarkerSections.find(
+				? (orderedCombinedMarkerSections.find(
 						(section) =>
-							Math.abs(section.startTime - markerDragState.startTime) <= 1 / 1000,
-				  ) ?? null
+							Math.abs(section.startTime - markerDragState.startTime) <=
+							1 / 1000,
+					) ?? null)
 				: null,
 		[markerDragState, orderedCombinedMarkerSections],
 	);
@@ -329,9 +356,29 @@ export function ReframeView() {
 			localTime: focusedSectionStartTime ?? localTime,
 		});
 	}, [normalizedVideo, focusedSectionStartTime, localTime]);
+	const angleSectionAtFocus = useMemo(() => {
+		if (!normalizedVideo) return null;
+		const storedAngleSection = getVideoAngleSectionByStartTime({
+			element: normalizedVideo.element,
+			startTime: focusedSectionStartTime,
+		});
+		if (storedAngleSection) {
+			return storedAngleSection;
+		}
+		return getVideoAngleSectionAtTime({
+			element: normalizedVideo.element,
+			localTime,
+		});
+	}, [normalizedVideo, focusedSectionStartTime, localTime]);
 	const previewSplitBindings =
 		normalizedVideo && !editor.playback.getIsPlaying()
-			? (selectedSplitPreviewSlotsByElementId[normalizedVideo.element.id] ?? null)
+			? (selectedSplitPreviewByElementId[normalizedVideo.element.id]?.slots ??
+				null)
+			: null;
+	const previewSplitViewportBalance =
+		normalizedVideo && !editor.playback.getIsPlaying()
+			? (selectedSplitPreviewByElementId[normalizedVideo.element.id]
+					?.viewportBalance ?? null)
 			: null;
 	const previewSelectedPresetId =
 		normalizedVideo && !editor.playback.getIsPlaying()
@@ -339,8 +386,9 @@ export function ReframeView() {
 			: null;
 	const previousPausedLocalTimeRef = useRef<number | null>(null);
 	const editingSplitSection =
-		splitScreen?.sections?.find((section) => section.id === selectedSplitSectionId) ??
-		null;
+		splitScreen?.sections?.find(
+			(section) => section.id === selectedSplitSectionId,
+		) ?? null;
 	const activeFocusedSplitSection =
 		splitSectionAtFocus?.enabled !== false ? splitSectionAtFocus : null;
 	const selectedSplitSectionEnabled = editingSplitSection?.enabled !== false;
@@ -354,9 +402,15 @@ export function ReframeView() {
 					startTime: focusedSectionStartTime ?? 0,
 					enabled: true,
 					slots: previewSplitBindings,
-			  };
+				};
 	const selectedAngleMode: "preset" | "split" =
-		previewSplitBindings?.length || activeSplitSection ? "split" : "preset";
+		previewSplitBindings?.length ||
+		activeSplitSection ||
+		angleSectionAtFocus?.isSplit
+			? "split"
+			: "preset";
+	const effectiveSplitViewportBalance =
+		previewSplitViewportBalance ?? splitScreen?.viewportBalance ?? "balanced";
 
 	useEffect(() => {
 		if (!normalizedVideo) return;
@@ -366,7 +420,10 @@ export function ReframeView() {
 		}
 		const previousTime = previousPausedLocalTimeRef.current;
 		previousPausedLocalTimeRef.current = localTime;
-		if (previousTime === null || Math.abs(previousTime - localTime) <= 1 / 1000) {
+		if (
+			previousTime === null ||
+			Math.abs(previousTime - localTime) <= 1 / 1000
+		) {
 			return;
 		}
 		if (!previewSelectedPresetId && !previewSplitBindings?.length) {
@@ -403,14 +460,35 @@ export function ReframeView() {
 				normalizedVideo?.element.defaultReframePresetId ??
 				null,
 			transformOverride: binding.transformOverride ?? null,
+			transformOverridesBySlotId: binding.transformOverridesBySlotId
+				? { ...binding.transformOverridesBySlotId }
+				: undefined,
 		}));
-	const editableSplitBindings =
-		resolveConcreteSplitBindings(
-			previewSplitBindings ??
-				editingSplitSection?.slots ??
-				splitScreen?.slots ??
-				[],
-		);
+	const withBindingSlotOverride = ({
+		binding,
+		slotId = binding.slotId,
+		transformOverride,
+	}: {
+		binding: VideoSplitScreenSlotBinding;
+		slotId?: string;
+		transformOverride: NonNullable<
+			VideoSplitScreenSlotBinding["transformOverride"]
+		>;
+	}): VideoSplitScreenSlotBinding => ({
+		...binding,
+		slotId,
+		transformOverride,
+		transformOverridesBySlotId: {
+			...(binding.transformOverridesBySlotId ?? {}),
+			[slotId]: transformOverride,
+		},
+	});
+	const editableSplitBindings = resolveConcreteSplitBindings(
+		previewSplitBindings ??
+			editingSplitSection?.slots ??
+			splitScreen?.slots ??
+			[],
+	);
 	const updateBaseSplitBindings = ({
 		slots,
 		pushHistory = true,
@@ -431,7 +509,7 @@ export function ReframeView() {
 						: {
 								...section,
 								slots,
-						  },
+							},
 				),
 			},
 			pushHistory,
@@ -439,6 +517,10 @@ export function ReframeView() {
 		setSelectedSplitPreviewSlots({
 			elementId: normalizedVideo.element.id,
 			slots,
+			viewportBalance:
+				splitScreen?.viewportBalance ??
+				previewSplitViewportBalance ??
+				"balanced",
 		});
 	};
 
@@ -458,11 +540,78 @@ export function ReframeView() {
 							mode: "fixed-preset" as const,
 							presetId,
 							transformOverride: binding.transformOverride ?? null,
-					  }
+							transformOverridesBySlotId: binding.transformOverridesBySlotId
+								? { ...binding.transformOverridesBySlotId }
+								: undefined,
+						}
 					: binding,
 			);
 		updateBaseSplitBindings({
-			slots: applyBinding(splitScreen?.slots ?? buildInitialSplitScreen().slots),
+			slots: applyBinding(
+				splitScreen?.slots ?? buildInitialSplitScreen().slots,
+			),
+		});
+	};
+
+	const updateSplitViewportBalance = ({
+		viewportBalance,
+	}: {
+		viewportBalance: VideoSplitScreenViewportBalance;
+	}) => {
+		if (!normalizedVideo) return;
+		const currentViewportBalance =
+			previewSplitViewportBalance ?? splitScreen?.viewportBalance ?? "balanced";
+		if (currentViewportBalance === viewportBalance) {
+			return;
+		}
+		const projectCanvas = editor.project.getActive().settings.canvasSize;
+		const remappedSlots = editableSplitBindings.map((binding) => {
+			const currentTransform = getSplitSlotTransform(binding);
+			const remappedTransform = remapSplitSlotTransformBetweenViewportBalances({
+				transform: currentTransform,
+				layoutPreset: splitScreen?.layoutPreset ?? "top-bottom",
+				fromViewportBalance: currentViewportBalance,
+				toViewportBalance: viewportBalance,
+				slotId: binding.slotId,
+				canvasWidth: projectCanvas.width,
+				canvasHeight: projectCanvas.height,
+				sourceWidth:
+					selectedMediaAsset?.type === "video"
+						? selectedMediaAsset.width
+						: undefined,
+				sourceHeight:
+					selectedMediaAsset?.type === "video"
+						? selectedMediaAsset.height
+						: undefined,
+			});
+			return {
+				...withBindingSlotOverride({
+					binding,
+					transformOverride: remappedTransform,
+				}),
+			};
+		});
+		editor.timeline.updateVideoSplitScreen({
+			trackId: normalizedVideo.trackId,
+			elementId: normalizedVideo.element.id,
+			updates: {
+				...(splitScreen ?? buildInitialSplitScreen()),
+				viewportBalance,
+				slots: remappedSlots,
+				sections: (splitScreen?.sections ?? []).map((section) =>
+					section.enabled === false
+						? section
+						: {
+								...section,
+								slots: remappedSlots,
+							},
+				),
+			},
+		});
+		setSelectedSplitPreviewSlots({
+			elementId: normalizedVideo.element.id,
+			slots: remappedSlots,
+			viewportBalance,
 		});
 	};
 
@@ -473,21 +622,33 @@ export function ReframeView() {
 		const projectCanvas = editor.project.getActive().settings.canvasSize;
 		const swappedBindings = bindings.map((binding, index, list) => {
 			const sourceBinding = list[(index + 1) % list.length] ?? binding;
+			const existingTargetOverride =
+				sourceBinding.transformOverridesBySlotId?.[binding.slotId] ?? null;
 			const sourceTransform = getSplitSlotTransform(sourceBinding);
 			const remappedTransform = remapSplitSlotTransformBetweenViewports({
 				transform: sourceTransform,
 				layoutPreset: splitScreen?.layoutPreset ?? "top-bottom",
+				viewportBalance: effectiveSplitViewportBalance,
 				fromSlotId: sourceBinding.slotId,
 				toSlotId: binding.slotId,
 				canvasWidth: projectCanvas.width,
 				canvasHeight: projectCanvas.height,
+				sourceWidth:
+					selectedMediaAsset?.type === "video"
+						? selectedMediaAsset.width
+						: undefined,
+				sourceHeight:
+					selectedMediaAsset?.type === "video"
+						? selectedMediaAsset.height
+						: undefined,
 			});
-			return {
-				...binding,
-				mode: sourceBinding.mode,
-				presetId: sourceBinding.presetId ?? null,
-				transformOverride: remappedTransform,
-			};
+			return withBindingSlotOverride({
+				binding: {
+					...sourceBinding,
+					slotId: binding.slotId,
+				},
+				transformOverride: existingTargetOverride ?? remappedTransform,
+			});
 		});
 		updateBaseSplitBindings({
 			slots: swappedBindings,
@@ -499,6 +660,7 @@ export function ReframeView() {
 		return {
 			enabled: false,
 			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
 			slots: buildDefaultVideoSplitScreenBindings({
 				layoutPreset: "top-bottom",
 				presets,
@@ -535,9 +697,14 @@ export function ReframeView() {
 				(preset) => preset.id === binding.presetId,
 			) ?? null;
 		return (
-			binding.transformOverride ?? {
+			getEffectiveVideoSplitScreenSlotTransformOverride({
+				slot: binding,
+			}) ?? {
 				position: slotPreset?.transform.position ?? { x: 0, y: 0 },
-				scale: slotPreset?.transform.scale ?? normalizedVideo?.element.transform.scale ?? 1,
+				scale:
+					slotPreset?.transform.scale ??
+					normalizedVideo?.element.transform.scale ??
+					1,
 			}
 		);
 	};
@@ -562,8 +729,8 @@ export function ReframeView() {
 					return binding;
 				}
 				const currentTransform = getSplitSlotTransform(binding);
-				return {
-					...binding,
+				return withBindingSlotOverride({
+					binding,
 					transformOverride: {
 						position: {
 							x: updates.x ?? currentTransform.position.x,
@@ -571,7 +738,7 @@ export function ReframeView() {
 						},
 						scale: updates.scale ?? currentTransform.scale,
 					},
-				};
+				});
 			});
 
 		updateBaseSplitBindings({
@@ -652,19 +819,23 @@ export function ReframeView() {
 	}) => {
 		if (!normalizedVideo) return;
 		const sectionByStartTime = new Map(
-			combinedMarkerSections.map((section) => [section.startTime, section] as const),
+			combinedMarkerSections.map(
+				(section) => [section.startTime, section] as const,
+			),
 		);
 		const sections = orderedStartTimes
 			.map((startTime) => sectionByStartTime.get(startTime) ?? null)
-			.filter((section): section is NonNullable<typeof section> => Boolean(section))
+			.filter((section): section is NonNullable<typeof section> =>
+				Boolean(section),
+			)
 			.map((section) => ({
-			startTime: section.startTime,
-			endTime: section.endTime,
-			presetId: section.presetId,
-			switchId: section.switchId,
-			splitSectionId: section.splitSectionId,
-			isSplit: section.isSplit,
-		}));
+				startTime: section.startTime,
+				endTime: section.endTime,
+				presetId: section.presetId,
+				switchId: section.switchId,
+				splitSectionId: section.splitSectionId,
+				isSplit: section.isSplit,
+			}));
 		if (sections.length === 0) return;
 		const boundaries = [...combinedMarkerSections]
 			.map((section) => section.startTime)
@@ -672,8 +843,7 @@ export function ReframeView() {
 		const rebuiltSections = sections.map((section, index) => ({
 			...section,
 			startTime: boundaries[index] ?? 0,
-			endTime:
-				boundaries[index + 1] ?? normalizedVideo.element.duration,
+			endTime: boundaries[index + 1] ?? normalizedVideo.element.duration,
 		}));
 		const nextState = rebuildVideoReframeStateFromAngleSections({
 			element: normalizedVideo.element,
@@ -694,7 +864,7 @@ export function ReframeView() {
 				: orderedStartTimes.findIndex(
 						(startTime) =>
 							Math.abs(startTime - selectedOrderedStartTime) <= 1 / 1000,
-				  );
+					);
 		const selectedSection =
 			(selectedIndex >= 0 ? rebuiltSections[selectedIndex] : null) ??
 			rebuiltSections[0] ??
@@ -713,7 +883,7 @@ export function ReframeView() {
 					? {
 							...previous,
 							pointerY: event.clientY,
-					  }
+						}
 					: previous,
 			);
 			setMarkerDragOrderStartTimes((previous) => {
@@ -721,7 +891,10 @@ export function ReframeView() {
 					previous ??
 					orderedCombinedMarkerSections.map((section) => section.startTime);
 				const hovered = orderedCombinedMarkerSections.find((section) => {
-					if (Math.abs(section.startTime - markerDragState.startTime) <= 1 / 1000) {
+					if (
+						Math.abs(section.startTime - markerDragState.startTime) <=
+						1 / 1000
+					) {
 						return false;
 					}
 					const element = markerItemElementsRef.current.get(section.startTime);
@@ -739,13 +912,13 @@ export function ReframeView() {
 				});
 			});
 		};
-			const onPointerUp = () => {
-				if (markerDragOrderStartTimes?.length) {
-					commitMarkerSectionOrder({
-						orderedStartTimes: markerDragOrderStartTimes,
-						selectedOrderedStartTime: markerDragState.startTime,
-					});
-				}
+		const onPointerUp = () => {
+			if (markerDragOrderStartTimes?.length) {
+				commitMarkerSectionOrder({
+					orderedStartTimes: markerDragOrderStartTimes,
+					selectedOrderedStartTime: markerDragState.startTime,
+				});
+			}
 			setDraggingMarkerStartTime(null);
 			setMarkerDragOrderStartTimes(null);
 			setMarkerDragState(null);
@@ -816,129 +989,133 @@ export function ReframeView() {
 					</div>
 
 					<div className="grid grid-cols-1 gap-2">
-								{(normalizedVideo.element.reframePresets ?? []).map((preset: VideoReframePreset) => {
-							const isActive =
-								selectedAngleMode === "preset" && selectedPreset?.id === preset.id;
-							const isEditingName = editingPresetId === preset.id;
-							return (
-								<div
-									key={preset.id}
-									className={cn(
-										"rounded-lg border p-2 transition-colors",
-										isActive && "border-primary bg-primary/5",
-									)}
-									onClick={() => {
-										applyPresetSelection({
-											presetId: preset.id,
-										});
-									}}
-								>
-									<div className="flex items-center gap-2">
-										<div className="flex min-w-0 flex-1 items-center gap-2">
-											<ReframePresetGlyph name={preset.name} />
-											{isEditingName ? (
-												<Input
-													autoFocus
-													value={editingName}
-													onClick={(event) => event.stopPropagation()}
-													onChange={(event) =>
-														setEditingName(event.target.value)
-													}
-													onBlur={() => {
-														const nextName = editingName.trim() || preset.name;
-														if (nextName !== preset.name) {
-															editor.timeline.updateVideoReframePreset({
-																trackId: normalizedVideo.trackId,
-																elementId: normalizedVideo.element.id,
-																presetId: preset.id,
-																updates: { name: nextName },
-															});
+						{(normalizedVideo.element.reframePresets ?? []).map(
+							(preset: VideoReframePreset) => {
+								const isActive =
+									selectedAngleMode === "preset" &&
+									selectedPreset?.id === preset.id;
+								const isEditingName = editingPresetId === preset.id;
+								return (
+									<div
+										key={preset.id}
+										className={cn(
+											"rounded-lg border p-2 transition-colors",
+											isActive && "border-primary bg-primary/5",
+										)}
+										onClick={() => {
+											applyPresetSelection({
+												presetId: preset.id,
+											});
+										}}
+									>
+										<div className="flex items-center gap-2">
+											<div className="flex min-w-0 flex-1 items-center gap-2">
+												<ReframePresetGlyph name={preset.name} />
+												{isEditingName ? (
+													<Input
+														autoFocus
+														value={editingName}
+														onClick={(event) => event.stopPropagation()}
+														onChange={(event) =>
+															setEditingName(event.target.value)
 														}
-														setEditingPresetId(null);
-													}}
-													onKeyDown={(event) => {
-														if (event.key === "Enter") {
-															event.currentTarget.blur();
-															return;
-														}
-														if (event.key === "Escape") {
-															setEditingName(preset.name);
+														onBlur={() => {
+															const nextName =
+																editingName.trim() || preset.name;
+															if (nextName !== preset.name) {
+																editor.timeline.updateVideoReframePreset({
+																	trackId: normalizedVideo.trackId,
+																	elementId: normalizedVideo.element.id,
+																	presetId: preset.id,
+																	updates: { name: nextName },
+																});
+															}
 															setEditingPresetId(null);
-														}
-													}}
-													className="h-8"
-												/>
-											) : (
-												<button
-													type="button"
-													className="truncate text-left text-sm font-medium"
-													onClick={(event) => {
-														event.stopPropagation();
-														setEditingPresetId(preset.id);
-														setEditingName(preset.name);
-													}}
-												>
-													{preset.name}
-												</button>
-											)}
-											{preset.autoSeeded && (
-												<span className="text-muted-foreground text-[10px] uppercase tracking-[0.14em]">
-													Auto
-												</span>
-											)}
+														}}
+														onKeyDown={(event) => {
+															if (event.key === "Enter") {
+																event.currentTarget.blur();
+																return;
+															}
+															if (event.key === "Escape") {
+																setEditingName(preset.name);
+																setEditingPresetId(null);
+															}
+														}}
+														className="h-8"
+													/>
+												) : (
+													<button
+														type="button"
+														className="truncate text-left text-sm font-medium"
+														onClick={(event) => {
+															event.stopPropagation();
+															setEditingPresetId(preset.id);
+															setEditingName(preset.name);
+														}}
+													>
+														{preset.name}
+													</button>
+												)}
+												{preset.autoSeeded && (
+													<span className="text-muted-foreground text-[10px] uppercase tracking-[0.14em]">
+														Auto
+													</span>
+												)}
+											</div>
+										</div>
+										<div className="mt-2 grid grid-cols-3 gap-2">
+											<ReframeScrubber
+												label="X"
+												value={preset.transform.position.x}
+												min={-1200}
+												max={1200}
+												step={1}
+												formatValue={(value) => Math.round(value).toString()}
+												onChange={(value, pushHistory) =>
+													updatePresetTransform({
+														preset,
+														updates: { x: value },
+														pushHistory,
+													})
+												}
+											/>
+											<ReframeScrubber
+												label="Y"
+												value={preset.transform.position.y}
+												min={-1200}
+												max={1200}
+												step={1}
+												formatValue={(value) => Math.round(value).toString()}
+												onChange={(value, pushHistory) =>
+													updatePresetTransform({
+														preset,
+														updates: { y: value },
+														pushHistory,
+													})
+												}
+											/>
+											<ReframeScrubber
+												label="Scale"
+												value={preset.transform.scale}
+												min={0.5}
+												max={8}
+												step={0.01}
+												dragScale={0.01}
+												formatValue={(value) => value.toFixed(2)}
+												onChange={(value, pushHistory) =>
+													updatePresetTransform({
+														preset,
+														updates: { scale: value },
+														pushHistory,
+													})
+												}
+											/>
 										</div>
 									</div>
-									<div className="mt-2 grid grid-cols-3 gap-2">
-										<ReframeScrubber
-											label="X"
-											value={preset.transform.position.x}
-											min={-1200}
-											max={1200}
-											step={1}
-											formatValue={(value) => Math.round(value).toString()}
-											onChange={(value, pushHistory) =>
-												updatePresetTransform({
-													preset,
-													updates: { x: value },
-													pushHistory,
-												})
-											}
-										/>
-										<ReframeScrubber
-											label="Y"
-											value={preset.transform.position.y}
-											min={-1200}
-											max={1200}
-											step={1}
-											formatValue={(value) => Math.round(value).toString()}
-											onChange={(value, pushHistory) =>
-												updatePresetTransform({
-													preset,
-													updates: { y: value },
-													pushHistory,
-												})
-											}
-										/>
-										<ReframeScrubber
-											label="Scale"
-											value={preset.transform.scale}
-											min={0.5}
-											max={8}
-											step={0.01}
-											dragScale={0.01}
-											formatValue={(value) => value.toFixed(2)}
-											onChange={(value, pushHistory) =>
-												updatePresetTransform({
-													preset,
-													updates: { scale: value },
-													pushHistory,
-												})
-											}
-										/>
-									</div>
-								</div>
-							);
-						})}
+								);
+							},
+						)}
 						<div
 							className={cn(
 								"rounded-lg border p-2 transition-colors",
@@ -952,12 +1129,15 @@ export function ReframeView() {
 								setSelectedSplitSectionId(null);
 								setSelectedSplitPreviewSlots({
 									elementId: normalizedVideo.element.id,
-									slots:
-										resolveConcreteSplitBindings(
-											editingSplitSection?.slots ??
-												splitScreen?.slots ??
-												buildInitialSplitScreen().slots,
-										),
+									slots: resolveConcreteSplitBindings(
+										editingSplitSection?.slots ??
+											splitScreen?.slots ??
+											buildInitialSplitScreen().slots,
+									),
+									viewportBalance:
+										splitScreen?.viewportBalance ??
+										previewSplitViewportBalance ??
+										buildInitialSplitScreen().viewportBalance,
 								});
 								setSelectedSectionStartTime({
 									elementId: normalizedVideo.element.id,
@@ -973,134 +1153,176 @@ export function ReframeView() {
 									</div>
 								</div>
 							</div>
-							{selectedAngleMode === "split" && (
-								<div className="mt-3 space-y-2">
-									<div className="flex items-center justify-between gap-2">
-										<div className="text-muted-foreground text-xs">
-											Marks a top/bottom split section and keeps single view elsewhere
-										</div>
-										<Button
-											size="sm"
-											variant="secondary"
-											onClick={(event) => {
-												event.stopPropagation();
-												swapSplitBindings();
-											}}
-											disabled={editableSplitBindings.length < 2}
-											title="Swap top and bottom"
-										>
-											<RefreshCw className="size-4" />
-										</Button>
+							<div className="mt-3 space-y-2">
+								<div className="flex items-center justify-between gap-2">
+									<div className="text-muted-foreground text-xs">
+										Marks a top/bottom split section and keeps single view
+										elsewhere
 									</div>
-									{editingSplitSection && selectedSplitSectionEnabled && (
-										<div className="rounded-md border p-2 text-xs">
-											Editing split marker at {editingSplitSection.startTime.toFixed(2)}s
-										</div>
-									)}
-									<div className="grid gap-2">
-										{editableSplitBindings.map((binding) => (
-											<div
-												key={binding.slotId}
-												className="grid grid-cols-[90px_minmax(0,1fr)] items-center gap-2"
-											>
-												<div className="text-xs font-medium uppercase tracking-[0.14em]">
-													{binding.slotId}
-												</div>
-												<div className="flex items-center gap-2">
-													{(() => {
-														const selectedSlotPreset =
-															normalizedVideo.element.reframePresets?.find(
-																(preset) => preset.id === binding.presetId,
-															) ?? null;
-														return selectedSlotPreset ? (
-															<ReframePresetGlyph name={selectedSlotPreset.name} />
-														) : (
-															<div className="bg-muted flex size-7 items-center justify-center rounded-md border" />
-														);
-													})()}
-													<select
-														className="bg-background h-8 flex-1 rounded-md border px-2 text-sm"
-													value={
-														`fixed:${binding.presetId ?? ""}`
-													}
+									<Button
+										size="sm"
+										variant="secondary"
+										onClick={(event) => {
+											event.stopPropagation();
+											swapSplitBindings();
+										}}
+										disabled={editableSplitBindings.length < 2}
+										title="Swap top and bottom"
+									>
+										<RefreshCw className="size-4" />
+									</Button>
+								</div>
+								<div className="grid grid-cols-2 gap-2">
+									<Button
+										type="button"
+										variant={
+											effectiveSplitViewportBalance === "balanced"
+												? "secondary"
+												: "outline"
+										}
+										size="sm"
+										onClick={(event) => {
+											event.stopPropagation();
+											updateSplitViewportBalance({
+												viewportBalance: "balanced",
+											});
+										}}
+									>
+										Balanced 1:1
+									</Button>
+									<Button
+										type="button"
+										variant={
+											effectiveSplitViewportBalance === "unbalanced"
+												? "secondary"
+												: "outline"
+										}
+										size="sm"
+										onClick={(event) => {
+											event.stopPropagation();
+											updateSplitViewportBalance({
+												viewportBalance: "unbalanced",
+											});
+										}}
+									>
+										Unbalanced 1:2
+									</Button>
+								</div>
+								{editingSplitSection && selectedSplitSectionEnabled && (
+									<div className="rounded-md border p-2 text-xs">
+										Editing split marker at{" "}
+										{editingSplitSection.startTime.toFixed(2)}s
+									</div>
+								)}
+								<div className="grid gap-2">
+									{editableSplitBindings.map((binding) => (
+										<div
+											key={binding.slotId}
+											className="grid grid-cols-[90px_minmax(0,1fr)] items-center gap-2"
+										>
+											<div className="text-xs font-medium uppercase tracking-[0.14em]">
+												{binding.slotId}
+											</div>
+											<div className="flex items-center gap-2">
+												{(() => {
+													const selectedSlotPreset =
+														normalizedVideo.element.reframePresets?.find(
+															(preset) => preset.id === binding.presetId,
+														) ?? null;
+													return selectedSlotPreset ? (
+														<ReframePresetGlyph
+															name={selectedSlotPreset.name}
+														/>
+													) : (
+														<div className="bg-muted flex size-7 items-center justify-center rounded-md border" />
+													);
+												})()}
+												<select
+													className="bg-background h-8 flex-1 rounded-md border px-2 text-sm"
+													value={`fixed:${binding.presetId ?? ""}`}
 													onClick={(event) => event.stopPropagation()}
 													onChange={(event) => {
 														updateSplitBindings({
 															slotId: binding.slotId,
 															presetId:
-																event.target.value.replace(/^fixed:/, "") || null,
+																event.target.value.replace(/^fixed:/, "") ||
+																null,
 														});
 													}}
-													>
-														{(normalizedVideo.element.reframePresets ?? []).map((preset) => (
-															<option key={preset.id} value={`fixed:${preset.id}`}>
+												>
+													{(normalizedVideo.element.reframePresets ?? []).map(
+														(preset) => (
+															<option
+																key={preset.id}
+																value={`fixed:${preset.id}`}
+															>
 																{preset.name}
 															</option>
-														))}
-													</select>
-												</div>
-												{(() => {
-													const slotTransform = getSplitSlotTransform(binding);
-													return (
-														<div className="col-span-2 mt-2 grid grid-cols-3 gap-2">
-															<ReframeScrubber
-																label="X"
-																value={slotTransform.position.x}
-																min={-1200}
-																max={1200}
-																step={1}
-																formatValue={(value) =>
-																	Math.round(value).toString()
-																}
-																onChange={(value, pushHistory) =>
-																	updateSplitSlotTransform({
-																		slotId: binding.slotId,
-																		updates: { x: value },
-																		pushHistory,
-																	})
-																}
-															/>
-															<ReframeScrubber
-																label="Y"
-																value={slotTransform.position.y}
-																min={-1200}
-																max={1200}
-																step={1}
-																formatValue={(value) =>
-																	Math.round(value).toString()
-																}
-																onChange={(value, pushHistory) =>
-																	updateSplitSlotTransform({
-																		slotId: binding.slotId,
-																		updates: { y: value },
-																		pushHistory,
-																	})
-																}
-															/>
-															<ReframeScrubber
-																label="Scale"
-																value={slotTransform.scale}
-																min={0.5}
-																max={8}
-																step={0.01}
-																dragScale={0.01}
-																formatValue={(value) => value.toFixed(2)}
-																onChange={(value, pushHistory) =>
-																	updateSplitSlotTransform({
-																		slotId: binding.slotId,
-																		updates: { scale: value },
-																		pushHistory,
-																	})
-																}
-															/>
-														</div>
-													);
-												})()}
+														),
+													)}
+												</select>
 											</div>
-										))}
-									</div>
+											{(() => {
+												const slotTransform = getSplitSlotTransform(binding);
+												return (
+													<div className="col-span-2 mt-2 grid grid-cols-3 gap-2">
+														<ReframeScrubber
+															label="X"
+															value={slotTransform.position.x}
+															min={-1200}
+															max={1200}
+															step={1}
+															formatValue={(value) =>
+																Math.round(value).toString()
+															}
+															onChange={(value, pushHistory) =>
+																updateSplitSlotTransform({
+																	slotId: binding.slotId,
+																	updates: { x: value },
+																	pushHistory,
+																})
+															}
+														/>
+														<ReframeScrubber
+															label="Y"
+															value={slotTransform.position.y}
+															min={-1200}
+															max={1200}
+															step={1}
+															formatValue={(value) =>
+																Math.round(value).toString()
+															}
+															onChange={(value, pushHistory) =>
+																updateSplitSlotTransform({
+																	slotId: binding.slotId,
+																	updates: { y: value },
+																	pushHistory,
+																})
+															}
+														/>
+														<ReframeScrubber
+															label="Scale"
+															value={slotTransform.scale}
+															min={0.5}
+															max={8}
+															step={0.01}
+															dragScale={0.01}
+															formatValue={(value) => value.toFixed(2)}
+															onChange={(value, pushHistory) =>
+																updateSplitSlotTransform({
+																	slotId: binding.slotId,
+																	updates: { scale: value },
+																	pushHistory,
+																})
+															}
+														/>
+													</div>
+												);
+											})()}
+										</div>
+									))}
 								</div>
-							)}
+							</div>
 						</div>
 					</div>
 
@@ -1126,9 +1348,10 @@ export function ReframeView() {
 								</Button>
 							)}
 						</div>
-					<div className="text-muted-foreground text-xs">
-						Angle markers switch reframes. Split markers apply the selected top/bottom split.
-					</div>
+						<div className="text-muted-foreground text-xs">
+							Angle markers switch reframes. Split markers apply the selected
+							top/bottom split.
+						</div>
 						<div className="relative space-y-1.5">
 							{orderedCombinedMarkerSections.length === 0 ? (
 								<div className="text-muted-foreground text-sm">
@@ -1152,7 +1375,10 @@ export function ReframeView() {
 											key={`combined:${section.startTime}`}
 											ref={(node) => {
 												if (node) {
-													markerItemElementsRef.current.set(section.startTime, node);
+													markerItemElementsRef.current.set(
+														section.startTime,
+														node,
+													);
 													return;
 												}
 												markerItemElementsRef.current.delete(section.startTime);
@@ -1167,7 +1393,9 @@ export function ReframeView() {
 												type="button"
 												className="text-muted-foreground cursor-grab touch-none"
 												onPointerDown={(event) => {
-													const row = markerItemElementsRef.current.get(section.startTime);
+													const row = markerItemElementsRef.current.get(
+														section.startTime,
+													);
 													if (!row) return;
 													const rect = row.getBoundingClientRect();
 													setDraggingMarkerStartTime(section.startTime);
@@ -1251,7 +1479,7 @@ export function ReframeView() {
 													: (normalizedVideo.element.reframePresets?.find(
 															(preset: VideoReframePreset) =>
 																preset.id === draggedMarkerSection.presetId,
-													  )?.name ?? "Subject")}
+														)?.name ?? "Subject")}
 										</span>
 									</div>
 								</div>
@@ -1513,7 +1741,8 @@ function ReframeScrubber({
 		};
 	}, [isDragging]);
 
-	const roundToStepString = (nextValue: number) => formatValue(clampValue(nextValue));
+	const roundToStepString = (nextValue: number) =>
+		formatValue(clampValue(nextValue));
 
 	const commitDraft = () => {
 		const parsed = Number.parseFloat(draftValue.trim());
@@ -1578,9 +1807,7 @@ function ReframeScrubber({
 						hasDraggedRef.current = false;
 						latestDragValueRef.current = value;
 						pointerLockElementRef.current = event.currentTarget;
-						if (
-							typeof event.currentTarget.requestPointerLock === "function"
-						) {
+						if (typeof event.currentTarget.requestPointerLock === "function") {
 							try {
 								event.currentTarget.requestPointerLock();
 							} catch {}
@@ -1597,7 +1824,9 @@ function ReframeScrubber({
 							isDragging || isHovering ? "opacity-100" : "opacity-60",
 						)}
 					/>
-					<span className="min-w-0 flex-1 text-center">{formatValue(value)}</span>
+					<span className="min-w-0 flex-1 text-center">
+						{formatValue(value)}
+					</span>
 					<span
 						aria-hidden
 						className={cn(
