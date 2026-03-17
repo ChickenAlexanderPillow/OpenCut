@@ -16,9 +16,12 @@ import {
 	getVideoElementSourceRange,
 } from "@/lib/reframe/subject-aware";
 import {
+	buildDefaultVideoSplitScreenBindings,
+	deriveVideoSplitScreenSectionRanges,
 	getSelectedOrActiveReframePresetId,
 	getVideoReframeSectionAtTime,
 	getVideoReframeSectionByStartTime,
+	getVideoSplitScreenSectionAtTime,
 	normalizeVideoReframeState,
 	replaceOrInsertReframeSwitch,
 } from "@/lib/reframe/video-reframe";
@@ -33,7 +36,13 @@ import {
 	Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { VideoReframePreset, VideoReframeSwitch } from "@/types/timeline";
+import type {
+	VideoReframePreset,
+	VideoReframeSwitch,
+	VideoSplitScreen,
+	VideoSplitScreenLayoutPreset,
+	VideoSplitScreenSlotBinding,
+} from "@/types/timeline";
 
 export function ReframeView() {
 	const activeTab = useAssetsPanelStore((state) => state.activeTab);
@@ -98,6 +107,15 @@ export function ReframeView() {
 
 	const selectedPreset = useMemo(() => {
 		if (!normalizedVideo) return null;
+		const explicitlySelectedPresetId =
+			selectedPresetIdByElementId[normalizedVideo.element.id] ?? null;
+		if (explicitlySelectedPresetId) {
+			return (
+				normalizedVideo.element.reframePresets?.find(
+					(preset: VideoReframePreset) => preset.id === explicitlySelectedPresetId,
+				) ?? null
+			);
+		}
 		const selectedSection = getVideoReframeSectionByStartTime({
 			element: normalizedVideo.element,
 			startTime: focusedSectionStartTime,
@@ -112,8 +130,7 @@ export function ReframeView() {
 		const presetId = getSelectedOrActiveReframePresetId({
 			element: normalizedVideo.element,
 			localTime,
-			selectedPresetId:
-				selectedPresetIdByElementId[normalizedVideo.element.id] ?? null,
+			selectedPresetId: explicitlySelectedPresetId,
 		});
 		return (
 			normalizedVideo.element.reframePresets?.find(
@@ -130,6 +147,7 @@ export function ReframeView() {
 	const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
 	const [editingName, setEditingName] = useState("");
 	const [isAnalyzing, setIsAnalyzing] = useState(false);
+	const [selectedSplitSectionId, setSelectedSplitSectionId] = useState<string | null>(null);
 
 	const selectedMediaAsset = useMemo(() => {
 		if (!normalizedVideo) return null;
@@ -237,6 +255,83 @@ export function ReframeView() {
 		} finally {
 			setIsAnalyzing(false);
 		}
+	};
+
+	const splitScreen = normalizedVideo?.element.splitScreen ?? null;
+	const splitSectionAtPlayhead = useMemo(() => {
+		if (!normalizedVideo) return null;
+		return getVideoSplitScreenSectionAtTime({
+			element: normalizedVideo.element,
+			localTime,
+		});
+	}, [normalizedVideo, localTime]);
+	const selectedSplitSection =
+		splitScreen?.sections?.find((section) => section.id === selectedSplitSectionId) ??
+		splitSectionAtPlayhead;
+	const editableSplitBindings =
+		selectedSplitSection?.slots ?? splitScreen?.slots ?? [];
+	const splitSectionRanges = normalizedVideo
+		? deriveVideoSplitScreenSectionRanges({ element: normalizedVideo.element })
+		: [];
+
+	const updateSplitScreen = (updates: Partial<VideoSplitScreen> | null) => {
+		if (!normalizedVideo) return;
+		editor.timeline.updateVideoSplitScreen({
+			trackId: normalizedVideo.trackId,
+			elementId: normalizedVideo.element.id,
+			updates,
+		});
+	};
+
+	const updateSplitBindings = ({
+		slotId,
+		mode,
+		presetId,
+	}: {
+		slotId: string;
+		mode: VideoSplitScreenSlotBinding["mode"];
+		presetId: string | null;
+	}) => {
+		if (!normalizedVideo || !splitScreen) return;
+		const applyBinding = (bindings: VideoSplitScreenSlotBinding[]) =>
+			bindings.map((binding) =>
+				binding.slotId === slotId
+					? {
+							...binding,
+							mode,
+							presetId: mode === "fixed-preset" ? presetId : null,
+					  }
+					: binding,
+			);
+		if (selectedSplitSection) {
+			editor.timeline.upsertVideoSplitScreenSection({
+				trackId: normalizedVideo.trackId,
+				elementId: normalizedVideo.element.id,
+				time: selectedSplitSection.startTime,
+				slots: applyBinding(selectedSplitSection.slots),
+			});
+			return;
+		}
+		updateSplitScreen({
+			slots: applyBinding(splitScreen.slots),
+		});
+	};
+
+	const buildInitialSplitScreen = ({
+		layoutPreset,
+	}: {
+		layoutPreset: VideoSplitScreenLayoutPreset;
+	}): VideoSplitScreen => {
+		const presets = normalizedVideo?.element.reframePresets ?? [];
+		return {
+			enabled: true,
+			layoutPreset,
+			slots: buildDefaultVideoSplitScreenBindings({
+				layoutPreset,
+				presets,
+			}),
+			sections: [],
+		};
 	};
 
 	return (
@@ -543,6 +638,175 @@ export function ReframeView() {
 								</div>
 							);
 						})}
+					</div>
+
+					<div className="space-y-3 rounded-lg border p-3">
+						<div className="flex items-center justify-between gap-2">
+							<div>
+								<div className="text-sm font-medium">Split Screen</div>
+								<div className="text-muted-foreground text-xs">
+									Render this clip into fixed top/bottom or left/right slots using
+									reframe presets.
+								</div>
+							</div>
+							<Button
+								size="sm"
+								variant={splitScreen?.enabled ? "default" : "secondary"}
+								onClick={() => {
+									if (splitScreen?.enabled) {
+										updateSplitScreen({
+											enabled: false,
+										});
+										return;
+									}
+									updateSplitScreen({
+										...(splitScreen ??
+											buildInitialSplitScreen({ layoutPreset: "top-bottom" })),
+										enabled: true,
+									});
+								}}
+							>
+								{splitScreen?.enabled ? "Disable" : "Enable"}
+							</Button>
+						</div>
+						{splitScreen?.enabled && (
+							<>
+								<div className="flex gap-2">
+									{(["top-bottom", "left-right"] as const).map((layoutPreset) => (
+										<Button
+											key={layoutPreset}
+											size="sm"
+											variant={
+												splitScreen.layoutPreset === layoutPreset
+													? "default"
+													: "secondary"
+											}
+											onClick={() =>
+												updateSplitScreen(
+													buildInitialSplitScreen({ layoutPreset }),
+												)
+											}
+										>
+											{layoutPreset === "top-bottom" ? "Top / Bottom" : "Left / Right"}
+										</Button>
+									))}
+								</div>
+								<div className="rounded-md border p-2 text-xs">
+									{selectedSplitSection ? (
+										<span>
+											Editing split section at {selectedSplitSection.startTime.toFixed(2)}s
+										</span>
+									) : (
+										<span>Editing default split bindings</span>
+									)}
+								</div>
+								<div className="grid gap-2">
+									{editableSplitBindings.map((binding) => (
+										<div
+											key={binding.slotId}
+											className="grid grid-cols-[90px_minmax(0,1fr)] items-center gap-2"
+										>
+											<div className="text-xs font-medium uppercase tracking-[0.14em]">
+												{binding.slotId}
+											</div>
+											<select
+												className="bg-background h-8 rounded-md border px-2 text-sm"
+												value={
+													binding.mode === "fixed-preset"
+														? `fixed:${binding.presetId ?? ""}`
+														: "follow-active"
+												}
+												onChange={(event) => {
+													const nextValue = event.target.value;
+													if (nextValue === "follow-active") {
+														updateSplitBindings({
+															slotId: binding.slotId,
+															mode: "follow-active",
+															presetId: null,
+														});
+														return;
+													}
+													updateSplitBindings({
+														slotId: binding.slotId,
+														mode: "fixed-preset",
+														presetId: nextValue.replace(/^fixed:/, "") || null,
+													});
+												}}
+											>
+												<option value="follow-active">Follow active reframe</option>
+												{(normalizedVideo.element.reframePresets ?? []).map((preset) => (
+													<option
+														key={preset.id}
+														value={`fixed:${preset.id}`}
+													>
+														Use {preset.name}
+													</option>
+												))}
+											</select>
+										</div>
+									))}
+								</div>
+								<div className="flex gap-2">
+									<Button
+										size="sm"
+										variant="secondary"
+										onClick={() => {
+											if (!normalizedVideo || !splitScreen) return;
+											editor.timeline.upsertVideoSplitScreenSection({
+												trackId: normalizedVideo.trackId,
+												elementId: normalizedVideo.element.id,
+												time: localTime,
+												slots: editableSplitBindings,
+											});
+										}}
+									>
+										Add Split Section
+									</Button>
+									{selectedSplitSection && (
+										<Button
+											size="sm"
+											variant="ghost"
+											onClick={() => {
+												if (!normalizedVideo) return;
+												editor.timeline.removeVideoSplitScreenSection({
+													trackId: normalizedVideo.trackId,
+													elementId: normalizedVideo.element.id,
+													sectionId: selectedSplitSection.id,
+												});
+												setSelectedSplitSectionId(null);
+											}}
+										>
+											Delete Section
+										</Button>
+									)}
+								</div>
+								<div className="space-y-1">
+									{splitSectionRanges.map((section) => (
+										<button
+											key={`${section.startTime}:${section.sectionId ?? "default"}`}
+											type="button"
+											className={cn(
+												"bg-muted/20 flex w-full items-center justify-between rounded-md border px-2 py-1.5 text-left text-xs",
+												selectedSplitSection?.id === section.sectionId &&
+													"border-primary bg-primary/5",
+											)}
+											onClick={() =>
+												setSelectedSplitSectionId(section.sectionId)
+											}
+										>
+											<span>
+												{section.sectionId
+													? `${section.startTime.toFixed(2)}s - ${section.endTime.toFixed(2)}s`
+													: `Default: 0.00s - ${section.endTime.toFixed(2)}s`}
+											</span>
+											<span className="text-muted-foreground">
+												{section.sectionId ? "Override" : "Base"}
+											</span>
+										</button>
+									))}
+								</div>
+							</>
+						)}
 					</div>
 
 					<div className="space-y-2 rounded-lg border p-3">

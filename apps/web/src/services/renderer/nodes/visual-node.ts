@@ -6,6 +6,7 @@ import type {
 	Transform,
 	VideoReframePreset,
 	VideoReframeSwitch,
+	VideoSplitScreen,
 } from "@/types/timeline";
 import type { ElementAnimations } from "@/types/animation";
 import {
@@ -20,6 +21,7 @@ import { TRANSCRIPT_CUT_VISUAL_BOUNDARY_GUARD_SECONDS } from "@/lib/transcript-e
 import type { TranscriptEditCutRange } from "@/types/transcription";
 import {
 	resolveVideoReframeTransform,
+	resolveVideoSplitScreenAtTime,
 } from "@/lib/reframe/video-reframe";
 
 const VISUAL_EPSILON = 1 / 1000;
@@ -38,9 +40,17 @@ export interface VisualNodeParams {
 	reframePresets?: VideoReframePreset[];
 	reframeSwitches?: VideoReframeSwitch[];
 	defaultReframePresetId?: string | null;
+	splitScreen?: VideoSplitScreen;
 }
 
 export interface VisualPlacement {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
+interface SplitViewport {
 	x: number;
 	y: number;
 	width: number;
@@ -268,6 +278,25 @@ export abstract class VisualNode<
 
 		const localTime = this.getLocalTime(time);
 		const clipElapsed = this.getClipElapsedTime(time);
+		const splitScreen = resolveVideoSplitScreenAtTime({
+			element: {
+				id: "__split__",
+				type: "video",
+				mediaId: "__split__",
+				name: "__split__",
+				startTime: 0,
+				duration: this.params.duration,
+				trimStart: 0,
+				trimEnd: 0,
+				transform: this.params.transform,
+				opacity: this.params.opacity,
+				reframePresets: this.params.reframePresets,
+				reframeSwitches: this.params.reframeSwitches,
+				defaultReframePresetId: this.params.defaultReframePresetId,
+				splitScreen: this.params.splitScreen,
+			},
+			localTime: clipElapsed,
+		});
 		const baseTransform = this.getBaseTransformForTime({
 			clipElapsed,
 		});
@@ -281,6 +310,75 @@ export abstract class VisualNode<
 			animations: this.params.animations,
 			localTime,
 		});
+		renderer.context.globalCompositeOperation = (
+			this.params.blendMode && this.params.blendMode !== "normal"
+				? this.params.blendMode
+				: "source-over"
+		) as GlobalCompositeOperation;
+		renderer.context.globalAlpha = opacity;
+		if (splitScreen?.slots?.length) {
+			const viewports = this.getSplitScreenViewports({
+				layoutPreset: splitScreen.layoutPreset,
+				rendererWidth: renderer.width,
+				rendererHeight: renderer.height,
+			});
+			for (const slot of splitScreen.slots) {
+				const viewport = viewports.get(slot.slotId);
+				if (!viewport) continue;
+				const slotTransform = resolveVideoReframeTransform({
+					baseTransform: this.params.transform,
+					duration: this.params.duration,
+					reframePresets: this.params.reframePresets,
+					reframeSwitches:
+						!slot.presetId
+							? this.params.reframeSwitches
+							: [
+									{
+										id: "__split-slot__",
+										time: 0,
+										presetId: slot.presetId,
+									},
+							  ],
+					defaultReframePresetId: slot.presetId ?? this.params.defaultReframePresetId,
+					localTime: clipElapsed,
+				});
+				const placement = this.getVisualPlacement({
+					rendererWidth: viewport.width,
+					rendererHeight: viewport.height,
+					sourceWidth,
+					sourceHeight,
+					transform: slotTransform,
+					offsetX: viewport.x,
+					offsetY: viewport.y,
+				});
+				renderer.context.save();
+				renderer.context.beginPath();
+				renderer.context.rect(
+					viewport.x,
+					viewport.y,
+					viewport.width,
+					viewport.height,
+				);
+				renderer.context.clip();
+				if (slotTransform.rotate !== 0) {
+					const centerX = placement.x + placement.width / 2;
+					const centerY = placement.y + placement.height / 2;
+					renderer.context.translate(centerX, centerY);
+					renderer.context.rotate((slotTransform.rotate * Math.PI) / 180);
+					renderer.context.translate(-centerX, -centerY);
+				}
+				renderer.context.drawImage(
+					source,
+					placement.x,
+					placement.y,
+					placement.width,
+					placement.height,
+				);
+				renderer.context.restore();
+			}
+			renderer.context.restore();
+			return;
+		}
 		const placement = this.getVisualPlacement({
 			rendererWidth: renderer.width,
 			rendererHeight: renderer.height,
@@ -288,13 +386,6 @@ export abstract class VisualNode<
 			sourceHeight,
 			transform,
 		});
-
-		renderer.context.globalCompositeOperation = (
-			this.params.blendMode && this.params.blendMode !== "normal"
-				? this.params.blendMode
-				: "source-over"
-		) as GlobalCompositeOperation;
-		renderer.context.globalAlpha = opacity;
 		const motionBlur = this.getMotionBlurForDraw({
 			time,
 			rendererWidth: renderer.width,
@@ -468,12 +559,16 @@ export abstract class VisualNode<
 		sourceWidth,
 		sourceHeight,
 		transform = this.params.transform,
+		offsetX = 0,
+		offsetY = 0,
 	}: {
 		rendererWidth: number;
 		rendererHeight: number;
 		sourceWidth: number;
 		sourceHeight: number;
 		transform?: Transform;
+		offsetX?: number;
+		offsetY?: number;
 	}): VisualPlacement {
 		const containScale = Math.min(
 			rendererWidth / sourceWidth,
@@ -481,8 +576,10 @@ export abstract class VisualNode<
 		);
 		const scaledWidth = sourceWidth * containScale * transform.scale;
 		const scaledHeight = sourceHeight * containScale * transform.scale;
-		const x = rendererWidth / 2 + transform.position.x - scaledWidth / 2;
-		const y = rendererHeight / 2 + transform.position.y - scaledHeight / 2;
+		const x =
+			offsetX + rendererWidth / 2 + transform.position.x - scaledWidth / 2;
+		const y =
+			offsetY + rendererHeight / 2 + transform.position.y - scaledHeight / 2;
 
 		return {
 			x,
@@ -490,5 +587,48 @@ export abstract class VisualNode<
 			width: scaledWidth,
 			height: scaledHeight,
 		};
+	}
+
+	protected getSplitScreenViewports({
+		layoutPreset,
+		rendererWidth,
+		rendererHeight,
+	}: {
+		layoutPreset: "top-bottom" | "left-right";
+		rendererWidth: number;
+		rendererHeight: number;
+	}): Map<string, SplitViewport> {
+		if (layoutPreset === "left-right") {
+			return new Map([
+				[
+					"left",
+					{ x: 0, y: 0, width: rendererWidth / 2, height: rendererHeight },
+				],
+				[
+					"right",
+					{
+						x: rendererWidth / 2,
+						y: 0,
+						width: rendererWidth / 2,
+						height: rendererHeight,
+					},
+				],
+			]);
+		}
+		return new Map([
+			[
+				"top",
+				{ x: 0, y: 0, width: rendererWidth, height: rendererHeight / 2 },
+			],
+			[
+				"bottom",
+				{
+					x: 0,
+					y: rendererHeight / 2,
+					width: rendererWidth,
+					height: rendererHeight / 2,
+				},
+			],
+		]);
 	}
 }

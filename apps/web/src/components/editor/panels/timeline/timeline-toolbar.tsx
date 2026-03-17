@@ -254,7 +254,9 @@ function getQuickReframePresets({
 
 function QuickReframeToolbarControl() {
 	const editor = useEditor({ subscribeTo: ["timeline", "selection", "project"] });
-	const [expanded, setExpanded] = useState(false);
+	const [isHovered, setIsHovered] = useState(false);
+	const [isPinnedOpen, setIsPinnedOpen] = useState(false);
+	const [hoverSuppressed, setHoverSuppressed] = useState(false);
 	const selectedSectionStartTimeByElementId = useReframeStore(
 		(state) => state.selectedSectionStartTimeByElementId,
 	);
@@ -351,6 +353,7 @@ function QuickReframeToolbarControl() {
 		selectedSectionStartTimeByElementId,
 		selectedVideo,
 	]);
+	const expanded = isPinnedOpen || (isHovered && !hoverSuppressed);
 
 	useEffect(() => {
 		if (!selectedVideo) return;
@@ -441,45 +444,46 @@ function QuickReframeToolbarControl() {
 	}
 
 	return (
-		<div
-			className="ml-1 flex items-center gap-1"
-			onMouseEnter={() => setExpanded(true)}
-			onMouseLeave={() => setExpanded(false)}
+		<fieldset
+			aria-label="Quick reframe controls"
+			className="ml-1 min-w-0 border-0 p-0"
+			onMouseEnter={() => {
+				setIsHovered(true);
+				if (hoverSuppressed) {
+					setHoverSuppressed(false);
+				}
+			}}
+			onMouseLeave={() => {
+				setIsHovered(false);
+				setHoverSuppressed(false);
+			}}
 		>
-			<div className="bg-border h-6 w-px" />
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<Button
-						variant={expanded ? "secondary" : "text"}
-						size="icon"
-						className="rounded-sm"
-					>
-						<ReframeTrayIcon className="size-4" />
-					</Button>
-				</TooltipTrigger>
-				<TooltipContent>Quick reframe angles</TooltipContent>
-			</Tooltip>
-			{expanded && (
-				<div className="bg-background flex items-center gap-1 rounded-sm border px-1 py-0.5">
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button
-								variant="text"
-								size="icon"
-								className="h-7 w-7 rounded-sm"
-								onClick={() => setExpanded(false)}
-							>
-								<ChevronLeft className="size-4" />
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent>Collapse reframe tray</TooltipContent>
-					</Tooltip>
-					{quickPresets.length === 0 ? (
-						<div className="text-muted-foreground px-2 text-xs">
-							No detected angles
-						</div>
-					) : (
-						<>
+			<div className="flex items-center gap-1">
+				<div className="bg-border h-6 w-px" />
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							variant={expanded ? "secondary" : "text"}
+							size="icon"
+							className="rounded-sm"
+							onClick={() => {
+								if (isPinnedOpen) {
+									setIsPinnedOpen(false);
+									setHoverSuppressed(true);
+									return;
+								}
+								setIsPinnedOpen(true);
+								setHoverSuppressed(false);
+							}}
+						>
+							<ReframeTrayIcon className="size-4" />
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent>Quick reframe angles</TooltipContent>
+				</Tooltip>
+				{expanded && (
+					<div className="bg-background flex items-center gap-1 rounded-sm border px-1 py-0.5">
+						{isPinnedOpen && (
 							<Tooltip>
 								<TooltipTrigger asChild>
 									<Button
@@ -487,87 +491,111 @@ function QuickReframeToolbarControl() {
 										size="icon"
 										className="h-7 w-7 rounded-sm"
 										onClick={() => {
-											const localTime = getSnappedLocalPlayheadTime();
-											const latestSelectedVideo =
-												getLatestSelectedVideo() ?? selectedVideo;
-											if (!latestSelectedVideo) return;
-											const nextSwitches = splitVideoReframeSectionAtTime({
-												element: latestSelectedVideo.element,
-												localTime,
-											});
-											editor.timeline.updateElements({
-												updates: [
-													{
-														trackId: latestSelectedVideo.trackId,
-														elementId: latestSelectedVideo.element.id,
-														updates: {
-															reframeSwitches: nextSwitches,
-														},
-													},
-												],
-											});
-											setSelectedSectionStartTime({
-												elementId: selectedVideo.element.id,
-												startTime: localTime,
-											});
+											setIsPinnedOpen(false);
+											setHoverSuppressed(true);
 										}}
 									>
-										<Plus className="size-4" />
+										<ChevronLeft className="size-4" />
 									</Button>
 								</TooltipTrigger>
-								<TooltipContent>Split section at playhead</TooltipContent>
+								<TooltipContent>Collapse reframe tray</TooltipContent>
 							</Tooltip>
-							<div className="bg-border h-5 w-px" />
-							{quickPresets.map((preset) => (
-								<Tooltip key={preset.id}>
+						)}
+						{quickPresets.length === 0 ? (
+							<div className="text-muted-foreground px-2 text-xs">
+								No detected angles
+							</div>
+						) : (
+							<>
+								<Tooltip>
 									<TooltipTrigger asChild>
 										<Button
-											variant={
-												activeSection?.presetId === preset.id
-													? "secondary"
-													: "text"
-											}
+											variant="text"
 											size="icon"
 											className="h-7 w-7 rounded-sm"
 											onClick={() => {
-												const target = getLatestTargetSection();
-												if (!target) return;
-												const nextReframeState =
-													applyPresetToVideoReframeSection({
-														element: target.selectedVideo.element,
-														sectionStartTime: target.section.startTime,
-														presetId: preset.id,
-													});
+												const localTime = getSnappedLocalPlayheadTime();
+												const latestSelectedVideo =
+													getLatestSelectedVideo() ?? selectedVideo;
+												if (!latestSelectedVideo) return;
+												const nextSwitches = splitVideoReframeSectionAtTime({
+													element: latestSelectedVideo.element,
+													localTime,
+												});
 												editor.timeline.updateElements({
 													updates: [
 														{
-															trackId: target.selectedVideo.trackId,
-															elementId: target.selectedVideo.element.id,
-															updates: nextReframeState,
+															trackId: latestSelectedVideo.trackId,
+															elementId: latestSelectedVideo.element.id,
+															updates: {
+																reframeSwitches: nextSwitches,
+															},
 														},
 													],
 												});
 												setSelectedSectionStartTime({
 													elementId: selectedVideo.element.id,
-													startTime: target.section.startTime,
+													startTime: localTime,
 												});
 											}}
 										>
-											<QuickReframePresetIcon kind={preset.kind} />
+											<Plus className="size-4" />
 										</Button>
 									</TooltipTrigger>
-									<TooltipContent>
-										{activeSection
-											? `Apply ${preset.name} to selected section`
-											: preset.name}
-									</TooltipContent>
+									<TooltipContent>Split section at playhead</TooltipContent>
 								</Tooltip>
-							))}
-						</>
-					)}
-				</div>
-			)}
-		</div>
+								<div className="bg-border h-5 w-px" />
+								{quickPresets.map((preset) => (
+									<Tooltip key={preset.id}>
+										<TooltipTrigger asChild>
+											<Button
+												variant={
+													activeSection?.presetId === preset.id
+														? "secondary"
+														: "text"
+												}
+												size="icon"
+												className="h-7 w-7 rounded-sm"
+												onClick={() => {
+													const target = getLatestTargetSection();
+													if (!target) return;
+													const nextReframeState =
+														applyPresetToVideoReframeSection({
+															element: target.selectedVideo.element,
+															sectionStartTime: target.section.startTime,
+															presetId: preset.id,
+														});
+													editor.timeline.updateElements({
+														updates: [
+															{
+																trackId: target.selectedVideo.trackId,
+																elementId: target.selectedVideo.element.id,
+																updates: nextReframeState,
+															},
+														],
+													});
+													setSelectedSectionStartTime({
+														elementId: selectedVideo.element.id,
+														startTime: target.section.startTime,
+													});
+												}}
+											>
+												<QuickReframePresetIcon kind={preset.kind} />
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent>
+											{activeSection
+												? `Apply ${preset.name} to selected section`
+												: preset.name}
+										</TooltipContent>
+									</Tooltip>
+								))}
+							</>
+						)}
+					</div>
+				)}
+			</div>
+		</fieldset>
 	);
 }
 

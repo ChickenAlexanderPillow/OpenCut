@@ -286,6 +286,7 @@ export function buildScene(params: BuildSceneParams) {
 							reframePresets: stableElement.reframePresets,
 							reframeSwitches: stableElement.reframeSwitches,
 							defaultReframePresetId: stableElement.defaultReframePresetId,
+							splitScreen: stableElement.splitScreen,
 							opacity: stableElement.opacity,
 							blendMode: stableElement.blendMode,
 							animations: stableElement.animations,

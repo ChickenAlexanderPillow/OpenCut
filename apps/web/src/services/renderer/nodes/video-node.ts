@@ -2,6 +2,10 @@ import type { CanvasRenderer } from "../canvas-renderer";
 import { VisualNode, type VisualNodeParams } from "./visual-node";
 import { type VideoCache, videoCache } from "@/services/video-cache/service";
 import type { WebGPUVisualDrawData } from "../webgpu-types";
+import {
+	resolveVideoReframeTransform,
+	resolveVideoSplitScreenAtTime,
+} from "@/lib/reframe/video-reframe";
 
 export interface VideoNodeParams extends VisualNodeParams {
 	url: string;
@@ -67,7 +71,7 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 		time: number;
 		rendererWidth: number;
 		rendererHeight: number;
-	}): Promise<WebGPUVisualDrawData | null> {
+	}): Promise<WebGPUVisualDrawData[] | null> {
 		if (!this.isInRange(time)) return null;
 
 		const localTime = this.getLocalTime(time);
@@ -98,7 +102,73 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 
 			const sourceWidth = frame.canvas.width;
 			const sourceHeight = frame.canvas.height;
-			const resolved = this.getResolvedVisualState({ time });
+			return this.buildWebGPUDrawData({
+				time,
+				rendererWidth,
+				rendererHeight,
+				source: frame.canvas,
+				sourceWidth,
+				sourceHeight,
+			});
+		}
+
+		const sourceWidth = gpuFrame.width;
+		const sourceHeight = gpuFrame.height;
+		return this.buildWebGPUDrawData({
+			time,
+			rendererWidth,
+			rendererHeight,
+			source: gpuFrame.frame,
+			sourceWidth,
+			sourceHeight,
+		});
+	}
+
+	private buildWebGPUDrawData({
+		time,
+		rendererWidth,
+		rendererHeight,
+		source,
+		sourceWidth,
+		sourceHeight,
+	}: {
+		time: number;
+		rendererWidth: number;
+		rendererHeight: number;
+		source: GPUCopyExternalImageSource;
+		sourceWidth: number;
+		sourceHeight: number;
+	}): WebGPUVisualDrawData[] {
+		const clipElapsed = this.getClipElapsedTime(time);
+		const resolved = this.getResolvedVisualState({ time });
+		const motionBlur =
+			this.getMotionBlurForDraw({
+				time,
+				rendererWidth,
+				rendererHeight,
+				sourceWidth,
+				sourceHeight,
+			}) ?? undefined;
+		const splitScreen = resolveVideoSplitScreenAtTime({
+			element: {
+				id: "__split__",
+				type: "video",
+				mediaId: "__split__",
+				name: "__split__",
+				startTime: 0,
+				duration: this.params.duration,
+				trimStart: 0,
+				trimEnd: 0,
+				transform: this.params.transform,
+				opacity: this.params.opacity,
+				reframePresets: this.params.reframePresets,
+				reframeSwitches: this.params.reframeSwitches,
+				defaultReframePresetId: this.params.defaultReframePresetId,
+				splitScreen: this.params.splitScreen,
+			},
+			localTime: clipElapsed,
+		});
+		if (!splitScreen?.slots?.length) {
 			const placement = this.getVisualPlacement({
 				rendererWidth,
 				rendererHeight,
@@ -106,57 +176,74 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 				sourceHeight,
 				transform: resolved.transform,
 			});
-
-			return {
-				source: frame.canvas,
-				sourceWidth,
-				sourceHeight,
-				x: placement.x,
-				y: placement.y,
-				width: placement.width,
-				height: placement.height,
-				rotation: resolved.transform.rotate,
-				opacity: resolved.opacity,
-				blendMode: this.params.blendMode,
-				motionBlur: this.getMotionBlurForDraw({
-					time,
-					rendererWidth,
-					rendererHeight,
+			return [
+				{
+					source,
 					sourceWidth,
 					sourceHeight,
-				}) ?? undefined,
-			};
+					x: placement.x,
+					y: placement.y,
+					width: placement.width,
+					height: placement.height,
+					rotation: resolved.transform.rotate,
+					opacity: resolved.opacity,
+					blendMode: this.params.blendMode,
+					motionBlur,
+				},
+			];
 		}
 
-		const sourceWidth = gpuFrame.width;
-		const sourceHeight = gpuFrame.height;
-		const resolved = this.getResolvedVisualState({ time });
-		const placement = this.getVisualPlacement({
+		const viewports = this.getSplitScreenViewports({
+			layoutPreset: splitScreen.layoutPreset,
 			rendererWidth,
 			rendererHeight,
-			sourceWidth,
-			sourceHeight,
-			transform: resolved.transform,
 		});
 
-		return {
-			source: gpuFrame.frame,
-			sourceWidth,
-			sourceHeight,
-			x: placement.x,
-			y: placement.y,
-			width: placement.width,
-			height: placement.height,
-			rotation: resolved.transform.rotate,
-			opacity: resolved.opacity,
-			blendMode: this.params.blendMode,
-			motionBlur: this.getMotionBlurForDraw({
-				time,
-				rendererWidth,
-				rendererHeight,
+		return splitScreen.slots.flatMap((slot) => {
+			const viewport = viewports.get(slot.slotId);
+			if (!viewport) return [];
+			const slotTransform = resolveVideoReframeTransform({
+				baseTransform: this.params.transform,
+				duration: this.params.duration,
+				reframePresets: this.params.reframePresets,
+				reframeSwitches:
+					!slot.presetId
+						? this.params.reframeSwitches
+						: [
+								{
+									id: "__split-slot__",
+									time: 0,
+									presetId: slot.presetId,
+								},
+						  ],
+				defaultReframePresetId: slot.presetId ?? this.params.defaultReframePresetId,
+				localTime: clipElapsed,
+			});
+			const placement = this.getVisualPlacement({
+				rendererWidth: viewport.width,
+				rendererHeight: viewport.height,
 				sourceWidth,
 				sourceHeight,
-			}) ?? undefined,
-		};
+				transform: slotTransform,
+				offsetX: viewport.x,
+				offsetY: viewport.y,
+			});
+			return [
+				{
+					source,
+					sourceWidth,
+					sourceHeight,
+					x: placement.x,
+					y: placement.y,
+					width: placement.width,
+					height: placement.height,
+					clipRect: viewport,
+					rotation: slotTransform.rotate,
+					opacity: resolved.opacity,
+					blendMode: this.params.blendMode,
+					motionBlur,
+				},
+			];
+		});
 	}
 }

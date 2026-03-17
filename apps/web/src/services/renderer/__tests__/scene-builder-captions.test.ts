@@ -4,7 +4,12 @@ import {
 	buildScene,
 	resolveLiveCaptionElementFromTranscriptSource,
 } from "@/services/renderer/scene-builder";
-import type { AudioElement, TextElement, UploadAudioElement } from "@/types/timeline";
+import type {
+	AudioElement,
+	TextElement,
+	UploadAudioElement,
+	VideoElement,
+} from "@/types/timeline";
 
 function createAudioElement({
 	id,
@@ -469,5 +474,87 @@ describe("scene builder live caption source resolution", () => {
 			| undefined;
 		expect(textNode?.params?.content).toBe("right");
 		expect(textNode?.params?.captionWordTimings?.[0]?.startTime).toBeCloseTo(1, 3);
+	});
+
+	test("passes split-screen config through to video nodes", () => {
+		const video: VideoElement = {
+			id: "video-1",
+			type: "video",
+			mediaId: "video-asset",
+			name: "Video 1",
+			startTime: 0,
+			duration: 5,
+			trimStart: 0,
+			trimEnd: 0,
+			transform: {
+				position: { x: 0, y: 0 },
+				scale: 1,
+				rotate: 0,
+			},
+			opacity: 1,
+			reframePresets: [
+				{
+					id: "left",
+					name: "Left",
+					transform: {
+						position: { x: -120, y: 0 },
+						scale: 2,
+					},
+				},
+				{
+					id: "right",
+					name: "Right",
+					transform: {
+						position: { x: 120, y: 0 },
+						scale: 2,
+					},
+				},
+			],
+			defaultReframePresetId: "left",
+			splitScreen: {
+				enabled: true,
+				layoutPreset: "top-bottom",
+				slots: [
+					{ slotId: "top", mode: "fixed-preset", presetId: "left" },
+					{ slotId: "bottom", mode: "fixed-preset", presetId: "right" },
+				],
+				sections: [],
+			},
+		};
+
+		const scene = buildScene({
+			tracks: [
+				{
+					id: "video-track",
+					type: "video",
+					name: "Video",
+					isMain: true,
+					muted: false,
+					hidden: false,
+					elements: [video],
+				},
+			],
+			mediaAssets: [
+				{
+					id: "video-asset",
+					name: "video.mp4",
+					type: "video",
+					width: 1920,
+					height: 1080,
+					duration: 5,
+					file: new File(["video"], "video.mp4", { type: "video/mp4" }),
+					url: "https://example.com/video.mp4",
+				},
+			],
+			duration: 5,
+			canvasSize: { width: 1080, height: 1920 },
+			background: { type: "color", color: "#000000" },
+		});
+
+		const videoNode = scene.children.find(
+			(node) => node.constructor.name === "VideoNode",
+		) as { params?: { splitScreen?: VideoElement["splitScreen"] } } | undefined;
+		expect(videoNode?.params?.splitScreen?.enabled).toBe(true);
+		expect(videoNode?.params?.splitScreen?.layoutPreset).toBe("top-bottom");
 	});
 });

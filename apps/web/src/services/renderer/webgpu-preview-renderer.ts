@@ -583,7 +583,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				}),
 			),
 		);
-		return drawData.filter((draw): draw is WebGPUVisualDrawData => !!draw);
+		return drawData.flatMap((draws) => draws ?? []);
 	}
 
 	private async renderNodesCpu({
@@ -890,6 +890,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				},
 			],
 		});
+		pass.setScissorRect(0, 0, this.width, this.height);
 
 		const drawList: WebGPUVisualDrawData[] = [];
 		if (partition.cpuPreNodes.length > 0) {
@@ -929,6 +930,25 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 			const isVideoFrameSource =
 				typeof VideoFrame !== "undefined" && draw.source instanceof VideoFrame;
 			const usePlusBlend = draw.blendMode === "plus-lighter";
+			const clipRect = draw.clipRect;
+			pass.setScissorRect(
+				Math.max(0, Math.floor(clipRect?.x ?? 0)),
+				Math.max(0, Math.floor(clipRect?.y ?? 0)),
+				Math.max(
+					1,
+					Math.min(
+						this.width - Math.max(0, Math.floor(clipRect?.x ?? 0)),
+						Math.ceil(clipRect?.width ?? this.width),
+					),
+				),
+				Math.max(
+					1,
+					Math.min(
+						this.height - Math.max(0, Math.floor(clipRect?.y ?? 0)),
+						Math.ceil(clipRect?.height ?? this.height),
+					),
+				),
+			);
 
 			const uniformBuffer = this.uniformBufferPool[index];
 			device.queue.writeBuffer(

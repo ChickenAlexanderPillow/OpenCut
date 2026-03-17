@@ -86,6 +86,29 @@ export interface VideoReframeSwitch {
 	presetId: string;
 }
 
+export type VideoSplitScreenLayoutPreset = "top-bottom" | "left-right";
+
+export type VideoSplitScreenSlotMode = "follow-active" | "fixed-preset";
+
+export interface VideoSplitScreenSlotBinding {
+	slotId: string;
+	mode: VideoSplitScreenSlotMode;
+	presetId?: string | null;
+}
+
+export interface VideoSplitScreenSection {
+	id: string;
+	startTime: number;
+	slots: VideoSplitScreenSlotBinding[];
+}
+
+export interface VideoSplitScreen {
+	enabled: boolean;
+	layoutPreset: VideoSplitScreenLayoutPreset;
+	slots: VideoSplitScreenSlotBinding[];
+	sections?: VideoSplitScreenSection[];
+}
+
 interface BaseTrack {
 	id: string;
 	name: string;
@@ -196,6 +219,7 @@ export interface VideoElement extends BaseTimelineElement {
 	reframeSwitches?: VideoReframeSwitch[];
 	defaultReframePresetId?: string | null;
 	reframeSeededBy?: "subject-aware-v1";
+	splitScreen?: VideoSplitScreen;
 	opacity: number;
 	blendMode?: BlendMode;
 	transitions?: ElementTransitions;

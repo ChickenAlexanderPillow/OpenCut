@@ -22,6 +22,9 @@ function createFake2DContext(): Fake2DContext {
 
 describe("WebGPUPreviewRenderer", () => {
 	let drawSourceFactory: () => unknown;
+	let gpuDrawFactory: () => Array<Record<string, unknown>>;
+	let passDraw: ReturnType<typeof mock>;
+	let passSetScissorRect: ReturnType<typeof mock>;
 	let fakeDevice: {
 		queue: {
 			copyExternalImageToTexture: ReturnType<typeof mock>;
@@ -54,6 +57,8 @@ describe("WebGPUPreviewRenderer", () => {
 			configurable: true,
 		});
 
+		passDraw = mock(() => {});
+		passSetScissorRect = mock(() => {});
 		fakeDevice = {
 			queue: {
 				copyExternalImageToTexture: mock(() => {}),
@@ -71,7 +76,8 @@ describe("WebGPUPreviewRenderer", () => {
 					setPipeline: () => {},
 					setBindGroup: () => {},
 					setVertexBuffer: () => {},
-					draw: () => {},
+					setScissorRect: passSetScissorRect,
+					draw: passDraw,
 					end: () => {},
 				}),
 				finish: () => ({}),
@@ -144,6 +150,20 @@ describe("WebGPUPreviewRenderer", () => {
 			width: 1920,
 			height: 1080,
 		});
+		gpuDrawFactory = () => [
+			{
+				source: drawSourceFactory() as GPUCopyExternalImageSource,
+				sourceWidth: 1920,
+				sourceHeight: 1080,
+				x: 0,
+				y: 0,
+				width: 1920,
+				height: 1080,
+				rotation: 0,
+				opacity: 1,
+				blendMode: "normal",
+			},
+		];
 
 		mock.module("../scene-partition", () => ({
 			getRendererCapabilities: () => ({ webgpuSupported: true }),
@@ -151,18 +171,7 @@ describe("WebGPUPreviewRenderer", () => {
 				supported: true,
 				gpuNodes: [
 					{
-						getWebGPUDrawData: async () => ({
-							source: drawSourceFactory() as GPUCopyExternalImageSource,
-							sourceWidth: 1920,
-							sourceHeight: 1080,
-							x: 0,
-							y: 0,
-							width: 1920,
-							height: 1080,
-							rotation: 0,
-							opacity: 1,
-							blendMode: "normal",
-						}),
+						getWebGPUDrawData: async () => gpuDrawFactory(),
 					},
 				],
 				cpuPreNodes: [],
@@ -256,5 +265,74 @@ describe("WebGPUPreviewRenderer", () => {
 		expect(fakeDevice.queue.copyExternalImageToTexture.mock.calls.length).toBe(
 			0,
 		);
+	});
+
+	test("renders multiple GPU draws from a single node for split-screen output", async () => {
+		gpuDrawFactory = () => [
+			{
+				source: drawSourceFactory() as GPUCopyExternalImageSource,
+				sourceWidth: 1920,
+				sourceHeight: 1080,
+				x: 0,
+				y: 0,
+				width: 1920,
+				height: 540,
+				clipRect: { x: 0, y: 0, width: 1920, height: 540 },
+				rotation: 0,
+				opacity: 1,
+				blendMode: "normal",
+			},
+			{
+				source: drawSourceFactory() as GPUCopyExternalImageSource,
+				sourceWidth: 1920,
+				sourceHeight: 1080,
+				x: 0,
+				y: 540,
+				width: 1920,
+				height: 540,
+				clipRect: { x: 0, y: 540, width: 1920, height: 540 },
+				rotation: 0,
+				opacity: 1,
+				blendMode: "normal",
+			},
+		];
+
+		const { WebGPUPreviewRenderer } = await import(
+			"../webgpu-preview-renderer"
+		);
+
+		const renderer = new WebGPUPreviewRenderer({
+			width: 1920,
+			height: 1080,
+			fps: 30,
+		});
+
+		const targetWebGPUContext = {
+			configure: () => {},
+			getCurrentTexture: () => ({
+				createView: () => ({}),
+			}),
+		};
+		const targetCanvas = {
+			width: 1920,
+			height: 1080,
+			getContext: (kind: string) =>
+				kind === "webgpu" ? targetWebGPUContext : null,
+		} as unknown as HTMLCanvasElement;
+
+		const result = await renderer.renderToCanvas({
+			rootNode: {} as never,
+			time: 0,
+			targetCanvas,
+		});
+
+		expect(result.usedWebGPU).toBe(true);
+		expect(passDraw.mock.calls.length).toBe(2);
+		expect(
+			passSetScissorRect.mock.calls.some(
+				([x, y, width, height]) =>
+					x === 0 && y === 540 && width === 1920 && height === 540,
+			),
+		).toBe(true);
 	});
 });

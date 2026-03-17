@@ -101,7 +101,7 @@ export class ImageNode extends VisualNode<ImageNodeParams> {
 		time: number;
 		rendererWidth: number;
 		rendererHeight: number;
-	}): Promise<WebGPUVisualDrawData | null> {
+	}): Promise<WebGPUVisualDrawData[] | null> {
 		if (!this.isInRange(time)) return null;
 
 		const { source, width, height } = await this.cachedSource;
@@ -116,24 +116,26 @@ export class ImageNode extends VisualNode<ImageNodeParams> {
 			transform: resolved.transform,
 		});
 
-		return {
-			source,
-			sourceWidth,
-			sourceHeight,
-			x: placement.x,
-			y: placement.y,
-			width: placement.width,
-			height: placement.height,
-			rotation: resolved.transform.rotate,
-			opacity: resolved.opacity,
-			blendMode: this.params.blendMode,
-			motionBlur: this.getMotionBlurForDraw({
-				time,
-				rendererWidth,
-				rendererHeight,
+		return [
+			{
+				source,
 				sourceWidth,
 				sourceHeight,
-			}) ?? undefined,
-		};
+				x: placement.x,
+				y: placement.y,
+				width: placement.width,
+				height: placement.height,
+				rotation: resolved.transform.rotate,
+				opacity: resolved.opacity,
+				blendMode: this.params.blendMode,
+				motionBlur: this.getMotionBlurForDraw({
+					time,
+					rendererWidth,
+					rendererHeight,
+					sourceWidth,
+					sourceHeight,
+				}) ?? undefined,
+			},
+		];
 	}
 }

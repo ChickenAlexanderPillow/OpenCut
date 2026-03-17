@@ -15,6 +15,8 @@ import type {
 	TimelineGapSelection,
 	TrackAudioEffects,
 	VideoReframePreset,
+	VideoSplitScreen,
+	VideoSplitScreenSection,
 } from "@/types/timeline";
 import { calculateTotalDuration } from "@/lib/timeline";
 import { expandElementIdsWithAlignedCompanions } from "@/lib/timeline/companion-media";
@@ -49,6 +51,7 @@ import {
 	buildVideoReframePreset,
 	getReframePresetById,
 	normalizeVideoReframeState,
+	replaceOrInsertSplitSection,
 	replaceOrInsertReframeSwitch,
 } from "@/lib/reframe/video-reframe";
 import { generateUUID } from "@/utils/id";
@@ -648,6 +651,124 @@ export class TimelineManager {
 			element: {
 				...element,
 				reframeSwitches: [],
+			},
+		});
+		this.updateSingleVideoElement({
+			trackId,
+			elementId,
+			nextElement,
+			pushHistory,
+		});
+	}
+
+	updateVideoSplitScreen({
+		trackId,
+		elementId,
+		updates,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		elementId: string;
+		updates: Partial<VideoSplitScreen> | null;
+		pushHistory?: boolean;
+	}): void {
+		const element = this.getVideoElement({ trackId, elementId });
+		if (!element) return;
+		const nextSplitScreen = updates
+			? {
+					...(element.splitScreen ?? {
+						enabled: true,
+						layoutPreset: "top-bottom" as const,
+						slots: [],
+						sections: [],
+					}),
+					...updates,
+			  }
+			: undefined;
+		const nextElement = normalizeVideoReframeState({
+			element: {
+				...element,
+				splitScreen: nextSplitScreen,
+			},
+		});
+		this.updateSingleVideoElement({
+			trackId,
+			elementId,
+			nextElement,
+			pushHistory,
+		});
+	}
+
+	upsertVideoSplitScreenSection({
+		trackId,
+		elementId,
+		time,
+		slots,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		elementId: string;
+		time: number;
+		slots: VideoSplitScreenSection["slots"];
+		pushHistory?: boolean;
+	}): string | null {
+		const element = this.getVideoElement({ trackId, elementId });
+		if (!element) return null;
+		const splitScreen = element.splitScreen;
+		if (!splitScreen) return null;
+		const sectionId = generateUUID();
+		const nextElement = normalizeVideoReframeState({
+			element: {
+				...element,
+				splitScreen: {
+					...splitScreen,
+					sections: replaceOrInsertSplitSection({
+						sections: splitScreen.sections,
+						nextSection: {
+							id: sectionId,
+							startTime: time,
+							slots,
+						},
+						duration: element.duration,
+					}),
+				},
+			},
+		});
+		this.updateSingleVideoElement({
+			trackId,
+			elementId,
+			nextElement,
+			pushHistory,
+		});
+		return (
+			nextElement.splitScreen?.sections?.find(
+				(section) => Math.abs(section.startTime - time) < 1 / 1000,
+			)?.id ?? sectionId
+		);
+	}
+
+	removeVideoSplitScreenSection({
+		trackId,
+		elementId,
+		sectionId,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		elementId: string;
+		sectionId: string;
+		pushHistory?: boolean;
+	}): void {
+		const element = this.getVideoElement({ trackId, elementId });
+		if (!element?.splitScreen) return;
+		const nextElement = normalizeVideoReframeState({
+			element: {
+				...element,
+				splitScreen: {
+					...element.splitScreen,
+					sections: (element.splitScreen.sections ?? []).filter(
+						(section) => section.id !== sectionId,
+					),
+				},
 			},
 		});
 		this.updateSingleVideoElement({

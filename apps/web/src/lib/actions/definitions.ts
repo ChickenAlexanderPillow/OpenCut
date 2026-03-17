@@ -210,6 +210,10 @@ export const ACTIONS = {
 		description: "Clear generated viral clips session",
 		category: "editing",
 	},
+	"toggle-split-screen-selected": {
+		description: "Toggle split screen for selected video clip",
+		category: "editing",
+	},
 	"delete-selected": {
 		description: "Delete selected elements",
 		category: "editing",

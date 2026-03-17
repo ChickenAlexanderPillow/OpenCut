@@ -107,6 +107,7 @@ import {
 	startPlaybackWhenReady,
 } from "@/lib/playback/start-playback";
 import { analyzeGeneratedClipReframes } from "@/lib/reframe/subject-aware";
+import { buildDefaultVideoSplitScreenBindings } from "@/lib/reframe/video-reframe";
 const MIN_VIRAL_CLIP_SCORE = 56;
 const MAX_VIRAL_CLIP_COUNT = 5;
 const VIRAL_CLIP_MIN_SECONDS = 18;
@@ -4450,6 +4451,45 @@ export function useEditorActions() {
 			});
 
 			setClipboard({ items });
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"toggle-split-screen-selected",
+		() => {
+			if (selectedElements.length !== 1) {
+				toast.error("Select a single video clip first");
+				return;
+			}
+			const selected = editor.timeline.getElementsWithTracks({
+				elements: selectedElements,
+			});
+			const target = selected[0];
+			if (!target || target.element.type !== "video") {
+				toast.error("Select a single video clip first");
+				return;
+			}
+			const presets = target.element.reframePresets ?? [];
+			editor.timeline.updateVideoSplitScreen({
+				trackId: target.track.id,
+				elementId: target.element.id,
+				updates: target.element.splitScreen?.enabled
+					? {
+							enabled: false,
+					  }
+					: {
+							enabled: true,
+							layoutPreset: target.element.splitScreen?.layoutPreset ?? "top-bottom",
+							slots:
+								target.element.splitScreen?.slots ??
+								buildDefaultVideoSplitScreenBindings({
+									layoutPreset: target.element.splitScreen?.layoutPreset ?? "top-bottom",
+									presets,
+								}),
+							sections: target.element.splitScreen?.sections ?? [],
+					  },
+			});
 		},
 		undefined,
 	);

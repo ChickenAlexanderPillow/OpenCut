@@ -8,6 +8,12 @@ export interface WebGPUVisualDrawData {
 	y: number;
 	width: number;
 	height: number;
+	clipRect?: {
+		x: number;
+		y: number;
+		width: number;
+		height: number;
+	};
 	rotation: number;
 	opacity: number;
 	blendMode?: BlendMode;
