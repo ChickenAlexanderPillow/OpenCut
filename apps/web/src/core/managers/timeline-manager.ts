@@ -750,6 +750,52 @@ export class TimelineManager {
 		);
 	}
 
+	updateVideoSplitScreenSection({
+		trackId,
+		elementId,
+		sectionId,
+		updates,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		elementId: string;
+		sectionId: string;
+		updates: Partial<VideoSplitScreenSection>;
+		pushHistory?: boolean;
+	}): void {
+		const element = this.getVideoElement({ trackId, elementId });
+		if (!element?.splitScreen) return;
+		const existing = (element.splitScreen.sections ?? []).find(
+			(section) => section.id === sectionId,
+		);
+		if (!existing) return;
+		const remaining = (element.splitScreen.sections ?? []).filter(
+			(section) => section.id !== sectionId,
+		);
+		const nextElement = normalizeVideoReframeState({
+			element: {
+				...element,
+				splitScreen: {
+					...element.splitScreen,
+					sections: replaceOrInsertSplitSection({
+						sections: remaining,
+						nextSection: {
+							...existing,
+							...updates,
+						},
+						duration: element.duration,
+					}),
+				},
+			},
+		});
+		this.updateSingleVideoElement({
+			trackId,
+			elementId,
+			nextElement,
+			pushHistory,
+		});
+	}
+
 	removeVideoSplitScreenSection({
 		trackId,
 		elementId,

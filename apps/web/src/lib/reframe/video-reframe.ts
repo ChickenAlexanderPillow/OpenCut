@@ -539,8 +539,9 @@ export function deriveVideoAngleSections({
 	const reframeSections = deriveVideoReframeSections({ element: normalized });
 	const splitRanges = deriveVideoSplitScreenSectionRanges({
 		element: normalized,
-	}).filter((range) => range.enabled);
-	if (splitRanges.length === 0) {
+	});
+	const enabledSplitRanges = splitRanges.filter((range) => range.enabled);
+	if (enabledSplitRanges.length === 0) {
 		return reframeSections.map((section) => ({
 			...section,
 			splitSectionId: null,
@@ -591,8 +592,8 @@ export function deriveVideoAngleSections({
 			endTime,
 			presetId: reframeSection?.presetId ?? null,
 			switchId: reframeSection?.switchId ?? null,
-			splitSectionId: splitRange?.sectionId ?? null,
-			isSplit: Boolean(splitRange),
+			splitSectionId: splitRange?.enabled ? splitRange.sectionId : null,
+			isSplit: splitRange?.enabled ?? false,
 		});
 	}
 

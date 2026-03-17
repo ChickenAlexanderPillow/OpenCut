@@ -456,6 +456,52 @@ describe("video reframe resolution", () => {
 		]);
 	});
 
+	test("derives a section boundary when split mode is explicitly disabled", () => {
+		const element: VideoElement = {
+			...baseElement,
+			reframeSwitches: [],
+			defaultReframePresetId: "subject",
+			splitScreen: {
+				enabled: true,
+				layoutPreset: "top-bottom",
+				slots: [
+					{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+					{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+				],
+				sections: [
+					{
+						id: "single-view",
+						startTime: 4,
+						enabled: false,
+						slots: [
+							{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+							{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+						],
+					},
+				],
+			},
+		};
+
+		expect(deriveVideoAngleSections({ element })).toEqual([
+			{
+				startTime: 0,
+				endTime: 4,
+				presetId: "subject",
+				switchId: null,
+				splitSectionId: null,
+				isSplit: true,
+			},
+			{
+				startTime: 4,
+				endTime: 10,
+				presetId: "subject",
+				switchId: null,
+				splitSectionId: null,
+				isSplit: false,
+			},
+		]);
+	});
+
 	test("applies a preset to an angle section that exists only because of split boundaries", () => {
 		const element: VideoElement = {
 			...baseElement,

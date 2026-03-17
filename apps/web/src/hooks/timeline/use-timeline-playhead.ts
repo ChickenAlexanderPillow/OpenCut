@@ -7,6 +7,19 @@ import { findSnapPoints, snapToNearestPoint } from "@/lib/timeline/snap-utils";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
 import { startPlaybackWhenReady } from "@/lib/playback/start-playback";
 
+function trySetPointerCapture({
+	target,
+	pointerId,
+}: {
+	target: EventTarget | null;
+	pointerId: number;
+}) {
+	if (!(target instanceof Element) || !target.isConnected) return;
+	try {
+		target.setPointerCapture?.(pointerId);
+	} catch {}
+}
+
 interface UseTimelinePlayheadProps {
 	zoomLevel: number;
 	displayTime?: number;
@@ -153,7 +166,10 @@ export function useTimelinePlayhead({
 			event.stopPropagation();
 			activePointerIdRef.current = event.pointerId;
 			activePointerTargetRef.current = event.currentTarget;
-			event.currentTarget.setPointerCapture?.(event.pointerId);
+			trySetPointerCapture({
+				target: event.currentTarget,
+				pointerId: event.pointerId,
+			});
 			shouldResumeAfterScrubRef.current = editor.playback.getIsPlaying();
 			if (shouldResumeAfterScrubRef.current) {
 				editor.playback.pause();
@@ -172,7 +188,10 @@ export function useTimelinePlayhead({
 			event.preventDefault();
 			activePointerIdRef.current = event.pointerId;
 			activePointerTargetRef.current = event.currentTarget;
-			event.currentTarget.setPointerCapture?.(event.pointerId);
+			trySetPointerCapture({
+				target: event.currentTarget,
+				pointerId: event.pointerId,
+			});
 			setIsDraggingRuler(true);
 			setHasDraggedRuler(false);
 			shouldResumeAfterScrubRef.current = editor.playback.getIsPlaying();

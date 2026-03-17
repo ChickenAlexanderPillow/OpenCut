@@ -66,9 +66,12 @@ import { cn } from "@/utils/ui";
 import {
 	deriveVideoAngleSections,
 	getActiveReframePresetId,
+	getVideoAngleSectionByStartTime,
+	getVideoAngleSectionAtTime,
 	getSelectedOrActiveReframePresetId,
 	getVideoReframeSectionAtTime,
 	getVideoReframeSectionByStartTime,
+	getVideoSplitScreenSectionByStartTime,
 	getVideoSplitScreenSectionAtTime,
 	normalizeVideoReframeState,
 	resolveVideoBaseTransformAtTime,
@@ -79,6 +82,16 @@ import {
 const MAX_PERSISTED_WAVEFORM_ENTRIES = 200;
 const timelineSectionThumbnailCache = new Map<string, Record<string, string>>();
 const MAX_PERSISTED_PEAKS = 768;
+const TIMELINE_SECTION_BOUNDARY_EPSILON = 1 / 1000;
+
+type TimelineBoundaryMarker = {
+	time: number;
+	switchId: string | null;
+	splitSectionId: string | null;
+	presetId: string | null;
+	isSplit: boolean;
+	isSplitToggle: boolean;
+};
 
 function getTimelineSectionThumbnailKey({
 	startTime,
@@ -86,8 +99,104 @@ function getTimelineSectionThumbnailKey({
 }: {
 	startTime: number;
 	endTime: number;
-}) {
+}): TimelineBoundaryMarker[] {
 	return `${startTime.toFixed(3)}:${endTime.toFixed(3)}`;
+}
+
+function getTimelineVisualPlacement({
+	rendererWidth,
+	rendererHeight,
+	sourceWidth,
+	sourceHeight,
+	transform,
+	offsetX = 0,
+	offsetY = 0,
+}: {
+	rendererWidth: number;
+	rendererHeight: number;
+	sourceWidth: number;
+	sourceHeight: number;
+	transform: {
+		position: { x: number; y: number };
+		scale: number;
+	};
+	offsetX?: number;
+	offsetY?: number;
+}) {
+	const containScale = Math.min(
+		rendererWidth / sourceWidth,
+		rendererHeight / sourceHeight,
+	);
+	const width = sourceWidth * containScale * transform.scale;
+	const height = sourceHeight * containScale * transform.scale;
+	const x = offsetX + rendererWidth / 2 + transform.position.x - width / 2;
+	const y = offsetY + rendererHeight / 2 + transform.position.y - height / 2;
+	return { x, y, width, height };
+}
+
+function getTimelineSplitViewports({
+	width,
+	height,
+}: {
+	width: number;
+	height: number;
+}) {
+	return new Map([
+		["top", { x: 0, y: 0, width, height: height / 2 }],
+		["bottom", { x: 0, y: height / 2, width, height: height / 2 }],
+	]);
+}
+
+function getTimelineViewportAdjustedTransform({
+	transform,
+	viewport,
+	rendererWidth,
+	rendererHeight,
+}: {
+	transform: {
+		position: { x: number; y: number };
+		scale: number;
+		rotate?: number;
+	};
+	viewport: { x: number; y: number; width: number; height: number };
+	rendererWidth: number;
+	rendererHeight: number;
+}) {
+	const viewportCenterX = viewport.x + viewport.width / 2;
+	const viewportCenterY = viewport.y + viewport.height / 2;
+	return {
+		...transform,
+		position: {
+			x: transform.position.x + rendererWidth / 2 - viewportCenterX,
+			y: transform.position.y + rendererHeight / 2 - viewportCenterY,
+		},
+	};
+}
+
+function scaleTransformToThumbnailCanvas({
+	transform,
+	projectCanvas,
+	rendererWidth,
+	rendererHeight,
+}: {
+	transform: {
+		position: { x: number; y: number };
+		scale: number;
+		rotate?: number;
+	};
+	projectCanvas: { width: number; height: number };
+	rendererWidth: number;
+	rendererHeight: number;
+}) {
+	const xScale = rendererWidth / Math.max(1, projectCanvas.width);
+	const yScale = rendererHeight / Math.max(1, projectCanvas.height);
+	return {
+		...transform,
+		position: {
+			x: transform.position.x * xScale,
+			y: transform.position.y * yScale,
+		},
+	};
 }
 
 function downsamplePeaksForPersistence({
@@ -661,10 +770,14 @@ function ElementInner({
 		propertyPath: AnimationPropertyPath;
 		keyframeId?: string;
 	} | null>(null);
-	const [draggingReframeSwitch, setDraggingReframeSwitch] = useState<{
-		switchId: string;
+	const [draggingReframeMarker, setDraggingReframeMarker] = useState<{
+		boundaryIndex: number;
+		switchId: string | null;
+		splitSectionId: string | null;
 		time: number;
 		pointerOffsetPx: number;
+		minTime: number;
+		maxTime: number;
 	} | null>(null);
 	const normalizedVideoElement = useMemo(
 		() =>
@@ -674,75 +787,96 @@ function ElementInner({
 	const displayedReframeSwitches = useMemo(() => {
 		if (!normalizedVideoElement) return [];
 		return (normalizedVideoElement.reframeSwitches ?? []).map((entry) =>
-			entry.id === draggingReframeSwitch?.switchId
-				? { ...entry, time: draggingReframeSwitch.time }
+			entry.id === draggingReframeMarker?.switchId
+				? { ...entry, time: draggingReframeMarker.time }
 				: entry,
 		);
-	}, [normalizedVideoElement, draggingReframeSwitch]);
+	}, [normalizedVideoElement, draggingReframeMarker]);
+	const displayedSplitSections = useMemo(() => {
+		if (!normalizedVideoElement?.splitScreen) {
+			return normalizedVideoElement?.splitScreen?.sections ?? [];
+		}
+		return (normalizedVideoElement.splitScreen.sections ?? []).map((section) =>
+			section.id === draggingReframeMarker?.splitSectionId
+				? { ...section, startTime: draggingReframeMarker.time }
+				: section,
+		);
+	}, [normalizedVideoElement, draggingReframeMarker]);
+	const displayedVideoElement = useMemo(() => {
+		if (!normalizedVideoElement) return null;
+		return {
+			...normalizedVideoElement,
+			reframeSwitches: displayedReframeSwitches,
+			splitScreen: normalizedVideoElement.splitScreen
+				? {
+						...normalizedVideoElement.splitScreen,
+						sections: displayedSplitSections,
+				  }
+				: undefined,
+		};
+	}, [normalizedVideoElement, displayedReframeSwitches, displayedSplitSections]);
 	const activeReframePresetId = useMemo(() => {
-		if (!normalizedVideoElement) return null;
+		if (!displayedVideoElement) return null;
 		return getActiveReframePresetId({
-			element: {
-				...normalizedVideoElement,
-				reframeSwitches: displayedReframeSwitches,
-			},
+			element: displayedVideoElement,
 			localTime: Math.max(
 				0,
 				Math.min(
-					normalizedVideoElement.duration,
-					playbackTime - normalizedVideoElement.startTime,
+					displayedVideoElement.duration,
+					playbackTime - displayedVideoElement.startTime,
 				),
 			),
 		});
-	}, [normalizedVideoElement, displayedReframeSwitches, playbackTime]);
+	}, [displayedVideoElement, playbackTime]);
 	const displayedAngleSections = useMemo(() => {
-		if (!normalizedVideoElement) return [];
+		if (!displayedVideoElement) return [];
 		return deriveVideoAngleSections({
-			element: {
-				...normalizedVideoElement,
-				reframeSwitches: displayedReframeSwitches,
-			},
+			element: displayedVideoElement,
 		});
-	}, [normalizedVideoElement, displayedReframeSwitches]);
-	const playheadReframeSection = useMemo(() => {
-		if (!normalizedVideoElement) return null;
-		return getVideoReframeSectionAtTime({
-			element: {
-				...normalizedVideoElement,
-				reframeSwitches: displayedReframeSwitches,
-			},
+	}, [displayedVideoElement]);
+	const displayedBoundaryMarkers = useMemo(
+		() =>
+			displayedVideoElement
+				? deriveTimelineBoundaryMarkers({
+						element: displayedVideoElement,
+						sections: displayedAngleSections,
+					})
+				: [],
+		[displayedVideoElement, displayedAngleSections],
+	);
+	const playheadAngleSection = useMemo(() => {
+		if (!displayedVideoElement) return null;
+		return getVideoAngleSectionAtTime({
+			element: displayedVideoElement,
 			localTime: Math.max(
 				0,
 				Math.min(
-					normalizedVideoElement.duration,
-					playbackTime - normalizedVideoElement.startTime,
+					displayedVideoElement.duration,
+					playbackTime - displayedVideoElement.startTime,
 				),
 			),
 		});
-	}, [normalizedVideoElement, displayedReframeSwitches, playbackTime]);
+	}, [displayedVideoElement, playbackTime]);
 	const activeSplitSection = useMemo(() => {
-		if (!normalizedVideoElement) return null;
+		if (!displayedVideoElement) return null;
 		const section = getVideoSplitScreenSectionAtTime({
-			element: normalizedVideoElement,
+			element: displayedVideoElement,
 			localTime: Math.max(
 				0,
 				Math.min(
-					normalizedVideoElement.duration,
-					playbackTime - normalizedVideoElement.startTime,
+					displayedVideoElement.duration,
+					playbackTime - displayedVideoElement.startTime,
 				),
 			),
 		});
 		return section?.enabled === false ? null : section;
-	}, [normalizedVideoElement, playbackTime]);
+	}, [displayedVideoElement, playbackTime]);
 	const selectedReframeSectionStartTime = normalizedVideoElement
 		? editor.playback.getIsPlaying()
-			? playheadReframeSection?.startTime ?? null
+			? playheadAngleSection?.startTime ?? null
 			: (() => {
-					const selectedSection = getVideoReframeSectionByStartTime({
-						element: {
-							...normalizedVideoElement,
-							reframeSwitches: displayedReframeSwitches,
-						},
+					const selectedSection = getVideoAngleSectionByStartTime({
+						element: displayedVideoElement ?? normalizedVideoElement,
 						startTime:
 							selectedSectionStartTimeByElementId[normalizedVideoElement.id] ??
 							null,
@@ -759,8 +893,8 @@ function ElementInner({
 							localTime <= selectedSection.endTime
 						: false;
 					return isPlayheadWithinSelectedSection
-						? selectedSection?.startTime ?? playheadReframeSection?.startTime ?? null
-						: (playheadReframeSection?.startTime ?? null);
+						? selectedSection?.startTime ?? playheadAngleSection?.startTime ?? null
+						: (playheadAngleSection?.startTime ?? null);
 				})()
 		: null;
 	const laneKeyframes = useMemo(() => {
@@ -927,7 +1061,7 @@ function ElementInner({
 	]);
 
 	useEffect(() => {
-		if (!draggingReframeSwitch || !containerElement || !normalizedVideoElement) {
+		if (!draggingReframeMarker || !containerElement || !normalizedVideoElement) {
 			return;
 		}
 
@@ -935,7 +1069,7 @@ function ElementInner({
 			const rect = containerElement.getBoundingClientRect();
 			let nextTime = snapTimeToFrame({
 				time: toLocalTimeFromClientX({
-					clientX: event.clientX - draggingReframeSwitch.pointerOffsetPx,
+					clientX: event.clientX - draggingReframeMarker.pointerOffsetPx,
 					containerRect: rect,
 					duration: normalizedVideoElement.duration,
 				}),
@@ -955,9 +1089,11 @@ function ElementInner({
 				if (playheadDistance <= thresholdTime) {
 					nextTime = playheadLocalTime;
 				} else {
-					const nearbyTimes = (normalizedVideoElement.reframeSwitches ?? [])
-						.filter((entry) => entry.id !== draggingReframeSwitch.switchId)
-						.map((entry) => entry.time);
+					const nearbyTimes = displayedBoundaryMarkers
+						.filter(
+							(_, index) => index !== draggingReframeMarker.boundaryIndex,
+						)
+						.map((marker) => marker.time);
 					let best = nextTime;
 					let bestDistance = Number.POSITIVE_INFINITY;
 					for (const candidate of nearbyTimes) {
@@ -970,7 +1106,14 @@ function ElementInner({
 					nextTime = best;
 				}
 			}
-			setDraggingReframeSwitch((previous) =>
+			nextTime = Math.max(
+				draggingReframeMarker.minTime,
+				Math.min(
+					draggingReframeMarker.maxTime,
+					nextTime,
+				),
+			);
+			setDraggingReframeMarker((previous) =>
 				previous
 					? {
 							...previous,
@@ -984,18 +1127,39 @@ function ElementInner({
 		};
 
 		const onMouseUp = () => {
-			const current = draggingReframeSwitch;
+			const current = draggingReframeMarker;
 			if (current) {
-				editor.timeline.updateVideoReframeSwitch({
-					trackId: track.id,
-					elementId: element.id,
-					switchId: current.switchId,
-					updates: {
-						time: current.time,
-					},
-				});
+				if (current.switchId && current.splitSectionId) {
+					editor.timeline.updateVideoReframeSwitch({
+						trackId: track.id,
+						elementId: element.id,
+						switchId: current.switchId,
+						updates: { time: current.time },
+						pushHistory: false,
+					});
+					editor.timeline.updateVideoSplitScreenSection({
+						trackId: track.id,
+						elementId: element.id,
+						sectionId: current.splitSectionId,
+						updates: { startTime: current.time },
+					});
+				} else if (current.switchId) {
+					editor.timeline.updateVideoReframeSwitch({
+						trackId: track.id,
+						elementId: element.id,
+						switchId: current.switchId,
+						updates: { time: current.time },
+					});
+				} else if (current.splitSectionId) {
+					editor.timeline.updateVideoSplitScreenSection({
+						trackId: track.id,
+						elementId: element.id,
+						sectionId: current.splitSectionId,
+						updates: { startTime: current.time },
+					});
+				}
 			}
-			setDraggingReframeSwitch(null);
+			setDraggingReframeMarker(null);
 		};
 
 		window.addEventListener("mousemove", onMouseMove);
@@ -1006,7 +1170,8 @@ function ElementInner({
 		};
 	}, [
 		containerElement,
-		draggingReframeSwitch,
+		displayedAngleSections,
+		draggingReframeMarker,
 		editor.timeline,
 		element.id,
 		normalizedVideoElement,
@@ -1227,8 +1392,10 @@ function ElementInner({
 				}}
 			>
 				<div className="absolute inset-0 flex h-full items-center">
-					<ElementContent
-						element={element}
+						<ElementContent
+							element={element}
+							captureVideoElement={element.type === "video" ? normalizedVideoElement : null}
+							displayedVideoSections={displayedAngleSections}
 						track={track}
 						isSelected={isSelected}
 						mediaAssets={mediaAssets}
@@ -1250,14 +1417,41 @@ function ElementInner({
 					normalizedVideoElement.reframePresets &&
 					normalizedVideoElement.reframePresets.length > 0 && (
 							<ReframeSwitchLane
-								element={normalizedVideoElement}
+								element={displayedVideoElement ?? normalizedVideoElement}
 								sections={displayedAngleSections}
-								switches={displayedReframeSwitches}
+								boundaryMarkers={displayedBoundaryMarkers}
 								activePresetId={activeReframePresetId}
 								activeSplitSectionId={activeSplitSection?.id ?? null}
 								selectedSectionStartTime={selectedReframeSectionStartTime}
-							onMarkerMouseDown={({ switchId, time, pointerOffsetPx }) =>
-								setDraggingReframeSwitch({ switchId, time, pointerOffsetPx })
+							onMarkerMouseDown={({
+								boundaryIndex,
+								switchId,
+								splitSectionId,
+								time,
+								pointerOffsetPx,
+							}) =>
+								(() => {
+									const previousBoundaryTime =
+										boundaryIndex > 0
+											? displayedBoundaryMarkers[boundaryIndex - 1]?.time ?? 0
+											: 0;
+									const nextBoundaryTime =
+										boundaryIndex >= 0
+											? displayedBoundaryMarkers[boundaryIndex + 1]?.time ??
+												normalizedVideoElement.duration
+											: normalizedVideoElement.duration;
+									setDraggingReframeMarker({
+										boundaryIndex,
+										switchId,
+										splitSectionId,
+										time,
+										pointerOffsetPx,
+										minTime:
+											previousBoundaryTime + TIMELINE_SECTION_BOUNDARY_EPSILON,
+										maxTime:
+											nextBoundaryTime - TIMELINE_SECTION_BOUNDARY_EPSILON,
+									});
+								})()
 							}
 							onMarkerClick={({ presetId }) => {
 								setSelectedPresetId({
@@ -1474,7 +1668,7 @@ function ResizeHandle({
 function ReframeSwitchLane({
 	element,
 	sections,
-	switches,
+	boundaryMarkers,
 	activePresetId,
 	activeSplitSectionId,
 	selectedSectionStartTime,
@@ -1491,23 +1685,23 @@ function ReframeSwitchLane({
 		splitSectionId: string | null;
 		isSplit: boolean;
 	}>;
-	switches: NonNullable<Extract<TimelineElementType, { type: "video" }>["reframeSwitches"]>;
+	boundaryMarkers: TimelineBoundaryMarker[];
 	activePresetId: string | null;
 	activeSplitSectionId: string | null;
 	selectedSectionStartTime: number | null;
 	onMarkerMouseDown: (params: {
-		switchId: string;
+		boundaryIndex: number;
+		switchId: string | null;
+		splitSectionId: string | null;
 		time: number;
 		pointerOffsetPx: number;
 	}) => void;
 	onMarkerClick: (params: { presetId: string }) => void;
 	onSectionClick: (params: { startTime: number; presetId: string | null }) => void;
 }) {
-	const sortedSwitches = [...switches].sort((left, right) => left.time - right.time);
-
 	return (
 		<div className="pointer-events-none absolute inset-x-0 top-1 z-[3] h-5">
-			<div className="relative h-full bg-black/20">
+			<div className="relative h-full bg-black/35">
 				{sections.map((section) => {
 					const leftPercent =
 						(section.startTime / Math.max(element.duration, 0.001)) * 100;
@@ -1533,12 +1727,12 @@ function ReframeSwitchLane({
 							className={cn(
 								"pointer-events-auto absolute top-0 bottom-0 overflow-hidden border text-left",
 								isSelected
-									? "border-white/80 bg-white/18"
+									? "border-white/85 bg-white/32"
 									: isActive
-										? "border-white/35 bg-white/12"
+										? "border-white/45 bg-white/22"
 										: section.isSplit
-											? "border-sky-300/30 bg-sky-300/12"
-											: "border-white/15 bg-black/10",
+											? "border-sky-300/45 bg-sky-300/24"
+											: "border-white/25 bg-black/20",
 							)}
 							style={{
 								left: `${leftPercent}%`,
@@ -1567,9 +1761,9 @@ function ReframeSwitchLane({
 						</button>
 					);
 				})}
-				{sortedSwitches.map((entry) => (
+				{boundaryMarkers.map((entry, boundaryIndex) => (
 					<button
-						key={entry.id}
+						key={`${entry.time}:${entry.switchId ?? "no-switch"}:${entry.splitSectionId ?? "no-split"}`}
 						type="button"
 						className="pointer-events-auto absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[2px] border border-white/80 bg-white/80"
 						style={{
@@ -1580,7 +1774,9 @@ function ReframeSwitchLane({
 							event.stopPropagation();
 							const rect = event.currentTarget.getBoundingClientRect();
 							onMarkerMouseDown({
-								switchId: entry.id,
+								boundaryIndex,
+								switchId: entry.switchId,
+								splitSectionId: entry.splitSectionId,
 								time: entry.time,
 								pointerOffsetPx:
 									event.clientX - (rect.left + rect.width / 2),
@@ -1589,11 +1785,17 @@ function ReframeSwitchLane({
 						onClick={(event) => {
 							event.preventDefault();
 							event.stopPropagation();
-							onMarkerClick({ presetId: entry.presetId });
+							if (entry.presetId) {
+								onMarkerClick({ presetId: entry.presetId });
+							}
 						}}
 						title={
-							element.reframePresets?.find((preset) => preset.id === entry.presetId)
-								?.name ?? "Reframe marker"
+							entry.isSplitToggle
+								? "Single view marker"
+								: entry.isSplit
+								? "Split screen marker"
+								: (element.reframePresets?.find((preset) => preset.id === entry.presetId)
+										?.name ?? "Reframe marker")
 						}
 					/>
 				))}
@@ -1602,45 +1804,131 @@ function ReframeSwitchLane({
 	);
 }
 
+function deriveTimelineBoundaryMarkers({
+	element,
+	sections,
+}: {
+	element: Extract<TimelineElementType, { type: "video" }>;
+	sections: Array<{
+		startTime: number;
+		endTime: number;
+		presetId: string | null;
+		switchId: string | null;
+		splitSectionId: string | null;
+		isSplit: boolean;
+	}>;
+}) {
+	const splitSectionByStartTime = new Map(
+		(element.splitScreen?.sections ?? []).map((section) => [
+			section.startTime.toFixed(3),
+			section,
+		]),
+	);
+	const reframeSwitchByTime = new Map(
+		(element.reframeSwitches ?? []).map((entry) => [entry.time.toFixed(3), entry]),
+	);
+
+	return sections
+		.slice(1)
+		.map((section) => {
+			const timeKey = section.startTime.toFixed(3);
+			const splitSection =
+				splitSectionByStartTime.get(timeKey) ??
+				getVideoSplitScreenSectionByStartTime({
+					element,
+					startTime: section.startTime,
+				});
+			const reframeSwitch =
+				reframeSwitchByTime.get(timeKey) ??
+				(element.reframeSwitches ?? []).find(
+					(entry) => Math.abs(entry.time - section.startTime) <= 1 / 1000,
+				) ??
+				null;
+			return {
+				time: section.startTime,
+				switchId: reframeSwitch?.id ?? section.switchId,
+				splitSectionId: splitSection?.id ?? section.splitSectionId,
+				presetId: reframeSwitch?.presetId ?? section.presetId,
+				isSplit:
+					splitSection?.enabled !== false && Boolean(splitSection)
+						? true
+						: section.isSplit,
+				isSplitToggle:
+					splitSection !== null && splitSection !== undefined
+						? splitSection.enabled === false
+						: false,
+			};
+		})
+		.filter((entry) => entry.switchId !== null || entry.splitSectionId !== null)
+		.sort((left, right) => left.time - right.time);
+}
+
 function drawTimelineThumbnailFrame({
 	context,
-	video,
-	width,
-	height,
+	source,
+	sourceWidth,
+	sourceHeight,
+	rendererWidth,
+	rendererHeight,
 	transform,
+	offsetX = 0,
+	offsetY = 0,
 }: {
 	context: CanvasRenderingContext2D;
-	video: HTMLVideoElement;
-	width: number;
-	height: number;
+	source: CanvasImageSource;
+	sourceWidth: number;
+	sourceHeight: number;
+	rendererWidth: number;
+	rendererHeight: number;
 	transform: {
 		position: { x: number; y: number };
 		scale: number;
 	};
+	offsetX?: number;
+	offsetY?: number;
 }) {
-	const containScale = Math.min(width / video.videoWidth, height / video.videoHeight);
-	const drawWidth = video.videoWidth * containScale * transform.scale;
-	const drawHeight = video.videoHeight * containScale * transform.scale;
-	const x = width / 2 + transform.position.x - drawWidth / 2;
-	const y = height / 2 + transform.position.y - drawHeight / 2;
-	context.drawImage(video, x, y, drawWidth, drawHeight);
+	const placement = getTimelineVisualPlacement({
+		rendererWidth,
+		rendererHeight,
+		sourceWidth,
+		sourceHeight,
+		transform,
+		offsetX,
+		offsetY,
+	});
+	context.drawImage(source, placement.x, placement.y, placement.width, placement.height);
 }
 
 function SectionThumbnailStrip({
-	element,
+	captureElement,
+	displaySections,
 	mediaAsset,
 	trackHeight,
 	insetY,
 }: {
-	element: Extract<TimelineElementType, { type: "video" }>;
+	captureElement: Extract<TimelineElementType, { type: "video" }>;
+	displaySections: Array<{
+		startTime: number;
+		endTime: number;
+		presetId: string | null;
+		switchId: string | null;
+		splitSectionId: string | null;
+		isSplit: boolean;
+	}>;
 	mediaAsset: MediaAsset & { type: "video" };
 	trackHeight: number;
 	insetY: number;
 }) {
-	const sections = useMemo(
-		() => deriveVideoAngleSections({ element }),
-		[element],
+	const editor = useEditor({ subscribeTo: ["project"] });
+	const projectCanvas = editor.project.getActive().settings.canvasSize;
+	const projectAspectRatio = Math.max(
+		0.01,
+		projectCanvas.width / Math.max(1, projectCanvas.height),
 	);
+	const tileHeight = Math.max(54, trackHeight);
+	const tileWidth = Math.max(96, Math.round(tileHeight * projectAspectRatio));
+	const renderScale = 2;
+	const sections = displaySections;
 	const fallbackThumbnailUrls = useMemo(
 		() =>
 			mediaAsset.thumbnailUrl
@@ -1656,29 +1944,31 @@ function SectionThumbnailStrip({
 	const thumbnailCacheKey = useMemo(
 		() =>
 			JSON.stringify({
-				elementId: element.id,
+				elementId: captureElement.id,
 				mediaId: mediaAsset.id,
 				mediaUrl: mediaAsset.url,
 				trackHeight,
-				transform: element.transform,
-				defaultReframePresetId: element.defaultReframePresetId ?? null,
-				reframePresets: (element.reframePresets ?? []).map((preset) => ({
+				projectCanvas,
+				trimStart: captureElement.trimStart,
+				transform: captureElement.transform,
+				defaultReframePresetId: captureElement.defaultReframePresetId ?? null,
+				reframePresets: (captureElement.reframePresets ?? []).map((preset) => ({
 					id: preset.id,
 					transform: preset.transform,
 				})),
-				reframeSwitches: (element.reframeSwitches ?? []).map((entry) => ({
+				reframeSwitches: (captureElement.reframeSwitches ?? []).map((entry) => ({
 					time: entry.time,
 					presetId: entry.presetId,
 				})),
-				splitScreen: element.splitScreen
+				splitScreen: captureElement.splitScreen
 					? {
-							enabled: element.splitScreen.enabled ?? false,
-							layoutPreset: element.splitScreen.layoutPreset,
-							sections: (element.splitScreen.sections ?? []).map((section) => ({
+							enabled: captureElement.splitScreen.enabled ?? false,
+							layoutPreset: captureElement.splitScreen.layoutPreset,
+							sections: (captureElement.splitScreen.sections ?? []).map((section) => ({
 								startTime: section.startTime,
 								enabled: section.enabled ?? true,
 							})),
-							slots: (element.splitScreen.slots ?? []).map((slot) => ({
+							slots: (captureElement.splitScreen.slots ?? []).map((slot) => ({
 								slotId: slot.slotId,
 								mode: slot.mode,
 								presetId: slot.presetId ?? null,
@@ -1692,7 +1982,7 @@ function SectionThumbnailStrip({
 					isSplit: section.isSplit,
 				})),
 			}),
-		[element, mediaAsset.id, mediaAsset.url, sections, trackHeight],
+		[captureElement, mediaAsset.id, mediaAsset.url, projectCanvas, sections, trackHeight],
 	);
 	const [thumbnailUrls, setThumbnailUrls] = useState<Record<string, string>>(
 		() =>
@@ -1718,6 +2008,7 @@ function SectionThumbnailStrip({
 		const video = document.createElement("video");
 		video.muted = true;
 		video.playsInline = true;
+		video.preload = "auto";
 		video.src = mediaAsset.url;
 
 		const waitForReady = () =>
@@ -1760,10 +2051,7 @@ function SectionThumbnailStrip({
 				};
 				video.addEventListener("seeked", onSeeked);
 				video.addEventListener("error", onError);
-				video.currentTime = Math.max(
-					0,
-					Math.min(Math.max(video.duration || 0, 0.001), time),
-				);
+				video.currentTime = time;
 			});
 
 		const waitForRenderedFrame = () =>
@@ -1790,44 +2078,50 @@ function SectionThumbnailStrip({
 						const sampleTime = Math.max(
 							0,
 							Math.min(
-								element.duration,
+								captureElement.duration,
 								section.startTime +
 									Math.max(0.05, (section.endTime - section.startTime) / 2),
 							),
 						);
-						await seekTo(sampleTime);
+						const sourceTime = Math.max(
+							0,
+							Math.min(
+								Math.max(video.duration || 0, 0.001),
+								captureElement.trimStart + sampleTime,
+							),
+						);
+						await seekTo(sourceTime);
 						await waitForRenderedFrame();
 						if (cancelled || video.videoWidth === 0 || video.videoHeight === 0) {
-							return;
+							continue;
 						}
 						const canvas = document.createElement("canvas");
-						canvas.width = Math.max(96, Math.round(trackHeight * (16 / 9)));
-						canvas.height = Math.max(54, trackHeight);
+						canvas.width = tileWidth * renderScale;
+						canvas.height = tileHeight * renderScale;
 						const context = canvas.getContext("2d");
 						if (!context) continue;
 						context.fillStyle = "#0a0a0a";
 						context.fillRect(0, 0, canvas.width, canvas.height);
 						if (section.isSplit) {
 							const split = resolveVideoSplitScreenAtTime({
-								element,
+								element: captureElement,
 								localTime: sampleTime,
 							});
 							if (split?.slots?.length) {
+								const logicalViewports = getTimelineSplitViewports({
+									width: projectCanvas.width,
+									height: projectCanvas.height,
+								});
+								const viewports = getTimelineSplitViewports({
+									width: canvas.width,
+									height: canvas.height,
+								});
 								for (const slot of split.slots) {
-									const viewport =
-										slot.slotId === "top"
-											? {
-													x: 0,
-													y: 0,
-													width: canvas.width,
-													height: canvas.height / 2,
-											  }
-											: {
-													x: 0,
-													y: canvas.height / 2,
-													width: canvas.width,
-													height: canvas.height / 2,
-											  };
+									const logicalViewport = logicalViewports.get(slot.slotId);
+									const viewport = viewports.get(slot.slotId);
+									if (!viewport || !logicalViewport) {
+										continue;
+									}
 									context.save();
 									context.beginPath();
 									context.rect(
@@ -1838,21 +2132,37 @@ function SectionThumbnailStrip({
 									);
 									context.clip();
 									const transform = resolveVideoSplitScreenSlotTransform({
-										baseTransform: element.transform,
-										duration: element.duration,
-										reframePresets: element.reframePresets,
-										reframeSwitches: element.reframeSwitches,
-										defaultReframePresetId: element.defaultReframePresetId,
+										baseTransform: captureElement.transform,
+										duration: captureElement.duration,
+										reframePresets: captureElement.reframePresets,
+										reframeSwitches: captureElement.reframeSwitches,
+										defaultReframePresetId: captureElement.defaultReframePresetId,
 										localTime: sampleTime,
 										slot,
 									});
-									context.translate(viewport.x, viewport.y);
+									const viewportAdjustedTransform =
+										getTimelineViewportAdjustedTransform({
+											transform,
+											viewport: logicalViewport,
+											rendererWidth: projectCanvas.width,
+											rendererHeight: projectCanvas.height,
+										});
+									const scaledTransform = scaleTransformToThumbnailCanvas({
+										transform: viewportAdjustedTransform,
+										projectCanvas,
+										rendererWidth: canvas.width,
+										rendererHeight: canvas.height,
+										});
 									drawTimelineThumbnailFrame({
 										context,
-										video,
-										width: viewport.width,
-										height: viewport.height,
-										transform,
+										source: video,
+										sourceWidth: video.videoWidth,
+										sourceHeight: video.videoHeight,
+										rendererWidth: viewport.width,
+										rendererHeight: viewport.height,
+										transform: scaledTransform,
+										offsetX: viewport.x,
+										offsetY: viewport.y,
 									});
 									context.restore();
 								}
@@ -1860,12 +2170,19 @@ function SectionThumbnailStrip({
 						} else {
 							drawTimelineThumbnailFrame({
 								context,
-								video,
-								width: canvas.width,
-								height: canvas.height,
-								transform: resolveVideoBaseTransformAtTime({
-									element,
-									localTime: sampleTime,
+								source: video,
+								sourceWidth: video.videoWidth,
+								sourceHeight: video.videoHeight,
+								rendererWidth: canvas.width,
+								rendererHeight: canvas.height,
+								transform: scaleTransformToThumbnailCanvas({
+									transform: resolveVideoBaseTransformAtTime({
+										element: captureElement,
+										localTime: sampleTime,
+									}),
+									projectCanvas,
+									rendererWidth: canvas.width,
+									rendererHeight: canvas.height,
 								}),
 							});
 						}
@@ -1908,7 +2225,18 @@ function SectionThumbnailStrip({
 			video.removeAttribute("src");
 			video.load();
 		};
-	}, [element, mediaAsset.thumbnailUrl, mediaAsset.url, sections, thumbnailCacheKey, trackHeight]);
+	}, [
+		captureElement,
+		displaySections,
+		mediaAsset.thumbnailUrl,
+		mediaAsset.url,
+		projectCanvas,
+		sections,
+		thumbnailCacheKey,
+		tileHeight,
+		tileWidth,
+		trackHeight,
+	]);
 
 	return (
 		<div className="flex size-full items-center justify-center">
@@ -1922,10 +2250,10 @@ function SectionThumbnailStrip({
 				>
 					{sections.map((section) => {
 						const leftPercent =
-							(section.startTime / Math.max(element.duration, 0.001)) * 100;
+							(section.startTime / Math.max(captureElement.duration, 0.001)) * 100;
 						const widthPercent =
 							((section.endTime - section.startTime) /
-								Math.max(element.duration, 0.001)) *
+								Math.max(captureElement.duration, 0.001)) *
 							100;
 						const key = getTimelineSectionThumbnailKey(section);
 						const thumbnailUrl = thumbnailUrls[key] ?? mediaAsset.thumbnailUrl ?? "";
@@ -1937,8 +2265,9 @@ function SectionThumbnailStrip({
 									left: `${leftPercent}%`,
 									width: `${widthPercent}%`,
 									backgroundImage: thumbnailUrl ? `url(${thumbnailUrl})` : "none",
-									backgroundSize: "cover",
-									backgroundPosition: "center",
+									backgroundSize: `${tileWidth}px ${tileHeight}px`,
+									backgroundRepeat: "repeat-x",
+									backgroundPosition: "left center",
 								}}
 							/>
 						);
@@ -1951,6 +2280,8 @@ function SectionThumbnailStrip({
 
 function ElementContent({
 	element,
+	captureVideoElement,
+	displayedVideoSections,
 	track,
 	isSelected,
 	mediaAssets,
@@ -1958,6 +2289,15 @@ function ElementContent({
 	onWaveformPeaksResolved,
 }: {
 	element: TimelineElementType;
+	captureVideoElement: Extract<TimelineElementType, { type: "video" }> | null;
+	displayedVideoSections: Array<{
+		startTime: number;
+		endTime: number;
+		presetId: string | null;
+		switchId: string | null;
+		splitSectionId: string | null;
+		isSplit: boolean;
+	}>;
 	track: TimelineTrack;
 	isSelected: boolean;
 	mediaAssets: MediaAsset[];
@@ -2101,7 +2441,8 @@ function ElementContent({
 		return (
 			<div className="relative flex size-full items-center justify-center">
 				<SectionThumbnailStrip
-					element={element}
+					captureElement={captureVideoElement ?? element}
+					displaySections={displayedVideoSections}
 					mediaAsset={videoMediaAsset}
 					trackHeight={getTrackHeight({ type: track.type })}
 					insetY={isSelected ? 4 : 0}
