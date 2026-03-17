@@ -466,7 +466,7 @@ export class StreamingTimelineAudioEngine {
 					clip.startTime < windowEnd &&
 					clip.startTime + clip.duration > windowStart,
 			)
-			.slice(0, 8);
+			.slice(0, 16);
 		await Promise.all(
 			candidates.map((clip) => {
 				const request = this.buildDecodeWindowRequest({

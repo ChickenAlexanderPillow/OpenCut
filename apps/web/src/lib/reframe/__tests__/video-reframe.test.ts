@@ -12,9 +12,12 @@ import {
 	remapSplitSlotTransformBetweenViewports,
 	replaceOrInsertReframeSwitch,
 	resolveVideoSplitScreenAtTime,
+	resolveVideoSplitScreenAtTimeFromState,
 	resolveVideoSplitScreenSlotTransform,
+	resolveVideoSplitScreenSlotTransformFromState,
 	resolveVideoBaseTransformAtTime,
 	resolveVideoReframeTransform,
+	resolveVideoReframeTransformFromState,
 } from "../video-reframe";
 import type { TimelineTrack, VideoElement } from "@/types/timeline";
 
@@ -119,6 +122,90 @@ describe("video reframe resolution", () => {
 			scale: 2.5,
 			rotate: 12,
 		});
+	});
+
+	test("fast state resolvers match normalized element resolvers", () => {
+		expect(
+			resolveVideoReframeTransformFromState({
+				baseTransform: baseElement.transform,
+				duration: baseElement.duration,
+				reframePresets: baseElement.reframePresets,
+				reframeSwitches: baseElement.reframeSwitches,
+				defaultReframePresetId: baseElement.defaultReframePresetId,
+				localTime: 5,
+			}),
+		).toEqual(
+			resolveVideoReframeTransform({
+				baseTransform: baseElement.transform,
+				duration: baseElement.duration,
+				reframePresets: baseElement.reframePresets,
+				reframeSwitches: baseElement.reframeSwitches,
+				defaultReframePresetId: baseElement.defaultReframePresetId,
+				localTime: 5,
+			}),
+		);
+
+		expect(
+			resolveVideoSplitScreenSlotTransformFromState({
+				baseTransform: baseElement.transform,
+				duration: baseElement.duration,
+				reframePresets: baseElement.reframePresets,
+				reframeSwitches: baseElement.reframeSwitches,
+				defaultReframePresetId: baseElement.defaultReframePresetId,
+				localTime: 5,
+				slot: {
+					presetId: "subject",
+					transformOverride: {
+						position: { x: 360, y: -120 },
+						scale: 3.4,
+					},
+				},
+			}),
+		).toEqual(
+			resolveVideoSplitScreenSlotTransform({
+				baseTransform: baseElement.transform,
+				duration: baseElement.duration,
+				reframePresets: baseElement.reframePresets,
+				reframeSwitches: baseElement.reframeSwitches,
+				defaultReframePresetId: baseElement.defaultReframePresetId,
+				localTime: 5,
+				slot: {
+					presetId: "subject",
+					transformOverride: {
+						position: { x: 360, y: -120 },
+						scale: 3.4,
+					},
+				},
+			}),
+		);
+
+		const splitElement: VideoElement = {
+			...baseElement,
+			splitScreen: {
+				enabled: true,
+				layoutPreset: "top-bottom",
+				slots: [
+					{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+					{ slotId: "bottom", mode: "follow-active", presetId: null },
+				],
+				sections: [],
+			},
+		};
+
+		expect(
+			resolveVideoSplitScreenAtTimeFromState({
+				duration: splitElement.duration,
+				splitScreen: splitElement.splitScreen,
+				defaultReframePresetId: splitElement.defaultReframePresetId,
+				reframeSwitches: splitElement.reframeSwitches,
+				localTime: 5,
+			}),
+		).toEqual(
+			resolveVideoSplitScreenAtTime({
+				element: splitElement,
+				localTime: 5,
+			}),
+		);
 	});
 
 	test("preview override renders the selected preset without mutating base timeline intent", () => {

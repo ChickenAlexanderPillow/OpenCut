@@ -3,8 +3,8 @@ import { VisualNode, type VisualNodeParams } from "./visual-node";
 import { type VideoCache, videoCache } from "@/services/video-cache/service";
 import type { WebGPUVisualDrawData } from "../webgpu-types";
 import {
-	resolveVideoSplitScreenSlotTransform,
-	resolveVideoSplitScreenAtTime,
+	resolveVideoSplitScreenAtTimeFromState,
+	resolveVideoSplitScreenSlotTransformFromState,
 } from "@/lib/reframe/video-reframe";
 
 export interface VideoNodeParams extends VisualNodeParams {
@@ -149,23 +149,11 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 				sourceWidth,
 				sourceHeight,
 			}) ?? undefined;
-		const splitScreen = resolveVideoSplitScreenAtTime({
-			element: {
-				id: "__split__",
-				type: "video",
-				mediaId: "__split__",
-				name: "__split__",
-				startTime: 0,
-				duration: this.params.duration,
-				trimStart: 0,
-				trimEnd: 0,
-				transform: this.params.transform,
-				opacity: this.params.opacity,
-				reframePresets: this.params.reframePresets,
-				reframeSwitches: this.params.reframeSwitches,
-				defaultReframePresetId: this.params.defaultReframePresetId,
-				splitScreen: this.params.splitScreen,
-			},
+		const splitScreen = resolveVideoSplitScreenAtTimeFromState({
+			duration: this.params.duration,
+			splitScreen: this.params.splitScreen,
+			defaultReframePresetId: this.params.defaultReframePresetId,
+			reframeSwitches: this.params.reframeSwitches,
 			localTime: clipElapsed,
 		});
 		if (!splitScreen?.slots?.length) {
@@ -202,7 +190,7 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 		return splitScreen.slots.flatMap((slot) => {
 			const viewport = viewports.get(slot.slotId);
 			if (!viewport) return [];
-			const slotTransform = resolveVideoSplitScreenSlotTransform({
+			const slotTransform = resolveVideoSplitScreenSlotTransformFromState({
 				baseTransform: this.params.transform,
 				duration: this.params.duration,
 				reframePresets: this.params.reframePresets,

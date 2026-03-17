@@ -20,9 +20,9 @@ import {
 import { TRANSCRIPT_CUT_VISUAL_BOUNDARY_GUARD_SECONDS } from "@/lib/transcript-editor/constants";
 import type { TranscriptEditCutRange } from "@/types/transcription";
 import {
-	resolveVideoReframeTransform,
-	resolveVideoSplitScreenSlotTransform,
-	resolveVideoSplitScreenAtTime,
+	resolveVideoReframeTransformFromState,
+	resolveVideoSplitScreenSlotTransformFromState,
+	resolveVideoSplitScreenAtTimeFromState,
 } from "@/lib/reframe/video-reframe";
 
 const VISUAL_EPSILON = 1 / 1000;
@@ -286,23 +286,11 @@ export abstract class VisualNode<
 
 		const localTime = this.getLocalTime(time);
 		const clipElapsed = this.getClipElapsedTime(time);
-		const splitScreen = resolveVideoSplitScreenAtTime({
-			element: {
-				id: "__split__",
-				type: "video",
-				mediaId: "__split__",
-				name: "__split__",
-				startTime: 0,
-				duration: this.params.duration,
-				trimStart: 0,
-				trimEnd: 0,
-				transform: this.params.transform,
-				opacity: this.params.opacity,
-				reframePresets: this.params.reframePresets,
-				reframeSwitches: this.params.reframeSwitches,
-				defaultReframePresetId: this.params.defaultReframePresetId,
-				splitScreen: this.params.splitScreen,
-			},
+		const splitScreen = resolveVideoSplitScreenAtTimeFromState({
+			duration: this.params.duration,
+			splitScreen: this.params.splitScreen,
+			defaultReframePresetId: this.params.defaultReframePresetId,
+			reframeSwitches: this.params.reframeSwitches,
 			localTime: clipElapsed,
 		});
 		const baseTransform = this.getBaseTransformForTime({
@@ -333,7 +321,7 @@ export abstract class VisualNode<
 			for (const slot of splitScreen.slots) {
 				const viewport = viewports.get(slot.slotId);
 				if (!viewport) continue;
-				const slotTransform = resolveVideoSplitScreenSlotTransform({
+				const slotTransform = resolveVideoSplitScreenSlotTransformFromState({
 					baseTransform: this.params.transform,
 					duration: this.params.duration,
 					reframePresets: this.params.reframePresets,
@@ -549,7 +537,7 @@ export abstract class VisualNode<
 	}: {
 		clipElapsed: number;
 	}): Transform {
-		return resolveVideoReframeTransform({
+		return resolveVideoReframeTransformFromState({
 			baseTransform: this.params.transform,
 			duration: this.params.duration,
 			reframePresets: this.params.reframePresets,

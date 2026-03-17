@@ -3,9 +3,15 @@ import { AudioManager } from "./audio-manager";
 
 describe("AudioManager", () => {
 	beforeEach(() => {
+		(
+			globalThis as typeof globalThis & {
+				__opencut_audio_manager_singleton__?: unknown;
+			}
+		).__opencut_audio_manager_singleton__ = null;
 		Object.defineProperty(globalThis, "window", {
 			value: {
 				addEventListener: () => {},
+				dispatchEvent: () => true,
 				removeEventListener: () => {},
 				setTimeout: () => 1,
 			},
@@ -63,5 +69,124 @@ describe("AudioManager", () => {
 		};
 
 		expect(manager.getPlaybackClockTime()).toBe(24.5);
+	});
+
+	test("primeCurrentTimelineAudio does not block on background prewarm", async () => {
+		const editor = {
+			playback: {
+				getVolume: () => 1,
+				getCurrentTime: () => 12,
+				getIsPlaying: () => false,
+				getIsScrubbing: () => false,
+				subscribe: () => () => {},
+			},
+			timeline: {
+				subscribe: () => () => {},
+				getTracks: () => [],
+			},
+			media: {
+				subscribe: () => () => {},
+				getAssets: () => [],
+			},
+			scenes: {
+				subscribe: () => () => {},
+			},
+		} as unknown as ConstructorParameters<typeof AudioManager>[0];
+
+		const manager = new AudioManager(editor);
+		let prewarmResolved = false;
+		const prewarmCalls: number[] = [];
+		(
+			manager as unknown as {
+				unlockAudioContext: () => Promise<void>;
+				prepareStreamingGraph: (args: { playhead: number }) => Promise<void>;
+				streamingEngine: {
+					prewarm: (args: { playhead: number; horizonSeconds: number }) => Promise<void>;
+				};
+			}
+		).unlockAudioContext = async () => {};
+		(
+			manager as unknown as {
+				prepareStreamingGraph: (args: { playhead: number }) => Promise<void>;
+			}
+		).prepareStreamingGraph = async () => {};
+		(
+			manager as unknown as {
+				streamingEngine: {
+					prewarm: (args: { playhead: number; horizonSeconds: number }) => Promise<void>;
+				};
+			}
+		).streamingEngine = {
+			prewarm: async ({ horizonSeconds }) => {
+				prewarmCalls.push(horizonSeconds);
+				if (horizonSeconds <= 2) {
+					return;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				prewarmResolved = true;
+			},
+		};
+
+		await manager.primeCurrentTimelineAudio();
+		expect(prewarmCalls).toEqual([2, 12]);
+		expect(prewarmResolved).toBe(false);
+	});
+
+	test("pause stops output without discarding the prepared streaming engine", () => {
+		const editor = {
+			playback: {
+				getVolume: () => 1,
+				getCurrentTime: () => 12,
+				getIsPlaying: () => false,
+				getIsScrubbing: () => false,
+				subscribe: () => () => {},
+			},
+			timeline: {
+				subscribe: () => () => {},
+				getTracks: () => [],
+			},
+			media: {
+				subscribe: () => () => {},
+				getAssets: () => [],
+			},
+			scenes: {
+				subscribe: () => () => {},
+			},
+		} as unknown as ConstructorParameters<typeof AudioManager>[0];
+
+		const manager = new AudioManager(editor);
+		let stopCalls = 0;
+		const fakeStreamingEngine = {
+			stop: () => {
+				stopCalls += 1;
+			},
+		};
+		(
+			manager as unknown as {
+				streamingEngine: typeof fakeStreamingEngine | null;
+				lastIsPlaying: boolean;
+				handlePlaybackChange: () => void;
+			}
+		).streamingEngine = fakeStreamingEngine;
+		(
+			manager as unknown as {
+				lastIsPlaying: boolean;
+			}
+		).lastIsPlaying = true;
+
+		(
+			manager as unknown as {
+				handlePlaybackChange: () => void;
+			}
+		).handlePlaybackChange();
+
+		expect(stopCalls).toBeGreaterThan(0);
+		expect(
+			(
+				manager as unknown as {
+					streamingEngine: typeof fakeStreamingEngine | null;
+				}
+			).streamingEngine,
+		).toBe(fakeStreamingEngine);
 	});
 });

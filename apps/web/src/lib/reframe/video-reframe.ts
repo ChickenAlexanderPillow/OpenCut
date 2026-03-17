@@ -474,6 +474,28 @@ export function getActiveReframePresetId({
 	return activePresetId;
 }
 
+export function getActiveReframePresetIdFromState({
+	defaultReframePresetId,
+	reframeSwitches,
+	duration,
+	localTime,
+}: {
+	defaultReframePresetId?: string | null;
+	reframeSwitches?: VideoElement["reframeSwitches"];
+	duration: number;
+	localTime: number;
+}): string | null {
+	const safeTime = Math.max(0, Math.min(duration, localTime));
+	let activePresetId = defaultReframePresetId ?? null;
+	for (const entry of reframeSwitches ?? []) {
+		if (entry.time - safeTime > REFRAME_SWITCH_TIME_EPSILON) {
+			break;
+		}
+		activePresetId = entry.presetId;
+	}
+	return activePresetId;
+}
+
 export function getSelectedOrActiveReframePresetId({
 	element,
 	localTime,
@@ -766,6 +788,41 @@ export function resolveVideoReframeTransform({
 	};
 }
 
+export function resolveVideoReframeTransformFromState({
+	baseTransform,
+	duration,
+	reframePresets,
+	reframeSwitches,
+	defaultReframePresetId,
+	localTime,
+}: {
+	baseTransform: Transform;
+	duration: number;
+	reframePresets?: VideoElement["reframePresets"];
+	reframeSwitches?: VideoElement["reframeSwitches"];
+	defaultReframePresetId?: string | null;
+	localTime: number;
+}): Transform {
+	const presetId = getActiveReframePresetIdFromState({
+		defaultReframePresetId,
+		reframeSwitches,
+		duration,
+		localTime,
+	});
+	const preset =
+		presetId
+			? (reframePresets?.find((candidate) => candidate.id === presetId) ?? null)
+			: null;
+	if (!preset) {
+		return baseTransform;
+	}
+	return {
+		position: preset.transform.position,
+		scale: preset.transform.scale,
+		rotate: baseTransform.rotate,
+	};
+}
+
 export function resolveVideoSplitScreenSlotTransform({
 	baseTransform,
 	duration,
@@ -787,6 +844,53 @@ export function resolveVideoSplitScreenSlotTransform({
 	>;
 }): Transform {
 	const resolvedTransform = resolveVideoReframeTransform({
+		baseTransform,
+		duration,
+		reframePresets,
+		reframeSwitches:
+			!slot.presetId
+				? reframeSwitches
+				: [
+						{
+							id: "__split-slot__",
+							time: 0,
+							presetId: slot.presetId,
+						},
+				  ],
+		defaultReframePresetId: slot.presetId ?? defaultReframePresetId,
+		localTime,
+	});
+	if (!slot.transformOverride) {
+		return resolvedTransform;
+	}
+	return {
+		position: {
+			x: slot.transformOverride.position.x,
+			y: slot.transformOverride.position.y,
+		},
+		scale: slot.transformOverride.scale,
+		rotate: resolvedTransform.rotate,
+	};
+}
+
+export function resolveVideoSplitScreenSlotTransformFromState({
+	baseTransform,
+	duration,
+	reframePresets,
+	reframeSwitches,
+	defaultReframePresetId,
+	localTime,
+	slot,
+}: {
+	baseTransform: Transform;
+	duration: number;
+	reframePresets?: VideoElement["reframePresets"];
+	reframeSwitches?: VideoElement["reframeSwitches"];
+	defaultReframePresetId?: string | null;
+	localTime: number;
+	slot: Pick<VideoSplitScreenSlotBinding, "presetId" | "transformOverride">;
+}): Transform {
+	const resolvedTransform = resolveVideoReframeTransformFromState({
 		baseTransform,
 		duration,
 		reframePresets,
@@ -990,6 +1094,60 @@ export function resolveVideoSplitScreenAtTime({
 	return {
 		...splitScreen,
 		slots: resolvedSlots,
+	};
+}
+
+export function resolveVideoSplitScreenAtTimeFromState({
+	duration,
+	splitScreen,
+	defaultReframePresetId,
+	reframeSwitches,
+	localTime,
+}: {
+	duration: number;
+	splitScreen?: VideoElement["splitScreen"];
+	defaultReframePresetId?: string | null;
+	reframeSwitches?: VideoElement["reframeSwitches"];
+	localTime: number;
+}): VideoSplitScreen | null {
+	if (!splitScreen) return null;
+	const safeTime = Math.max(0, Math.min(duration, localTime));
+	const sections = splitScreen.sections ?? [];
+	let activeSection: VideoSplitScreenSection | null = null;
+	for (let index = 0; index < sections.length; index++) {
+		const section = sections[index]!;
+		const nextStartTime = sections[index + 1]?.startTime ?? duration;
+		const isLast = index === sections.length - 1;
+		if (safeTime + REFRAME_SWITCH_TIME_EPSILON < section.startTime) continue;
+		if (safeTime < nextStartTime || (isLast && safeTime <= nextStartTime)) {
+			activeSection = section;
+			break;
+		}
+	}
+	const effectiveEnabled = activeSection
+		? activeSection.enabled !== false
+		: splitScreen.enabled;
+	if (!effectiveEnabled) return null;
+	const activePresetId = getActiveReframePresetIdFromState({
+		defaultReframePresetId,
+		reframeSwitches,
+		duration,
+		localTime: safeTime,
+	});
+	return {
+		...splitScreen,
+		slots: (splitScreen.slots ?? []).map((slot) => {
+			const presetId =
+				slot.mode === "fixed-preset"
+					? slot.presetId ?? activePresetId ?? defaultReframePresetId ?? null
+					: activePresetId ?? defaultReframePresetId ?? null;
+			return {
+				slotId: slot.slotId,
+				mode: slot.mode,
+				presetId,
+				transformOverride: slot.transformOverride ?? null,
+			};
+		}),
 	};
 }
 

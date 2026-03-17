@@ -59,6 +59,7 @@ export class AudioManager {
 	private unsubscribers: Array<() => void> = [];
 	private lastAudioFingerprint = "";
 	private rebuildDebounceTimer: number | null = null;
+	private pausedSeekPrimeTimer: number | null = null;
 	private streamingEngine: StreamingTimelineAudioEngine | null = null;
 	private prepareGraphSequence = 0;
 	private audioGraphDirty = false;
@@ -122,6 +123,10 @@ export class AudioManager {
 			window.clearTimeout(this.rebuildDebounceTimer);
 			this.rebuildDebounceTimer = null;
 		}
+		if (this.pausedSeekPrimeTimer !== null && typeof window !== "undefined") {
+			window.clearTimeout(this.pausedSeekPrimeTimer);
+			this.pausedSeekPrimeTimer = null;
+		}
 		this.pendingGraphRebuild = false;
 		this.audioGraphDirty = false;
 		this.audioGraphDirtySinceMs = null;
@@ -155,9 +160,6 @@ export class AudioManager {
 				this.playbackRequestId += 1;
 				this.stopPlaybackOutputs();
 				this.emitSilentMeterLevels();
-				this.streamingEngine?.dispose();
-				this.streamingEngine = null;
-				void this.resetAudioContext();
 			}
 		}
 
@@ -183,6 +185,7 @@ export class AudioManager {
 
 		if (!this.editor.playback.getIsPlaying()) {
 			this.stopPlaybackOutputs();
+			this.schedulePausedSeekPrime({ time });
 			return;
 		}
 
@@ -634,7 +637,22 @@ export class AudioManager {
 		await this.unlockAudioContext();
 		const playhead = this.editor.playback.getCurrentTime();
 		await this.prepareStreamingGraph({ playhead });
-		await this.streamingEngine?.prewarm({ playhead });
+		await this.streamingEngine?.prewarm({ playhead, horizonSeconds: 2 });
+		void this.streamingEngine?.prewarm({ playhead, horizonSeconds: 12 });
+	}
+
+	private schedulePausedSeekPrime({ time }: { time: number }): void {
+		if (typeof window === "undefined") return;
+		if (this.pausedSeekPrimeTimer !== null) {
+			window.clearTimeout(this.pausedSeekPrimeTimer);
+		}
+		this.pausedSeekPrimeTimer = window.setTimeout(() => {
+			this.pausedSeekPrimeTimer = null;
+			void this.prepareStreamingGraph({
+				playhead: time,
+				prewarm: true,
+			});
+		}, 40);
 	}
 
 	clearCachedTimelineAudio({
