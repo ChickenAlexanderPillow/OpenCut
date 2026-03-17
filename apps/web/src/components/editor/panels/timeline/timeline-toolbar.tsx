@@ -38,11 +38,11 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
-	applyPresetToVideoReframeSection,
+	applyPresetToVideoAngleSection,
+	applySplitScreenToVideoAngleSection,
 	buildDefaultVideoSplitScreenBindings,
-	getVideoReframeSectionAtTime,
-	getVideoReframeSectionByStartTime,
-	getVideoSplitScreenSectionAtTime,
+	getVideoAngleSectionAtTime,
+	getVideoAngleSectionByStartTime,
 	normalizeVideoReframeState,
 	splitVideoReframeSectionAtTime,
 } from "@/lib/reframe/video-reframe";
@@ -333,7 +333,7 @@ function QuickReframeToolbarControl() {
 		if (!latestSelectedVideo) return null;
 		const shouldFollowPlayhead = isPlaying;
 		const localTime = getSnappedLocalPlayheadTime();
-		const selectedSection = getVideoReframeSectionByStartTime({
+		const selectedSection = getVideoAngleSectionByStartTime({
 			element: latestSelectedVideo.element,
 			startTime:
 				selectedSectionStartTimeByElementId[latestSelectedVideo.element.id] ?? null,
@@ -344,7 +344,7 @@ function QuickReframeToolbarControl() {
 		if (selectedSection && !shouldFollowPlayhead && isPlayheadWithinSelectedSection) {
 			return { selectedVideo: latestSelectedVideo, section: selectedSection };
 		}
-		const playheadSection = getVideoReframeSectionAtTime({
+		const playheadSection = getVideoAngleSectionAtTime({
 			element: latestSelectedVideo.element,
 			localTime,
 		});
@@ -365,7 +365,7 @@ function QuickReframeToolbarControl() {
 		if (!selectedVideo) return null;
 		const shouldFollowPlayhead = isPlaying;
 		const localTime = getSnappedLocalPlayheadTime();
-		const selectedSection = getVideoReframeSectionByStartTime({
+		const selectedSection = getVideoAngleSectionByStartTime({
 			element: selectedVideo.element,
 			startTime:
 				selectedSectionStartTimeByElementId[selectedVideo.element.id] ?? null,
@@ -376,7 +376,7 @@ function QuickReframeToolbarControl() {
 		if (selectedSection && !shouldFollowPlayhead && isPlayheadWithinSelectedSection) {
 			return selectedSection;
 		}
-		return getVideoReframeSectionAtTime({
+		return getVideoAngleSectionAtTime({
 			element: selectedVideo.element,
 			localTime,
 		});
@@ -387,12 +387,8 @@ function QuickReframeToolbarControl() {
 		selectedVideo,
 	]);
 	const activeSplitSection = useMemo(() => {
-		if (!selectedVideo || !activeSection) return null;
-		const section = getVideoSplitScreenSectionAtTime({
-			element: selectedVideo.element,
-			localTime: activeSection.startTime,
-		});
-		return section?.enabled !== false ? section : null;
+		if (!activeSection) return null;
+		return activeSection.isSplit ? activeSection : null;
 	}, [activeSection, selectedVideo]);
 	const previewSelectedPresetId =
 		selectedVideo && !isPlaying
@@ -418,70 +414,34 @@ function QuickReframeToolbarControl() {
 		clearSelectedSplitPreviewSlots({ elementId });
 	};
 
-	const disableSplitAtSectionStart = ({
-		trackId,
-		element,
-		sectionStartTime,
-	}: {
-		trackId: string;
-		element: ReturnType<typeof normalizeVideoReframeState>;
-		sectionStartTime: number;
-	}) => {
-		const activeSplit = getVideoSplitScreenSectionAtTime({
-			element,
-			localTime: sectionStartTime,
-		});
-		if (!element.splitScreen || activeSplit?.enabled === false) {
-			return;
-		}
-		editor.timeline.upsertVideoSplitScreenSection({
-			trackId,
-			elementId: element.id,
-			time: sectionStartTime,
-			enabled: false,
-			slots: activeSplit?.slots ?? element.splitScreen.slots,
-		});
-	};
-
 	const applySplitScreenToTargetSection = () => {
 		const target = getLatestTargetSection();
 		if (!target) return;
 		clearPreviewOverrides({ elementId: target.selectedVideo.element.id });
-		const defaultSlots = buildDefaultVideoSplitScreenBindings({
-			layoutPreset: "top-bottom",
-			presets: target.selectedVideo.element.reframePresets ?? [],
-		});
-		const existingSplitSection = getVideoSplitScreenSectionAtTime({
-			element: target.selectedVideo.element,
-			localTime: target.section.startTime,
-		});
 		const splitScreen = target.selectedVideo.element.splitScreen;
-		if (!splitScreen) {
-			editor.timeline.updateVideoSplitScreen({
-				trackId: target.selectedVideo.trackId,
-				elementId: target.selectedVideo.element.id,
-				updates: {
+		const nextReframeState = applySplitScreenToVideoAngleSection({
+			element: {
+				...target.selectedVideo.element,
+				splitScreen: splitScreen ?? {
 					enabled: false,
 					layoutPreset: "top-bottom",
-					slots: defaultSlots,
+					slots: buildDefaultVideoSplitScreenBindings({
+						layoutPreset: "top-bottom",
+						presets: target.selectedVideo.element.reframePresets ?? [],
+					}),
 					sections: [],
 				},
-			});
-		} else if (splitScreen.enabled) {
-			editor.timeline.updateVideoSplitScreen({
-				trackId: target.selectedVideo.trackId,
-				elementId: target.selectedVideo.element.id,
-				updates: {
-					enabled: false,
+			},
+			sectionStartTime: target.section.startTime,
+		});
+		editor.timeline.updateElements({
+			updates: [
+				{
+					trackId: target.selectedVideo.trackId,
+					elementId: target.selectedVideo.element.id,
+					updates: nextReframeState,
 				},
-			});
-		}
-		editor.timeline.upsertVideoSplitScreenSection({
-			trackId: target.selectedVideo.trackId,
-			elementId: target.selectedVideo.element.id,
-			time: target.section.startTime,
-			enabled: true,
-			slots: existingSplitSection?.slots ?? defaultSlots,
+			],
 		});
 		setSelectedSectionStartTime({
 			elementId: target.selectedVideo.element.id,
@@ -543,12 +503,7 @@ function QuickReframeToolbarControl() {
 			const targetSection = getLatestTargetSection();
 			if (!targetSection) return;
 			clearPreviewOverrides({ elementId: targetSection.selectedVideo.element.id });
-			disableSplitAtSectionStart({
-				trackId: targetSection.selectedVideo.trackId,
-				element: targetSection.selectedVideo.element,
-				sectionStartTime: targetSection.section.startTime,
-			});
-			const nextReframeState = applyPresetToVideoReframeSection({
+			const nextReframeState = applyPresetToVideoAngleSection({
 				element: targetSection.selectedVideo.element,
 				sectionStartTime: targetSection.section.startTime,
 				presetId: preset.id,
@@ -702,23 +657,18 @@ function QuickReframeToolbarControl() {
 												}
 												size="icon"
 												className="h-7 w-7 rounded-sm"
-												onClick={() => {
-													const target = getLatestTargetSection();
-													if (!target) return;
-													clearPreviewOverrides({
-														elementId: target.selectedVideo.element.id,
-													});
-													disableSplitAtSectionStart({
-														trackId: target.selectedVideo.trackId,
-														element: target.selectedVideo.element,
-														sectionStartTime: target.section.startTime,
-													});
-													const nextReframeState =
-														applyPresetToVideoReframeSection({
-															element: target.selectedVideo.element,
-															sectionStartTime: target.section.startTime,
-															presetId: preset.id,
-														});
+								onClick={() => {
+									const target = getLatestTargetSection();
+									if (!target) return;
+									clearPreviewOverrides({
+										elementId: target.selectedVideo.element.id,
+									});
+									const nextReframeState =
+										applyPresetToVideoAngleSection({
+											element: target.selectedVideo.element,
+											sectionStartTime: target.section.startTime,
+											presetId: preset.id,
+										});
 													editor.timeline.updateElements({
 														updates: [
 															{
@@ -807,7 +757,7 @@ function QuickReframePresetIcon({ kind }: { kind: QuickReframePresetKind }) {
 				<PersonCameraGlyph
 					className={cn(
 						"absolute top-0 h-4 w-4",
-						kind === "subject-left" ? "left-0" : "left-0 -translate-x-1/2",
+						kind === "subject-left" ? "left-0" : "right-0",
 					)}
 				/>
 			</div>

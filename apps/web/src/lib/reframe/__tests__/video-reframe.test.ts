@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
+	applyPresetToVideoAngleSection,
+	applySplitScreenToVideoAngleSection,
 	applySelectedReframePresetPreviewToTracks,
 	buildDefaultVideoSplitScreenBindings,
 	deriveVideoAngleSections,
 	deriveVideoSplitScreenSectionRanges,
 	getActiveReframePresetId,
+	getVideoAngleSectionAtTime,
 	getVideoSplitScreenSectionAtTime,
+	remapSplitSlotTransformBetweenViewports,
 	replaceOrInsertReframeSwitch,
 	resolveVideoSplitScreenAtTime,
 	resolveVideoSplitScreenSlotTransform,
@@ -255,7 +259,7 @@ describe("video reframe resolution", () => {
 		]);
 	});
 
-	test("split-screen section overrides slot preset bindings", () => {
+	test("split-screen sections use the shared split angle bindings when enabled", () => {
 		const element: VideoElement = {
 			...baseElement,
 			splitScreen: {
@@ -289,14 +293,14 @@ describe("video reframe resolution", () => {
 		expect(resolved?.slots).toEqual([
 			{
 				slotId: "top",
-				mode: "fixed-preset",
-				presetId: "subject",
+				mode: "follow-active",
+				presetId: "wide",
 				transformOverride: null,
 			},
 			{
 				slotId: "bottom",
 				mode: "fixed-preset",
-				presetId: "wide",
+				presetId: "subject",
 				transformOverride: null,
 			},
 		]);
@@ -450,5 +454,189 @@ describe("video reframe resolution", () => {
 				isSplit: true,
 			},
 		]);
+	});
+
+	test("applies a preset to an angle section that exists only because of split boundaries", () => {
+		const element: VideoElement = {
+			...baseElement,
+			reframeSwitches: [],
+			defaultReframePresetId: "wide",
+			splitScreen: {
+				enabled: false,
+				layoutPreset: "top-bottom",
+				slots: [
+					{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+					{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+				],
+				sections: [
+					{
+						id: "split-only",
+						startTime: 4,
+						enabled: true,
+						slots: [
+							{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+							{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+						],
+					},
+					{
+						id: "single-again",
+						startTime: 7,
+						enabled: false,
+						slots: [
+							{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+							{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+						],
+					},
+				],
+			},
+		};
+
+		expect(
+			getVideoAngleSectionAtTime({
+				element,
+				localTime: 8,
+			}),
+		).toMatchObject({
+			startTime: 7,
+			endTime: 10,
+			presetId: "wide",
+			isSplit: false,
+		});
+
+		const nextState = applyPresetToVideoAngleSection({
+			element,
+			sectionStartTime: 7,
+			presetId: "subject",
+		});
+
+		expect(nextState.defaultReframePresetId).toBe("wide");
+		expect(nextState.reframeSwitches).toEqual([
+			{
+				id: expect.any(String),
+				time: 7,
+				presetId: "subject",
+			},
+		]);
+		expect(nextState.splitScreen?.sections).toHaveLength(2);
+		expect(nextState.splitScreen?.sections?.[0]).toMatchObject({
+			id: expect.any(String),
+			startTime: 4,
+			enabled: true,
+			slots: [
+				{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+				{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+			],
+		});
+		expect(nextState.splitScreen?.sections?.[1]).toMatchObject({
+			id: expect.any(String),
+			startTime: 7,
+			enabled: false,
+			slots: [
+				{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+				{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+			],
+		});
+	});
+
+	test("applies split screen to the current angle section without inventing extra sections", () => {
+		const element: VideoElement = {
+			...baseElement,
+			reframeSwitches: [
+				{
+					id: "switch-1",
+					time: 5,
+					presetId: "subject",
+				},
+			],
+			splitScreen: {
+				enabled: false,
+				layoutPreset: "top-bottom",
+				slots: [
+					{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+					{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+				],
+				sections: [],
+			},
+		};
+
+		const nextState = applySplitScreenToVideoAngleSection({
+			element,
+			sectionStartTime: 5,
+		});
+
+		expect(nextState.reframeSwitches).toEqual([
+			{
+				id: expect.any(String),
+				time: 5,
+				presetId: "subject",
+			},
+		]);
+		expect(nextState.splitScreen?.enabled).toBe(false);
+		expect(nextState.splitScreen?.sections).toHaveLength(1);
+		expect(nextState.splitScreen?.sections?.[0]).toMatchObject({
+			id: expect.any(String),
+			startTime: 5,
+			enabled: true,
+			slots: [
+				{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+				{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+			],
+		});
+		const nextSections = deriveVideoAngleSections({
+			element: {
+				...element,
+				...nextState,
+			},
+		});
+		expect(nextSections).toHaveLength(2);
+		expect(nextSections[0]).toEqual({
+			startTime: 0,
+			endTime: 5,
+			presetId: "wide",
+			switchId: null,
+			splitSectionId: null,
+			isSplit: false,
+		});
+		expect(nextSections[1]?.startTime).toBe(5);
+		expect(nextSections[1]?.endTime).toBe(10);
+		expect(nextSections[1]?.presetId).toBe("subject");
+		expect(nextSections[1]?.isSplit).toBe(true);
+		expect(typeof nextSections[1]?.switchId).toBe("string");
+	});
+
+	test("remaps split slot transforms when swapping between top and bottom", () => {
+		expect(
+			remapSplitSlotTransformBetweenViewports({
+				transform: {
+					position: { x: 40, y: -120 },
+					scale: 2.2,
+				},
+				layoutPreset: "top-bottom",
+				fromSlotId: "top",
+				toSlotId: "bottom",
+				canvasWidth: 1080,
+				canvasHeight: 1920,
+			}),
+		).toEqual({
+			position: { x: 40, y: 840 },
+			scale: 2.2,
+		});
+
+		expect(
+			remapSplitSlotTransformBetweenViewports({
+				transform: {
+					position: { x: -60, y: 510 },
+					scale: 1.8,
+				},
+				layoutPreset: "top-bottom",
+				fromSlotId: "bottom",
+				toSlotId: "top",
+				canvasWidth: 1080,
+				canvasHeight: 1920,
+			}),
+		).toEqual({
+			position: { x: -60, y: -450 },
+			scale: 1.8,
+		});
 	});
 });

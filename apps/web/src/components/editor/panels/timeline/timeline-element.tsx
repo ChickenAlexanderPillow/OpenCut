@@ -71,10 +71,24 @@ import {
 	getVideoReframeSectionByStartTime,
 	getVideoSplitScreenSectionAtTime,
 	normalizeVideoReframeState,
+	resolveVideoBaseTransformAtTime,
+	resolveVideoSplitScreenAtTime,
+	resolveVideoSplitScreenSlotTransform,
 } from "@/lib/reframe/video-reframe";
 
 const MAX_PERSISTED_WAVEFORM_ENTRIES = 200;
+const timelineSectionThumbnailCache = new Map<string, Record<string, string>>();
 const MAX_PERSISTED_PEAKS = 768;
+
+function getTimelineSectionThumbnailKey({
+	startTime,
+	endTime,
+}: {
+	startTime: number;
+	endTime: number;
+}) {
+	return `${startTime.toFixed(3)}:${endTime.toFixed(3)}`;
+}
 
 function downsamplePeaksForPersistence({
 	peaks,
@@ -1588,6 +1602,353 @@ function ReframeSwitchLane({
 	);
 }
 
+function drawTimelineThumbnailFrame({
+	context,
+	video,
+	width,
+	height,
+	transform,
+}: {
+	context: CanvasRenderingContext2D;
+	video: HTMLVideoElement;
+	width: number;
+	height: number;
+	transform: {
+		position: { x: number; y: number };
+		scale: number;
+	};
+}) {
+	const containScale = Math.min(width / video.videoWidth, height / video.videoHeight);
+	const drawWidth = video.videoWidth * containScale * transform.scale;
+	const drawHeight = video.videoHeight * containScale * transform.scale;
+	const x = width / 2 + transform.position.x - drawWidth / 2;
+	const y = height / 2 + transform.position.y - drawHeight / 2;
+	context.drawImage(video, x, y, drawWidth, drawHeight);
+}
+
+function SectionThumbnailStrip({
+	element,
+	mediaAsset,
+	trackHeight,
+	insetY,
+}: {
+	element: Extract<TimelineElementType, { type: "video" }>;
+	mediaAsset: MediaAsset & { type: "video" };
+	trackHeight: number;
+	insetY: number;
+}) {
+	const sections = useMemo(
+		() => deriveVideoAngleSections({ element }),
+		[element],
+	);
+	const fallbackThumbnailUrls = useMemo(
+		() =>
+			mediaAsset.thumbnailUrl
+				? Object.fromEntries(
+						sections.map((section) => [
+							getTimelineSectionThumbnailKey(section),
+							mediaAsset.thumbnailUrl as string,
+						]),
+					)
+				: {},
+		[mediaAsset.thumbnailUrl, sections],
+	);
+	const thumbnailCacheKey = useMemo(
+		() =>
+			JSON.stringify({
+				elementId: element.id,
+				mediaId: mediaAsset.id,
+				mediaUrl: mediaAsset.url,
+				trackHeight,
+				transform: element.transform,
+				defaultReframePresetId: element.defaultReframePresetId ?? null,
+				reframePresets: (element.reframePresets ?? []).map((preset) => ({
+					id: preset.id,
+					transform: preset.transform,
+				})),
+				reframeSwitches: (element.reframeSwitches ?? []).map((entry) => ({
+					time: entry.time,
+					presetId: entry.presetId,
+				})),
+				splitScreen: element.splitScreen
+					? {
+							enabled: element.splitScreen.enabled ?? false,
+							layoutPreset: element.splitScreen.layoutPreset,
+							sections: (element.splitScreen.sections ?? []).map((section) => ({
+								startTime: section.startTime,
+								enabled: section.enabled ?? true,
+							})),
+							slots: (element.splitScreen.slots ?? []).map((slot) => ({
+								slotId: slot.slotId,
+								mode: slot.mode,
+								presetId: slot.presetId ?? null,
+								transformOverride: slot.transformOverride ?? null,
+							})),
+					  }
+					: null,
+				sections: sections.map((section) => ({
+					key: getTimelineSectionThumbnailKey(section),
+					presetId: section.presetId,
+					isSplit: section.isSplit,
+				})),
+			}),
+		[element, mediaAsset.id, mediaAsset.url, sections, trackHeight],
+	);
+	const [thumbnailUrls, setThumbnailUrls] = useState<Record<string, string>>(
+		() =>
+			timelineSectionThumbnailCache.get(thumbnailCacheKey) ??
+			fallbackThumbnailUrls,
+	);
+
+	useEffect(() => {
+		const cachedThumbnailUrls = timelineSectionThumbnailCache.get(thumbnailCacheKey);
+		if (cachedThumbnailUrls) {
+			setThumbnailUrls(cachedThumbnailUrls);
+			return;
+		}
+		if (Object.keys(fallbackThumbnailUrls).length > 0) {
+			setThumbnailUrls(fallbackThumbnailUrls);
+		}
+	}, [fallbackThumbnailUrls, thumbnailCacheKey]);
+
+	useEffect(() => {
+		if (!mediaAsset.url) return;
+		if (timelineSectionThumbnailCache.has(thumbnailCacheKey)) return;
+		let cancelled = false;
+		const video = document.createElement("video");
+		video.muted = true;
+		video.playsInline = true;
+		video.src = mediaAsset.url;
+
+		const waitForReady = () =>
+			new Promise<void>((resolve, reject) => {
+				if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0) {
+					resolve();
+					return;
+				}
+				const onReady = () => {
+					cleanup();
+					resolve();
+				};
+				const onError = () => {
+					cleanup();
+					reject(new Error("Could not load video for timeline thumbnails"));
+				};
+				const cleanup = () => {
+					video.removeEventListener("loadeddata", onReady);
+					video.removeEventListener("loadedmetadata", onReady);
+					video.removeEventListener("error", onError);
+				};
+				video.addEventListener("loadeddata", onReady);
+				video.addEventListener("loadedmetadata", onReady);
+				video.addEventListener("error", onError);
+			});
+
+		const seekTo = (time: number) =>
+			new Promise<void>((resolve, reject) => {
+				const onSeeked = () => {
+					cleanup();
+					resolve();
+				};
+				const onError = () => {
+					cleanup();
+					reject(new Error("Could not seek video for timeline thumbnails"));
+				};
+				const cleanup = () => {
+					video.removeEventListener("seeked", onSeeked);
+					video.removeEventListener("error", onError);
+				};
+				video.addEventListener("seeked", onSeeked);
+				video.addEventListener("error", onError);
+				video.currentTime = Math.max(
+					0,
+					Math.min(Math.max(video.duration || 0, 0.001), time),
+				);
+			});
+
+		const waitForRenderedFrame = () =>
+			new Promise<void>((resolve) => {
+				const finish = () => {
+					requestAnimationFrame(() => {
+						requestAnimationFrame(() => resolve());
+					});
+				};
+				if (typeof video.requestVideoFrameCallback === "function") {
+					video.requestVideoFrameCallback(() => finish());
+					return;
+				}
+				finish();
+			});
+
+		const render = async () => {
+			try {
+				await waitForReady();
+				const nextUrls: Record<string, string> = {};
+				for (const section of sections) {
+					const sectionKey = getTimelineSectionThumbnailKey(section);
+					try {
+						const sampleTime = Math.max(
+							0,
+							Math.min(
+								element.duration,
+								section.startTime +
+									Math.max(0.05, (section.endTime - section.startTime) / 2),
+							),
+						);
+						await seekTo(sampleTime);
+						await waitForRenderedFrame();
+						if (cancelled || video.videoWidth === 0 || video.videoHeight === 0) {
+							return;
+						}
+						const canvas = document.createElement("canvas");
+						canvas.width = Math.max(96, Math.round(trackHeight * (16 / 9)));
+						canvas.height = Math.max(54, trackHeight);
+						const context = canvas.getContext("2d");
+						if (!context) continue;
+						context.fillStyle = "#0a0a0a";
+						context.fillRect(0, 0, canvas.width, canvas.height);
+						if (section.isSplit) {
+							const split = resolveVideoSplitScreenAtTime({
+								element,
+								localTime: sampleTime,
+							});
+							if (split?.slots?.length) {
+								for (const slot of split.slots) {
+									const viewport =
+										slot.slotId === "top"
+											? {
+													x: 0,
+													y: 0,
+													width: canvas.width,
+													height: canvas.height / 2,
+											  }
+											: {
+													x: 0,
+													y: canvas.height / 2,
+													width: canvas.width,
+													height: canvas.height / 2,
+											  };
+									context.save();
+									context.beginPath();
+									context.rect(
+										viewport.x,
+										viewport.y,
+										viewport.width,
+										viewport.height,
+									);
+									context.clip();
+									const transform = resolveVideoSplitScreenSlotTransform({
+										baseTransform: element.transform,
+										duration: element.duration,
+										reframePresets: element.reframePresets,
+										reframeSwitches: element.reframeSwitches,
+										defaultReframePresetId: element.defaultReframePresetId,
+										localTime: sampleTime,
+										slot,
+									});
+									context.translate(viewport.x, viewport.y);
+									drawTimelineThumbnailFrame({
+										context,
+										video,
+										width: viewport.width,
+										height: viewport.height,
+										transform,
+									});
+									context.restore();
+								}
+							}
+						} else {
+							drawTimelineThumbnailFrame({
+								context,
+								video,
+								width: canvas.width,
+								height: canvas.height,
+								transform: resolveVideoBaseTransformAtTime({
+									element,
+									localTime: sampleTime,
+								}),
+							});
+						}
+						nextUrls[sectionKey] = canvas.toDataURL(
+							"image/jpeg",
+							0.72,
+						);
+					} catch {
+						const fallbackUrl =
+							timelineSectionThumbnailCache.get(thumbnailCacheKey)?.[sectionKey] ??
+							mediaAsset.thumbnailUrl ??
+							null;
+						if (fallbackUrl) {
+							nextUrls[sectionKey] = fallbackUrl;
+						}
+					}
+				}
+				if (!cancelled && Object.keys(nextUrls).length > 0) {
+					timelineSectionThumbnailCache.set(thumbnailCacheKey, nextUrls);
+					setThumbnailUrls(nextUrls);
+				}
+			} catch {
+				if (!cancelled && mediaAsset.thumbnailUrl) {
+					const fallbackUrls = Object.fromEntries(
+						sections.map((section) => [
+							getTimelineSectionThumbnailKey(section),
+							mediaAsset.thumbnailUrl as string,
+						]),
+					);
+					timelineSectionThumbnailCache.set(thumbnailCacheKey, fallbackUrls);
+					setThumbnailUrls(fallbackUrls);
+				}
+			}
+		};
+
+		void render();
+		return () => {
+			cancelled = true;
+			video.pause();
+			video.removeAttribute("src");
+			video.load();
+		};
+	}, [element, mediaAsset.thumbnailUrl, mediaAsset.url, sections, thumbnailCacheKey, trackHeight]);
+
+	return (
+		<div className="flex size-full items-center justify-center">
+			<div className="relative size-full">
+				<div
+					className="absolute inset-x-0"
+					style={{
+						top: insetY,
+						bottom: insetY,
+					}}
+				>
+					{sections.map((section) => {
+						const leftPercent =
+							(section.startTime / Math.max(element.duration, 0.001)) * 100;
+						const widthPercent =
+							((section.endTime - section.startTime) /
+								Math.max(element.duration, 0.001)) *
+							100;
+						const key = getTimelineSectionThumbnailKey(section);
+						const thumbnailUrl = thumbnailUrls[key] ?? mediaAsset.thumbnailUrl ?? "";
+						return (
+							<div
+								key={key}
+								className="absolute top-0 bottom-0 overflow-hidden border-r border-black/20"
+								style={{
+									left: `${leftPercent}%`,
+									width: `${widthPercent}%`,
+									backgroundImage: thumbnailUrl ? `url(${thumbnailUrl})` : "none",
+									backgroundSize: "cover",
+									backgroundPosition: "center",
+								}}
+							/>
+						);
+					})}
+				</div>
+			</div>
+		</div>
+	);
+}
+
 function ElementContent({
 	element,
 	track,
@@ -1708,14 +2069,10 @@ function ElementContent({
 		);
 	}
 
-	if (
-		mediaAsset.type === "image" ||
-		(mediaAsset.type === "video" && mediaAsset.thumbnailUrl)
-	) {
+	if (mediaAsset.type === "image") {
 		const trackHeight = getTrackHeight({ type: track.type });
 		const tileWidth = Math.round(trackHeight * (16 / 9));
-		const imageUrl =
-			mediaAsset.type === "image" ? mediaAsset.url : mediaAsset.thumbnailUrl;
+		const imageUrl = mediaAsset.url;
 
 		return (
 			<div className="flex size-full items-center justify-center">
@@ -1734,56 +2091,37 @@ function ElementContent({
 							bottom: isSelected ? "0.25rem" : "0rem",
 						}}
 					/>
-					{mediaAsset.type === "video" &&
-						mediaSupportsAudio({ media: mediaAsset }) && (
-							<div className="pointer-events-none absolute right-1 bottom-0 left-1 z-[1]">
-								<AudioWaveform
-									audioUrl={mediaAsset.url}
-									audioFile={mediaAsset.file}
-									trimStart={element.trimStart}
-									trimEnd={element.trimEnd}
-									duration={element.duration}
-									sourceDuration={mediaAsset.duration}
-									cacheKey={`media:${mediaAsset.id}`}
-									initialPeaks={getPersistedWaveformPeaks({
-										cacheKey: `media:${mediaAsset.id}`,
-									})}
-									onPeaksResolved={(peaks) =>
-										onWaveformPeaksResolved({
-											cacheKey: `media:${mediaAsset.id}`,
-											peaks,
-										})
-									}
-									height={Math.max(14, Math.floor(trackHeight * 0.42))}
-									className="w-full opacity-80"
-								/>
-							</div>
-						)}
 				</div>
 			</div>
 		);
 	}
 
-	if (mediaAsset.type === "video") {
+	if (mediaAsset.type === "video" && element.type === "video") {
+		const videoMediaAsset = mediaAsset as MediaAsset & { type: "video" };
 		return (
 			<div className="relative flex size-full items-center justify-center">
-				<span className="text-foreground/80 truncate px-2 text-xs">{element.name}</span>
-				{mediaSupportsAudio({ media: mediaAsset }) && (
+				<SectionThumbnailStrip
+					element={element}
+					mediaAsset={videoMediaAsset}
+					trackHeight={getTrackHeight({ type: track.type })}
+					insetY={isSelected ? 4 : 0}
+				/>
+				{mediaSupportsAudio({ media: videoMediaAsset }) && (
 					<div className="pointer-events-none absolute right-1 bottom-0 left-1 z-[1]">
 						<AudioWaveform
-							audioUrl={mediaAsset.url}
-							audioFile={mediaAsset.file}
+							audioUrl={videoMediaAsset.url}
+							audioFile={videoMediaAsset.file}
 							trimStart={element.trimStart}
 							trimEnd={element.trimEnd}
 							duration={element.duration}
-							sourceDuration={mediaAsset.duration}
-							cacheKey={`media:${mediaAsset.id}`}
+							sourceDuration={videoMediaAsset.duration}
+							cacheKey={`media:${videoMediaAsset.id}`}
 							initialPeaks={getPersistedWaveformPeaks({
-								cacheKey: `media:${mediaAsset.id}`,
+								cacheKey: `media:${videoMediaAsset.id}`,
 							})}
 							onPeaksResolved={(peaks) =>
 								onWaveformPeaksResolved({
-									cacheKey: `media:${mediaAsset.id}`,
+									cacheKey: `media:${videoMediaAsset.id}`,
 									peaks,
 								})
 							}

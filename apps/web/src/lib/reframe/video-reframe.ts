@@ -48,6 +48,220 @@ export interface VideoAngleSection {
 	isSplit: boolean;
 }
 
+export function rebuildVideoReframeStateFromAngleSections({
+	element,
+	sections,
+}: {
+	element: VideoElement;
+	sections: VideoAngleSection[];
+}): Pick<VideoElement, "defaultReframePresetId" | "reframeSwitches" | "splitScreen"> {
+	const normalized = normalizeVideoReframeState({ element });
+	if (sections.length === 0) {
+		return {
+			defaultReframePresetId: normalized.defaultReframePresetId ?? null,
+			reframeSwitches: [],
+			splitScreen: normalized.splitScreen,
+		};
+	}
+
+	const defaultReframePresetId = sections[0]?.presetId ?? null;
+	const reframeSwitches = sections.slice(1).reduce<NonNullable<VideoElement["reframeSwitches"]>>(
+		(result, section) => {
+			const previousPresetId = result.length
+				? result[result.length - 1]?.presetId ?? defaultReframePresetId
+				: defaultReframePresetId;
+			if (section.presetId === previousPresetId) {
+				return result;
+			}
+			return [
+				...(result ?? []),
+				{
+					id: generateUUID(),
+					time: section.startTime,
+					presetId: section.presetId ?? defaultReframePresetId ?? "",
+				},
+			];
+		},
+		[],
+	).filter((entry) => Boolean(entry.presetId));
+
+	const baseSplitScreen = normalized.splitScreen ?? {
+		enabled: false,
+		layoutPreset: DEFAULT_SPLIT_LAYOUT_PRESET,
+		slots: buildDefaultVideoSplitScreenBindings({
+			layoutPreset: DEFAULT_SPLIT_LAYOUT_PRESET,
+			presets: normalized.reframePresets ?? [],
+		}),
+		sections: [],
+	};
+
+	const splitSections = sections.slice(1).reduce<VideoSplitScreenSection[]>(
+		(result, section, index) => {
+			const previousIsSplit = index === 0 ? sections[0]?.isSplit ?? false : sections[index]?.isSplit ?? false;
+			if (section.isSplit === previousIsSplit) {
+				return result;
+			}
+			return [
+				...result,
+				{
+					id: generateUUID(),
+					startTime: section.startTime,
+					enabled: section.isSplit,
+					slots: baseSplitScreen.slots,
+				},
+			];
+		},
+		[],
+	);
+
+	return {
+		defaultReframePresetId,
+		reframeSwitches: reframeSwitches ?? [],
+		splitScreen: {
+			...baseSplitScreen,
+			enabled: sections[0]?.isSplit ?? false,
+			sections: splitSections,
+		},
+	};
+}
+
+export function splitVideoAngleSectionsAtTime({
+	element,
+	splitTime,
+}: {
+	element: VideoElement;
+	splitTime: number;
+}): {
+	left: Pick<VideoElement, "defaultReframePresetId" | "reframeSwitches" | "splitScreen">;
+	right: Pick<VideoElement, "defaultReframePresetId" | "reframeSwitches" | "splitScreen">;
+} {
+	const normalized = normalizeVideoReframeState({ element });
+	const safeSplitTime = Math.max(0, Math.min(normalized.duration, splitTime));
+	const leftSections = deriveVideoAngleSections({ element: normalized })
+		.filter((section) => section.startTime < safeSplitTime - REFRAME_SWITCH_TIME_EPSILON)
+		.map((section) => ({
+			...section,
+			endTime: Math.min(section.endTime, safeSplitTime),
+		}));
+	const activeSection =
+		getVideoReframeSectionAtTime({ element: normalized, localTime: safeSplitTime }) ??
+		deriveVideoReframeSections({ element: normalized })[0] ??
+		null;
+	const activeSplit = resolveVideoSplitScreenAtTime({
+		element: normalized,
+		localTime: safeSplitTime,
+	});
+	const rightSections = deriveVideoAngleSections({ element: normalized })
+		.filter((section) => section.endTime > safeSplitTime + REFRAME_SWITCH_TIME_EPSILON)
+		.map((section, index) => ({
+			...section,
+			startTime:
+				index === 0
+					? 0
+					: Math.max(0, section.startTime - safeSplitTime),
+			endTime: Math.max(0, section.endTime - safeSplitTime),
+			presetId: index === 0 ? activeSection?.presetId ?? section.presetId : section.presetId,
+			isSplit: index === 0 ? Boolean(activeSplit) : section.isSplit,
+		}));
+	if (rightSections.length === 0) {
+		rightSections.push({
+			startTime: 0,
+			endTime: Math.max(0, normalized.duration - safeSplitTime),
+			presetId: activeSection?.presetId ?? normalized.defaultReframePresetId ?? null,
+			switchId: null,
+			splitSectionId: null,
+			isSplit: Boolean(activeSplit),
+		});
+	}
+	if (leftSections.length === 0) {
+		leftSections.push({
+			startTime: 0,
+			endTime: safeSplitTime,
+			presetId: normalized.defaultReframePresetId ?? activeSection?.presetId ?? null,
+			switchId: null,
+			splitSectionId: null,
+			isSplit: deriveVideoAngleSections({ element: normalized })[0]?.isSplit ?? false,
+		});
+	}
+
+	return {
+		left: rebuildVideoReframeStateFromAngleSections({
+			element: { ...normalized, duration: safeSplitTime },
+			sections: leftSections,
+		}),
+		right: rebuildVideoReframeStateFromAngleSections({
+			element: { ...normalized, duration: Math.max(0, normalized.duration - safeSplitTime) },
+			sections: rightSections,
+		}),
+	};
+}
+
+export function remapSplitSlotTransformBetweenViewports({
+	transform,
+	layoutPreset,
+	fromSlotId,
+	toSlotId,
+	canvasWidth,
+	canvasHeight,
+}: {
+	transform: {
+		position: Transform["position"];
+		scale: number;
+	};
+	layoutPreset: VideoSplitScreenLayoutPreset;
+	fromSlotId: string;
+	toSlotId: string;
+	canvasWidth: number;
+	canvasHeight: number;
+}): {
+	position: Transform["position"];
+	scale: number;
+} {
+	if (fromSlotId === toSlotId) {
+		return {
+			position: {
+				x: transform.position.x,
+				y: transform.position.y,
+			},
+			scale: transform.scale,
+		};
+	}
+	if (layoutPreset !== "top-bottom") {
+		return {
+			position: {
+				x: transform.position.x,
+				y: transform.position.y,
+			},
+			scale: transform.scale,
+		};
+	}
+	const viewports = new Map([
+		["top", { x: 0, y: 0, width: canvasWidth, height: canvasHeight / 2 }],
+		[
+			"bottom",
+			{ x: 0, y: canvasHeight / 2, width: canvasWidth, height: canvasHeight / 2 },
+		],
+	]);
+	const fromViewport = viewports.get(fromSlotId);
+	const toViewport = viewports.get(toSlotId);
+	if (!fromViewport || !toViewport) {
+		return {
+			position: {
+				x: transform.position.x,
+				y: transform.position.y,
+			},
+			scale: transform.scale,
+		};
+	}
+	return {
+		position: {
+			x: transform.position.x + (toViewport.x - fromViewport.x),
+			y: transform.position.y + (toViewport.y - fromViewport.y),
+		},
+		scale: transform.scale,
+	};
+}
+
 export function buildVideoReframePreset({
 	name,
 	transform,
@@ -316,8 +530,10 @@ export function deriveVideoReframeSections({
 
 export function deriveVideoAngleSections({
 	element,
+	mergeAdjacent = true,
 }: {
 	element: VideoElement;
+	mergeAdjacent?: boolean;
 }): VideoAngleSection[] {
 	const normalized = normalizeVideoReframeState({ element });
 	const reframeSections = deriveVideoReframeSections({ element: normalized });
@@ -380,6 +596,10 @@ export function deriveVideoAngleSections({
 		});
 	}
 
+	if (!mergeAdjacent) {
+		return sections;
+	}
+
 	return sections.reduce<VideoAngleSection[]>((result, section) => {
 		const previous = result[result.length - 1];
 		if (
@@ -431,6 +651,44 @@ export function getVideoReframeSectionByStartTime({
 	if (startTime === null || startTime === undefined) return null;
 	return (
 		deriveVideoReframeSections({ element }).find(
+			(section) =>
+				Math.abs(section.startTime - startTime) <= REFRAME_SWITCH_TIME_EPSILON,
+		) ?? null
+	);
+}
+
+export function getVideoAngleSectionAtTime({
+	element,
+	localTime,
+}: {
+	element: VideoElement;
+	localTime: number;
+}): VideoAngleSection | null {
+	const safeTime = Math.max(0, Math.min(element.duration, localTime));
+	const sections = deriveVideoAngleSections({ element });
+	for (let index = 0; index < sections.length; index++) {
+		const section = sections[index]!;
+		const isLast = index === sections.length - 1;
+		if (safeTime + REFRAME_SWITCH_TIME_EPSILON < section.startTime) {
+			continue;
+		}
+		if (safeTime < section.endTime || (isLast && safeTime <= section.endTime)) {
+			return section;
+		}
+	}
+	return sections[sections.length - 1] ?? null;
+}
+
+export function getVideoAngleSectionByStartTime({
+	element,
+	startTime,
+}: {
+	element: VideoElement;
+	startTime: number | null | undefined;
+}): VideoAngleSection | null {
+	if (startTime === null || startTime === undefined) return null;
+	return (
+		deriveVideoAngleSections({ element }).find(
 			(section) =>
 				Math.abs(section.startTime - startTime) <= REFRAME_SWITCH_TIME_EPSILON,
 		) ?? null
@@ -711,11 +969,9 @@ export function resolveVideoSplitScreenAtTime({
 		element: normalized,
 		localTime,
 	});
-	const slotBindings = section?.slots ?? splitScreen.slots;
+	const slotBindings = splitScreen.slots;
 	const resolvedSlots: VideoSplitScreenResolvedSlot[] = slotBindings.map((slot) => {
-		const sectionSlot =
-			section?.slots.find((candidate) => candidate.slotId === slot.slotId) ?? null;
-		const binding = sectionSlot ?? slot;
+		const binding = slot;
 		const presetId =
 			binding.mode === "fixed-preset"
 				? binding.presetId ??
@@ -806,6 +1062,223 @@ export function applyPresetToVideoReframeSection({
 	return {
 		defaultReframePresetId: presetId,
 		reframeSwitches: normalized.reframeSwitches,
+	};
+}
+
+export function applyPresetToVideoAngleSection({
+	element,
+	sectionStartTime,
+	presetId,
+}: {
+	element: VideoElement;
+	sectionStartTime: number;
+	presetId: string;
+}): Pick<VideoElement, "defaultReframePresetId" | "reframeSwitches" | "splitScreen"> {
+	const normalized = normalizeVideoReframeState({ element });
+	const section = getVideoAngleSectionByStartTime({
+		element: normalized,
+		startTime: sectionStartTime,
+	});
+	if (!section) {
+		return {
+			defaultReframePresetId: normalized.defaultReframePresetId,
+			reframeSwitches: normalized.reframeSwitches,
+			splitScreen: normalized.splitScreen,
+		};
+	}
+
+	const previousPresetId =
+		section.startTime <= REFRAME_SWITCH_TIME_EPSILON
+			? null
+			: getActiveReframePresetId({
+					element: normalized,
+					localTime: Math.max(0, section.startTime - REFRAME_SWITCH_TIME_EPSILON * 2),
+				});
+	const nextPresetId =
+		section.endTime >= normalized.duration - REFRAME_SWITCH_TIME_EPSILON
+			? null
+			: getActiveReframePresetId({
+					element: normalized,
+					localTime: Math.min(
+						normalized.duration,
+						section.endTime + REFRAME_SWITCH_TIME_EPSILON * 2,
+					),
+				});
+
+	let reframeSwitches = (normalized.reframeSwitches ?? []).filter(
+		(entry) =>
+			Math.abs(entry.time - section.startTime) > REFRAME_SWITCH_TIME_EPSILON &&
+			Math.abs(entry.time - section.endTime) > REFRAME_SWITCH_TIME_EPSILON,
+	);
+
+	if (section.startTime <= REFRAME_SWITCH_TIME_EPSILON) {
+		normalized.defaultReframePresetId = presetId;
+	} else if (previousPresetId !== presetId) {
+		reframeSwitches = replaceOrInsertReframeSwitch({
+			switches: reframeSwitches,
+			nextSwitch: {
+				id: generateUUID(),
+				time: section.startTime,
+				presetId,
+			},
+			duration: normalized.duration,
+		}) ?? [];
+	}
+
+	if (
+		nextPresetId &&
+		section.endTime < normalized.duration - REFRAME_SWITCH_TIME_EPSILON &&
+		nextPresetId !== presetId
+	) {
+		reframeSwitches = replaceOrInsertReframeSwitch({
+			switches: reframeSwitches,
+			nextSwitch: {
+				id: generateUUID(),
+				time: section.endTime,
+				presetId: nextPresetId,
+			},
+			duration: normalized.duration,
+		}) ?? [];
+	}
+
+	const splitScreen = applySplitEnabledToVideoAngleSection({
+		element: normalized,
+		sectionStartTime,
+		enabled: false,
+	}).splitScreen;
+
+	return {
+		defaultReframePresetId: normalized.defaultReframePresetId,
+		reframeSwitches,
+		splitScreen,
+	};
+}
+
+export function applySplitScreenToVideoAngleSection({
+	element,
+	sectionStartTime,
+}: {
+	element: VideoElement;
+	sectionStartTime: number;
+}): Pick<VideoElement, "defaultReframePresetId" | "reframeSwitches" | "splitScreen"> {
+	return applySplitEnabledToVideoAngleSection({
+		element,
+		sectionStartTime,
+		enabled: true,
+	});
+}
+
+function applySplitEnabledToVideoAngleSection({
+	element,
+	sectionStartTime,
+	enabled,
+}: {
+	element: VideoElement;
+	sectionStartTime: number;
+	enabled: boolean;
+}): Pick<VideoElement, "defaultReframePresetId" | "reframeSwitches" | "splitScreen"> {
+	const normalized = normalizeVideoReframeState({ element });
+	const targetSection = getVideoAngleSectionByStartTime({
+		element: normalized,
+		startTime: sectionStartTime,
+	});
+	if (!targetSection) {
+		return {
+			defaultReframePresetId: normalized.defaultReframePresetId,
+			reframeSwitches: normalized.reframeSwitches,
+			splitScreen: normalized.splitScreen,
+		};
+	}
+
+	const baseSplitScreen = normalized.splitScreen ?? {
+		enabled: false,
+		layoutPreset: DEFAULT_SPLIT_LAYOUT_PRESET,
+		slots: buildDefaultVideoSplitScreenBindings({
+			layoutPreset: DEFAULT_SPLIT_LAYOUT_PRESET,
+			presets: normalized.reframePresets ?? [],
+		}),
+		sections: [],
+	};
+	const previousSplitEnabled =
+		targetSection.startTime <= REFRAME_SWITCH_TIME_EPSILON
+			? null
+			: Boolean(
+					resolveVideoSplitScreenAtTime({
+						element: {
+							...normalized,
+							splitScreen: baseSplitScreen,
+						},
+						localTime: Math.max(
+							0,
+							targetSection.startTime - REFRAME_SWITCH_TIME_EPSILON * 2,
+						),
+					}),
+				);
+	const nextSplitEnabled =
+		targetSection.endTime >= normalized.duration - REFRAME_SWITCH_TIME_EPSILON
+			? null
+			: Boolean(
+					resolveVideoSplitScreenAtTime({
+						element: {
+							...normalized,
+							splitScreen: baseSplitScreen,
+						},
+						localTime: Math.min(
+							normalized.duration,
+							targetSection.endTime + REFRAME_SWITCH_TIME_EPSILON * 2,
+						),
+					}),
+				);
+
+	let splitSections = (baseSplitScreen.sections ?? []).filter(
+		(section) =>
+			Math.abs(section.startTime - targetSection.startTime) >
+				REFRAME_SWITCH_TIME_EPSILON &&
+			Math.abs(section.startTime - targetSection.endTime) >
+				REFRAME_SWITCH_TIME_EPSILON,
+	);
+
+	let splitScreenEnabled = baseSplitScreen.enabled !== false;
+	if (targetSection.startTime <= REFRAME_SWITCH_TIME_EPSILON) {
+		splitScreenEnabled = enabled;
+	} else if (previousSplitEnabled !== enabled) {
+		splitSections = replaceOrInsertSplitSection({
+			sections: splitSections,
+			nextSection: {
+				id: generateUUID(),
+				startTime: targetSection.startTime,
+				enabled,
+				slots: baseSplitScreen.slots,
+			},
+			duration: normalized.duration,
+		});
+	}
+
+	if (
+		nextSplitEnabled !== null &&
+		targetSection.endTime < normalized.duration - REFRAME_SWITCH_TIME_EPSILON &&
+		nextSplitEnabled !== enabled
+	) {
+		splitSections = replaceOrInsertSplitSection({
+			sections: splitSections,
+			nextSection: {
+				id: generateUUID(),
+				startTime: targetSection.endTime,
+				enabled: nextSplitEnabled,
+				slots: baseSplitScreen.slots,
+			},
+			duration: normalized.duration,
+		});
+	}
+
+	return {
+		defaultReframePresetId: normalized.defaultReframePresetId,
+		reframeSwitches: normalized.reframeSwitches,
+		splitScreen: {
+			...baseSplitScreen,
+			enabled: splitScreenEnabled,
+			sections: splitSections,
+		},
 	};
 }
 

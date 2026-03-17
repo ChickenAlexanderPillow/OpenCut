@@ -17,6 +17,7 @@ import {
 	withTranscriptState,
 } from "@/lib/transcript-editor/state";
 import type { AudioElement, VideoElement, TextElement } from "@/types/timeline";
+import { splitVideoAngleSectionsAtTime } from "@/lib/reframe/video-reframe";
 
 function isTranscriptEditableElement(
 	element: unknown,
@@ -385,6 +386,13 @@ export class SplitElementsCommand extends Command {
 				const relativeTime = this.splitTime - element.startTime;
 				const leftVisibleDuration = relativeTime;
 				const rightVisibleDuration = element.duration - relativeTime;
+				const splitVideoReframeState =
+					element.type === "video"
+						? splitVideoAngleSectionsAtTime({
+								element,
+								splitTime: relativeTime,
+						  })
+						: null;
 				const { leftAnimations, rightAnimations } = splitAnimationsAtTime({
 					animations: element.animations,
 					splitTime: relativeTime,
@@ -424,6 +432,7 @@ export class SplitElementsCommand extends Command {
 										duration: leftVisibleDuration,
 										trimEnd: element.trimEnd + rightVisibleDuration,
 										name: `${element.name} (left)`,
+										...(splitVideoReframeState?.left ?? {}),
 										animations: leftAnimations,
 									} as VideoElement | AudioElement,
 									draft: leftTranscriptEdit.draft,
@@ -435,6 +444,7 @@ export class SplitElementsCommand extends Command {
 							duration: leftVisibleDuration,
 							trimEnd: element.trimEnd + rightVisibleDuration,
 							name: `${element.name} (left)`,
+							...(splitVideoReframeState?.left ?? {}),
 							animations: leftAnimations,
 						},
 					];
@@ -484,6 +494,7 @@ export class SplitElementsCommand extends Command {
 										duration: rightVisibleDuration,
 										trimStart: element.trimStart + leftVisibleDuration,
 										name: `${element.name} (right)`,
+										...(splitVideoReframeState?.right ?? {}),
 										animations: rightAnimations,
 									} as VideoElement | AudioElement,
 									draft: rightTranscriptEdit.draft,
@@ -497,6 +508,7 @@ export class SplitElementsCommand extends Command {
 							duration: rightVisibleDuration,
 							trimStart: element.trimStart + leftVisibleDuration,
 							name: `${element.name} (right)`,
+							...(splitVideoReframeState?.right ?? {}),
 							animations: rightAnimations,
 						},
 					];
@@ -543,6 +555,7 @@ export class SplitElementsCommand extends Command {
 									duration: leftVisibleDuration,
 									trimEnd: element.trimEnd + rightVisibleDuration,
 									name: `${element.name} (left)`,
+									...(splitVideoReframeState?.left ?? {}),
 									animations: leftAnimations,
 								} as VideoElement | AudioElement,
 								draft: splitTranscript.left.draft,
@@ -554,6 +567,7 @@ export class SplitElementsCommand extends Command {
 						duration: leftVisibleDuration,
 						trimEnd: element.trimEnd + rightVisibleDuration,
 						name: `${element.name} (left)`,
+						...(splitVideoReframeState?.left ?? {}),
 						animations: leftAnimations,
 					},
 					splitTranscript?.right
@@ -565,6 +579,7 @@ export class SplitElementsCommand extends Command {
 									duration: rightVisibleDuration,
 									trimStart: element.trimStart + leftVisibleDuration,
 									name: `${element.name} (right)`,
+									...(splitVideoReframeState?.right ?? {}),
 									animations: rightAnimations,
 								} as VideoElement | AudioElement,
 								draft: splitTranscript.right.draft,
@@ -578,6 +593,7 @@ export class SplitElementsCommand extends Command {
 						duration: rightVisibleDuration,
 						trimStart: element.trimStart + leftVisibleDuration,
 						name: `${element.name} (right)`,
+						...(splitVideoReframeState?.right ?? {}),
 						animations: rightAnimations,
 					},
 				];

@@ -330,6 +330,8 @@ function RenderTreeController() {
 	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_RENDER_TREE });
 	const tracks = editor.timeline.getTracks();
 	const selectedElements = editor.selection.getSelectedElements();
+	const playbackTime = editor.playback.getCurrentTime();
+	const isPlaying = editor.playback.getIsPlaying();
 	const mediaAssets = editor.media.getAssets();
 	const activeProject = editor.project.getActive();
 	const activeSceneRevision =
@@ -446,7 +448,6 @@ function RenderTreeController() {
 	]);
 
 	useEffect(() => {
-		const currentTime = editor.playback.getCurrentTime();
 		const previewElementIds = new Set([
 			...Object.keys(selectedPresetIdByElementId),
 			...Object.keys(selectedSplitPreviewSlotsByElementId),
@@ -473,7 +474,7 @@ function RenderTreeController() {
 			if (!selectedSection) continue;
 			const localTime = Math.max(
 				0,
-				Math.min(normalized.duration, currentTime - normalized.startTime),
+				Math.min(normalized.duration, playbackTime - normalized.startTime),
 			);
 			const isWithinSelectedSection =
 				localTime >= selectedSection.startTime &&
@@ -483,11 +484,40 @@ function RenderTreeController() {
 			clearSelectedSplitPreviewSlots({ elementId });
 		}
 	}, [
-		editor.playback,
+		playbackTime,
 		tracks,
 		selectedPresetIdByElementId,
 		selectedSplitPreviewSlotsByElementId,
 		selectedSectionStartTimeByElementId,
+		clearSelectedPresetId,
+		clearSelectedSplitPreviewSlots,
+	]);
+
+	const previousPausedPreviewTimeRef = useRef<number | null>(null);
+
+	useEffect(() => {
+		if (isPlaying) {
+			previousPausedPreviewTimeRef.current = null;
+			return;
+		}
+		const previousTime = previousPausedPreviewTimeRef.current;
+		previousPausedPreviewTimeRef.current = playbackTime;
+		if (previousTime === null || Math.abs(previousTime - playbackTime) <= 1 / 1000) {
+			return;
+		}
+		const previewElementIds = new Set([
+			...Object.keys(selectedPresetIdByElementId),
+			...Object.keys(selectedSplitPreviewSlotsByElementId),
+		]);
+		for (const elementId of previewElementIds) {
+			clearSelectedPresetId({ elementId });
+			clearSelectedSplitPreviewSlots({ elementId });
+		}
+	}, [
+		playbackTime,
+		isPlaying,
+		selectedPresetIdByElementId,
+		selectedSplitPreviewSlotsByElementId,
 		clearSelectedPresetId,
 		clearSelectedSplitPreviewSlots,
 	]);
@@ -536,7 +566,7 @@ function RenderTreeController() {
 						previewCanvas: { width, height },
 					})
 				: captionMappedTracks;
-		const shouldApplyReframePreview = !editor.playback.getIsPlaying();
+		const shouldApplyReframePreview = !isPlaying;
 		const previewTracksWithSelectedReframe =
 			applySelectedReframePresetPreviewToTracks({
 				tracks: previewTracks,
@@ -577,6 +607,7 @@ function RenderTreeController() {
 		selectedElements,
 		selectedPresetIdByElementId,
 		selectedSplitPreviewSlotsByElementId,
+		isPlaying,
 		width,
 		height,
 		previewVideoFrameRateCap,

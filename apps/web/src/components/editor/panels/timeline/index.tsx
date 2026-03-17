@@ -91,7 +91,7 @@ export function Timeline() {
 
 	// state
 	const [isResizing, setIsResizing] = useState(false);
-	const [mixerCollapsed, setMixerCollapsed] = useState(false);
+	const [mixerCollapsed, setMixerCollapsed] = useState(true);
 	const [currentSnapPoint, setCurrentSnapPoint] = useState<SnapPoint | null>(
 		null,
 	);
