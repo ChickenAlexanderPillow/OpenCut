@@ -21,6 +21,7 @@ import { TRANSCRIPT_CUT_VISUAL_BOUNDARY_GUARD_SECONDS } from "@/lib/transcript-e
 import type { TranscriptEditCutRange } from "@/types/transcription";
 import {
 	resolveVideoReframeTransform,
+	resolveVideoSplitScreenSlotTransform,
 	resolveVideoSplitScreenAtTime,
 } from "@/lib/reframe/video-reframe";
 
@@ -55,6 +56,13 @@ interface SplitViewport {
 	y: number;
 	width: number;
 	height: number;
+}
+
+interface ViewportAdjustedTransformParams {
+	transform: Transform;
+	viewport: SplitViewport;
+	rendererWidth: number;
+	rendererHeight: number;
 }
 
 export abstract class VisualNode<
@@ -325,29 +333,27 @@ export abstract class VisualNode<
 			for (const slot of splitScreen.slots) {
 				const viewport = viewports.get(slot.slotId);
 				if (!viewport) continue;
-				const slotTransform = resolveVideoReframeTransform({
+				const slotTransform = resolveVideoSplitScreenSlotTransform({
 					baseTransform: this.params.transform,
 					duration: this.params.duration,
 					reframePresets: this.params.reframePresets,
-					reframeSwitches:
-						!slot.presetId
-							? this.params.reframeSwitches
-							: [
-									{
-										id: "__split-slot__",
-										time: 0,
-										presetId: slot.presetId,
-									},
-							  ],
-					defaultReframePresetId: slot.presetId ?? this.params.defaultReframePresetId,
+					reframeSwitches: this.params.reframeSwitches,
+					defaultReframePresetId: this.params.defaultReframePresetId,
 					localTime: clipElapsed,
+					slot,
+				});
+				const viewportAdjustedTransform = this.getViewportAdjustedTransform({
+					transform: slotTransform,
+					viewport,
+					rendererWidth: renderer.width,
+					rendererHeight: renderer.height,
 				});
 				const placement = this.getVisualPlacement({
 					rendererWidth: viewport.width,
 					rendererHeight: viewport.height,
 					sourceWidth,
 					sourceHeight,
-					transform: slotTransform,
+					transform: viewportAdjustedTransform,
 					offsetX: viewport.x,
 					offsetY: viewport.y,
 				});
@@ -589,32 +595,32 @@ export abstract class VisualNode<
 		};
 	}
 
+	protected getViewportAdjustedTransform({
+		transform,
+		viewport,
+		rendererWidth,
+		rendererHeight,
+	}: ViewportAdjustedTransformParams): Transform {
+		const viewportCenterX = viewport.x + viewport.width / 2;
+		const viewportCenterY = viewport.y + viewport.height / 2;
+		return {
+			...transform,
+			position: {
+				x: transform.position.x + rendererWidth / 2 - viewportCenterX,
+				y: transform.position.y + rendererHeight / 2 - viewportCenterY,
+			},
+		};
+	}
+
 	protected getSplitScreenViewports({
 		layoutPreset,
 		rendererWidth,
 		rendererHeight,
 	}: {
-		layoutPreset: "top-bottom" | "left-right";
+		layoutPreset: "top-bottom";
 		rendererWidth: number;
 		rendererHeight: number;
 	}): Map<string, SplitViewport> {
-		if (layoutPreset === "left-right") {
-			return new Map([
-				[
-					"left",
-					{ x: 0, y: 0, width: rendererWidth / 2, height: rendererHeight },
-				],
-				[
-					"right",
-					{
-						x: rendererWidth / 2,
-						y: 0,
-						width: rendererWidth / 2,
-						height: rendererHeight,
-					},
-				],
-			]);
-		}
 		return new Map([
 			[
 				"top",

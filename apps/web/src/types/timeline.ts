@@ -86,19 +86,26 @@ export interface VideoReframeSwitch {
 	presetId: string;
 }
 
-export type VideoSplitScreenLayoutPreset = "top-bottom" | "left-right";
+export type VideoSplitScreenLayoutPreset = "top-bottom";
 
 export type VideoSplitScreenSlotMode = "follow-active" | "fixed-preset";
+
+export interface VideoSplitScreenSlotTransformOverride {
+	position: Transform["position"];
+	scale: number;
+}
 
 export interface VideoSplitScreenSlotBinding {
 	slotId: string;
 	mode: VideoSplitScreenSlotMode;
 	presetId?: string | null;
+	transformOverride?: VideoSplitScreenSlotTransformOverride | null;
 }
 
 export interface VideoSplitScreenSection {
 	id: string;
 	startTime: number;
+	enabled?: boolean;
 	slots: VideoSplitScreenSlotBinding[];
 }
 
@@ -284,6 +291,18 @@ export interface TextElement extends BaseTimelineElement {
 		safeAreaBottomOffset?: number;
 		anchorToSafeAreaTop?: boolean;
 		safeAreaTopOffset?: number;
+		splitScreenOverrides?: {
+			enabled?: boolean;
+			anchorToSplitViewport?: boolean;
+			slotAnchor?: "auto" | "top" | "bottom" | "left" | "right";
+			fitInCanvas?: boolean;
+			wordsOnScreen?: number;
+			maxLinesOnScreen?: number;
+			anchorToSafeAreaBottom?: boolean;
+			safeAreaBottomOffset?: number;
+			anchorToSafeAreaTop?: boolean;
+			safeAreaTopOffset?: number;
+		};
 	};
 	captionWordTimings?: Array<{
 		word: string;

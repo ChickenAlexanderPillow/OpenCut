@@ -703,12 +703,14 @@ export class TimelineManager {
 		trackId,
 		elementId,
 		time,
+		enabled = true,
 		slots,
 		pushHistory = true,
 	}: {
 		trackId: string;
 		elementId: string;
 		time: number;
+		enabled?: boolean;
 		slots: VideoSplitScreenSection["slots"];
 		pushHistory?: boolean;
 	}): string | null {
@@ -727,6 +729,7 @@ export class TimelineManager {
 						nextSection: {
 							id: sectionId,
 							startTime: time,
+							enabled,
 							slots,
 						},
 						duration: element.duration,

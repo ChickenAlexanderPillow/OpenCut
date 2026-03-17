@@ -7,16 +7,16 @@ import {
 	AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Separator } from "@/components/ui/separator";
-import { SOCIAL_LINKS } from "@/constants/site-constants";
+import { BRAND_NAME, SOCIAL_LINKS } from "@/constants/site-constants";
 
 export const metadata: Metadata = {
-	title: "Privacy Policy - OpenCut",
+	title: `Privacy Policy - ${BRAND_NAME}`,
 	description:
-		"Learn how OpenCut handles your data and privacy. Our commitment to protecting your information while you edit videos.",
+		`Learn how ${BRAND_NAME} handles your data and privacy. Our commitment to protecting your information while you edit videos.`,
 	openGraph: {
-		title: "Privacy Policy - OpenCut",
+		title: `Privacy Policy - ${BRAND_NAME}`,
 		description:
-			"Learn how OpenCut handles your data and privacy. Our commitment to protecting your information while you edit videos.",
+			`Learn how ${BRAND_NAME} handles your data and privacy. Our commitment to protecting your information while you edit videos.`,
 		type: "website",
 	},
 };
@@ -172,7 +172,7 @@ export default function PrivacyPage() {
 						Databuddy
 					</a>{" "}
 					for completely anonymized and non-invasive analytics to understand how
-					people use OpenCut.
+					people use {BRAND_NAME}.
 				</p>
 				<p>
 					This helps us improve the editor, but we never collect personal
@@ -197,7 +197,7 @@ export default function PrivacyPage() {
 
 			<section className="flex flex-col gap-3">
 				<h2 className="text-2xl font-semibold">Third-Party Services</h2>
-				<p>OpenCut integrates with these services:</p>
+				<p>{BRAND_NAME} integrates with these services:</p>
 				<ul className="list-disc space-y-2 pl-6">
 					<li>
 						<strong>Google OAuth:</strong> For optional Google sign-in (governed
@@ -226,7 +226,7 @@ export default function PrivacyPage() {
 			<section className="flex flex-col gap-3">
 				<h2 className="text-2xl font-semibold">Open Source Transparency</h2>
 				<p>
-					OpenCut is completely open source. You can review our code, see
+					{BRAND_NAME} is completely open source. You can review our code, see
 					exactly how we handle data, and even self-host the application if you
 					prefer.
 				</p>

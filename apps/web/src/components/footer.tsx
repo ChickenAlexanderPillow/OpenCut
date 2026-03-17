@@ -2,7 +2,11 @@ import Link from "next/link";
 import { RiDiscordFill, RiTwitterXLine } from "react-icons/ri";
 import { FaGithub } from "react-icons/fa6";
 import Image from "next/image";
-import { DEFAULT_LOGO_URL, SOCIAL_LINKS } from "@/constants/site-constants";
+import {
+	BRAND_NAME,
+	DEFAULT_LOGO_URL,
+	SOCIAL_LINKS,
+} from "@/constants/site-constants";
 import { capitalizeFirstLetter } from "@/utils/string";
 
 type Category = "resources" | "company";
@@ -39,12 +43,12 @@ export function Footer() {
 						<div className="mb-4 flex items-center justify-start gap-2">
 							<Image
 								src={DEFAULT_LOGO_URL}
-								alt="OpenCut"
+								alt={BRAND_NAME}
 								width={24}
 								height={24}
 								className="invert dark:invert-0"
 							/>
-							<span className="text-lg font-bold">OpenCut</span>
+							<span className="text-lg font-bold">{BRAND_NAME}</span>
 						</div>
 						<p className="text-muted-foreground mb-5 text-sm md:text-left">
 							The privacy-first video editor that feels simple to use.
@@ -111,9 +115,7 @@ export function Footer() {
 				{/* Bottom Section */}
 				<div className="flex flex-col items-start justify-between gap-4 pt-2 md:flex-row">
 					<div className="text-muted-foreground flex items-center gap-4 text-sm">
-						<span>
-							© {new Date().getFullYear()} OpenCut, All Rights Reserved
-						</span>
+						<span>{`© ${new Date().getFullYear()} ${BRAND_NAME}, All Rights Reserved`}</span>
 					</div>
 				</div>
 			</div>

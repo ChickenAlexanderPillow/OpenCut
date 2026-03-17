@@ -324,6 +324,10 @@ export function buildScene(params: BuildSceneParams) {
 				const sourceMediaFromRef = sourceMediaId
 					? mediaElementById.get(sourceMediaId)
 					: null;
+				const captionPlacementSourceMedia =
+					sourceMediaFromRef && sourceMediaFromRef.type === "video"
+						? sourceMediaFromRef
+						: null;
 				const sourceMediaFromRefOrCompanion =
 					sourceMediaFromRef && isEditableMediaElement(sourceMediaFromRef)
 						? (getTranscriptDraft(sourceMediaFromRef)?.words.length ?? 0) > 0
@@ -343,6 +347,9 @@ export function buildScene(params: BuildSceneParams) {
 								candidates: transcriptMediaCandidates,
 						  })
 						: null);
+				const captionSourceVideo =
+					captionPlacementSourceMedia ??
+					(sourceMedia?.type === "video" ? sourceMedia : null);
 				const resolvedTextElement =
 					sourceMedia && isEditableMediaElement(sourceMedia)
 						? resolveLiveCaptionElementFromTranscriptSource({
@@ -359,6 +366,20 @@ export function buildScene(params: BuildSceneParams) {
 						canvasCenter: { x: canvasSize.width / 2, y: canvasSize.height / 2 },
 						canvasWidth: canvasSize.width,
 						canvasHeight: canvasSize.height,
+						...(captionSourceVideo
+							? {
+									captionSourceVideo: {
+										startTime: captionSourceVideo.startTime,
+										duration: captionSourceVideo.duration,
+										trimStart: captionSourceVideo.trimStart,
+										reframePresets: captionSourceVideo.reframePresets,
+										reframeSwitches: captionSourceVideo.reframeSwitches,
+										defaultReframePresetId:
+											captionSourceVideo.defaultReframePresetId,
+										splitScreen: captionSourceVideo.splitScreen,
+									},
+							  }
+							: {}),
 						backgroundReferenceCanvasHeight:
 							params.backgroundReferenceCanvasSize?.height ?? canvasSize.height,
 						textBaseline: "middle",

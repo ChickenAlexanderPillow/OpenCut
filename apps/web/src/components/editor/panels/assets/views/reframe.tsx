@@ -17,7 +17,6 @@ import {
 } from "@/lib/reframe/subject-aware";
 import {
 	buildDefaultVideoSplitScreenBindings,
-	deriveVideoSplitScreenSectionRanges,
 	getSelectedOrActiveReframePresetId,
 	getVideoReframeSectionAtTime,
 	getVideoReframeSectionByStartTime,
@@ -28,11 +27,10 @@ import {
 import {
 	ChevronsLeftRight,
 	CircleDot,
-	Copy,
 	Focus,
 	Plus,
+	RefreshCw,
 	ScanFace,
-	Sparkles,
 	Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -40,7 +38,6 @@ import type {
 	VideoReframePreset,
 	VideoReframeSwitch,
 	VideoSplitScreen,
-	VideoSplitScreenLayoutPreset,
 	VideoSplitScreenSlotBinding,
 } from "@/types/timeline";
 
@@ -56,11 +53,17 @@ export function ReframeView() {
 	const selectedPresetIdByElementId = useReframeStore(
 		(state) => state.selectedPresetIdByElementId,
 	);
+	const selectedSplitPreviewSlotsByElementId = useReframeStore(
+		(state) => state.selectedSplitPreviewSlotsByElementId,
+	);
 	const selectedSectionStartTimeByElementId = useReframeStore(
 		(state) => state.selectedSectionStartTimeByElementId,
 	);
 	const setSelectedPresetId = useReframeStore(
 		(state) => state.setSelectedPresetId,
+	);
+	const setSelectedSplitPreviewSlots = useReframeStore(
+		(state) => state.setSelectedSplitPreviewSlots,
 	);
 	const setSelectedSectionStartTime = useReframeStore(
 		(state) => state.setSelectedSectionStartTime,
@@ -97,18 +100,31 @@ export function ReframeView() {
 			localTime,
 		});
 	}, [normalizedVideo, localTime]);
+	const storedFocusedSection = normalizedVideo
+		? getVideoReframeSectionByStartTime({
+				element: normalizedVideo.element,
+				startTime:
+					selectedSectionStartTimeByElementId[normalizedVideo.element.id] ?? null,
+			})
+		: null;
+	const isPlayheadWithinStoredSection = storedFocusedSection
+		? localTime >= storedFocusedSection.startTime &&
+			localTime <= storedFocusedSection.endTime
+		: false;
 	const focusedSectionStartTime = normalizedVideo
 		? editor.playback.getIsPlaying()
 			? playheadSection?.startTime ?? null
-			: (selectedSectionStartTimeByElementId[normalizedVideo.element.id] ??
-				playheadSection?.startTime ??
-				null)
+			: isPlayheadWithinStoredSection
+				? storedFocusedSection?.startTime ?? playheadSection?.startTime ?? null
+				: (playheadSection?.startTime ?? null)
 		: null;
 
 	const selectedPreset = useMemo(() => {
 		if (!normalizedVideo) return null;
 		const explicitlySelectedPresetId =
-			selectedPresetIdByElementId[normalizedVideo.element.id] ?? null;
+			editor.playback.getIsPlaying()
+				? null
+				: (selectedPresetIdByElementId[normalizedVideo.element.id] ?? null);
 		if (explicitlySelectedPresetId) {
 			return (
 				normalizedVideo.element.reframePresets?.find(
@@ -258,52 +274,98 @@ export function ReframeView() {
 	};
 
 	const splitScreen = normalizedVideo?.element.splitScreen ?? null;
-	const splitSectionAtPlayhead = useMemo(() => {
+	const splitSectionAtFocus = useMemo(() => {
 		if (!normalizedVideo) return null;
 		return getVideoSplitScreenSectionAtTime({
 			element: normalizedVideo.element,
-			localTime,
+			localTime: focusedSectionStartTime ?? localTime,
 		});
-	}, [normalizedVideo, localTime]);
+	}, [normalizedVideo, focusedSectionStartTime, localTime]);
+	const previewSplitBindings =
+		normalizedVideo && !editor.playback.getIsPlaying()
+			? (selectedSplitPreviewSlotsByElementId[normalizedVideo.element.id] ?? null)
+			: null;
+	const previewSelectedPresetId =
+		normalizedVideo && !editor.playback.getIsPlaying()
+			? (selectedPresetIdByElementId[normalizedVideo.element.id] ?? null)
+			: null;
 	const selectedSplitSection =
 		splitScreen?.sections?.find((section) => section.id === selectedSplitSectionId) ??
-		splitSectionAtPlayhead;
+		splitSectionAtFocus;
+	const selectedSplitSectionEnabled = selectedSplitSection?.enabled !== false;
+	const activeSplitSection =
+		previewSelectedPresetId || !previewSplitBindings?.length
+			? selectedSplitSectionEnabled
+				? selectedSplitSection
+				: null
+			: {
+					id: "__preview-split__",
+					startTime: focusedSectionStartTime ?? 0,
+					enabled: true,
+					slots: previewSplitBindings,
+			  };
+	const selectedAngleMode: "preset" | "split" =
+		previewSplitBindings?.length || activeSplitSection ? "split" : "preset";
+	const resolveConcreteSplitBindings = (
+		bindings: VideoSplitScreenSlotBinding[],
+	): VideoSplitScreenSlotBinding[] =>
+		bindings.map((binding) => ({
+			slotId: binding.slotId,
+			mode: "fixed-preset" as const,
+			presetId:
+				binding.presetId ??
+				selectedPreset?.id ??
+				normalizedVideo?.element.defaultReframePresetId ??
+				null,
+			transformOverride: binding.transformOverride ?? null,
+		}));
 	const editableSplitBindings =
-		selectedSplitSection?.slots ?? splitScreen?.slots ?? [];
-	const splitSectionRanges = normalizedVideo
-		? deriveVideoSplitScreenSectionRanges({ element: normalizedVideo.element })
-		: [];
-
-	const updateSplitScreen = (updates: Partial<VideoSplitScreen> | null) => {
+		resolveConcreteSplitBindings(
+			selectedSplitSection?.slots ?? splitScreen?.slots ?? [],
+		);
+	const updateBaseSplitBindings = ({
+		slots,
+		pushHistory = true,
+	}: {
+		slots: VideoSplitScreenSlotBinding[];
+		pushHistory?: boolean;
+	}) => {
 		if (!normalizedVideo) return;
 		editor.timeline.updateVideoSplitScreen({
 			trackId: normalizedVideo.trackId,
 			elementId: normalizedVideo.element.id,
-			updates,
+			updates: {
+				...(splitScreen ?? buildInitialSplitScreen()),
+				slots,
+			},
+			pushHistory,
+		});
+		setSelectedSplitPreviewSlots({
+			elementId: normalizedVideo.element.id,
+			slots,
 		});
 	};
 
 	const updateSplitBindings = ({
 		slotId,
-		mode,
 		presetId,
 	}: {
 		slotId: string;
-		mode: VideoSplitScreenSlotBinding["mode"];
 		presetId: string | null;
 	}) => {
-		if (!normalizedVideo || !splitScreen) return;
+		if (!normalizedVideo) return;
 		const applyBinding = (bindings: VideoSplitScreenSlotBinding[]) =>
 			bindings.map((binding) =>
 				binding.slotId === slotId
 					? {
 							...binding,
-							mode,
-							presetId: mode === "fixed-preset" ? presetId : null,
+							mode: "fixed-preset" as const,
+							presetId,
+							transformOverride: binding.transformOverride ?? null,
 					  }
 					: binding,
 			);
-		if (selectedSplitSection) {
+		if (selectedSplitSectionId && splitScreen && selectedSplitSection) {
 			editor.timeline.upsertVideoSplitScreenSection({
 				trackId: normalizedVideo.trackId,
 				elementId: normalizedVideo.element.id,
@@ -312,26 +374,132 @@ export function ReframeView() {
 			});
 			return;
 		}
-		updateSplitScreen({
-			slots: applyBinding(splitScreen.slots),
+		updateBaseSplitBindings({
+			slots: applyBinding(splitScreen?.slots ?? buildInitialSplitScreen().slots),
 		});
 	};
 
-	const buildInitialSplitScreen = ({
-		layoutPreset,
-	}: {
-		layoutPreset: VideoSplitScreenLayoutPreset;
-	}): VideoSplitScreen => {
+	const swapSplitBindings = () => {
+		if (!normalizedVideo) return;
+		const bindings = editableSplitBindings;
+		if (bindings.length < 2) return;
+		const swappedBindings = bindings.map((binding, index, list) => ({
+			...binding,
+			mode: list[(index + 1) % list.length]?.mode ?? binding.mode,
+			presetId: list[(index + 1) % list.length]?.presetId ?? binding.presetId,
+			transformOverride:
+				list[(index + 1) % list.length]?.transformOverride ??
+				binding.transformOverride ??
+				null,
+		}));
+		if (selectedSplitSectionId && splitScreen && selectedSplitSection) {
+			editor.timeline.upsertVideoSplitScreenSection({
+				trackId: normalizedVideo.trackId,
+				elementId: normalizedVideo.element.id,
+				time: selectedSplitSection.startTime,
+				enabled: selectedSplitSection.enabled !== false,
+				slots: swappedBindings,
+			});
+			return;
+		}
+		updateBaseSplitBindings({
+			slots: swappedBindings,
+		});
+	};
+
+	const buildInitialSplitScreen = (): VideoSplitScreen => {
 		const presets = normalizedVideo?.element.reframePresets ?? [];
 		return {
-			enabled: true,
-			layoutPreset,
+			enabled: false,
+			layoutPreset: "top-bottom",
 			slots: buildDefaultVideoSplitScreenBindings({
-				layoutPreset,
+				layoutPreset: "top-bottom",
 				presets,
 			}),
 			sections: [],
 		};
+	};
+
+	const applyPresetSelection = ({ presetId }: { presetId: string }) => {
+		if (!normalizedVideo) return;
+		setSelectedPresetId({
+			elementId: normalizedVideo.element.id,
+			presetId,
+		});
+		setSelectedSplitPreviewSlots({
+			elementId: normalizedVideo.element.id,
+			slots: null,
+		});
+		setSelectedSplitSectionId(null);
+		setSelectedSectionStartTime({
+			elementId: normalizedVideo.element.id,
+			startTime: focusedSectionStartTime,
+		});
+	};
+
+	const getSplitSlotTransform = (binding: VideoSplitScreenSlotBinding) => {
+		const slotPreset =
+			normalizedVideo?.element.reframePresets?.find(
+				(preset) => preset.id === binding.presetId,
+			) ?? null;
+		return (
+			binding.transformOverride ?? {
+				position: slotPreset?.transform.position ?? { x: 0, y: 0 },
+				scale: slotPreset?.transform.scale ?? normalizedVideo?.element.transform.scale ?? 1,
+			}
+		);
+	};
+
+	const updateSplitSlotTransform = ({
+		slotId,
+		updates,
+		pushHistory,
+	}: {
+		slotId: string;
+		updates: Partial<{
+			x: number;
+			y: number;
+			scale: number;
+		}>;
+		pushHistory: boolean;
+	}) => {
+		if (!normalizedVideo) return;
+		const applyOverride = (bindings: VideoSplitScreenSlotBinding[]) =>
+			bindings.map((binding) => {
+				if (binding.slotId !== slotId) {
+					return binding;
+				}
+				const currentTransform = getSplitSlotTransform(binding);
+				return {
+					...binding,
+					transformOverride: {
+						position: {
+							x: updates.x ?? currentTransform.position.x,
+							y: updates.y ?? currentTransform.position.y,
+						},
+						scale: updates.scale ?? currentTransform.scale,
+					},
+				};
+			});
+
+		if (selectedSplitSectionId && splitScreen && selectedSplitSection) {
+			editor.timeline.upsertVideoSplitScreenSection({
+				trackId: normalizedVideo.trackId,
+				elementId: normalizedVideo.element.id,
+				time: selectedSplitSection.startTime,
+				enabled: selectedSplitSection.enabled !== false,
+				slots: applyOverride(selectedSplitSection.slots),
+				pushHistory,
+			});
+			return;
+		}
+
+		updateBaseSplitBindings({
+			slots: applyOverride(
+				splitScreen?.slots ?? buildInitialSplitScreen().slots,
+			),
+			pushHistory,
+		});
 	};
 
 	return (
@@ -383,52 +551,12 @@ export function ReframeView() {
 							<Plus className="mr-2 size-4" />
 							New
 						</Button>
-						<Button
-							size="sm"
-							variant="secondary"
-							disabled={!selectedPreset}
-							onClick={() => {
-								if (!selectedPreset) return;
-								const presetId = editor.timeline.duplicateVideoReframePreset({
-									trackId: normalizedVideo.trackId,
-									elementId: normalizedVideo.element.id,
-									presetId: selectedPreset.id,
-								});
-								if (presetId) {
-									setSelectedPresetId({
-										elementId: normalizedVideo.element.id,
-										presetId,
-									});
-								}
-							}}
-						>
-							<Copy className="mr-2 size-4" />
-							Duplicate
-						</Button>
-						<Button
-							size="sm"
-							variant="secondary"
-							disabled={!selectedPreset}
-							onClick={() => {
-								if (!selectedPreset) return;
-								editor.timeline.upsertVideoReframeSwitch({
-									trackId: normalizedVideo.trackId,
-									elementId: normalizedVideo.element.id,
-									time: localTime,
-									presetId: selectedPreset.id,
-								});
-							}}
-						>
-							<Sparkles className="mr-2 size-4" />
-							Mark Angle
-						</Button>
 					</div>
 
 					<div className="grid grid-cols-1 gap-2">
-						{(normalizedVideo.element.reframePresets ?? []).map((preset: VideoReframePreset) => {
-							const isActive = selectedPreset?.id === preset.id;
-							const isDefault =
-								normalizedVideo.element.defaultReframePresetId === preset.id;
+								{(normalizedVideo.element.reframePresets ?? []).map((preset: VideoReframePreset) => {
+							const isActive =
+								selectedAngleMode === "preset" && selectedPreset?.id === preset.id;
 							const isEditingName = editingPresetId === preset.id;
 							return (
 								<div
@@ -437,12 +565,11 @@ export function ReframeView() {
 										"rounded-lg border p-2 transition-colors",
 										isActive && "border-primary bg-primary/5",
 									)}
-									onClick={() =>
-										setSelectedPresetId({
-											elementId: normalizedVideo.element.id,
+									onClick={() => {
+										applyPresetSelection({
 											presetId: preset.id,
-										})
-									}
+										});
+									}}
 								>
 									<div className="flex items-center gap-2">
 										<div className="flex min-w-0 flex-1 items-center gap-2">
@@ -498,21 +625,6 @@ export function ReframeView() {
 												</span>
 											)}
 										</div>
-										<Button
-											size="sm"
-											variant={isDefault ? "default" : "secondary"}
-											className="h-7 px-2 text-xs"
-											onClick={(event) => {
-												event.stopPropagation();
-												editor.timeline.setVideoDefaultReframePreset({
-													trackId: normalizedVideo.trackId,
-													elementId: normalizedVideo.element.id,
-													presetId: preset.id,
-												});
-											}}
-										>
-											Default
-										</Button>
 									</div>
 									<div className="mt-2 grid grid-cols-3 gap-2">
 										<ReframeScrubber
@@ -589,231 +701,168 @@ export function ReframeView() {
 											}
 										/>
 									</div>
-									{isActive && (
-										<div className="mt-3 flex gap-2">
-											<Button
-												size="sm"
-												variant="secondary"
-												onClick={(event) => {
-													event.stopPropagation();
-													const resolvedTransform =
-														resolveElementTransformAtTime({
-															element: normalizedVideo.element,
-															localTime,
-															baseTransformLocalTime: localTime,
-														});
-													editor.timeline.updateVideoReframePreset({
-														trackId: normalizedVideo.trackId,
-														elementId: normalizedVideo.element.id,
-														presetId: preset.id,
-														updates: {
-															transform: {
-																position: resolvedTransform.position,
-																scale: resolvedTransform.scale,
-															},
-														},
-													});
-												}}
-											>
-												<ChevronsLeftRight className="mr-2 size-4" />
-												From Preview
-											</Button>
-											<Button
-												size="sm"
-												variant="destructive"
-												onClick={(event) => {
-													event.stopPropagation();
-													editor.timeline.deleteVideoReframePreset({
-														trackId: normalizedVideo.trackId,
-														elementId: normalizedVideo.element.id,
-														presetId: preset.id,
-													});
-												}}
-											>
-												<Trash2 className="mr-2 size-4" />
-												Delete
-											</Button>
-										</div>
-									)}
 								</div>
 							);
 						})}
-					</div>
-
-					<div className="space-y-3 rounded-lg border p-3">
-						<div className="flex items-center justify-between gap-2">
-							<div>
-								<div className="text-sm font-medium">Split Screen</div>
-								<div className="text-muted-foreground text-xs">
-									Render this clip into fixed top/bottom or left/right slots using
-									reframe presets.
+						<div
+							className={cn(
+								"rounded-lg border p-2 transition-colors",
+								selectedAngleMode === "split" && "border-primary bg-primary/5",
+							)}
+							onClick={() => {
+								setSelectedPresetId({
+									elementId: normalizedVideo.element.id,
+									presetId: null,
+								});
+								setSelectedSplitSectionId(null);
+								setSelectedSplitPreviewSlots({
+									elementId: normalizedVideo.element.id,
+									slots:
+										resolveConcreteSplitBindings(
+											selectedSplitSection?.slots ??
+												splitScreen?.slots ??
+												buildInitialSplitScreen().slots,
+										),
+								});
+								setSelectedSectionStartTime({
+									elementId: normalizedVideo.element.id,
+									startTime: focusedSectionStartTime,
+								});
+							}}
+						>
+							<div className="flex items-center gap-2">
+								<div className="flex min-w-0 flex-1 items-center gap-2">
+									<div className="bg-muted flex size-7 items-center justify-center rounded-md border">
+										<ChevronsLeftRight className="size-3.5" />
+									</div>
+									<div className="truncate text-left text-sm font-medium">
+										Split Screen
+									</div>
 								</div>
 							</div>
-							<Button
-								size="sm"
-								variant={splitScreen?.enabled ? "default" : "secondary"}
-								onClick={() => {
-									if (splitScreen?.enabled) {
-										updateSplitScreen({
-											enabled: false,
-										});
-										return;
-									}
-									updateSplitScreen({
-										...(splitScreen ??
-											buildInitialSplitScreen({ layoutPreset: "top-bottom" })),
-										enabled: true,
-									});
-								}}
-							>
-								{splitScreen?.enabled ? "Disable" : "Enable"}
-							</Button>
-						</div>
-						{splitScreen?.enabled && (
-							<>
-								<div className="flex gap-2">
-									{(["top-bottom", "left-right"] as const).map((layoutPreset) => (
+							{selectedAngleMode === "split" && (
+								<div className="mt-3 space-y-2">
+									<div className="flex items-center justify-between gap-2">
+										<div className="text-muted-foreground text-xs">
+											Marks a top/bottom split section and keeps single view elsewhere
+										</div>
 										<Button
-											key={layoutPreset}
 											size="sm"
-											variant={
-												splitScreen.layoutPreset === layoutPreset
-													? "default"
-													: "secondary"
-											}
-											onClick={() =>
-												updateSplitScreen(
-													buildInitialSplitScreen({ layoutPreset }),
-												)
-											}
+											variant="secondary"
+											onClick={(event) => {
+												event.stopPropagation();
+												swapSplitBindings();
+											}}
+											disabled={editableSplitBindings.length < 2}
+											title="Swap top and bottom"
 										>
-											{layoutPreset === "top-bottom" ? "Top / Bottom" : "Left / Right"}
+											<RefreshCw className="size-4" />
 										</Button>
-									))}
-								</div>
-								<div className="rounded-md border p-2 text-xs">
-									{selectedSplitSection ? (
-										<span>
-											Editing split section at {selectedSplitSection.startTime.toFixed(2)}s
-										</span>
-									) : (
-										<span>Editing default split bindings</span>
+									</div>
+									{selectedSplitSection && selectedSplitSectionEnabled && (
+										<div className="rounded-md border p-2 text-xs">
+											Editing split marker at {selectedSplitSection.startTime.toFixed(2)}s
+										</div>
 									)}
-								</div>
-								<div className="grid gap-2">
-									{editableSplitBindings.map((binding) => (
-										<div
-											key={binding.slotId}
-											className="grid grid-cols-[90px_minmax(0,1fr)] items-center gap-2"
-										>
-											<div className="text-xs font-medium uppercase tracking-[0.14em]">
-												{binding.slotId}
-											</div>
-											<select
-												className="bg-background h-8 rounded-md border px-2 text-sm"
-												value={
-													binding.mode === "fixed-preset"
-														? `fixed:${binding.presetId ?? ""}`
-														: "follow-active"
-												}
-												onChange={(event) => {
-													const nextValue = event.target.value;
-													if (nextValue === "follow-active") {
+									<div className="grid gap-2">
+										{editableSplitBindings.map((binding) => (
+											<div
+												key={binding.slotId}
+												className="grid grid-cols-[90px_minmax(0,1fr)] items-center gap-2"
+											>
+												<div className="text-xs font-medium uppercase tracking-[0.14em]">
+													{binding.slotId}
+												</div>
+												<select
+													className="bg-background h-8 rounded-md border px-2 text-sm"
+													value={
+														`fixed:${binding.presetId ?? ""}`
+													}
+													onClick={(event) => event.stopPropagation()}
+													onChange={(event) => {
 														updateSplitBindings({
 															slotId: binding.slotId,
-															mode: "follow-active",
-															presetId: null,
+															presetId:
+																event.target.value.replace(/^fixed:/, "") || null,
 														});
-														return;
-													}
-													updateSplitBindings({
-														slotId: binding.slotId,
-														mode: "fixed-preset",
-														presetId: nextValue.replace(/^fixed:/, "") || null,
-													});
-												}}
-											>
-												<option value="follow-active">Follow active reframe</option>
-												{(normalizedVideo.element.reframePresets ?? []).map((preset) => (
-													<option
-														key={preset.id}
-														value={`fixed:${preset.id}`}
-													>
-														Use {preset.name}
-													</option>
-												))}
-											</select>
-										</div>
-									))}
+													}}
+												>
+													{(normalizedVideo.element.reframePresets ?? []).map((preset) => (
+														<option key={preset.id} value={`fixed:${preset.id}`}>
+															Use {preset.name}
+														</option>
+													))}
+												</select>
+												{(() => {
+													const slotTransform = getSplitSlotTransform(binding);
+													return (
+														<div className="col-span-2 mt-2 grid grid-cols-3 gap-2">
+															<ReframeScrubber
+																label="X"
+																value={slotTransform.position.x}
+																min={-1200}
+																max={1200}
+																step={1}
+																formatValue={(value) =>
+																	Math.round(value).toString()
+																}
+																onChange={(value, pushHistory) =>
+																	updateSplitSlotTransform({
+																		slotId: binding.slotId,
+																		updates: { x: value },
+																		pushHistory,
+																	})
+																}
+															/>
+															<ReframeScrubber
+																label="Y"
+																value={slotTransform.position.y}
+																min={-1200}
+																max={1200}
+																step={1}
+																formatValue={(value) =>
+																	Math.round(value).toString()
+																}
+																onChange={(value, pushHistory) =>
+																	updateSplitSlotTransform({
+																		slotId: binding.slotId,
+																		updates: { y: value },
+																		pushHistory,
+																	})
+																}
+															/>
+															<ReframeScrubber
+																label="Scale"
+																value={slotTransform.scale}
+																min={0.5}
+																max={8}
+																step={0.01}
+																dragScale={0.01}
+																formatValue={(value) => value.toFixed(2)}
+																onChange={(value, pushHistory) =>
+																	updateSplitSlotTransform({
+																		slotId: binding.slotId,
+																		updates: { scale: value },
+																		pushHistory,
+																	})
+																}
+															/>
+														</div>
+													);
+												})()}
+											</div>
+										))}
+									</div>
 								</div>
-								<div className="flex gap-2">
-									<Button
-										size="sm"
-										variant="secondary"
-										onClick={() => {
-											if (!normalizedVideo || !splitScreen) return;
-											editor.timeline.upsertVideoSplitScreenSection({
-												trackId: normalizedVideo.trackId,
-												elementId: normalizedVideo.element.id,
-												time: localTime,
-												slots: editableSplitBindings,
-											});
-										}}
-									>
-										Add Split Section
-									</Button>
-									{selectedSplitSection && (
-										<Button
-											size="sm"
-											variant="ghost"
-											onClick={() => {
-												if (!normalizedVideo) return;
-												editor.timeline.removeVideoSplitScreenSection({
-													trackId: normalizedVideo.trackId,
-													elementId: normalizedVideo.element.id,
-													sectionId: selectedSplitSection.id,
-												});
-												setSelectedSplitSectionId(null);
-											}}
-										>
-											Delete Section
-										</Button>
-									)}
-								</div>
-								<div className="space-y-1">
-									{splitSectionRanges.map((section) => (
-										<button
-											key={`${section.startTime}:${section.sectionId ?? "default"}`}
-											type="button"
-											className={cn(
-												"bg-muted/20 flex w-full items-center justify-between rounded-md border px-2 py-1.5 text-left text-xs",
-												selectedSplitSection?.id === section.sectionId &&
-													"border-primary bg-primary/5",
-											)}
-											onClick={() =>
-												setSelectedSplitSectionId(section.sectionId)
-											}
-										>
-											<span>
-												{section.sectionId
-													? `${section.startTime.toFixed(2)}s - ${section.endTime.toFixed(2)}s`
-													: `Default: 0.00s - ${section.endTime.toFixed(2)}s`}
-											</span>
-											<span className="text-muted-foreground">
-												{section.sectionId ? "Override" : "Base"}
-											</span>
-										</button>
-									))}
-								</div>
-							</>
-						)}
+							)}
+						</div>
 					</div>
 
 					<div className="space-y-2 rounded-lg border p-3">
 						<div className="flex items-center justify-between gap-2">
 							<div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.14em]">
 								<CircleDot className="size-3.5" />
-								<span>Switch Markers</span>
+								<span>Markers</span>
 							</div>
 							{(normalizedVideo.element.reframeSwitches ?? []).length > 0 && (
 								<Button
@@ -831,12 +880,70 @@ export function ReframeView() {
 								</Button>
 							)}
 						</div>
-						<div className="text-muted-foreground text-xs">
-							Markers switch between detected camera angles on this clip.
+					<div className="text-muted-foreground text-xs">
+						Angle markers switch reframes. Split markers apply the selected top/bottom split.
+					</div>
+						<div className="space-y-1">
+							{(normalizedVideo.element.splitScreen?.sections ?? []).length === 0 ? (
+								<div className="text-muted-foreground text-sm">
+									No split markers yet.
+								</div>
+							) : (
+								(normalizedVideo.element.splitScreen?.sections ?? []).map((section) => (
+									<div
+										key={section.id}
+										className="bg-muted/20 flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs"
+									>
+										<button
+											type="button"
+											className="hover:text-foreground text-muted-foreground min-w-11 text-left font-medium"
+											onClick={() => {
+												setSelectedPresetId({
+													elementId: normalizedVideo.element.id,
+													presetId: null,
+												});
+												setSelectedSplitSectionId(section.id);
+												setSelectedSplitPreviewSlots({
+													elementId: normalizedVideo.element.id,
+													slots: resolveConcreteSplitBindings(section.slots),
+												});
+												setSelectedSectionStartTime({
+													elementId: normalizedVideo.element.id,
+													startTime: section.startTime,
+												});
+											}}
+										>
+											{section.startTime.toFixed(2)}s
+										</button>
+										<div className="flex min-w-0 flex-1 items-center gap-2">
+											<div className="bg-muted flex size-7 items-center justify-center rounded-md border text-[10px] font-medium uppercase">
+												{section.enabled === false ? "1x" : "2x"}
+											</div>
+											<span className="text-muted-foreground truncate">
+												{section.enabled === false ? "Single view" : "Split screen"}
+											</span>
+										</div>
+										<Button
+											size="sm"
+											variant="ghost"
+											className="ml-auto h-7 px-2"
+											onClick={() =>
+												editor.timeline.removeVideoSplitScreenSection({
+													trackId: normalizedVideo.trackId,
+													elementId: normalizedVideo.element.id,
+													sectionId: section.id,
+												})
+											}
+										>
+											<Trash2 className="size-3.5" />
+										</Button>
+									</div>
+								))
+							)}
 						</div>
 						{(normalizedVideo.element.reframeSwitches ?? []).length === 0 ? (
 							<div className="text-muted-foreground text-sm">
-								No switch markers yet.
+								No angle markers yet.
 							</div>
 						) : (
 							(normalizedVideo.element.reframeSwitches ?? []).map((entry: VideoReframeSwitch) => (
@@ -844,16 +951,15 @@ export function ReframeView() {
 									key={entry.id}
 									className="bg-muted/20 flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs"
 								>
-									<button
-										type="button"
-										className="hover:text-foreground text-muted-foreground min-w-11 text-left font-medium"
-										onClick={() =>
-											setSelectedPresetId({
-												elementId: normalizedVideo.element.id,
-												presetId: entry.presetId,
-											})
-										}
-									>
+										<button
+											type="button"
+											className="hover:text-foreground text-muted-foreground min-w-11 text-left font-medium"
+											onClick={() =>
+												applyPresetSelection({
+													presetId: entry.presetId,
+												})
+											}
+										>
 										{entry.time.toFixed(2)}s
 									</button>
 									<div className="flex min-w-0 flex-1 items-center gap-2">

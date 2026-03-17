@@ -32,6 +32,7 @@ type FakeContext = {
 
 function createFakeRenderer() {
 	const operations: string[] = [];
+	const translations: Array<[number, number]> = [];
 	const context: FakeContext = {
 		save: () => operations.push("save"),
 		restore: () => operations.push("restore"),
@@ -49,7 +50,10 @@ function createFakeRenderer() {
 		closePath: () => operations.push("closePath"),
 		fill: () => operations.push("fill"),
 		stroke: () => operations.push("stroke"),
-		translate: () => operations.push("translate"),
+		translate: (...args) => {
+			operations.push("translate");
+			translations.push([Number(args[0] ?? 0), Number(args[1] ?? 0)]);
+		},
 		scale: () => operations.push("scale"),
 		setTransform: () => operations.push("setTransform"),
 		font: "",
@@ -65,6 +69,7 @@ function createFakeRenderer() {
 
 	return {
 		operations,
+		translations,
 		renderer: {
 			context,
 			width: 1280,
@@ -141,6 +146,59 @@ describe("TextNode caption gap rendering", () => {
 		await node.render({ renderer, time: 10.8 });
 
 		expect(operations).toEqual([]);
+	});
+
+	test("anchors captions into the active split viewport when linked video is split", async () => {
+		const node = new TextNode({
+			...createCaptionNode().params,
+			captionStyle: {
+				anchorToSafeAreaBottom: true,
+				safeAreaBottomOffset: 0,
+				splitScreenOverrides: {
+					slotAnchor: "bottom",
+				},
+			},
+			captionSourceVideo: {
+				startTime: 10,
+				duration: 2,
+				trimStart: 0,
+				reframePresets: [
+					{
+						id: "subject-left",
+						name: "Subject Left",
+						transform: {
+							position: { x: -120, y: 0 },
+							scale: 2,
+						},
+					},
+					{
+						id: "subject-right",
+						name: "Subject Right",
+						transform: {
+							position: { x: 120, y: 0 },
+							scale: 2,
+						},
+					},
+				],
+				defaultReframePresetId: "subject-left",
+				splitScreen: {
+					enabled: true,
+					layoutPreset: "top-bottom",
+					slots: [
+						{ slotId: "top", mode: "fixed-preset", presetId: "subject-left" },
+						{ slotId: "bottom", mode: "fixed-preset", presetId: "subject-right" },
+					],
+					sections: [],
+				},
+			},
+		});
+		const { operations, renderer, translations } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.39 });
+
+		expect(operations).toContain("fillText");
+		expect(translations.length).toBeGreaterThan(0);
+		expect((translations[0]?.[1] ?? 0) > 360).toBe(true);
 	});
 
 });

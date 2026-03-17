@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { SITE_INFO, SITE_URL } from "@/constants/site-constants";
+import { BRAND_NAME, SITE_INFO, SITE_URL } from "@/constants/site-constants";
 
 export const baseMetaData: Metadata = {
 	metadataBase: new URL(SITE_URL),
@@ -17,7 +17,7 @@ export const baseMetaData: Metadata = {
 				url: SITE_INFO.openGraphImage,
 				width: 1200,
 				height: 630,
-				alt: "OpenCut Wordmark",
+				alt: `${BRAND_NAME} wordmark`,
 			},
 		],
 	},
@@ -37,7 +37,7 @@ export const baseMetaData: Metadata = {
 	},
 	icons: {
 		icon: [
-			{ url: "/favicon.ico" },
+			{ url: SITE_INFO.favicon, type: "image/svg+xml" },
 			{ url: "/icons/favicon-16x16.png", sizes: "16x16", type: "image/png" },
 			{ url: "/icons/favicon-32x32.png", sizes: "32x32", type: "image/png" },
 			{ url: "/icons/favicon-96x96.png", sizes: "96x96", type: "image/png" },
@@ -73,7 +73,7 @@ export const baseMetaData: Metadata = {
 				type: "image/png",
 			},
 		],
-		shortcut: ["/favicon.ico"],
+		shortcut: [SITE_INFO.favicon],
 	},
 	appleWebApp: {
 		capable: true,

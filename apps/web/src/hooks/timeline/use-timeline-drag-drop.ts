@@ -13,6 +13,7 @@ import {
 	buildStickerElement,
 	buildElementFromMedia,
 } from "@/lib/timeline/element-utils";
+import { getVideoCoverScaleMultiplier } from "@/lib/timeline/video-cover-fit";
 import type { Command } from "@/lib/commands/base-command";
 import { AddMediaAssetCommand } from "@/lib/commands/media";
 import { AddTrackCommand, InsertElementCommand } from "@/lib/commands/timeline";
@@ -350,12 +351,21 @@ export function useTimelineDragDrop({
 
 			const duration =
 				mediaAsset.duration ?? TIMELINE_CONSTANTS.DEFAULT_ELEMENT_DURATION;
+			const canvasSize = activeProject?.settings.canvasSize;
 			const element = buildElementFromMedia({
 				mediaId: mediaAsset.id,
 				mediaType: mediaAsset.type,
 				name: mediaAsset.name,
 				duration,
 				startTime: target.xPosition,
+				transformScale:
+					mediaAsset.type === "video" && canvasSize
+						? getVideoCoverScaleMultiplier({
+								canvasSize,
+								sourceWidth: mediaAsset.width,
+								sourceHeight: mediaAsset.height,
+						  })
+						: undefined,
 			});
 
 			const insertCmd = new InsertElementCommand({
@@ -371,7 +381,7 @@ export function useTimelineDragDrop({
 				});
 			}
 		},
-		[editor.command, editor, mediaAssets, tracks],
+		[activeProject, editor.command, editor, mediaAssets, tracks],
 	);
 
 	const executeLocalMusicDrop = useCallback(
@@ -474,6 +484,14 @@ export function useTimelineDragDrop({
 					buffer:
 						asset.type === "audio"
 							? new AudioBuffer({ length: 1, sampleRate: 44100 })
+							: undefined,
+					transformScale:
+						asset.type === "video"
+							? getVideoCoverScaleMultiplier({
+									canvasSize: activeProject.settings.canvasSize,
+									sourceWidth: asset.width,
+									sourceHeight: asset.height,
+							  })
 							: undefined,
 				});
 

@@ -30,8 +30,13 @@ import {
 	getPreviewCanvasSize,
 	remapCaptionTransformsForPreviewVariant,
 } from "@/lib/preview/preview-format";
-import { applySelectedReframePresetPreviewToTracks } from "@/lib/reframe/video-reframe";
+import {
+	applySelectedReframePresetPreviewToTracks,
+	getVideoReframeSectionByStartTime,
+	normalizeVideoReframeState,
+} from "@/lib/reframe/video-reframe";
 import { validateAndHealCaptionDriftInTracks } from "@/lib/transcript-editor/sync-captions";
+import { healLegacyPortraitVideoCoverFitInTracks } from "@/lib/timeline/video-cover-fit";
 import {
 	Tooltip,
 	TooltipContent,
@@ -205,6 +210,7 @@ const EDITOR_SUBSCRIBE_RENDER_TREE = [
 	"media",
 	"project",
 	"selection",
+	"playback",
 ] as const;
 const EDITOR_SUBSCRIBE_PREVIEW_CANVAS = ["project", "renderer"] as const;
 
@@ -332,11 +338,20 @@ function RenderTreeController() {
 	const selectedPresetIdByElementId = useReframeStore(
 		(state) => state.selectedPresetIdByElementId,
 	);
+	const selectedSplitPreviewSlotsByElementId = useReframeStore(
+		(state) => state.selectedSplitPreviewSlotsByElementId,
+	);
 	const clearSelectedPresetId = useReframeStore(
 		(state) => state.clearSelectedPresetId,
 	);
+	const clearSelectedSplitPreviewSlots = useReframeStore(
+		(state) => state.clearSelectedSplitPreviewSlots,
+	);
 	const clearSelectedSectionStartTime = useReframeStore(
 		(state) => state.clearSelectedSectionStartTime,
+	);
+	const selectedSectionStartTimeByElementId = useReframeStore(
+		(state) => state.selectedSectionStartTimeByElementId,
 	);
 	const {
 		previewFormatVariant,
@@ -395,20 +410,86 @@ function RenderTreeController() {
 	}, [activeProject, editor.timeline, tracks]);
 
 	useEffect(() => {
+		if (!activeProject) return;
+		const healed = healLegacyPortraitVideoCoverFitInTracks({
+			tracks,
+			mediaAssets,
+			canvasSize: activeProject.settings.canvasSize,
+		});
+		if (healed.changed) {
+			editor.timeline.updateTracks(healed.tracks);
+		}
+	}, [activeProject, editor.timeline, mediaAssets, tracks]);
+
+	useEffect(() => {
 		const selectedElementIds = new Set(
 			selectedElements.map((selection) => selection.elementId),
 		);
-		for (const elementId of Object.keys(selectedPresetIdByElementId)) {
+		const previewElementIds = new Set([
+			...Object.keys(selectedPresetIdByElementId),
+			...Object.keys(selectedSplitPreviewSlotsByElementId),
+		]);
+		for (const elementId of previewElementIds) {
 			if (!selectedElementIds.has(elementId)) {
 				clearSelectedPresetId({ elementId });
+				clearSelectedSplitPreviewSlots({ elementId });
 				clearSelectedSectionStartTime({ elementId });
 			}
 		}
 	}, [
 		selectedElements,
 		selectedPresetIdByElementId,
+		selectedSplitPreviewSlotsByElementId,
+		clearSelectedSplitPreviewSlots,
 		clearSelectedPresetId,
 		clearSelectedSectionStartTime,
+	]);
+
+	useEffect(() => {
+		const currentTime = editor.playback.getCurrentTime();
+		const previewElementIds = new Set([
+			...Object.keys(selectedPresetIdByElementId),
+			...Object.keys(selectedSplitPreviewSlotsByElementId),
+		]);
+		for (const elementId of previewElementIds) {
+			const track = tracks.find((candidateTrack) =>
+				candidateTrack.type === "video" &&
+				candidateTrack.elements.some((element) => element.id === elementId),
+			);
+			const element =
+				track?.type === "video"
+					? track.elements.find(
+							(candidateElement) =>
+								candidateElement.type === "video" &&
+								candidateElement.id === elementId,
+					  )
+					: null;
+			if (!element || element.type !== "video") continue;
+			const normalized = normalizeVideoReframeState({ element });
+			const selectedSection = getVideoReframeSectionByStartTime({
+				element: normalized,
+				startTime: selectedSectionStartTimeByElementId[elementId] ?? null,
+			});
+			if (!selectedSection) continue;
+			const localTime = Math.max(
+				0,
+				Math.min(normalized.duration, currentTime - normalized.startTime),
+			);
+			const isWithinSelectedSection =
+				localTime >= selectedSection.startTime &&
+				localTime <= selectedSection.endTime;
+			if (isWithinSelectedSection) continue;
+			clearSelectedPresetId({ elementId });
+			clearSelectedSplitPreviewSlots({ elementId });
+		}
+	}, [
+		editor.playback,
+		tracks,
+		selectedPresetIdByElementId,
+		selectedSplitPreviewSlotsByElementId,
+		selectedSectionStartTimeByElementId,
+		clearSelectedPresetId,
+		clearSelectedSplitPreviewSlots,
 	]);
 
 	useDeepCompareEffect(() => {
@@ -455,10 +536,16 @@ function RenderTreeController() {
 						previewCanvas: { width, height },
 					})
 				: captionMappedTracks;
+		const shouldApplyReframePreview = !editor.playback.getIsPlaying();
 		const previewTracksWithSelectedReframe =
 			applySelectedReframePresetPreviewToTracks({
 				tracks: previewTracks,
-				selectedPresetIdByElementId,
+				selectedPresetIdByElementId: shouldApplyReframePreview
+					? selectedPresetIdByElementId
+					: {},
+				selectedSplitPreviewSlotsByElementId: shouldApplyReframePreview
+					? selectedSplitPreviewSlotsByElementId
+					: {},
 				selectedElementIds: new Set(
 					selectedElements.map((selection) => selection.elementId),
 				),
@@ -489,6 +576,7 @@ function RenderTreeController() {
 		playbackQuality,
 		selectedElements,
 		selectedPresetIdByElementId,
+		selectedSplitPreviewSlotsByElementId,
 		width,
 		height,
 		previewVideoFrameRateCap,

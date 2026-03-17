@@ -132,6 +132,82 @@ async function seekVideo({
 	});
 }
 
+async function waitForVideoFrameReady({
+	video,
+}: {
+	video: HTMLVideoElement;
+}) {
+	if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+		await new Promise<void>((resolve, reject) => {
+			const timeout = setTimeout(() => {
+				cleanup();
+				reject(new Error("Timed out waiting for video frame data"));
+			}, 2000);
+			const onReady = () => {
+				if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+					return;
+				}
+				cleanup();
+				resolve();
+			};
+			const onError = () => {
+				cleanup();
+				reject(new Error("Video failed while waiting for frame data"));
+			};
+			const cleanup = () => {
+				clearTimeout(timeout);
+				video.removeEventListener("loadeddata", onReady);
+				video.removeEventListener("canplay", onReady);
+				video.removeEventListener("timeupdate", onReady);
+				video.removeEventListener("error", onError);
+			};
+			video.addEventListener("loadeddata", onReady);
+			video.addEventListener("canplay", onReady);
+			video.addEventListener("timeupdate", onReady);
+			video.addEventListener("error", onError);
+			onReady();
+		});
+	}
+
+	if ("requestVideoFrameCallback" in video) {
+		await new Promise<void>((resolve) => {
+			let settled = false;
+			const finish = () => {
+				if (settled) return;
+				settled = true;
+				resolve();
+			};
+			const timeout = setTimeout(finish, 250);
+			(
+				video as HTMLVideoElement & {
+					requestVideoFrameCallback?: (callback: () => void) => number;
+				}
+			).requestVideoFrameCallback?.(() => {
+				clearTimeout(timeout);
+				finish();
+			});
+		});
+		return;
+	}
+
+	await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+	await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function canAnalyzeCurrentVideoFrame({
+	video,
+}: {
+	video: HTMLVideoElement;
+}) {
+	return (
+		Number.isFinite(video.currentTime) &&
+		!video.seeking &&
+		video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+		video.videoWidth > 0 &&
+		video.videoHeight > 0
+	);
+}
+
 function median(values: number[]): number {
 	if (values.length === 0) return 0;
 	const sorted = [...values].sort((left, right) => left - right);
@@ -897,42 +973,53 @@ export async function analyzeGeneratedClipReframes({
 					video,
 					time: clamp(t, startTime, Math.max(startTime, endTime - 0.04)),
 				});
-				const timestampMs = Math.round(video.currentTime * 1000);
-				const faceResult = faceDetector.detectForVideo(video, timestampMs);
-				const faceDetections = (faceResult.detections ?? [])
-					.map((detection) => detection.boundingBox)
-					.filter((box): box is NonNullable<typeof box> => Boolean(box));
-				if (faceDetections.length > 0) {
-					const boxes: SubjectBox[] = [];
-					for (const faceBox of faceDetections) {
-						const nextBox = {
-							centerX: faceBox.originX + faceBox.width / 2,
-							centerY: faceBox.originY + faceBox.height / 2,
-							width: Math.max(1, faceBox.width * 2.4),
-							height: Math.max(1, faceBox.height * 3.4),
-						};
-						detections.push(nextBox);
-						boxes.push(nextBox);
-					}
-					observations.push({ time: Math.max(0, t - startTime), boxes });
+				await waitForVideoFrameReady({ video });
+				if (!canAnalyzeCurrentVideoFrame({ video })) {
 					continue;
 				}
-
-				const poseResult = poseLandmarker.detectForVideo(video, timestampMs);
-				const boxes: SubjectBox[] = [];
-				for (const pose of poseResult.landmarks ?? []) {
-					const poseBox = extractPoseBox({
-						landmarks: pose,
-						sourceWidth,
-						sourceHeight,
-					});
-					if (poseBox) {
-						detections.push(poseBox);
-						boxes.push(poseBox);
+				const timestampMs = Math.round(video.currentTime * 1000);
+				try {
+					const faceResult = faceDetector.detectForVideo(video, timestampMs);
+					const faceDetections = (faceResult.detections ?? [])
+						.map((detection) => detection.boundingBox)
+						.filter((box): box is NonNullable<typeof box> => Boolean(box));
+					if (faceDetections.length > 0) {
+						const boxes: SubjectBox[] = [];
+						for (const faceBox of faceDetections) {
+							const nextBox = {
+								centerX: faceBox.originX + faceBox.width / 2,
+								centerY: faceBox.originY + faceBox.height / 2,
+								width: Math.max(1, faceBox.width * 2.4),
+								height: Math.max(1, faceBox.height * 3.4),
+							};
+							detections.push(nextBox);
+							boxes.push(nextBox);
+						}
+						observations.push({ time: Math.max(0, t - startTime), boxes });
+						continue;
 					}
-				}
-				if (boxes.length > 0) {
-					observations.push({ time: Math.max(0, t - startTime), boxes });
+
+					const poseResult = poseLandmarker.detectForVideo(video, timestampMs);
+					const boxes: SubjectBox[] = [];
+					for (const pose of poseResult.landmarks ?? []) {
+						const poseBox = extractPoseBox({
+							landmarks: pose,
+							sourceWidth,
+							sourceHeight,
+						});
+						if (poseBox) {
+							detections.push(poseBox);
+							boxes.push(poseBox);
+						}
+					}
+					if (boxes.length > 0) {
+						observations.push({ time: Math.max(0, t - startTime), boxes });
+					}
+				} catch (sampleError) {
+					console.warn(
+						"Subject-aware reframing skipped a sampled frame after detector failure.",
+						sampleError,
+					);
 				}
 			}
 

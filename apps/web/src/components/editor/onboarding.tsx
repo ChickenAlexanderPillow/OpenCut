@@ -3,7 +3,7 @@
 import { ArrowRightIcon } from "lucide-react";
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { SOCIAL_LINKS } from "@/constants/site-constants";
+import { BRAND_NAME, SOCIAL_LINKS } from "@/constants/site-constants";
 import { useLocalStorage } from "@/hooks/storage/use-local-storage";
 import { Button } from "../ui/button";
 import { Dialog, DialogBody, DialogContent, DialogTitle } from "../ui/dialog";
@@ -28,13 +28,13 @@ export function Onboarding() {
 	const getStepTitle = () => {
 		switch (step) {
 			case 0:
-				return "Welcome to OpenCut Beta! 🎉";
+				return `Welcome to ${BRAND_NAME} Beta!`;
 			case 1:
-				return "⚠️ This is a super early beta!";
+				return "This is a super early beta";
 			case 2:
-				return "🦋 Have fun testing!";
+				return "Have fun testing";
 			default:
-				return "OpenCut Onboarding";
+				return `${BRAND_NAME} Onboarding`;
 		}
 	};
 
@@ -44,8 +44,10 @@ export function Onboarding() {
 				return (
 					<div className="space-y-5">
 						<div className="space-y-3">
-							<Title title="Welcome to OpenCut Beta! 🎉" />
-							<Description description="You're among the first to try OpenCut - the fully open source CapCut alternative." />
+							<Title title={`Welcome to ${BRAND_NAME} Beta!`} />
+							<Description
+								description={`You're among the first to try ${BRAND_NAME} - the fully open source CapCut alternative.`}
+							/>
 						</div>
 						<NextButton onClick={handleNext}>Next</NextButton>
 					</div>
@@ -68,7 +70,7 @@ export function Onboarding() {
 						<div className="space-y-3">
 							<Title title={getStepTitle()} />
 							<Description
-								description={`Join our [Discord](${SOCIAL_LINKS.discord}), chat with cool people and share feedback to help make OpenCut the best editor ever.`}
+								description={`Join our [Discord](${SOCIAL_LINKS.discord}), chat with cool people and share feedback to help make ${BRAND_NAME} the best editor ever.`}
 							/>
 						</div>
 						<NextButton onClick={handleClose}>Finish</NextButton>

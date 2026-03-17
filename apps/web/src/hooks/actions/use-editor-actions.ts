@@ -4481,12 +4481,10 @@ export function useEditorActions() {
 					: {
 							enabled: true,
 							layoutPreset: target.element.splitScreen?.layoutPreset ?? "top-bottom",
-							slots:
-								target.element.splitScreen?.slots ??
-								buildDefaultVideoSplitScreenBindings({
-									layoutPreset: target.element.splitScreen?.layoutPreset ?? "top-bottom",
-									presets,
-								}),
+							slots: buildDefaultVideoSplitScreenBindings({
+								layoutPreset: target.element.splitScreen?.layoutPreset ?? "top-bottom",
+								presets,
+							}),
 							sections: target.element.splitScreen?.sections ?? [],
 					  },
 			});

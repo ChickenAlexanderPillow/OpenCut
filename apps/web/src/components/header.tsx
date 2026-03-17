@@ -10,7 +10,11 @@ import { ThemeToggle } from "./theme-toggle";
 import { GithubIcon, Menu02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { cn } from "@/utils/ui";
-import { DEFAULT_LOGO_URL, SOCIAL_LINKS } from "@/constants/site-constants";
+import {
+	BRAND_NAME,
+	DEFAULT_LOGO_URL,
+	SOCIAL_LINKS,
+} from "@/constants/site-constants";
 
 export function Header() {
 	const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -38,7 +42,7 @@ export function Header() {
 					<Link href="/" className="flex items-center gap-3">
 						<Image
 							src={DEFAULT_LOGO_URL}
-							alt="OpenCut Logo"
+							alt={`${BRAND_NAME} logo`}
 							className="invert dark:invert-0"
 							width={32}
 							height={32}

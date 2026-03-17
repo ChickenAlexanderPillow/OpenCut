@@ -1,6 +1,6 @@
 import type { CanvasRenderer } from "../canvas-renderer";
 import { BaseNode } from "./base-node";
-import type { TextElement } from "@/types/timeline";
+import type { TextElement, VideoElement } from "@/types/timeline";
 import {
 	DEFAULT_TEXT_ELEMENT,
 	DEFAULT_LINE_HEIGHT,
@@ -18,6 +18,7 @@ import {
 } from "@/lib/text/layout";
 import { resolveSafeAreaAnchoredPositionY } from "@/constants/safe-area-constants";
 import { toTimelineCaptionWordTimings } from "@/lib/captions/timing";
+import { resolveVideoSplitScreenAtTime } from "@/lib/reframe/video-reframe";
 
 function scaleFontSize({
 	fontSize,
@@ -249,7 +250,47 @@ export type TextNodeParams = TextElement & {
 	canvasHeight: number;
 	backgroundReferenceCanvasHeight?: number;
 	textBaseline?: CanvasTextBaseline;
+	captionSourceVideo?: {
+		startTime: number;
+		duration: number;
+		trimStart: number;
+		reframePresets?: VideoElement["reframePresets"];
+		reframeSwitches?: VideoElement["reframeSwitches"];
+		defaultReframePresetId?: string | null;
+		splitScreen?: VideoElement["splitScreen"];
+	};
 };
+
+type CaptionStyleValue = NonNullable<TextElement["captionStyle"]>;
+type CaptionSplitViewport = {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+};
+
+function getSplitScreenViewports({
+	layoutPreset,
+	canvasWidth,
+	canvasHeight,
+}: {
+	layoutPreset: "top-bottom";
+	canvasWidth: number;
+	canvasHeight: number;
+}): Map<string, CaptionSplitViewport> {
+	return new Map([
+		["top", { x: 0, y: 0, width: canvasWidth, height: canvasHeight / 2 }],
+		[
+			"bottom",
+			{
+				x: 0,
+				y: canvasHeight / 2,
+				width: canvasWidth,
+				height: canvasHeight / 2,
+			},
+		],
+	]);
+}
 
 export class TextNode extends BaseNode<TextNodeParams> {
 	private cachedCaptionTimingsRef: Array<{
@@ -302,6 +343,126 @@ export class TextNode extends BaseNode<TextNodeParams> {
 	private getTimelineCaptionWords(): CaptionRenderToken[] {
 		void this.getTimelineCaptionTimings();
 		return this.cachedTimelineCaptionWords;
+	}
+
+	private getEffectiveCaptionStyle({
+		time,
+	}: {
+		time: number;
+	}): CaptionStyleValue {
+		const baseStyle = (this.params.captionStyle ?? {}) as CaptionStyleValue;
+		const splitOverrides = baseStyle.splitScreenOverrides;
+		if (!splitOverrides) return baseStyle;
+		if (splitOverrides.enabled === false) return baseStyle;
+		if (!this.resolveActiveSplitViewport({ time, captionStyle: baseStyle })) {
+			return baseStyle;
+		}
+		return {
+			...baseStyle,
+			...splitOverrides,
+			splitScreenOverrides: splitOverrides,
+		};
+	}
+
+	private resolveActiveSplitViewport({
+		time,
+		captionStyle,
+	}: {
+		time: number;
+		captionStyle: CaptionStyleValue;
+	}): CaptionSplitViewport | null {
+		if (captionStyle.splitScreenOverrides?.anchorToSplitViewport === false) {
+			return null;
+		}
+		const sourceVideo = this.params.captionSourceVideo;
+		if (!sourceVideo?.splitScreen) return null;
+		const localTime = Math.max(
+			0,
+			Math.min(sourceVideo.duration, time - sourceVideo.startTime),
+		);
+		const activeSplitScreen = resolveVideoSplitScreenAtTime({
+			element: {
+				id: "__caption_source__",
+				type: "video",
+				mediaId: "__caption_source__",
+				name: "__caption_source__",
+				startTime: 0,
+				duration: sourceVideo.duration,
+				trimStart: sourceVideo.trimStart,
+				trimEnd: 0,
+				transform: DEFAULT_TEXT_ELEMENT.transform,
+				opacity: 1,
+				reframePresets: sourceVideo.reframePresets,
+				reframeSwitches: sourceVideo.reframeSwitches,
+				defaultReframePresetId: sourceVideo.defaultReframePresetId,
+				splitScreen: sourceVideo.splitScreen,
+			},
+			localTime,
+		});
+		if (!activeSplitScreen) return null;
+		const viewports = getSplitScreenViewports({
+			layoutPreset: activeSplitScreen.layoutPreset,
+			canvasWidth: this.params.canvasWidth,
+			canvasHeight: this.params.canvasHeight,
+		});
+		const preferredAnchor =
+			captionStyle.splitScreenOverrides?.slotAnchor ?? "auto";
+		const resolvedSlotId =
+			preferredAnchor === "auto" ? "bottom" : preferredAnchor;
+		return (
+			viewports.get(resolvedSlotId) ??
+			Array.from(viewports.values())[0] ??
+			null
+		);
+	}
+
+	private resolveCaptionPlacement({
+		time,
+		visualRect,
+		captionStyle,
+		fitInCanvas,
+	}: {
+		time: number;
+		visualRect: {
+			left: number;
+			top: number;
+			width: number;
+			height: number;
+		};
+		captionStyle: CaptionStyleValue;
+		fitInCanvas?: boolean;
+	}): { x: number; y: number; effectiveScale: number } {
+		const splitViewport = this.resolveActiveSplitViewport({ time, captionStyle });
+		const placementCanvasWidth = splitViewport?.width ?? this.params.canvasWidth;
+		const placementCanvasHeight = splitViewport?.height ?? this.params.canvasHeight;
+		const placementOffsetX = splitViewport?.x ?? 0;
+		const placementOffsetY = splitViewport?.y ?? 0;
+		const placement = resolveTextPlacement({
+			canvasWidth: placementCanvasWidth,
+			canvasHeight: placementCanvasHeight,
+			positionX:
+				this.params.transform.position.x + placementCanvasWidth / 2,
+			positionY: resolveSafeAreaAnchoredPositionY({
+				canvasWidth: placementCanvasWidth,
+				canvasHeight: placementCanvasHeight,
+				transformPositionY: this.params.transform.position.y,
+				scale: this.params.transform.scale,
+				visualRect,
+				anchorToSafeAreaBottom:
+					captionStyle.anchorToSafeAreaBottom ?? true,
+				safeAreaBottomOffset: captionStyle.safeAreaBottomOffset ?? 0,
+				anchorToSafeAreaTop: captionStyle.anchorToSafeAreaTop ?? false,
+				safeAreaTopOffset: captionStyle.safeAreaTopOffset ?? 0,
+			}),
+			scale: this.params.transform.scale,
+			visualRect,
+			fitInCanvas,
+		});
+		return {
+			x: placement.x + placementOffsetX,
+			y: placement.y + placementOffsetY,
+			effectiveScale: placement.effectiveScale,
+		};
 	}
 
 	isInRange({ time }: { time: number }) {
@@ -359,16 +520,15 @@ export class TextNode extends BaseNode<TextNodeParams> {
 
 		const letterSpacing = this.params.letterSpacing ?? 0;
 		const lineHeight = this.params.lineHeight ?? DEFAULT_LINE_HEIGHT;
+		const captionStyle = this.getEffectiveCaptionStyle({ time });
 		if ("letterSpacing" in renderer.context) {
 			(
 				renderer.context as CanvasRenderingContext2D & { letterSpacing: string }
 			).letterSpacing = `${letterSpacing}px`;
 		}
 
-		const karaokeWordHighlight =
-			this.params.captionStyle?.karaokeWordHighlight === true;
-		const karaokeHighlightMode =
-			this.params.captionStyle?.karaokeHighlightMode ?? "block";
+		const karaokeWordHighlight = captionStyle.karaokeWordHighlight === true;
+		const karaokeHighlightMode = captionStyle.karaokeHighlightMode ?? "block";
 		const captionWordTimings = this.getTimelineCaptionTimings();
 		const visibleCaptionWordTimings = captionWordTimings.filter(
 			(timing) => !timing.hidden,
@@ -403,14 +563,14 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		const captionWords = this.getTimelineCaptionWords().filter(
 			(token) => !token.hidden,
 		);
-		const wordsOnScreenRaw = this.params.captionStyle?.wordsOnScreen;
+		const wordsOnScreenRaw = captionStyle.wordsOnScreen;
 		const wordsOnScreen =
 			typeof wordsOnScreenRaw === "number"
 				? clampWordCount(wordsOnScreenRaw)
 				: null;
-		const neverShrinkFont = this.params.captionStyle?.neverShrinkFont === true;
-		const fitInCanvas = this.params.captionStyle?.fitInCanvas;
-		const maxLinesOnScreenRaw = this.params.captionStyle?.maxLinesOnScreen;
+		const neverShrinkFont = captionStyle.neverShrinkFont === true;
+		const fitInCanvas = captionStyle.fitInCanvas;
+		const maxLinesOnScreenRaw = captionStyle.maxLinesOnScreen;
 		const maxLinesOnScreen =
 			typeof maxLinesOnScreenRaw === "number"
 				? clampLineCount(maxLinesOnScreenRaw)
@@ -432,8 +592,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			canvasHeight: this.params.canvasHeight,
 			referenceCanvasHeight: this.params.backgroundReferenceCanvasHeight,
 		});
-		const backgroundMode =
-			this.params.captionStyle?.backgroundFitMode ?? "block";
+		const backgroundMode = captionStyle.backgroundFitMode ?? "block";
 
 		const getFitPageSize = ({
 			start,
@@ -476,27 +635,10 @@ export class TextNode extends BaseNode<TextNodeParams> {
 					backgroundMode,
 					fontSizeRatio,
 				});
-				const candidatePlacement = resolveTextPlacement({
-					canvasWidth: this.params.canvasWidth,
-					canvasHeight: this.params.canvasHeight,
-					positionX:
-						this.params.transform.position.x + this.params.canvasCenter.x,
-					positionY: resolveSafeAreaAnchoredPositionY({
-						canvasWidth: this.params.canvasWidth,
-						canvasHeight: this.params.canvasHeight,
-						transformPositionY: this.params.transform.position.y,
-						scale: this.params.transform.scale,
-						visualRect: candidateVisualRect,
-						anchorToSafeAreaBottom:
-							this.params.captionStyle?.anchorToSafeAreaBottom ?? true,
-						safeAreaBottomOffset:
-							this.params.captionStyle?.safeAreaBottomOffset ?? 0,
-						anchorToSafeAreaTop:
-							this.params.captionStyle?.anchorToSafeAreaTop ?? false,
-						safeAreaTopOffset: this.params.captionStyle?.safeAreaTopOffset ?? 0,
-					}),
-					scale: this.params.transform.scale,
+				const candidatePlacement = this.resolveCaptionPlacement({
+					time,
 					visualRect: candidateVisualRect,
+					captionStyle,
 					fitInCanvas,
 				});
 				if (
@@ -624,26 +766,10 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			fontSizeRatio,
 		});
 
-		const placement = resolveTextPlacement({
-			canvasWidth: this.params.canvasWidth,
-			canvasHeight: this.params.canvasHeight,
-			positionX: this.params.transform.position.x + this.params.canvasCenter.x,
-			positionY: resolveSafeAreaAnchoredPositionY({
-				canvasWidth: this.params.canvasWidth,
-				canvasHeight: this.params.canvasHeight,
-				transformPositionY: this.params.transform.position.y,
-				scale: this.params.transform.scale,
-				visualRect,
-				anchorToSafeAreaBottom:
-					this.params.captionStyle?.anchorToSafeAreaBottom ?? true,
-				safeAreaBottomOffset:
-					this.params.captionStyle?.safeAreaBottomOffset ?? 0,
-				anchorToSafeAreaTop:
-					this.params.captionStyle?.anchorToSafeAreaTop ?? false,
-				safeAreaTopOffset: this.params.captionStyle?.safeAreaTopOffset ?? 0,
-			}),
-			scale: this.params.transform.scale,
+		const placement = this.resolveCaptionPlacement({
+			time,
 			visualRect,
+			captionStyle,
 			fitInCanvas,
 		});
 		const { x, y, effectiveScale } = placement;
@@ -789,7 +915,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 					});
 					const wordLeft = lineX + lineLeft + prefixWidth;
 					const highlightOpacity = clampOpacity(
-						this.params.captionStyle?.karaokeHighlightOpacity ?? 1,
+						captionStyle.karaokeHighlightOpacity ?? 1,
 					);
 					const absoluteWordIndex = windowWordIndex + windowed.chunkStart;
 					let easeInOutFactor = 1;
@@ -807,7 +933,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 						motionFactor = easeInQuad(fadeInProgress);
 					}
 					if (
-						this.params.captionStyle?.karaokeHighlightEaseInOnly === true &&
+						captionStyle.karaokeHighlightEaseInOnly === true &&
 						hasWordTimings &&
 						absoluteWordIndex >= 0 &&
 						absoluteWordIndex < visibleCaptionWordTimings.length
@@ -815,22 +941,22 @@ export class TextNode extends BaseNode<TextNodeParams> {
 						easeInOutFactor = motionFactor;
 					}
 					const highlightedWordScale =
-						this.params.captionStyle?.karaokeScaleHighlightedWord === true
+						captionStyle.karaokeScaleHighlightedWord === true
 							? 1 + 0.1 * motionFactor
 							: 1;
 					const highlightAlpha =
 						this.params.opacity * highlightOpacity * easeInOutFactor;
 					if (highlightAlpha <= 0) continue;
 					const highlightColor =
-						this.params.captionStyle?.karaokeHighlightColor ?? "#FDE047";
+						captionStyle.karaokeHighlightColor ?? "#FDE047";
 					const highlightRoundnessRaw = Math.max(
 						0,
 						Math.round(
-							this.params.captionStyle?.karaokeHighlightRoundness ?? 4,
+							captionStyle.karaokeHighlightRoundness ?? 4,
 						),
 					);
 					const highlightTextColor =
-						this.params.captionStyle?.karaokeHighlightTextColor ?? "#111111";
+						captionStyle.karaokeHighlightTextColor ?? "#111111";
 
 					if (karaokeHighlightMode === "block") {
 						const padX = Math.max(2, scaledFontSize * 0.08);
@@ -904,7 +1030,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 						const underlineThicknessRaw = Math.max(
 							1,
 							Math.round(
-								this.params.captionStyle?.karaokeUnderlineThickness ?? 3,
+								captionStyle.karaokeUnderlineThickness ?? 3,
 							),
 						);
 						const scaleFactor = Math.max(

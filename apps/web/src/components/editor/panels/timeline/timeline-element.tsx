@@ -64,10 +64,12 @@ import { Clapperboard, Sparkles } from "lucide-react";
 import { uppercase } from "@/utils/string";
 import { cn } from "@/utils/ui";
 import {
-	deriveVideoReframeSections,
+	deriveVideoAngleSections,
 	getActiveReframePresetId,
 	getSelectedOrActiveReframePresetId,
 	getVideoReframeSectionAtTime,
+	getVideoReframeSectionByStartTime,
+	getVideoSplitScreenSectionAtTime,
 	normalizeVideoReframeState,
 } from "@/lib/reframe/video-reframe";
 
@@ -679,9 +681,9 @@ function ElementInner({
 			),
 		});
 	}, [normalizedVideoElement, displayedReframeSwitches, playbackTime]);
-	const displayedReframeSections = useMemo(() => {
+	const displayedAngleSections = useMemo(() => {
 		if (!normalizedVideoElement) return [];
-		return deriveVideoReframeSections({
+		return deriveVideoAngleSections({
 			element: {
 				...normalizedVideoElement,
 				reframeSwitches: displayedReframeSwitches,
@@ -704,12 +706,48 @@ function ElementInner({
 			),
 		});
 	}, [normalizedVideoElement, displayedReframeSwitches, playbackTime]);
+	const activeSplitSection = useMemo(() => {
+		if (!normalizedVideoElement) return null;
+		const section = getVideoSplitScreenSectionAtTime({
+			element: normalizedVideoElement,
+			localTime: Math.max(
+				0,
+				Math.min(
+					normalizedVideoElement.duration,
+					playbackTime - normalizedVideoElement.startTime,
+				),
+			),
+		});
+		return section?.enabled === false ? null : section;
+	}, [normalizedVideoElement, playbackTime]);
 	const selectedReframeSectionStartTime = normalizedVideoElement
 		? editor.playback.getIsPlaying()
 			? playheadReframeSection?.startTime ?? null
-			: (selectedSectionStartTimeByElementId[normalizedVideoElement.id] ??
-				playheadReframeSection?.startTime ??
-				null)
+			: (() => {
+					const selectedSection = getVideoReframeSectionByStartTime({
+						element: {
+							...normalizedVideoElement,
+							reframeSwitches: displayedReframeSwitches,
+						},
+						startTime:
+							selectedSectionStartTimeByElementId[normalizedVideoElement.id] ??
+							null,
+					});
+					const localTime = Math.max(
+						0,
+						Math.min(
+							normalizedVideoElement.duration,
+							playbackTime - normalizedVideoElement.startTime,
+						),
+					);
+					const isPlayheadWithinSelectedSection = selectedSection
+						? localTime >= selectedSection.startTime &&
+							localTime <= selectedSection.endTime
+						: false;
+					return isPlayheadWithinSelectedSection
+						? selectedSection?.startTime ?? playheadReframeSection?.startTime ?? null
+						: (playheadReframeSection?.startTime ?? null);
+				})()
 		: null;
 	const laneKeyframes = useMemo(() => {
 		const laneMap = new Map<AnimationPropertyPath, ElementKeyframe[]>();
@@ -1197,12 +1235,13 @@ function ElementInner({
 					isSelected &&
 					normalizedVideoElement.reframePresets &&
 					normalizedVideoElement.reframePresets.length > 0 && (
-						<ReframeSwitchLane
-							element={normalizedVideoElement}
-							sections={displayedReframeSections}
-							switches={displayedReframeSwitches}
-							activePresetId={activeReframePresetId}
-							selectedSectionStartTime={selectedReframeSectionStartTime}
+							<ReframeSwitchLane
+								element={normalizedVideoElement}
+								sections={displayedAngleSections}
+								switches={displayedReframeSwitches}
+								activePresetId={activeReframePresetId}
+								activeSplitSectionId={activeSplitSection?.id ?? null}
+								selectedSectionStartTime={selectedReframeSectionStartTime}
 							onMarkerMouseDown={({ switchId, time, pointerOffsetPx }) =>
 								setDraggingReframeSwitch({ switchId, time, pointerOffsetPx })
 							}
@@ -1423,6 +1462,7 @@ function ReframeSwitchLane({
 	sections,
 	switches,
 	activePresetId,
+	activeSplitSectionId,
 	selectedSectionStartTime,
 	onMarkerMouseDown,
 	onMarkerClick,
@@ -1434,9 +1474,12 @@ function ReframeSwitchLane({
 		endTime: number;
 		presetId: string | null;
 		switchId: string | null;
+		splitSectionId: string | null;
+		isSplit: boolean;
 	}>;
 	switches: NonNullable<Extract<TimelineElementType, { type: "video" }>["reframeSwitches"]>;
 	activePresetId: string | null;
+	activeSplitSectionId: string | null;
 	selectedSectionStartTime: number | null;
 	onMarkerMouseDown: (params: {
 		switchId: string;
@@ -1460,14 +1503,18 @@ function ReframeSwitchLane({
 					const isSelected =
 						selectedSectionStartTime !== null &&
 						Math.abs(selectedSectionStartTime - section.startTime) <= 1 / 1000;
-					const isActive = section.presetId === activePresetId;
-					const presetName =
-						element.reframePresets?.find(
-							(preset) => preset.id === section.presetId,
-						)?.name ?? "Section";
+					const isActive = section.isSplit
+						? section.splitSectionId === activeSplitSectionId
+						: section.presetId === activePresetId &&
+							activeSplitSectionId === null;
+					const presetName = section.isSplit
+						? "Split Screen"
+						: (element.reframePresets?.find(
+								(preset) => preset.id === section.presetId,
+						  )?.name ?? "Section");
 					return (
 						<button
-							key={`${section.startTime}:${section.switchId ?? "default"}`}
+							key={`${section.startTime}:${section.switchId ?? section.splitSectionId ?? "default"}`}
 							type="button"
 							className={cn(
 								"pointer-events-auto absolute top-0 bottom-0 overflow-hidden border text-left",
@@ -1475,7 +1522,9 @@ function ReframeSwitchLane({
 									? "border-white/80 bg-white/18"
 									: isActive
 										? "border-white/35 bg-white/12"
-										: "border-white/15 bg-black/10",
+										: section.isSplit
+											? "border-sky-300/30 bg-sky-300/12"
+											: "border-white/15 bg-black/10",
 							)}
 							style={{
 								left: `${leftPercent}%`,
@@ -1492,7 +1541,12 @@ function ReframeSwitchLane({
 							title={presetName}
 						>
 							<div className="flex h-full items-center px-1.5">
-								<span className="truncate text-[9px] font-medium text-white/80">
+								<span
+									className={cn(
+										"truncate text-[9px] font-medium",
+										section.isSplit ? "text-sky-100/90" : "text-white/80",
+									)}
+								>
 									{presetName}
 								</span>
 							</div>

@@ -211,11 +211,13 @@ export function buildVideoElement({
 	name,
 	duration,
 	startTime,
+	transformScale,
 }: {
 	mediaId: string;
 	name: string;
 	duration: number;
 	startTime: number;
+	transformScale?: number;
 }): CreateVideoElement {
 	return {
 		type: "video",
@@ -227,7 +229,13 @@ export function buildVideoElement({
 		trimEnd: 0,
 		muted: false,
 		hidden: false,
-		transform: { ...DEFAULT_TRANSFORM },
+		transform: {
+			...DEFAULT_TRANSFORM,
+			scale:
+				typeof transformScale === "number" && Number.isFinite(transformScale)
+					? Math.max(1, transformScale)
+					: DEFAULT_TRANSFORM.scale,
+		},
 		opacity: DEFAULT_OPACITY,
 		blendMode: DEFAULT_BLEND_MODE,
 	};
@@ -297,6 +305,7 @@ export function buildElementFromMedia({
 	duration,
 	startTime,
 	buffer,
+	transformScale,
 }: {
 	mediaId: string;
 	mediaType: MediaType;
@@ -304,6 +313,7 @@ export function buildElementFromMedia({
 	duration: number;
 	startTime: number;
 	buffer?: AudioBuffer;
+	transformScale?: number;
 }): CreateTimelineElement {
 	switch (mediaType) {
 		case "audio":
@@ -315,7 +325,13 @@ export function buildElementFromMedia({
 				buffer,
 			});
 		case "video":
-			return buildVideoElement({ mediaId, name, duration, startTime });
+			return buildVideoElement({
+				mediaId,
+				name,
+				duration,
+				startTime,
+				transformScale,
+			});
 		case "image":
 			return buildImageElement({ mediaId, name, duration, startTime });
 	}

@@ -557,4 +557,97 @@ describe("scene builder live caption source resolution", () => {
 		expect(videoNode?.params?.splitScreen?.enabled).toBe(true);
 		expect(videoNode?.params?.splitScreen?.layoutPreset).toBe("top-bottom");
 	});
+
+	test("passes linked source split-screen config through to caption text nodes", () => {
+		const video: VideoElement = {
+			id: "video-1",
+			type: "video",
+			mediaId: "video-asset",
+			name: "Video 1",
+			startTime: 0,
+			duration: 5,
+			trimStart: 0,
+			trimEnd: 0,
+			transform: {
+				position: { x: 0, y: 0 },
+				scale: 1,
+				rotate: 0,
+			},
+			opacity: 1,
+			reframePresets: [
+				{
+					id: "subject-left",
+					name: "Subject Left",
+					transform: {
+						position: { x: -120, y: 0 },
+						scale: 2,
+					},
+				},
+				{
+					id: "subject-right",
+					name: "Subject Right",
+					transform: {
+						position: { x: 120, y: 0 },
+						scale: 2,
+					},
+				},
+			],
+			defaultReframePresetId: "subject-left",
+			splitScreen: {
+				enabled: true,
+				layoutPreset: "top-bottom",
+				slots: [
+					{ slotId: "top", mode: "fixed-preset", presetId: "subject-left" },
+					{ slotId: "bottom", mode: "fixed-preset", presetId: "subject-right" },
+				],
+				sections: [],
+			},
+		};
+		const caption = createCaption({ sourceMediaElementId: video.id });
+
+		const scene = buildScene({
+			tracks: [
+				{
+					id: "video-track",
+					type: "video",
+					name: "Video",
+					isMain: true,
+					muted: false,
+					hidden: false,
+					elements: [video],
+				},
+				{
+					id: "text-track",
+					type: "text",
+					name: "Text",
+					hidden: false,
+					elements: [caption],
+				},
+			],
+			mediaAssets: [
+				{
+					id: "video-asset",
+					name: "video.mp4",
+					type: "video",
+					width: 1920,
+					height: 1080,
+					duration: 5,
+					file: new File(["video"], "video.mp4", { type: "video/mp4" }),
+					url: "https://example.com/video.mp4",
+				},
+			],
+			duration: 5,
+			canvasSize: { width: 1080, height: 1920 },
+			background: { type: "color", color: "#000000" },
+		});
+
+		const textNode = scene.children.find(
+			(node) => node.constructor.name === "TextNode",
+		) as { params?: { captionSourceVideo?: { splitScreen?: VideoElement["splitScreen"] } } } | undefined;
+
+		expect(textNode?.params?.captionSourceVideo?.splitScreen?.enabled).toBe(true);
+		expect(textNode?.params?.captionSourceVideo?.splitScreen?.layoutPreset).toBe(
+			"top-bottom",
+		);
+	});
 });

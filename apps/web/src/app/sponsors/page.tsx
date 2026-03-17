@@ -3,18 +3,18 @@ import Image from "next/image";
 import Link from "next/link";
 import { BasePage } from "@/app/base-page";
 import { Card, CardContent } from "@/components/ui/card";
-import { SPONSORS, type Sponsor } from "@/constants/site-constants";
+import { BRAND_NAME, SPONSORS, type Sponsor } from "@/constants/site-constants";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { LinkSquare02Icon } from "@hugeicons/core-free-icons";
 
 export const metadata: Metadata = {
-	title: "Sponsors - OpenCut",
+	title: `Sponsors - ${BRAND_NAME}`,
 	description:
-		"Support OpenCut and help us build the future of free and open-source video editing.",
+		`Support ${BRAND_NAME} and help us build the future of free and open-source video editing.`,
 	openGraph: {
-		title: "Sponsors - OpenCut",
+		title: `Sponsors - ${BRAND_NAME}`,
 		description:
-			"Support OpenCut and help us build the future of free and open-source video editing.",
+			`Support ${BRAND_NAME} and help us build the future of free and open-source video editing.`,
 		type: "website",
 	},
 };
@@ -27,7 +27,7 @@ export default function SponsorsPage() {
 					Sponsors
 				</h1>
 				<p className="text-muted-foreground mx-auto max-w-2xl text-xl leading-relaxed text-pretty">
-					Support OpenCut and help us build the future of privacy-first video
+					Support {BRAND_NAME} and help us build the future of privacy-first video
 					editing.
 				</p>
 			</div>

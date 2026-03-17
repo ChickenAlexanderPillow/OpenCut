@@ -3,7 +3,7 @@ import { VisualNode, type VisualNodeParams } from "./visual-node";
 import { type VideoCache, videoCache } from "@/services/video-cache/service";
 import type { WebGPUVisualDrawData } from "../webgpu-types";
 import {
-	resolveVideoReframeTransform,
+	resolveVideoSplitScreenSlotTransform,
 	resolveVideoSplitScreenAtTime,
 } from "@/lib/reframe/video-reframe";
 
@@ -202,29 +202,27 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 		return splitScreen.slots.flatMap((slot) => {
 			const viewport = viewports.get(slot.slotId);
 			if (!viewport) return [];
-			const slotTransform = resolveVideoReframeTransform({
+			const slotTransform = resolveVideoSplitScreenSlotTransform({
 				baseTransform: this.params.transform,
 				duration: this.params.duration,
 				reframePresets: this.params.reframePresets,
-				reframeSwitches:
-					!slot.presetId
-						? this.params.reframeSwitches
-						: [
-								{
-									id: "__split-slot__",
-									time: 0,
-									presetId: slot.presetId,
-								},
-						  ],
-				defaultReframePresetId: slot.presetId ?? this.params.defaultReframePresetId,
+				reframeSwitches: this.params.reframeSwitches,
+				defaultReframePresetId: this.params.defaultReframePresetId,
 				localTime: clipElapsed,
+				slot,
+			});
+			const viewportAdjustedTransform = this.getViewportAdjustedTransform({
+				transform: slotTransform,
+				viewport,
+				rendererWidth,
+				rendererHeight,
 			});
 			const placement = this.getVisualPlacement({
 				rendererWidth: viewport.width,
 				rendererHeight: viewport.height,
 				sourceWidth,
 				sourceHeight,
-				transform: slotTransform,
+				transform: viewportAdjustedTransform,
 				offsetX: viewport.x,
 				offsetY: viewport.y,
 			});

@@ -2,11 +2,13 @@ import { describe, expect, test } from "bun:test";
 import {
 	applySelectedReframePresetPreviewToTracks,
 	buildDefaultVideoSplitScreenBindings,
+	deriveVideoAngleSections,
 	deriveVideoSplitScreenSectionRanges,
 	getActiveReframePresetId,
 	getVideoSplitScreenSectionAtTime,
 	replaceOrInsertReframeSwitch,
 	resolveVideoSplitScreenAtTime,
+	resolveVideoSplitScreenSlotTransform,
 	resolveVideoBaseTransformAtTime,
 	resolveVideoReframeTransform,
 } from "../video-reframe";
@@ -196,8 +198,18 @@ describe("video reframe resolution", () => {
 		});
 
 		expect(resolved?.slots).toEqual([
-			{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
-			{ slotId: "bottom", mode: "follow-active", presetId: "subject" },
+			{
+				slotId: "top",
+				mode: "fixed-preset",
+				presetId: "wide",
+				transformOverride: null,
+			},
+			{
+				slotId: "bottom",
+				mode: "follow-active",
+				presetId: "subject",
+				transformOverride: null,
+			},
 		]);
 	});
 
@@ -234,12 +246,12 @@ describe("video reframe resolution", () => {
 
 		expect(
 			buildDefaultVideoSplitScreenBindings({
-				layoutPreset: "left-right",
+				layoutPreset: "top-bottom",
 				presets: presetsWithNamedSides,
 			}),
 		).toEqual([
-			{ slotId: "left", mode: "fixed-preset", presetId: "subject-left" },
-			{ slotId: "right", mode: "fixed-preset", presetId: "subject-right" },
+			{ slotId: "top", mode: "fixed-preset", presetId: "subject-left" },
+			{ slotId: "bottom", mode: "fixed-preset", presetId: "subject-right" },
 		]);
 	});
 
@@ -248,18 +260,18 @@ describe("video reframe resolution", () => {
 			...baseElement,
 			splitScreen: {
 				enabled: true,
-				layoutPreset: "left-right",
+				layoutPreset: "top-bottom",
 				slots: [
-					{ slotId: "left", mode: "follow-active", presetId: null },
-					{ slotId: "right", mode: "fixed-preset", presetId: "subject" },
+					{ slotId: "top", mode: "follow-active", presetId: null },
+					{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
 				],
 				sections: [
 					{
 						id: "section-1",
 						startTime: 2,
 						slots: [
-							{ slotId: "left", mode: "fixed-preset", presetId: "subject" },
-							{ slotId: "right", mode: "fixed-preset", presetId: "wide" },
+							{ slotId: "top", mode: "fixed-preset", presetId: "subject" },
+							{ slotId: "bottom", mode: "fixed-preset", presetId: "wide" },
 						],
 					},
 				],
@@ -275,9 +287,87 @@ describe("video reframe resolution", () => {
 			"section-1",
 		);
 		expect(resolved?.slots).toEqual([
-			{ slotId: "left", mode: "fixed-preset", presetId: "subject" },
-			{ slotId: "right", mode: "fixed-preset", presetId: "wide" },
+			{
+				slotId: "top",
+				mode: "fixed-preset",
+				presetId: "subject",
+				transformOverride: null,
+			},
+			{
+				slotId: "bottom",
+				mode: "fixed-preset",
+				presetId: "wide",
+				transformOverride: null,
+			},
 		]);
+	});
+
+	test("split-screen slot transform overrides stay separate from the bound preset", () => {
+		const resolved = resolveVideoSplitScreenSlotTransform({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: baseElement.reframePresets,
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				presetId: "subject",
+				transformOverride: {
+					position: { x: 360, y: -120 },
+					scale: 3.4,
+				},
+			},
+		});
+
+		expect(resolved).toEqual({
+			position: { x: 360, y: -120 },
+			scale: 3.4,
+			rotate: 12,
+		});
+		expect(
+			baseElement.reframePresets?.find((preset) => preset.id === "subject")?.transform,
+		).toEqual({
+			position: { x: 120, y: -40 },
+			scale: 2.5,
+		});
+	});
+
+	test("split-screen section can disable split mode for a timed segment", () => {
+		const element: VideoElement = {
+			...baseElement,
+			splitScreen: {
+				enabled: true,
+				layoutPreset: "top-bottom",
+				slots: [
+					{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+					{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+				],
+				sections: [
+					{
+						id: "single-view",
+						startTime: 2,
+						enabled: false,
+						slots: [
+							{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+							{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+						],
+					},
+				],
+			},
+		};
+
+		expect(
+			resolveVideoSplitScreenAtTime({
+				element,
+				localTime: 1,
+			}),
+		).not.toBeNull();
+		expect(
+			resolveVideoSplitScreenAtTime({
+				element,
+				localTime: 3,
+			}),
+		).toBeNull();
 	});
 
 	test("derives split-screen section ranges including the default segment", () => {
@@ -312,9 +402,53 @@ describe("video reframe resolution", () => {
 		};
 
 		expect(deriveVideoSplitScreenSectionRanges({ element })).toEqual([
-			{ startTime: 0, endTime: 2, sectionId: null },
-			{ startTime: 2, endTime: 6, sectionId: "section-1" },
-			{ startTime: 6, endTime: 10, sectionId: "section-2" },
+			{ startTime: 0, endTime: 2, sectionId: null, enabled: true },
+			{ startTime: 2, endTime: 6, sectionId: "section-1", enabled: true },
+			{ startTime: 6, endTime: 10, sectionId: "section-2", enabled: true },
+		]);
+	});
+
+	test("derives timeline angle sections with split taking precedence", () => {
+		const element: VideoElement = {
+			...baseElement,
+			splitScreen: {
+				enabled: false,
+				layoutPreset: "top-bottom",
+				slots: [
+					{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+					{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+				],
+				sections: [
+					{
+						id: "split-at-switch",
+						startTime: 4,
+						enabled: true,
+						slots: [
+							{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+							{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+						],
+					},
+				],
+			},
+		};
+
+		expect(deriveVideoAngleSections({ element })).toEqual([
+			{
+				startTime: 0,
+				endTime: 4,
+				presetId: "wide",
+				switchId: null,
+				splitSectionId: null,
+				isSplit: false,
+			},
+			{
+				startTime: 4,
+				endTime: 10,
+				presetId: "subject",
+				switchId: "switch-1",
+				splitSectionId: "split-at-switch",
+				isSplit: true,
+			},
 		]);
 	});
 });

@@ -152,6 +152,20 @@ function clampSafeAreaBottomOffset(value: number): number {
 	return Math.max(-500, Math.min(500, Math.round(value)));
 }
 
+function clampSplitScreenSlotAnchor(
+	value: string | undefined,
+): "auto" | "top" | "bottom" | "left" | "right" {
+	if (
+		value === "top" ||
+		value === "bottom" ||
+		value === "left" ||
+		value === "right"
+	) {
+		return value;
+	}
+	return "auto";
+}
+
 function getPresetFromWords(words: number): CaptionWordPreset | "custom" {
 	if (words === CAPTION_WORD_PRESETS.compact) return "compact";
 	if (words === CAPTION_WORD_PRESETS.balanced) return "balanced";
@@ -221,6 +235,46 @@ function captureCaptionPresetSnapshot({
 			safeAreaBottomOffset: clampSafeAreaBottomOffset(
 				element.captionStyle?.safeAreaBottomOffset ?? 0,
 			),
+			splitScreenOverrides: element.captionStyle?.splitScreenOverrides
+				? {
+						enabled: element.captionStyle.splitScreenOverrides.enabled ?? true,
+						anchorToSplitViewport:
+							element.captionStyle.splitScreenOverrides.anchorToSplitViewport ?? true,
+						slotAnchor: clampSplitScreenSlotAnchor(
+							element.captionStyle.splitScreenOverrides.slotAnchor,
+						),
+						fitInCanvas:
+							element.captionStyle.splitScreenOverrides.fitInCanvas ??
+							element.captionStyle?.fitInCanvas ??
+							true,
+						wordsOnScreen:
+							element.captionStyle.splitScreenOverrides.wordsOnScreen ??
+							element.captionStyle?.wordsOnScreen ??
+							CAPTION_WORD_PRESETS.balanced,
+						maxLinesOnScreen:
+							element.captionStyle.splitScreenOverrides.maxLinesOnScreen ??
+							element.captionStyle?.maxLinesOnScreen ??
+							2,
+						anchorToSafeAreaBottom:
+							element.captionStyle.splitScreenOverrides.anchorToSafeAreaBottom ??
+							element.captionStyle?.anchorToSafeAreaBottom ??
+							true,
+						safeAreaBottomOffset: clampSafeAreaBottomOffset(
+							element.captionStyle.splitScreenOverrides.safeAreaBottomOffset ??
+								element.captionStyle?.safeAreaBottomOffset ??
+								0,
+						),
+						anchorToSafeAreaTop:
+							element.captionStyle.splitScreenOverrides.anchorToSafeAreaTop ??
+							element.captionStyle?.anchorToSafeAreaTop ??
+							false,
+						safeAreaTopOffset: clampSafeAreaBottomOffset(
+							element.captionStyle.splitScreenOverrides.safeAreaTopOffset ??
+								element.captionStyle?.safeAreaTopOffset ??
+								0,
+						),
+				  }
+				: undefined,
 		},
 	};
 }
@@ -428,6 +482,34 @@ function CaptionSection({
 	const editor = useEditor();
 	const hasCaptionData = (element.captionWordTimings?.length ?? 0) > 0;
 	const isLinkedToGroup = element.captionStyle?.linkedToCaptionGroup !== false;
+	const updateCaptionStyle = (
+		updates: Partial<NonNullable<TextElement["captionStyle"]>>,
+	) =>
+		editor.timeline.updateElements({
+			updates: [
+				{
+					trackId,
+					elementId: element.id,
+					updates: {
+						captionStyle: {
+							...(element.captionStyle ?? {}),
+							...updates,
+						},
+					},
+				},
+			],
+		});
+	const updateSplitScreenCaptionOverrides = (
+		updates: Partial<
+			NonNullable<NonNullable<TextElement["captionStyle"]>["splitScreenOverrides"]>
+		>,
+	) =>
+		updateCaptionStyle({
+			splitScreenOverrides: {
+				...(element.captionStyle?.splitScreenOverrides ?? {}),
+				...updates,
+			},
+		});
 
 	const findSourceLinkedCaption = () => {
 		const tracks = editor.timeline.getTracks();
@@ -676,6 +758,108 @@ function CaptionSection({
 							captionStyle: {
 								...(element.captionStyle ?? {}),
 								maxLinesOnScreen: value,
+							},
+						},
+					},
+				],
+			}),
+		onCommit: () => editor.timeline.commitPreview(),
+	});
+	const splitWordsOnScreen = usePropertyDraft({
+		displayValue: String(
+			clampWordsOnScreen(
+				element.captionStyle?.splitScreenOverrides?.wordsOnScreen ??
+					element.captionStyle?.wordsOnScreen ??
+					CAPTION_WORD_PRESETS.balanced,
+			),
+		),
+		parse: (input) => {
+			const parsed = parseFloat(input);
+			if (Number.isNaN(parsed)) return null;
+			return clampWordsOnScreen(parsed);
+		},
+		onPreview: (value) =>
+			editor.timeline.previewElements({
+				updates: [
+					{
+						trackId,
+						elementId: element.id,
+						updates: {
+							captionStyle: {
+								...(element.captionStyle ?? {}),
+								splitScreenOverrides: {
+									...(element.captionStyle?.splitScreenOverrides ?? {}),
+									wordsOnScreen: value,
+								},
+							},
+						},
+					},
+				],
+			}),
+		onCommit: () => editor.timeline.commitPreview(),
+	});
+	const splitMaxLinesOnScreen = usePropertyDraft({
+		displayValue: String(
+			clampMaxLinesOnScreen(
+				element.captionStyle?.splitScreenOverrides?.maxLinesOnScreen ??
+					element.captionStyle?.maxLinesOnScreen ??
+					2,
+			),
+		),
+		parse: (input) => {
+			const parsed = parseFloat(input);
+			if (Number.isNaN(parsed)) return null;
+			return clampMaxLinesOnScreen(parsed);
+		},
+		onPreview: (value) =>
+			editor.timeline.previewElements({
+				updates: [
+					{
+						trackId,
+						elementId: element.id,
+						updates: {
+							captionStyle: {
+								...(element.captionStyle ?? {}),
+								splitScreenOverrides: {
+									...(element.captionStyle?.splitScreenOverrides ?? {}),
+									maxLinesOnScreen: value,
+								},
+							},
+						},
+					},
+				],
+			}),
+		onCommit: () => editor.timeline.commitPreview(),
+	});
+	const splitSafeAreaOffset = usePropertyDraft({
+		displayValue: String(
+			clampSafeAreaBottomOffset(
+				(element.captionStyle?.splitScreenOverrides?.anchorToSafeAreaTop ?? false)
+					? (element.captionStyle?.splitScreenOverrides?.safeAreaTopOffset ?? 0)
+					: (element.captionStyle?.splitScreenOverrides?.safeAreaBottomOffset ?? 0),
+			),
+		),
+		parse: (input) => {
+			const parsed = parseFloat(input);
+			if (Number.isNaN(parsed)) return null;
+			return clampSafeAreaBottomOffset(parsed);
+		},
+		onPreview: (value) =>
+			editor.timeline.previewElements({
+				updates: [
+					{
+						trackId,
+						elementId: element.id,
+						updates: {
+							captionStyle: {
+								...(element.captionStyle ?? {}),
+								splitScreenOverrides: {
+									...(element.captionStyle?.splitScreenOverrides ?? {}),
+									...((element.captionStyle?.splitScreenOverrides
+										?.anchorToSafeAreaTop ?? false)
+										? { safeAreaTopOffset: value }
+										: { safeAreaBottomOffset: value }),
+								},
 							},
 						},
 					},
@@ -1007,6 +1191,195 @@ function CaptionSection({
 							icon="L"
 						/>
 					</SectionField>
+					<div className="rounded-sm border p-2">
+						<div className="mb-2 flex items-center justify-between">
+							<span className="text-muted-foreground text-xs">
+								Split-screen caption overrides
+							</span>
+							<Checkbox
+								checked={
+									element.captionStyle?.splitScreenOverrides?.enabled !== false
+								}
+								onCheckedChange={(checked) =>
+									updateSplitScreenCaptionOverrides({
+										enabled: Boolean(checked),
+									})
+								}
+							/>
+						</div>
+						<div className="grid gap-2">
+							<div className="flex items-center justify-between rounded-sm border px-2 py-2">
+								<span className="text-muted-foreground text-xs">
+									Anchor to split viewport
+								</span>
+								<Checkbox
+									checked={
+										element.captionStyle?.splitScreenOverrides
+											?.anchorToSplitViewport ?? true
+									}
+									onCheckedChange={(checked) =>
+										updateSplitScreenCaptionOverrides({
+											anchorToSplitViewport: Boolean(checked),
+										})
+									}
+								/>
+							</div>
+							<SectionField label="Viewport anchor">
+								<Select
+									value={
+										clampSplitScreenSlotAnchor(
+											element.captionStyle?.splitScreenOverrides?.slotAnchor,
+										)
+									}
+									onValueChange={(value) =>
+										updateSplitScreenCaptionOverrides({
+											slotAnchor: clampSplitScreenSlotAnchor(value),
+										})
+									}
+								>
+									<SelectTrigger>
+										<SelectValue placeholder="Select split anchor" />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="auto">Auto</SelectItem>
+										<SelectItem value="top">Top</SelectItem>
+										<SelectItem value="bottom">Bottom</SelectItem>
+										<SelectItem value="left">Left</SelectItem>
+										<SelectItem value="right">Right</SelectItem>
+									</SelectContent>
+								</Select>
+							</SectionField>
+							<div className="flex items-center justify-between rounded-sm border px-2 py-2">
+								<span className="text-muted-foreground text-xs">
+									Keep inside split viewport
+								</span>
+								<Checkbox
+									checked={
+										element.captionStyle?.splitScreenOverrides?.fitInCanvas ??
+										element.captionStyle?.fitInCanvas ??
+										true
+									}
+									onCheckedChange={(checked) =>
+										updateSplitScreenCaptionOverrides({
+											fitInCanvas: Boolean(checked),
+										})
+									}
+								/>
+							</div>
+							<SectionField label="Split words on screen">
+								<NumberField
+									value={splitWordsOnScreen.displayValue}
+									min={1}
+									max={12}
+									onFocus={splitWordsOnScreen.onFocus}
+									onChange={splitWordsOnScreen.onChange}
+									onBlur={splitWordsOnScreen.onBlur}
+									onScrub={splitWordsOnScreen.scrubTo}
+									onScrubEnd={splitWordsOnScreen.commitScrub}
+									onReset={() =>
+										updateSplitScreenCaptionOverrides({
+											wordsOnScreen: element.captionStyle?.wordsOnScreen ??
+												CAPTION_WORD_PRESETS.balanced,
+										})
+									}
+									isDefault={
+										clampWordsOnScreen(
+											element.captionStyle?.splitScreenOverrides?.wordsOnScreen ??
+												element.captionStyle?.wordsOnScreen ??
+												CAPTION_WORD_PRESETS.balanced,
+										) ===
+										clampWordsOnScreen(
+											element.captionStyle?.wordsOnScreen ??
+												CAPTION_WORD_PRESETS.balanced,
+										)
+									}
+									icon="W"
+								/>
+							</SectionField>
+							<SectionField label="Split max lines">
+								<NumberField
+									value={splitMaxLinesOnScreen.displayValue}
+									min={1}
+									max={4}
+									onFocus={splitMaxLinesOnScreen.onFocus}
+									onChange={splitMaxLinesOnScreen.onChange}
+									onBlur={splitMaxLinesOnScreen.onBlur}
+									onScrub={splitMaxLinesOnScreen.scrubTo}
+									onScrubEnd={splitMaxLinesOnScreen.commitScrub}
+									onReset={() =>
+										updateSplitScreenCaptionOverrides({
+											maxLinesOnScreen:
+												element.captionStyle?.maxLinesOnScreen ?? 2,
+										})
+									}
+									isDefault={
+										clampMaxLinesOnScreen(
+											element.captionStyle?.splitScreenOverrides
+												?.maxLinesOnScreen ??
+												element.captionStyle?.maxLinesOnScreen ??
+												2,
+										) ===
+										clampMaxLinesOnScreen(
+											element.captionStyle?.maxLinesOnScreen ?? 2,
+										)
+									}
+									icon="L"
+								/>
+							</SectionField>
+							<div className="flex items-center justify-between rounded-sm border px-2 py-2">
+								<span className="text-muted-foreground text-xs">
+									Anchor split captions to safe area top
+								</span>
+								<Checkbox
+									checked={
+										element.captionStyle?.splitScreenOverrides
+											?.anchorToSafeAreaTop ?? false
+									}
+									onCheckedChange={(checked) =>
+										updateSplitScreenCaptionOverrides({
+											anchorToSafeAreaTop: Boolean(checked),
+											anchorToSafeAreaBottom: Boolean(checked)
+												? false
+												: (element.captionStyle?.splitScreenOverrides
+														?.anchorToSafeAreaBottom ??
+													true),
+										})
+									}
+								/>
+							</div>
+							<SectionField label="Split Y offset">
+								<NumberField
+									icon="Y"
+									value={splitSafeAreaOffset.displayValue}
+									min={-500}
+									max={500}
+									onFocus={splitSafeAreaOffset.onFocus}
+									onChange={splitSafeAreaOffset.onChange}
+									onBlur={splitSafeAreaOffset.onBlur}
+									onScrub={splitSafeAreaOffset.scrubTo}
+									onScrubEnd={splitSafeAreaOffset.commitScrub}
+									onReset={() =>
+										updateSplitScreenCaptionOverrides({
+											...((element.captionStyle?.splitScreenOverrides
+												?.anchorToSafeAreaTop ?? false)
+												? { safeAreaTopOffset: 0 }
+												: { safeAreaBottomOffset: 0 }),
+										})
+									}
+									isDefault={
+										clampSafeAreaBottomOffset(
+											(element.captionStyle?.splitScreenOverrides
+												?.anchorToSafeAreaTop ?? false)
+												? (element.captionStyle?.splitScreenOverrides
+														?.safeAreaTopOffset ?? 0)
+												: (element.captionStyle?.splitScreenOverrides
+														?.safeAreaBottomOffset ?? 0),
+										) === 0
+									}
+								/>
+							</SectionField>
+						</div>
+					</div>
 					<div className="flex items-center justify-between rounded-sm border px-2 py-2">
 						<span className="text-muted-foreground text-xs">
 							Link style across captions

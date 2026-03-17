@@ -3,6 +3,7 @@ import { BasePage } from "@/app/base-page";
 import { GitHubContributeSection } from "@/components/gitHub-contribute-section";
 import { Badge } from "@/components/ui/badge";
 import { ReactMarkdownWrapper } from "@/components/ui/react-markdown-wrapper";
+import { BRAND_NAME } from "@/constants/site-constants";
 import { cn } from "@/utils/ui";
 
 const LAST_UPDATED = "February 25, 2026";
@@ -51,7 +52,7 @@ const roadmapItems: RoadmapItem[] = [
 	{
 		title: "Native app (mobile/desktop)",
 		description:
-			"Native OpenCut apps for Mac, Windows, Linux, and iOS/Android.",
+			`Native ${BRAND_NAME} apps for Mac, Windows, Linux, and iOS/Android.`,
 		status: {
 			text: "Not started",
 			type: "default",
@@ -60,28 +61,28 @@ const roadmapItems: RoadmapItem[] = [
 ];
 
 export const metadata: Metadata = {
-	title: "Roadmap - OpenCut",
+	title: `Roadmap - ${BRAND_NAME}`,
 	description:
-		"See what's coming next for OpenCut - the free, open-source video editor that respects your privacy.",
+		`See what's coming next for ${BRAND_NAME} - the free, open-source video editor that respects your privacy.`,
 	openGraph: {
-		title: "OpenCut Roadmap - What's Coming Next",
+		title: `${BRAND_NAME} Roadmap - What's Coming Next`,
 		description:
-			"See what's coming next for OpenCut - the free, open-source video editor that respects your privacy.",
+			`See what's coming next for ${BRAND_NAME} - the free, open-source video editor that respects your privacy.`,
 		type: "website",
 		images: [
 			{
 				url: "/open-graph/roadmap.jpg",
 				width: 1200,
 				height: 630,
-				alt: "OpenCut Roadmap",
+				alt: `${BRAND_NAME} roadmap`,
 			},
 		],
 	},
 	twitter: {
 		card: "summary_large_image",
-		title: "OpenCut Roadmap - What's Coming Next",
+		title: `${BRAND_NAME} Roadmap - What's Coming Next`,
 		description:
-			"See what's coming next for OpenCut - the free, open-source video editor that respects your privacy.",
+			`See what's coming next for ${BRAND_NAME} - the free, open-source video editor that respects your privacy.`,
 		images: ["/open-graph/roadmap.jpg"],
 	},
 };
@@ -90,7 +91,7 @@ export default function RoadmapPage() {
 	return (
 		<BasePage
 			title="Roadmap"
-			description={`What's coming next for OpenCut (last updated: ${LAST_UPDATED})`}
+			description={`What's coming next for ${BRAND_NAME} (last updated: ${LAST_UPDATED})`}
 		>
 			<div className="mx-auto flex max-w-4xl flex-col gap-16">
 				<div className="flex flex-col gap-6">
@@ -100,9 +101,9 @@ export default function RoadmapPage() {
 				</div>
 				<GitHubContributeSection
 					title="Want to help?"
-					description="OpenCut is open source and built by the community. Every contribution,
+					description={`${BRAND_NAME} is open source and built by the community. Every contribution,
           no matter how small, helps us build the best free video editor
-          possible."
+          possible.`}
 				/>
 			</div>
 		</BasePage>
