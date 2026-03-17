@@ -468,6 +468,70 @@ describe("video reframe resolution", () => {
 		expect(resolved.rotate).toBe(12);
 	});
 
+	test("split-screen binding remembers separate transforms for balanced and unbalanced variants", () => {
+		const balanced = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: baseElement.reframePresets,
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: "subject",
+				transformAdjustmentsBySlotId: {
+					"balanced:bottom": {
+						sourceCenterOffset: { x: 60, y: 0 },
+						scaleMultiplier: 1,
+					},
+					"unbalanced:bottom": {
+						sourceCenterOffset: { x: 0, y: -80 },
+						scaleMultiplier: 0.85,
+					},
+				},
+			},
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+		});
+
+		const unbalanced = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: baseElement.reframePresets,
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: "subject",
+				transformAdjustmentsBySlotId: {
+					"balanced:bottom": {
+						sourceCenterOffset: { x: 60, y: 0 },
+						scaleMultiplier: 1,
+					},
+					"unbalanced:bottom": {
+						sourceCenterOffset: { x: 0, y: -80 },
+						scaleMultiplier: 0.85,
+					},
+				},
+			},
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "unbalanced",
+		});
+
+		expect(balanced.position.x).not.toBe(unbalanced.position.x);
+		expect(balanced.position.y).not.toBe(unbalanced.position.y);
+		expect(balanced.scale).not.toBe(unbalanced.scale);
+	});
+
 	test("split-screen section can disable split mode for a timed segment", () => {
 		const element: VideoElement = {
 			...baseElement,

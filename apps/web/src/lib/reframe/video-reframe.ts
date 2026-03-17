@@ -24,6 +24,16 @@ const SPLIT_LAYOUT_SLOTS: Record<VideoSplitScreenLayoutPreset, string[]> = {
 	"top-bottom": ["top", "bottom"],
 };
 
+export function getVideoSplitScreenVariantKey({
+	slotId,
+	viewportBalance = DEFAULT_SPLIT_VIEWPORT_BALANCE,
+}: {
+	slotId: string;
+	viewportBalance?: VideoSplitScreenViewportBalance;
+}): string {
+	return `${viewportBalance}:${slotId}`;
+}
+
 export interface VideoReframeSection {
 	startTime: number;
 	endTime: number;
@@ -149,13 +159,23 @@ export function getEffectiveVideoSplitScreenSlotTransformOverride({
 
 export function getEffectiveVideoSplitScreenSlotTransformAdjustment({
 	slot,
+	viewportBalance = DEFAULT_SPLIT_VIEWPORT_BALANCE,
 }: {
 	slot: Pick<VideoSplitScreenSlotBinding, "transformAdjustmentsBySlotId"> & {
 		slotId?: string;
 	};
+	viewportBalance?: VideoSplitScreenViewportBalance;
 }): VideoSplitScreenSlotTransformAdjustment | null {
 	if (!slot.slotId) return null;
-	return slot.transformAdjustmentsBySlotId?.[slot.slotId] ?? null;
+	const variantKey = getVideoSplitScreenVariantKey({
+		slotId: slot.slotId,
+		viewportBalance,
+	});
+	return (
+		slot.transformAdjustmentsBySlotId?.[variantKey] ??
+		slot.transformAdjustmentsBySlotId?.[slot.slotId] ??
+		null
+	);
 }
 
 function getFitBaseScale({
@@ -1476,6 +1496,7 @@ function resolveVideoSplitScreenSlotTransformWithViewport({
 	});
 	const adjustment = getEffectiveVideoSplitScreenSlotTransformAdjustment({
 		slot,
+		viewportBalance,
 	});
 	if (!slot.slotId) {
 		return legacyOverride

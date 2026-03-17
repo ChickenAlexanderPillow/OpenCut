@@ -19,6 +19,7 @@ import {
 	buildDefaultVideoSplitScreenBindings,
 	deriveVideoSplitScreenSlotAdjustmentFromTransform,
 	deriveVideoAngleSections,
+	getVideoSplitScreenVariantKey,
 	getVideoAngleSectionAtTime,
 	getVideoAngleSectionByStartTime,
 	getSelectedOrActiveReframePresetId,
@@ -410,6 +411,10 @@ export function ReframeView() {
 			: "preset";
 	const effectiveSplitViewportBalance =
 		previewSplitViewportBalance ?? splitScreen?.viewportBalance ?? "balanced";
+	const splitViewportBalanceLabel =
+		effectiveSplitViewportBalance === "balanced"
+			? "Balanced 1:1"
+			: "Unbalanced 1:2";
 
 	useEffect(() => {
 		if (!normalizedVideo) return;
@@ -469,10 +474,12 @@ export function ReframeView() {
 	const withBindingSlotAdjustment = ({
 		binding,
 		slotId = binding.slotId,
+		viewportBalance = effectiveSplitViewportBalance,
 		transformAdjustment,
 	}: {
 		binding: VideoSplitScreenSlotBinding;
 		slotId?: string;
+		viewportBalance?: VideoSplitScreenViewportBalance;
 		transformAdjustment: NonNullable<
 			VideoSplitScreenSlotBinding["transformAdjustmentsBySlotId"]
 		>[string];
@@ -481,7 +488,10 @@ export function ReframeView() {
 		slotId,
 		transformAdjustmentsBySlotId: {
 			...(binding.transformAdjustmentsBySlotId ?? {}),
-			[slotId]: transformAdjustment,
+			[getVideoSplitScreenVariantKey({
+				slotId,
+				viewportBalance,
+			})]: transformAdjustment,
 		},
 	});
 	const editableSplitBindings = resolveConcreteSplitBindings(
@@ -1231,98 +1241,102 @@ export function ReframeView() {
 												{binding.slotId}
 											</div>
 											<div className="flex items-center gap-2">
-												{(() => {
-													const selectedSlotPreset =
-														normalizedVideo.element.reframePresets?.find(
-															(preset) => preset.id === binding.presetId,
-														) ?? null;
-													return selectedSlotPreset ? (
-														<ReframePresetGlyph
-															name={selectedSlotPreset.name}
-														/>
-													) : (
-														<div className="bg-muted flex size-7 items-center justify-center rounded-md border" />
-													);
-												})()}
-												<select
-													className="bg-background h-8 flex-1 rounded-md border px-2 text-sm"
-													value={`fixed:${binding.presetId ?? ""}`}
-													onClick={(event) => event.stopPropagation()}
-													onChange={(event) => {
-														updateSplitBindings({
-															slotId: binding.slotId,
-															presetId:
-																event.target.value.replace(/^fixed:/, "") ||
-																null,
-														});
-													}}
-												>
+												<div className="flex flex-1 flex-wrap gap-1.5">
 													{(normalizedVideo.element.reframePresets ?? []).map(
-														(preset) => (
-															<option
-																key={preset.id}
-																value={`fixed:${preset.id}`}
-															>
-																{preset.name}
-															</option>
-														),
+														(preset) => {
+															const isActive =
+																(binding.presetId ?? null) === preset.id;
+															return (
+																<button
+																	key={`${binding.slotId}:${preset.id}`}
+																	type="button"
+																	className={cn(
+																		"bg-background hover:bg-muted/70 inline-flex h-8 min-w-8 items-center justify-center rounded-md border px-2 transition-colors",
+																		isActive &&
+																			"border-primary bg-primary/8 text-primary",
+																	)}
+																	title={preset.name}
+																	aria-pressed={isActive}
+																	onClick={(event) => {
+																		event.stopPropagation();
+																		updateSplitBindings({
+																			slotId: binding.slotId,
+																			presetId: preset.id,
+																		});
+																	}}
+																>
+																	<QuickAngleGlyph
+																		kind={getQuickAngleGlyphKind(preset.name)}
+																		className="size-4"
+																	/>
+																</button>
+															);
+														},
 													)}
-												</select>
+												</div>
 											</div>
 											{(() => {
 												const slotTransform = getSplitSlotTransform(binding);
 												return (
-													<div className="col-span-2 mt-2 grid grid-cols-3 gap-2">
-														<ReframeScrubber
-															label="X"
-															value={slotTransform.position.x}
-															min={-1200}
-															max={1200}
-															step={1}
-															formatValue={(value) =>
-																Math.round(value).toString()
-															}
-															onChange={(value, pushHistory) =>
-																updateSplitSlotTransform({
-																	slotId: binding.slotId,
-																	updates: { x: value },
-																	pushHistory,
-																})
-															}
-														/>
-														<ReframeScrubber
-															label="Y"
-															value={slotTransform.position.y}
-															min={-1200}
-															max={1200}
-															step={1}
-															formatValue={(value) =>
-																Math.round(value).toString()
-															}
-															onChange={(value, pushHistory) =>
-																updateSplitSlotTransform({
-																	slotId: binding.slotId,
-																	updates: { y: value },
-																	pushHistory,
-																})
-															}
-														/>
-														<ReframeScrubber
-															label="Scale"
-															value={slotTransform.scale}
-															min={0.5}
-															max={8}
-															step={0.01}
-															dragScale={0.01}
-															formatValue={(value) => value.toFixed(2)}
-															onChange={(value, pushHistory) =>
-																updateSplitSlotTransform({
-																	slotId: binding.slotId,
-																	updates: { scale: value },
-																	pushHistory,
-																})
-															}
-														/>
+													<div className="col-span-2 mt-2">
+														<div className="text-muted-foreground mb-2 text-[11px]">
+															Editing {binding.slotId} ·{" "}
+															<span className="text-foreground font-medium">
+																{splitViewportBalanceLabel}
+															</span>
+														</div>
+														<div className="grid grid-cols-3 gap-2">
+															<ReframeScrubber
+																label="X"
+																value={slotTransform.position.x}
+																min={-1200}
+																max={1200}
+																step={1}
+																formatValue={(value) =>
+																	Math.round(value).toString()
+																}
+																onChange={(value, pushHistory) =>
+																	updateSplitSlotTransform({
+																		slotId: binding.slotId,
+																		updates: { x: value },
+																		pushHistory,
+																	})
+																}
+															/>
+															<ReframeScrubber
+																label="Y"
+																value={slotTransform.position.y}
+																min={-1200}
+																max={1200}
+																step={1}
+																formatValue={(value) =>
+																	Math.round(value).toString()
+																}
+																onChange={(value, pushHistory) =>
+																	updateSplitSlotTransform({
+																		slotId: binding.slotId,
+																		updates: { y: value },
+																		pushHistory,
+																	})
+																}
+															/>
+															<ReframeScrubber
+																label="Scale"
+																value={slotTransform.scale}
+																min={0.5}
+																max={8}
+																step={0.01}
+																dragScale={0.01}
+																formatValue={(value) => value.toFixed(2)}
+																onChange={(value, pushHistory) =>
+																	updateSplitSlotTransform({
+																		slotId: binding.slotId,
+																		updates: { scale: value },
+																		pushHistory,
+																	})
+																}
+															/>
+														</div>
 													</div>
 												);
 											})()}
@@ -1500,17 +1514,24 @@ export function ReframeView() {
 }
 
 function ReframePresetGlyph({ name }: { name: string }) {
-	const normalized = name.trim().toLowerCase();
-	const kind = normalized.includes("left")
-		? "subject-left"
-		: normalized.includes("right")
-			? "subject-right"
-			: "subject";
 	return (
 		<div className="bg-muted flex size-7 items-center justify-center rounded-md border">
-			<QuickAngleGlyph kind={kind} className="size-4" />
+			<QuickAngleGlyph kind={getQuickAngleGlyphKind(name)} className="size-4" />
 		</div>
 	);
+}
+
+function getQuickAngleGlyphKind(
+	name: string,
+): "subject" | "subject-left" | "subject-right" {
+	const normalized = name.trim().toLowerCase();
+	if (normalized.includes("left")) {
+		return "subject-left";
+	}
+	if (normalized.includes("right")) {
+		return "subject-right";
+	}
+	return "subject";
 }
 
 function SplitScreenPresetGlyph() {
