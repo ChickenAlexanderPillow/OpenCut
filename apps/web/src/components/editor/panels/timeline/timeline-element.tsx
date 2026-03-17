@@ -2056,13 +2056,28 @@ function SectionThumbnailStrip({
 
 		const waitForRenderedFrame = () =>
 			new Promise<void>((resolve) => {
+				let settled = false;
+				let timeoutId: number | null = null;
+				let callbackHandle: number | null = null;
 				const finish = () => {
+					if (settled) return;
+					settled = true;
+					if (
+						callbackHandle !== null &&
+						typeof video.cancelVideoFrameCallback === "function"
+					) {
+						video.cancelVideoFrameCallback(callbackHandle);
+					}
+					if (timeoutId !== null) {
+						window.clearTimeout(timeoutId);
+					}
 					requestAnimationFrame(() => {
 						requestAnimationFrame(() => resolve());
 					});
 				};
+				timeoutId = window.setTimeout(finish, 80);
 				if (typeof video.requestVideoFrameCallback === "function") {
-					video.requestVideoFrameCallback(() => finish());
+					callbackHandle = video.requestVideoFrameCallback(() => finish());
 					return;
 				}
 				finish();

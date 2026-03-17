@@ -19,16 +19,13 @@ import {
 	mapCompressedTimeToSourceTime,
 } from "@/lib/transcript-editor/core";
 import { TRANSCRIPT_CUT_AUDIO_SMOOTHING_SECONDS } from "@/lib/transcript-editor/constants";
-import { getEffectiveTranscriptCutsForClipWindow } from "@/lib/transcript-editor/snapshot";
 import {
 	getTranscriptAudioRevisionKey,
 	getTranscriptApplied,
 	getTranscriptDraft,
 } from "@/lib/transcript-editor/state";
-import {
-	getTrackAudioEffectsFingerprint,
-	normalizeTrackAudioEffects,
-} from "@/lib/media/track-audio-effects";
+import { normalizeTrackAudioEffects } from "@/lib/media/track-audio-effects";
+import { getOrFetchLocalSourceFile } from "@/lib/music/local-source-cache";
 
 const MAX_AUDIO_CHANNELS = 2;
 const EXPORT_SAMPLE_RATE = 44100;
@@ -45,7 +42,7 @@ export interface TrackAudioLevelSnapshot {
 	silent: boolean;
 }
 
-function getTranscriptDraftLike(
+function _getTranscriptDraftLike(
 	element: AudioElement | VideoElement,
 ): AudioElement["transcriptEdit"] | VideoElement["transcriptEdit"] | undefined {
 	const draft = getTranscriptDraft(element);
@@ -419,7 +416,9 @@ export async function collectAudioElements({
 									duration: stableElement.duration,
 									// If decode is windowed, trimStart is already baked into the buffer.
 									// For full-file fallback decode, preserve element trimStart.
-									trimStart: resolvedAudio.windowed ? 0 : stableElement.trimStart,
+									trimStart: resolvedAudio.windowed
+										? 0
+										: stableElement.trimStart,
 									trimEnd: stableElement.trimEnd,
 									transcriptCuts: effectiveTranscriptCuts,
 									muted: stableElement.muted || isTrackMuted,
@@ -523,9 +522,9 @@ async function resolveAudioBufferForElement({
 	mediaMap: Map<string, MediaAsset>;
 	audioContext: AudioContext;
 }): Promise<AudioBuffer | null> {
-		try {
-			if (element.buffer) return element.buffer;
-			const effectiveTranscriptCuts = getAppliedTranscriptCuts(element);
+	try {
+		if (element.buffer) return element.buffer;
+		const effectiveTranscriptCuts = getAppliedTranscriptCuts(element);
 
 		if (element.sourceType === "upload") {
 			const asset = mediaMap.get(element.mediaId);
@@ -552,12 +551,11 @@ async function resolveAudioBufferForElement({
 			return await audioContext.decodeAudioData(arrayBuffer.slice(0));
 		}
 
-		const response = await fetch(element.sourceUrl);
-		if (!response.ok) {
-			throw new Error(`Library audio fetch failed: ${response.status}`);
-		}
-
-		const arrayBuffer = await response.arrayBuffer();
+		const file = await getOrFetchLocalSourceFile({
+			sourceUrl: element.sourceUrl,
+			fallbackName: element.name,
+		});
+		const arrayBuffer = await file.arrayBuffer();
 		return await audioContext.decodeAudioData(arrayBuffer.slice(0));
 	} catch (error) {
 		console.warn("Failed to decode audio:", error);
@@ -1078,14 +1076,9 @@ async function fetchLibraryAudioSource({
 	trackAudioEffects: TrackAudioEffects;
 }): Promise<AudioMixSource | null> {
 	try {
-		const response = await fetch(element.sourceUrl);
-		if (!response.ok) {
-			throw new Error(`Library audio fetch failed: ${response.status}`);
-		}
-
-		const blob = await response.blob();
-		const file = new File([blob], `${element.name}.mp3`, {
-			type: "audio/mpeg",
+		const file = await getOrFetchLocalSourceFile({
+			sourceUrl: element.sourceUrl,
+			fallbackName: element.name,
 		});
 
 		return {
@@ -1121,14 +1114,9 @@ async function fetchLibraryAudioClip({
 	trackAudioEffects: TrackAudioEffects;
 }): Promise<AudioClipSource | null> {
 	try {
-		const response = await fetch(element.sourceUrl);
-		if (!response.ok) {
-			throw new Error(`Library audio fetch failed: ${response.status}`);
-		}
-
-		const blob = await response.blob();
-		const file = new File([blob], `${element.name}.mp3`, {
-			type: "audio/mpeg",
+		const file = await getOrFetchLocalSourceFile({
+			sourceUrl: element.sourceUrl,
+			fallbackName: element.name,
 		});
 
 		return {
@@ -1484,7 +1472,11 @@ export async function createTimelineAudioBuffer({
 
 		const outputChannels = 2;
 		const outputLength = Math.ceil(duration * sampleRate);
-		const outputBuffer = context.createBuffer(outputChannels, outputLength, sampleRate);
+		const outputBuffer = context.createBuffer(
+			outputChannels,
+			outputLength,
+			sampleRate,
+		);
 		const elementsByTrack = new Map<
 			string,
 			{
@@ -1589,7 +1581,9 @@ function mixAudioChannels({
 			: [];
 
 	const sourceStartSample = Math.floor(trimStart * buffer.sampleRate);
-	const outputStartSample = Math.floor((startTime - outputStartTime) * sampleRate);
+	const outputStartSample = Math.floor(
+		(startTime - outputStartTime) * sampleRate,
+	);
 	const resampledLength = Math.floor(elementDuration * sampleRate);
 
 	const outputChannels = 2;
