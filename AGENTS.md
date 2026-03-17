@@ -144,7 +144,9 @@ Custom non-action shortcuts currently implemented directly in UI code:
 - `1` - Apply the first visible reframe angle in the tray
 - `2` - Apply the second visible reframe angle in the tray
 - `3` - Apply the third visible reframe angle in the tray
-- `4` - Apply the fourth visible reframe angle in the tray, if present
+- `4` - Apply split-screen balanced mode to the active angle section
+- `5` - Apply split-screen unbalanced mode to the active angle section
+- `=` - Swap top and bottom split-screen bindings
 
 If any shortcut is added, removed, or reassigned, update this section in the same change.
 

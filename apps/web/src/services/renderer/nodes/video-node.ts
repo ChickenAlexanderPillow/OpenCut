@@ -200,6 +200,12 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 				defaultReframePresetId: this.params.defaultReframePresetId,
 				localTime: clipElapsed,
 				slot,
+				canvasWidth: rendererWidth,
+				canvasHeight: rendererHeight,
+				sourceWidth,
+				sourceHeight,
+				layoutPreset: splitScreen.layoutPreset,
+				viewportBalance: splitScreen.viewportBalance,
 			});
 			const viewportAdjustedTransform = this.getViewportAdjustedTransform({
 				transform: slotTransform,

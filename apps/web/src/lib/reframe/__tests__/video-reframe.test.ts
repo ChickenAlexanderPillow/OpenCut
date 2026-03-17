@@ -157,6 +157,7 @@ describe("video reframe resolution", () => {
 				defaultReframePresetId: baseElement.defaultReframePresetId,
 				localTime: 5,
 				slot: {
+					slotId: "bottom",
 					presetId: "subject",
 					transformOverride: {
 						position: { x: 360, y: -120 },
@@ -173,6 +174,7 @@ describe("video reframe resolution", () => {
 				defaultReframePresetId: baseElement.defaultReframePresetId,
 				localTime: 5,
 				slot: {
+					slotId: "bottom",
 					presetId: "subject",
 					transformOverride: {
 						position: { x: 360, y: -120 },
@@ -407,6 +409,7 @@ describe("video reframe resolution", () => {
 			defaultReframePresetId: baseElement.defaultReframePresetId,
 			localTime: 5,
 			slot: {
+				slotId: "bottom",
 				presetId: "subject",
 				transformOverride: {
 					position: { x: 360, y: -120 },
@@ -440,28 +443,29 @@ describe("video reframe resolution", () => {
 			slot: {
 				slotId: "bottom",
 				presetId: "subject",
-				transformOverride: {
-					position: { x: 360, y: -120 },
-					scale: 3.4,
-				},
-				transformOverridesBySlotId: {
+				transformAdjustmentsBySlotId: {
 					top: {
-						position: { x: 40, y: -160 },
-						scale: 2.2,
+						sourceCenterOffset: { x: 0, y: 0 },
+						scaleMultiplier: 1,
 					},
 					bottom: {
-						position: { x: -90, y: 280 },
-						scale: 1.6,
+						sourceCenterOffset: { x: 120, y: -40 },
+						scaleMultiplier: 0.8,
 					},
 				},
 			},
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
 		});
 
-		expect(resolved).toEqual({
-			position: { x: -90, y: 280 },
-			scale: 1.6,
-			rotate: 12,
-		});
+		expect(resolved.position.x).toBeCloseTo(-39, 5);
+		expect(resolved.position.y).toBeCloseTo(13, 5);
+		expect(resolved.scale).toBeCloseTo(1.265625, 5);
+		expect(resolved.rotate).toBe(12);
 	});
 
 	test("split-screen section can disable split mode for a timed segment", () => {
@@ -687,6 +691,11 @@ describe("video reframe resolution", () => {
 		expect(nextState.reframeSwitches).toEqual([
 			{
 				id: expect.any(String),
+				time: 4,
+				presetId: "wide",
+			},
+			{
+				id: expect.any(String),
 				time: 7,
 				presetId: "subject",
 			},
@@ -710,6 +719,92 @@ describe("video reframe resolution", () => {
 				{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
 			],
 		});
+	});
+
+	test("keeps adjacent sections when applying the same preset to a split-only angle section", () => {
+		const element: VideoElement = {
+			...baseElement,
+			reframeSwitches: [
+				{
+					id: "switch-1",
+					time: 4,
+					presetId: "subject",
+				},
+			],
+			defaultReframePresetId: "wide",
+			splitScreen: {
+				enabled: false,
+				layoutPreset: "top-bottom",
+				slots: [
+					{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+					{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+				],
+				sections: [
+					{
+						id: "split-only",
+						startTime: 7,
+						enabled: true,
+						slots: [
+							{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+							{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+						],
+					},
+				],
+			},
+		};
+
+		const nextState = applyPresetToVideoAngleSection({
+			element,
+			sectionStartTime: 7,
+			presetId: "subject",
+		});
+
+		expect(nextState.reframeSwitches).toEqual([
+			{
+				id: expect.any(String),
+				time: 4,
+				presetId: "subject",
+			},
+			{
+				id: expect.any(String),
+				time: 7,
+				presetId: "subject",
+			},
+		]);
+		expect(
+			deriveVideoAngleSections({
+				element: {
+					...element,
+					...nextState,
+				},
+				mergeAdjacent: false,
+			}),
+		).toEqual([
+			{
+				startTime: 0,
+				endTime: 4,
+				presetId: "wide",
+				switchId: null,
+				splitSectionId: null,
+				isSplit: false,
+			},
+			{
+				startTime: 4,
+				endTime: 7,
+				presetId: "subject",
+				switchId: expect.any(String),
+				splitSectionId: null,
+				isSplit: false,
+			},
+			{
+				startTime: 7,
+				endTime: 10,
+				presetId: "subject",
+				switchId: expect.any(String),
+				splitSectionId: null,
+				isSplit: false,
+			},
+		]);
 	});
 
 	test("applies split screen to the current angle section without inventing extra sections", () => {

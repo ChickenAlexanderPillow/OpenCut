@@ -17,19 +17,18 @@ import {
 } from "@/lib/reframe/subject-aware";
 import {
 	buildDefaultVideoSplitScreenBindings,
+	deriveVideoSplitScreenSlotAdjustmentFromTransform,
 	deriveVideoAngleSections,
 	getVideoAngleSectionAtTime,
 	getVideoAngleSectionByStartTime,
 	getSelectedOrActiveReframePresetId,
-	getEffectiveVideoSplitScreenSlotTransformOverride,
 	getVideoReframeSectionAtTime,
 	getVideoReframeSectionByStartTime,
 	getVideoSplitScreenSectionAtTime,
 	normalizeVideoReframeState,
 	rebuildVideoReframeStateFromAngleSections,
-	remapSplitSlotTransformBetweenViewportBalances,
-	remapSplitSlotTransformBetweenViewports,
 	replaceOrInsertReframeSwitch,
+	resolveVideoSplitScreenSlotTransformFromState,
 } from "@/lib/reframe/video-reframe";
 import {
 	CircleDot,
@@ -463,24 +462,26 @@ export function ReframeView() {
 			transformOverridesBySlotId: binding.transformOverridesBySlotId
 				? { ...binding.transformOverridesBySlotId }
 				: undefined,
+			transformAdjustmentsBySlotId: binding.transformAdjustmentsBySlotId
+				? { ...binding.transformAdjustmentsBySlotId }
+				: undefined,
 		}));
-	const withBindingSlotOverride = ({
+	const withBindingSlotAdjustment = ({
 		binding,
 		slotId = binding.slotId,
-		transformOverride,
+		transformAdjustment,
 	}: {
 		binding: VideoSplitScreenSlotBinding;
 		slotId?: string;
-		transformOverride: NonNullable<
-			VideoSplitScreenSlotBinding["transformOverride"]
-		>;
+		transformAdjustment: NonNullable<
+			VideoSplitScreenSlotBinding["transformAdjustmentsBySlotId"]
+		>[string];
 	}): VideoSplitScreenSlotBinding => ({
 		...binding,
 		slotId,
-		transformOverride,
-		transformOverridesBySlotId: {
-			...(binding.transformOverridesBySlotId ?? {}),
-			[slotId]: transformOverride,
+		transformAdjustmentsBySlotId: {
+			...(binding.transformAdjustmentsBySlotId ?? {}),
+			[slotId]: transformAdjustment,
 		},
 	});
 	const editableSplitBindings = resolveConcreteSplitBindings(
@@ -539,10 +540,9 @@ export function ReframeView() {
 							...binding,
 							mode: "fixed-preset" as const,
 							presetId,
-							transformOverride: binding.transformOverride ?? null,
-							transformOverridesBySlotId: binding.transformOverridesBySlotId
-								? { ...binding.transformOverridesBySlotId }
-								: undefined,
+							transformOverride: null,
+							transformOverridesBySlotId: undefined,
+							transformAdjustmentsBySlotId: undefined,
 						}
 					: binding,
 			);
@@ -564,53 +564,26 @@ export function ReframeView() {
 		if (currentViewportBalance === viewportBalance) {
 			return;
 		}
-		const projectCanvas = editor.project.getActive().settings.canvasSize;
-		const remappedSlots = editableSplitBindings.map((binding) => {
-			const currentTransform = getSplitSlotTransform(binding);
-			const remappedTransform = remapSplitSlotTransformBetweenViewportBalances({
-				transform: currentTransform,
-				layoutPreset: splitScreen?.layoutPreset ?? "top-bottom",
-				fromViewportBalance: currentViewportBalance,
-				toViewportBalance: viewportBalance,
-				slotId: binding.slotId,
-				canvasWidth: projectCanvas.width,
-				canvasHeight: projectCanvas.height,
-				sourceWidth:
-					selectedMediaAsset?.type === "video"
-						? selectedMediaAsset.width
-						: undefined,
-				sourceHeight:
-					selectedMediaAsset?.type === "video"
-						? selectedMediaAsset.height
-						: undefined,
-			});
-			return {
-				...withBindingSlotOverride({
-					binding,
-					transformOverride: remappedTransform,
-				}),
-			};
-		});
 		editor.timeline.updateVideoSplitScreen({
 			trackId: normalizedVideo.trackId,
 			elementId: normalizedVideo.element.id,
 			updates: {
 				...(splitScreen ?? buildInitialSplitScreen()),
 				viewportBalance,
-				slots: remappedSlots,
+				slots: editableSplitBindings,
 				sections: (splitScreen?.sections ?? []).map((section) =>
 					section.enabled === false
 						? section
 						: {
 								...section,
-								slots: remappedSlots,
+								slots: editableSplitBindings,
 							},
 				),
 			},
 		});
 		setSelectedSplitPreviewSlots({
 			elementId: normalizedVideo.element.id,
-			slots: remappedSlots,
+			slots: editableSplitBindings,
 			viewportBalance,
 		});
 	};
@@ -619,36 +592,15 @@ export function ReframeView() {
 		if (!normalizedVideo) return;
 		const bindings = editableSplitBindings;
 		if (bindings.length < 2) return;
-		const projectCanvas = editor.project.getActive().settings.canvasSize;
 		const swappedBindings = bindings.map((binding, index, list) => {
 			const sourceBinding = list[(index + 1) % list.length] ?? binding;
-			const existingTargetOverride =
-				sourceBinding.transformOverridesBySlotId?.[binding.slotId] ?? null;
-			const sourceTransform = getSplitSlotTransform(sourceBinding);
-			const remappedTransform = remapSplitSlotTransformBetweenViewports({
-				transform: sourceTransform,
-				layoutPreset: splitScreen?.layoutPreset ?? "top-bottom",
-				viewportBalance: effectiveSplitViewportBalance,
-				fromSlotId: sourceBinding.slotId,
-				toSlotId: binding.slotId,
-				canvasWidth: projectCanvas.width,
-				canvasHeight: projectCanvas.height,
-				sourceWidth:
-					selectedMediaAsset?.type === "video"
-						? selectedMediaAsset.width
-						: undefined,
-				sourceHeight:
-					selectedMediaAsset?.type === "video"
-						? selectedMediaAsset.height
-						: undefined,
-			});
-			return withBindingSlotOverride({
-				binding: {
-					...sourceBinding,
-					slotId: binding.slotId,
-				},
-				transformOverride: existingTargetOverride ?? remappedTransform,
-			});
+			return {
+				...sourceBinding,
+				slotId: binding.slotId,
+				transformAdjustmentsBySlotId: sourceBinding.transformAdjustmentsBySlotId
+					? { ...sourceBinding.transformAdjustmentsBySlotId }
+					: undefined,
+			};
 		});
 		updateBaseSplitBindings({
 			slots: swappedBindings,
@@ -692,21 +644,40 @@ export function ReframeView() {
 	};
 
 	const getSplitSlotTransform = (binding: VideoSplitScreenSlotBinding) => {
-		const slotPreset =
-			normalizedVideo?.element.reframePresets?.find(
-				(preset) => preset.id === binding.presetId,
-			) ?? null;
-		return (
-			getEffectiveVideoSplitScreenSlotTransformOverride({
-				slot: binding,
-			}) ?? {
+		if (
+			!normalizedVideo ||
+			selectedMediaAsset?.type !== "video" ||
+			!Number.isFinite(selectedMediaAsset.width) ||
+			!Number.isFinite(selectedMediaAsset.height)
+		) {
+			const slotPreset =
+				normalizedVideo?.element.reframePresets?.find(
+					(preset) => preset.id === binding.presetId,
+				) ?? null;
+			return {
 				position: slotPreset?.transform.position ?? { x: 0, y: 0 },
 				scale:
 					slotPreset?.transform.scale ??
 					normalizedVideo?.element.transform.scale ??
 					1,
-			}
-		);
+			};
+		}
+		const projectCanvas = editor.project.getActive().settings.canvasSize;
+		return resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: normalizedVideo.element.transform,
+			duration: normalizedVideo.element.duration,
+			reframePresets: normalizedVideo.element.reframePresets,
+			reframeSwitches: normalizedVideo.element.reframeSwitches,
+			defaultReframePresetId: normalizedVideo.element.defaultReframePresetId,
+			localTime,
+			slot: binding,
+			canvasWidth: projectCanvas.width,
+			canvasHeight: projectCanvas.height,
+			sourceWidth: selectedMediaAsset.width,
+			sourceHeight: selectedMediaAsset.height,
+			layoutPreset: splitScreen?.layoutPreset ?? "top-bottom",
+			viewportBalance: effectiveSplitViewportBalance,
+		});
 	};
 
 	const updateSplitSlotTransform = ({
@@ -723,21 +694,57 @@ export function ReframeView() {
 		pushHistory: boolean;
 	}) => {
 		if (!normalizedVideo) return;
+		if (
+			selectedMediaAsset?.type !== "video" ||
+			!Number.isFinite(selectedMediaAsset.width) ||
+			!Number.isFinite(selectedMediaAsset.height)
+		) {
+			return;
+		}
+		const sourceWidth = selectedMediaAsset.width!;
+		const sourceHeight = selectedMediaAsset.height!;
+		const projectCanvas = editor.project.getActive().settings.canvasSize;
 		const applyOverride = (bindings: VideoSplitScreenSlotBinding[]) =>
 			bindings.map((binding) => {
 				if (binding.slotId !== slotId) {
 					return binding;
 				}
 				const currentTransform = getSplitSlotTransform(binding);
-				return withBindingSlotOverride({
-					binding,
-					transformOverride: {
-						position: {
-							x: updates.x ?? currentTransform.position.x,
-							y: updates.y ?? currentTransform.position.y,
-						},
-						scale: updates.scale ?? currentTransform.scale,
+				const nextTransform = {
+					position: {
+						x: updates.x ?? currentTransform.position.x,
+						y: updates.y ?? currentTransform.position.y,
 					},
+					scale: updates.scale ?? currentTransform.scale,
+				};
+				const baseResolvedTransform =
+					resolveVideoSplitScreenSlotTransformFromState({
+						baseTransform: normalizedVideo.element.transform,
+						duration: normalizedVideo.element.duration,
+						reframePresets: normalizedVideo.element.reframePresets,
+						reframeSwitches: normalizedVideo.element.reframeSwitches,
+						defaultReframePresetId:
+							normalizedVideo.element.defaultReframePresetId,
+						localTime,
+						slot: {
+							slotId: binding.slotId,
+							presetId: binding.presetId ?? null,
+						},
+					});
+				return withBindingSlotAdjustment({
+					binding,
+					transformAdjustment:
+						deriveVideoSplitScreenSlotAdjustmentFromTransform({
+							baseTransform: baseResolvedTransform,
+							finalTransform: nextTransform,
+							slotId: binding.slotId,
+							layoutPreset: splitScreen?.layoutPreset ?? "top-bottom",
+							viewportBalance: effectiveSplitViewportBalance,
+							canvasWidth: projectCanvas.width,
+							canvasHeight: projectCanvas.height,
+							sourceWidth,
+							sourceHeight,
+						}),
 				});
 			});
 

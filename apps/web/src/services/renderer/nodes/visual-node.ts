@@ -337,6 +337,12 @@ export abstract class VisualNode<
 					defaultReframePresetId: this.params.defaultReframePresetId,
 					localTime: clipElapsed,
 					slot,
+					canvasWidth: renderer.width,
+					canvasHeight: renderer.height,
+					sourceWidth,
+					sourceHeight,
+					layoutPreset: splitScreen.layoutPreset,
+					viewportBalance: splitScreen.viewportBalance,
 				});
 				const viewportAdjustedTransform = this.getViewportAdjustedTransform({
 					transform: slotTransform,

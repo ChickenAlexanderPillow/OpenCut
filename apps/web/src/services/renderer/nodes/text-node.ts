@@ -19,6 +19,7 @@ import {
 import { resolveSafeAreaAnchoredPositionY } from "@/constants/safe-area-constants";
 import { toTimelineCaptionWordTimings } from "@/lib/captions/timing";
 import {
+	getVideoSplitScreenDividers,
 	getVideoSplitScreenViewports,
 	resolveVideoSplitScreenAtTime,
 } from "@/lib/reframe/video-reframe";
@@ -267,6 +268,9 @@ export type TextNodeParams = TextElement & {
 
 type CaptionStyleValue = NonNullable<TextElement["captionStyle"]>;
 type CaptionSplitViewport = {
+	slotId: string;
+	viewportBalance: "balanced" | "unbalanced";
+	dividerBottom?: number;
 	x: number;
 	y: number;
 	width: number;
@@ -387,13 +391,31 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			width: this.params.canvasWidth,
 			height: this.params.canvasHeight,
 		});
+		const divider = getVideoSplitScreenDividers({
+			layoutPreset: activeSplitScreen.layoutPreset,
+			viewportBalance: activeSplitScreen.viewportBalance,
+			width: this.params.canvasWidth,
+			height: this.params.canvasHeight,
+		})[0];
+		const dividerBottom = divider ? divider.y + divider.height : undefined;
 		const preferredAnchor =
 			captionStyle.splitScreenOverrides?.slotAnchor ?? "auto";
 		const resolvedSlotId =
-			preferredAnchor === "auto" ? "bottom" : preferredAnchor;
-		return (
-			viewports.get(resolvedSlotId) ?? Array.from(viewports.values())[0] ?? null
-		);
+			activeSplitScreen.viewportBalance === "unbalanced"
+				? "bottom"
+				: preferredAnchor === "auto"
+					? "bottom"
+					: preferredAnchor;
+		const viewport =
+			viewports.get(resolvedSlotId) ?? Array.from(viewports.values())[0] ?? null;
+		return viewport
+			? {
+					slotId: resolvedSlotId,
+					viewportBalance: activeSplitScreen.viewportBalance ?? "balanced",
+					dividerBottom,
+					...viewport,
+				}
+			: null;
 	}
 
 	private resolveCaptionPlacement({
@@ -422,21 +444,39 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			splitViewport?.height ?? this.params.canvasHeight;
 		const placementOffsetX = splitViewport?.x ?? 0;
 		const placementOffsetY = splitViewport?.y ?? 0;
+		const shouldAnchorBelowDivider =
+			splitViewport?.viewportBalance === "unbalanced" &&
+			splitViewport.slotId === "bottom" &&
+			(captionStyle.anchorToSafeAreaBottom ?? true) &&
+			!(captionStyle.anchorToSafeAreaTop ?? false);
+		const dividerGap =
+			shouldAnchorBelowDivider && splitViewport
+				? Math.max(
+						0,
+						(splitViewport.dividerBottom ?? splitViewport.y) - splitViewport.y,
+					) +
+					(captionStyle.safeAreaTopOffset ??
+						captionStyle.safeAreaBottomOffset ??
+						0)
+				: 0;
+		const anchoredPositionY = shouldAnchorBelowDivider
+			? dividerGap - visualRect.top * this.params.transform.scale
+			: resolveSafeAreaAnchoredPositionY({
+					canvasWidth: placementCanvasWidth,
+					canvasHeight: placementCanvasHeight,
+					transformPositionY: this.params.transform.position.y,
+					scale: this.params.transform.scale,
+					visualRect,
+					anchorToSafeAreaBottom: captionStyle.anchorToSafeAreaBottom ?? true,
+					safeAreaBottomOffset: captionStyle.safeAreaBottomOffset ?? 0,
+					anchorToSafeAreaTop: captionStyle.anchorToSafeAreaTop ?? false,
+					safeAreaTopOffset: captionStyle.safeAreaTopOffset ?? 0,
+				});
 		const placement = resolveTextPlacement({
 			canvasWidth: placementCanvasWidth,
 			canvasHeight: placementCanvasHeight,
 			positionX: this.params.transform.position.x + placementCanvasWidth / 2,
-			positionY: resolveSafeAreaAnchoredPositionY({
-				canvasWidth: placementCanvasWidth,
-				canvasHeight: placementCanvasHeight,
-				transformPositionY: this.params.transform.position.y,
-				scale: this.params.transform.scale,
-				visualRect,
-				anchorToSafeAreaBottom: captionStyle.anchorToSafeAreaBottom ?? true,
-				safeAreaBottomOffset: captionStyle.safeAreaBottomOffset ?? 0,
-				anchorToSafeAreaTop: captionStyle.anchorToSafeAreaTop ?? false,
-				safeAreaTopOffset: captionStyle.safeAreaTopOffset ?? 0,
-			}),
+			positionY: anchoredPositionY,
 			scale: this.params.transform.scale,
 			visualRect,
 			fitInCanvas,

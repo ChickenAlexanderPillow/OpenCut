@@ -201,4 +201,113 @@ describe("TextNode caption gap rendering", () => {
 		expect((translations[0]?.[1] ?? 0) > 360).toBe(true);
 	});
 
+	test("anchors unbalanced split captions just below the divider", async () => {
+		const node = new TextNode({
+			...createCaptionNode().params,
+			captionStyle: {
+				anchorToSafeAreaBottom: true,
+				safeAreaBottomOffset: 0,
+				splitScreenOverrides: {
+					slotAnchor: "bottom",
+				},
+			},
+			captionSourceVideo: {
+				startTime: 10,
+				duration: 2,
+				trimStart: 0,
+				reframePresets: [
+					{
+						id: "subject-left",
+						name: "Subject Left",
+						transform: {
+							position: { x: -120, y: 0 },
+							scale: 2,
+						},
+					},
+					{
+						id: "subject-right",
+						name: "Subject Right",
+						transform: {
+							position: { x: 120, y: 0 },
+							scale: 2,
+						},
+					},
+				],
+				defaultReframePresetId: "subject-left",
+				splitScreen: {
+					enabled: true,
+					layoutPreset: "top-bottom",
+					viewportBalance: "unbalanced",
+					slots: [
+						{ slotId: "top", mode: "fixed-preset", presetId: "subject-left" },
+						{ slotId: "bottom", mode: "fixed-preset", presetId: "subject-right" },
+					],
+					sections: [],
+				},
+			},
+		});
+		const { operations, renderer, translations } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.39 });
+
+		expect(operations).toContain("fillText");
+		expect(translations.length).toBeGreaterThan(0);
+		expect((translations[0]?.[1] ?? 0) > 240).toBe(true);
+		expect((translations[0]?.[1] ?? 0) < 360).toBe(true);
+	});
+
+	test("forces unbalanced split captions onto the lower side even if top anchor is selected", async () => {
+		const node = new TextNode({
+			...createCaptionNode().params,
+			captionStyle: {
+				anchorToSafeAreaBottom: true,
+				safeAreaBottomOffset: 0,
+				splitScreenOverrides: {
+					slotAnchor: "top",
+				},
+			},
+			captionSourceVideo: {
+				startTime: 10,
+				duration: 2,
+				trimStart: 0,
+				reframePresets: [
+					{
+						id: "subject-left",
+						name: "Subject Left",
+						transform: {
+							position: { x: -120, y: 0 },
+							scale: 2,
+						},
+					},
+					{
+						id: "subject-right",
+						name: "Subject Right",
+						transform: {
+							position: { x: 120, y: 0 },
+							scale: 2,
+						},
+					},
+				],
+				defaultReframePresetId: "subject-left",
+				splitScreen: {
+					enabled: true,
+					layoutPreset: "top-bottom",
+					viewportBalance: "unbalanced",
+					slots: [
+						{ slotId: "top", mode: "fixed-preset", presetId: "subject-left" },
+						{ slotId: "bottom", mode: "fixed-preset", presetId: "subject-right" },
+					],
+					sections: [],
+				},
+			},
+		});
+		const { operations, renderer, translations } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.39 });
+
+		expect(operations).toContain("fillText");
+		expect((translations[0]?.[1] ?? 0) > 240).toBe(true);
+		expect((translations[0]?.[1] ?? 0) < 360).toBe(true);
+	});
+
 });

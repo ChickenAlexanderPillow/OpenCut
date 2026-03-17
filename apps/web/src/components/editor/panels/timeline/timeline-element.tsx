@@ -2205,6 +2205,12 @@ function SectionThumbnailStrip({
 											captureElement.defaultReframePresetId,
 										localTime: sampleTime,
 										slot,
+										canvasWidth: projectCanvas.width,
+										canvasHeight: projectCanvas.height,
+										sourceWidth: video.videoWidth,
+										sourceHeight: video.videoHeight,
+										layoutPreset: split.layoutPreset,
+										viewportBalance: split.viewportBalance,
 									});
 									const viewportAdjustedTransform =
 										getTimelineViewportAdjustedTransform({

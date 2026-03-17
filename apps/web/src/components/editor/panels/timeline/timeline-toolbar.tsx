@@ -41,12 +41,18 @@ import {
 	applyPresetToVideoAngleSection,
 	applySplitScreenToVideoAngleSection,
 	buildDefaultVideoSplitScreenBindings,
+	getEffectiveVideoSplitScreenSlotTransformOverride,
 	getVideoAngleSectionAtTime,
 	getVideoAngleSectionByStartTime,
 	normalizeVideoReframeState,
+	remapSplitSlotTransformBetweenViewports,
 	splitVideoReframeSectionAtTime,
 } from "@/lib/reframe/video-reframe";
 import { useEffect, useMemo, useState } from "react";
+import type {
+	VideoSplitScreenSlotBinding,
+	VideoSplitScreenViewportBalance,
+} from "@/types/timeline";
 
 function InOutPointIcon({ type }: { type: "in" | "out" }) {
 	const colorClass = type === "in" ? "bg-emerald-500" : "bg-rose-500";
@@ -302,6 +308,11 @@ function QuickReframeToolbarControl() {
 			element: normalizeVideoReframeState({ element: selected.element }),
 		};
 	})();
+	const selectedMediaAsset = selectedVideo
+		? (editor.media
+				.getAssets()
+				.find((asset) => asset.id === selectedVideo.element.mediaId) ?? null)
+		: null;
 	const getLatestSelectedVideo = () => {
 		if (!selectedVideo) return null;
 		const track = editor.timeline.getTrackById({
@@ -431,6 +442,17 @@ function QuickReframeToolbarControl() {
 	};
 
 	const applySplitScreenToTargetSection = () => {
+		applySplitScreenToTargetSectionWithViewportBalance({
+			viewportBalance:
+				selectedVideo?.element.splitScreen?.viewportBalance ?? "balanced",
+		});
+	};
+
+	const applySplitScreenToTargetSectionWithViewportBalance = ({
+		viewportBalance,
+	}: {
+		viewportBalance: VideoSplitScreenViewportBalance;
+	}) => {
 		const target = getLatestTargetSection();
 		if (!target) return;
 		clearPreviewOverrides({ elementId: target.selectedVideo.element.id });
@@ -441,6 +463,7 @@ function QuickReframeToolbarControl() {
 				splitScreen: splitScreen ?? {
 					enabled: false,
 					layoutPreset: "top-bottom",
+					viewportBalance,
 					slots: buildDefaultVideoSplitScreenBindings({
 						layoutPreset: "top-bottom",
 						presets: target.selectedVideo.element.reframePresets ?? [],
@@ -462,6 +485,90 @@ function QuickReframeToolbarControl() {
 		setSelectedSectionStartTime({
 			elementId: target.selectedVideo.element.id,
 			startTime: target.section.startTime,
+		});
+	};
+
+	const swapSplitScreenBindings = () => {
+		const target = getLatestTargetSection();
+		if (!target) return;
+		const splitScreen = target.selectedVideo.element.splitScreen;
+		const bindings =
+			splitScreen?.slots ??
+			buildDefaultVideoSplitScreenBindings({
+				layoutPreset: "top-bottom",
+				presets: target.selectedVideo.element.reframePresets ?? [],
+			});
+		if (bindings.length < 2) return;
+		const canvasSize = editor.project.getActive().settings.canvasSize;
+		const getBindingTransform = (binding: VideoSplitScreenSlotBinding) => {
+			const slotPreset =
+				target.selectedVideo.element.reframePresets?.find(
+					(preset) => preset.id === binding.presetId,
+				) ?? null;
+			return (
+				getEffectiveVideoSplitScreenSlotTransformOverride({
+					slot: binding,
+				}) ?? {
+					position: slotPreset?.transform.position ?? { x: 0, y: 0 },
+					scale:
+						slotPreset?.transform.scale ??
+						target.selectedVideo.element.transform.scale ??
+						1,
+				}
+			);
+		};
+		const swappedBindings = bindings.map((binding, index, list) => {
+			const sourceBinding = list[(index + 1) % list.length] ?? binding;
+			const existingTargetOverride =
+				sourceBinding.transformOverridesBySlotId?.[binding.slotId] ?? null;
+			const remappedTransform = remapSplitSlotTransformBetweenViewports({
+				transform: getBindingTransform(sourceBinding),
+				layoutPreset: splitScreen?.layoutPreset ?? "top-bottom",
+				viewportBalance: splitScreen?.viewportBalance ?? "balanced",
+				fromSlotId: sourceBinding.slotId,
+				toSlotId: binding.slotId,
+				canvasWidth: canvasSize.width,
+				canvasHeight: canvasSize.height,
+				sourceWidth:
+					selectedMediaAsset?.type === "video"
+						? selectedMediaAsset.width
+						: undefined,
+				sourceHeight:
+					selectedMediaAsset?.type === "video"
+						? selectedMediaAsset.height
+						: undefined,
+			});
+			return {
+				...sourceBinding,
+				slotId: binding.slotId,
+				transformOverride: existingTargetOverride ?? remappedTransform,
+				transformOverridesBySlotId: {
+					...(sourceBinding.transformOverridesBySlotId ?? {}),
+					[binding.slotId]: existingTargetOverride ?? remappedTransform,
+				},
+			};
+		});
+		editor.timeline.updateVideoSplitScreen({
+			trackId: target.selectedVideo.trackId,
+			elementId: target.selectedVideo.element.id,
+			updates: {
+				...(splitScreen ?? {
+					enabled: false,
+					layoutPreset: "top-bottom",
+					viewportBalance: "balanced",
+					slots: bindings,
+					sections: [],
+				}),
+				slots: swappedBindings,
+				sections: (splitScreen?.sections ?? []).map((section) =>
+					section.enabled === false
+						? section
+						: {
+								...section,
+								slots: swappedBindings,
+							},
+				),
+			},
 		});
 	};
 
@@ -507,7 +614,29 @@ function QuickReframeToolbarControl() {
 				return;
 			}
 
-			if (!["Digit1", "Digit2", "Digit3", "Digit4"].includes(event.code)) {
+			if (event.code === "Equal") {
+				event.preventDefault();
+				swapSplitScreenBindings();
+				return;
+			}
+
+			if (event.code === "Digit4") {
+				event.preventDefault();
+				applySplitScreenToTargetSectionWithViewportBalance({
+					viewportBalance: "balanced",
+				});
+				return;
+			}
+
+			if (event.code === "Digit5") {
+				event.preventDefault();
+				applySplitScreenToTargetSectionWithViewportBalance({
+					viewportBalance: "unbalanced",
+				});
+				return;
+			}
+
+			if (!["Digit1", "Digit2", "Digit3"].includes(event.code)) {
 				return;
 			}
 
@@ -551,6 +680,7 @@ function QuickReframeToolbarControl() {
 		isPlaying,
 		playbackTime,
 		quickPresets,
+		selectedMediaAsset,
 		selectedVideo,
 		setSelectedSectionStartTime,
 		clearSelectedPresetId,

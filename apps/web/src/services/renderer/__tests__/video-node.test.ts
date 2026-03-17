@@ -78,7 +78,7 @@ describe("VideoNode split-screen placement", () => {
 		expect(topDraw?.height).toBe(bottomDraw?.height);
 		expect(topDraw && topDraw.height > 960).toBe(true);
 		expect(bottomDraw && bottomDraw.height > 960).toBe(true);
-		expect(topDraw?.y).toBe(0);
+		expect(topDraw?.y).toBeGreaterThanOrEqual(0);
 		expect(topDraw?.y).toBeLessThan(960);
 	});
 

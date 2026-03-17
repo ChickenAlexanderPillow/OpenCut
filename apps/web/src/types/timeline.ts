@@ -96,6 +96,11 @@ export interface VideoSplitScreenSlotTransformOverride {
 	scale: number;
 }
 
+export interface VideoSplitScreenSlotTransformAdjustment {
+	sourceCenterOffset: Transform["position"];
+	scaleMultiplier: number;
+}
+
 export interface VideoSplitScreenSlotBinding {
 	slotId: string;
 	mode: VideoSplitScreenSlotMode;
@@ -104,6 +109,10 @@ export interface VideoSplitScreenSlotBinding {
 	transformOverridesBySlotId?: Record<
 		string,
 		VideoSplitScreenSlotTransformOverride | null | undefined
+	>;
+	transformAdjustmentsBySlotId?: Record<
+		string,
+		VideoSplitScreenSlotTransformAdjustment | null | undefined
 	>;
 }
 
