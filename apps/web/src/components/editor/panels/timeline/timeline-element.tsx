@@ -99,7 +99,7 @@ function getTimelineSectionThumbnailKey({
 }: {
 	startTime: number;
 	endTime: number;
-}): TimelineBoundaryMarker[] {
+}): string {
 	return `${startTime.toFixed(3)}:${endTime.toFixed(3)}`;
 }
 
@@ -1170,7 +1170,7 @@ function ElementInner({
 		};
 	}, [
 		containerElement,
-		displayedAngleSections,
+		displayedBoundaryMarkers,
 		draggingReframeMarker,
 		editor.timeline,
 		element.id,
