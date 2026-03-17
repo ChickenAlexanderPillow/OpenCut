@@ -1,15 +1,25 @@
 import { Slider } from "@/components/ui/slider";
 import { useEditor } from "@/hooks/use-editor";
+import {
+	audioVolumeToSliderPosition,
+	sliderPositionToAudioVolume,
+} from "@/lib/media/audio-volume-slider";
 import type { AudioElement } from "@/types/timeline";
 
-export function AudioProperties({ _element: element }: { _element: AudioElement }) {
+export function AudioProperties({
+	_element: element,
+}: {
+	_element: AudioElement;
+}) {
 	const editor = useEditor({ subscribeTo: ["timeline"] });
-	const track = editor
-		.timeline.getTracks()
+	const track = editor.timeline
+		.getTracks()
 		.find(
 			(candidate) =>
 				candidate.type === "audio" &&
-				candidate.elements.some((trackElement) => trackElement.id === element.id),
+				candidate.elements.some(
+					(trackElement) => trackElement.id === element.id,
+				),
 		);
 
 	return (
@@ -28,17 +38,24 @@ export function AudioProperties({ _element: element }: { _element: AudioElement 
 				</div>
 				<Slider
 					min={0}
-					max={2}
-					step={0.01}
-					value={[element.volume ?? 1]}
+					max={1}
+					step={0.005}
+					value={[
+						audioVolumeToSliderPosition({
+							volume: element.volume ?? 1,
+						}),
+					]}
 					onValueChange={([value]) => {
 						if (!track) return;
+						const nextVolume = sliderPositionToAudioVolume({
+							position: value ?? 0,
+						});
 						editor.timeline.updateElements({
 							updates: [
 								{
 									trackId: track.id,
 									elementId: element.id,
-									updates: { volume: value ?? 1 },
+									updates: { volume: nextVolume },
 								},
 							],
 							pushHistory: false,
@@ -46,12 +63,15 @@ export function AudioProperties({ _element: element }: { _element: AudioElement 
 					}}
 					onValueCommit={([value]) => {
 						if (!track) return;
+						const nextVolume = sliderPositionToAudioVolume({
+							position: value ?? 0,
+						});
 						editor.timeline.updateElements({
 							updates: [
 								{
 									trackId: track.id,
 									elementId: element.id,
-									updates: { volume: value ?? 1 },
+									updates: { volume: nextVolume },
 								},
 							],
 						});
@@ -63,7 +83,9 @@ export function AudioProperties({ _element: element }: { _element: AudioElement 
 				<button
 					type="button"
 					className={`rounded px-2 py-1 text-xs ${
-						element.muted ? "bg-destructive text-destructive-foreground" : "bg-muted"
+						element.muted
+							? "bg-destructive text-destructive-foreground"
+							: "bg-muted"
 					}`}
 					onClick={() => {
 						if (!track) return;

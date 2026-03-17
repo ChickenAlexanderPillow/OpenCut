@@ -4,9 +4,17 @@ import { useEffect, useState, type ReactNode } from "react";
 import { PanelView } from "@/components/editor/panels/assets/views/base-view";
 import { Slider } from "@/components/ui/slider";
 import { useEditor } from "@/hooks/use-editor";
+import {
+	audioVolumeToSliderPosition,
+	sliderPositionToAudioVolume,
+} from "@/lib/media/audio-volume-slider";
 import { canTracktHaveAudio } from "@/lib/timeline";
 import { normalizeTrackAudioEffects } from "@/lib/media/track-audio-effects";
-import type { AudioTrack, TimelineTrack, TrackAudioEffects, VideoTrack } from "@/types/timeline";
+import type {
+	AudioTrack,
+	TrackAudioEffects,
+	VideoTrack,
+} from "@/types/timeline";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 type TrackMeter = {
@@ -17,14 +25,14 @@ type TrackMeter = {
 
 export function MixerView() {
 	const editor = useEditor({ subscribeTo: ["timeline"] });
-	const [trackLevels, setTrackLevels] = useState<Record<string, TrackMeter>>({});
+	const [trackLevels, setTrackLevels] = useState<Record<string, TrackMeter>>(
+		{},
+	);
 	const tracks = editor.timeline.getTracks().filter(canTracktHaveAudio);
 
 	useEffect(() => {
 		if (typeof window === "undefined") return;
-		const handleTrackLevels = (
-			event: Event,
-		) => {
+		const handleTrackLevels = (event: Event) => {
 			const detail = (
 				event as CustomEvent<{
 					tracks: Array<{
@@ -48,7 +56,10 @@ export function MixerView() {
 		};
 		window.addEventListener("opencut:audio-track-levels", handleTrackLevels);
 		return () => {
-			window.removeEventListener("opencut:audio-track-levels", handleTrackLevels);
+			window.removeEventListener(
+				"opencut:audio-track-levels",
+				handleTrackLevels,
+			);
 		};
 	}, []);
 
@@ -117,7 +128,10 @@ function TrackMixerStrip({
 		deesser: false,
 		limiter: false,
 	});
-	const peakPercent = Math.max(4, Math.min(100, Math.round((level?.peak ?? 0) * 100)));
+	const peakPercent = Math.max(
+		4,
+		Math.min(100, Math.round((level?.peak ?? 0) * 100)),
+	);
 
 	return (
 		<div className="bg-muted/25 rounded-md border p-3">
@@ -141,7 +155,9 @@ function TrackMixerStrip({
 				<button
 					type="button"
 					className={`rounded border px-2 py-1 text-xs ${
-						track.muted ? "border-destructive text-destructive" : "text-muted-foreground"
+						track.muted
+							? "border-destructive text-destructive"
+							: "text-muted-foreground"
 					}`}
 					onClick={onToggleMute}
 				>
@@ -156,11 +172,25 @@ function TrackMixerStrip({
 			</div>
 			<Slider
 				min={0}
-				max={2}
-				step={0.01}
-				value={[track.volume ?? 1]}
-				onValueChange={([value]) => onVolumeChange(value ?? 1, false)}
-				onValueCommit={([value]) => onVolumeChange(value ?? 1, true)}
+				max={1}
+				step={0.005}
+				value={[
+					audioVolumeToSliderPosition({
+						volume: track.volume ?? 1,
+					}),
+				]}
+				onValueChange={([value]) =>
+					onVolumeChange(
+						sliderPositionToAudioVolume({ position: value ?? 0 }),
+						false,
+					)
+				}
+				onValueCommit={([value]) =>
+					onVolumeChange(
+						sliderPositionToAudioVolume({ position: value ?? 0 }),
+						true,
+					)
+				}
 			/>
 			<div className="mt-3 space-y-2">
 				<EffectModule
@@ -253,7 +283,10 @@ function TrackMixerStrip({
 					expanded={expanded.deesser}
 					enabled={effects.deesser.enabled}
 					onToggleExpanded={() =>
-						setExpanded((current) => ({ ...current, deesser: !current.deesser }))
+						setExpanded((current) => ({
+							...current,
+							deesser: !current.deesser,
+						}))
 					}
 					onToggleEnabled={(enabled) =>
 						onEffectChange("deesser", { enabled }, true)
@@ -286,7 +319,10 @@ function TrackMixerStrip({
 					expanded={expanded.limiter}
 					enabled={effects.limiter.enabled}
 					onToggleExpanded={() =>
-						setExpanded((current) => ({ ...current, limiter: !current.limiter }))
+						setExpanded((current) => ({
+							...current,
+							limiter: !current.limiter,
+						}))
 					}
 					onToggleEnabled={(enabled) =>
 						onEffectChange("limiter", { enabled }, true)
@@ -352,14 +388,18 @@ function EffectModule({
 				<button
 					type="button"
 					className={`rounded px-1.5 py-0.5 text-[10px] ${
-						enabled ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+						enabled
+							? "bg-primary text-primary-foreground"
+							: "bg-muted text-muted-foreground"
 					}`}
 					onClick={() => onToggleEnabled(!enabled)}
 				>
 					{enabled ? "On" : "Off"}
 				</button>
 			</div>
-			{expanded ? <div className="space-y-2 border-t p-2">{children}</div> : null}
+			{expanded ? (
+				<div className="space-y-2 border-t p-2">{children}</div>
+			) : null}
 		</div>
 	);
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@/utils/ui";
+import { clamp } from "@/utils/math";
 import { useRef, useState, type ComponentProps } from "react";
 import { useFocusLock } from "@/hooks/use-focus-lock";
 import { Button } from "@/components/ui/button";
@@ -8,11 +9,48 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowTurnBackwardIcon } from "@hugeicons/core-free-icons";
 
 const DRAG_SENSITIVITIES = {
-	default: 1,
-	slow: 0.5,
+	default: 0.35,
+	slow: 0.15,
 } as const;
+const SCRUB_START_THRESHOLD_PX = 3;
+const MAX_POINTER_SCRUB_DELTA_PX = 48;
+const POINTER_LOCK_STABILIZATION_MS = 120;
 
 type DragSensitivity = "default" | "slow";
+
+function parseOptionalFiniteNumber(
+	value: number | string | undefined,
+): number | null {
+	if (typeof value === "number") {
+		return Number.isFinite(value) ? value : null;
+	}
+	if (typeof value === "string" && value.trim().length > 0) {
+		const parsed = Number(value);
+		return Number.isFinite(parsed) ? parsed : null;
+	}
+	return null;
+}
+
+function clampScrubValue({
+	value,
+	min,
+	max,
+}: {
+	value: number;
+	min: number | string | undefined;
+	max: number | string | undefined;
+}): number {
+	const parsedMin = parseOptionalFiniteNumber(min);
+	const parsedMax = parseOptionalFiniteNumber(max);
+	if (parsedMin === null && parsedMax === null) {
+		return value;
+	}
+	return clamp({
+		value,
+		min: parsedMin ?? Number.NEGATIVE_INFINITY,
+		max: parsedMax ?? Number.POSITIVE_INFINITY,
+	});
+}
 
 interface NumberFieldProps
 	extends Omit<ComponentProps<"input">, "size" | "type"> {
@@ -58,37 +96,94 @@ function NumberField({
 
 	const handleIconPointerDown = (event: React.PointerEvent) => {
 		if (!onScrub || disabled || event.button !== 0) return;
+		event.preventDefault();
 		const parsed = parseFloat(String(value ?? "0"));
 		startValueRef.current = Number.isNaN(parsed) ? 0 : parsed;
 		cumulativeDeltaRef.current = 0;
 		let hasReceivedFirstMove = false;
-		iconRef.current?.requestPointerLock();
+		let pointerLockAcquiredAt = 0;
+		let hasStartedScrub = false;
+		const startClientX = event.clientX;
+		const startClientY = event.clientY;
 
 		const handlePointerMove = (moveEvent: PointerEvent) => {
+			if (!hasStartedScrub) {
+				const deltaX = moveEvent.clientX - startClientX;
+				const deltaY = moveEvent.clientY - startClientY;
+				if (Math.hypot(deltaX, deltaY) < SCRUB_START_THRESHOLD_PX) {
+					return;
+				}
+				hasStartedScrub = true;
+				iconRef.current?.requestPointerLock();
+				return;
+			}
+			if (document.pointerLockElement !== iconRef.current) {
+				return;
+			}
+			if (
+				pointerLockAcquiredAt > 0 &&
+				performance.now() - pointerLockAcquiredAt <
+					POINTER_LOCK_STABILIZATION_MS
+			) {
+				return;
+			}
 			// first movementX after pointer lock often contains a bogus warp delta
 			if (!hasReceivedFirstMove) {
 				hasReceivedFirstMove = true;
 				return;
 			}
-			cumulativeDeltaRef.current += moveEvent.movementX;
+			const safeMovementX = clamp({
+				value: moveEvent.movementX,
+				min: -MAX_POINTER_SCRUB_DELTA_PX,
+				max: MAX_POINTER_SCRUB_DELTA_PX,
+			});
+			cumulativeDeltaRef.current += safeMovementX;
 			const sensitivity =
 				typeof dragSensitivity === "number"
 					? dragSensitivity
 					: DRAG_SENSITIVITIES[dragSensitivity];
-			const newValue =
+			const nextValue =
 				startValueRef.current + cumulativeDeltaRef.current * sensitivity;
-			onScrub(newValue);
+			onScrub(
+				clampScrubValue({
+					value: nextValue,
+					min: props.min,
+					max: props.max,
+				}),
+			);
+		};
+
+		const cleanup = () => {
+			document.removeEventListener("pointermove", handlePointerMove);
+			document.removeEventListener("pointerup", handlePointerUp);
+			document.removeEventListener(
+				"pointerlockchange",
+				handlePointerLockChange,
+			);
 		};
 
 		const handlePointerUp = () => {
-			document.removeEventListener("pointermove", handlePointerMove);
-			document.removeEventListener("pointerup", handlePointerUp);
-			document.exitPointerLock();
-			onScrubEnd?.();
+			cleanup();
+			if (document.pointerLockElement === iconRef.current) {
+				document.exitPointerLock();
+			}
+			if (hasStartedScrub) {
+				onScrubEnd?.();
+			}
+		};
+
+		const handlePointerLockChange = () => {
+			if (document.pointerLockElement === iconRef.current) {
+				pointerLockAcquiredAt = performance.now();
+				hasReceivedFirstMove = false;
+				return;
+			}
+			cleanup();
 		};
 
 		document.addEventListener("pointermove", handlePointerMove);
 		document.addEventListener("pointerup", handlePointerUp);
+		document.addEventListener("pointerlockchange", handlePointerLockChange);
 	};
 
 	const canScrub = Boolean(icon && onScrub);
