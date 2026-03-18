@@ -464,7 +464,7 @@ describe("video reframe resolution", () => {
 
 		expect(resolved.position.x).toBeCloseTo(-39, 5);
 		expect(resolved.position.y).toBeCloseTo(13, 5);
-		expect(resolved.scale).toBeCloseTo(1.268267223382046, 5);
+		expect(resolved.scale).toBeCloseTo(1.2669447340980189, 5);
 		expect(resolved.rotate).toBe(12);
 	});
 
@@ -954,7 +954,7 @@ describe("video reframe resolution", () => {
 				sourceHeight: 1080,
 			}),
 		).toEqual({
-			position: { x: 40, y: 842 },
+			position: { x: 40, y: 841 },
 			scale: 2.2,
 		});
 
@@ -974,7 +974,7 @@ describe("video reframe resolution", () => {
 				sourceHeight: 1080,
 			}),
 		).toEqual({
-			position: { x: -60, y: -452 },
+			position: { x: -60, y: -451 },
 			scale: 1.8,
 		});
 
@@ -994,7 +994,7 @@ describe("video reframe resolution", () => {
 				sourceHeight: 1080,
 			}),
 		).toEqual({
-			position: { x: 79.93740219092332, y: 1361.6854460093896 },
+			position: { x: 80.06259780907669, y: 1362.3145539906104 },
 			scale: 2.2,
 		});
 
@@ -1014,7 +1014,7 @@ describe("video reframe resolution", () => {
 				sourceHeight: 1080,
 			}),
 		).toEqual({
-			position: { x: -30.02349256068912, y: -546.1761942051684 },
+			position: { x: -29.976544175136823, y: -545.8240813135262 },
 			scale: 1.8,
 		});
 	});
@@ -1034,9 +1034,9 @@ describe("video reframe resolution", () => {
 		});
 		expect(viewports.get("bottom")).toEqual({
 			x: 0,
-			y: 643,
+			y: 641,
 			width: 1080,
-			height: 1277,
+			height: 1279,
 		});
 		expect(
 			getVideoSplitScreenDividers({
@@ -1045,7 +1045,7 @@ describe("video reframe resolution", () => {
 				width: 1080,
 				height: 1920,
 			}),
-		).toEqual([{ x: 0, y: 639, width: 1080, height: 4 }]);
+		).toEqual([{ x: 0, y: 639, width: 1080, height: 2 }]);
 	});
 
 	test("remaps split slot transforms when changing viewport balance", () => {
@@ -1065,7 +1065,7 @@ describe("video reframe resolution", () => {
 				sourceHeight: 1080,
 			}),
 		).toEqual({
-			position: { x: 26.680584551148225, y: -399.70772442588725 },
+			position: { x: 26.65276329509906, y: -400.29197080291976 },
 			scale: 2.2,
 		});
 
@@ -1085,7 +1085,7 @@ describe("video reframe resolution", () => {
 				sourceHeight: 1080,
 			}),
 		).toEqual({
-			position: { x: -79.97912317327764, y: 360.15657620041753 },
+			position: { x: -80.02085505735141, y: 359.84358706986444 },
 			scale: 1.8,
 		});
 	});

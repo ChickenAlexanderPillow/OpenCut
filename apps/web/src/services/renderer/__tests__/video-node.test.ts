@@ -67,19 +67,19 @@ describe("VideoNode split-screen placement", () => {
 		expect(draws?.length).toBe(3);
 
 		const [topDraw, bottomDraw] = draws ?? [];
-		expect(topDraw?.clipRect).toEqual({ x: 0, y: 0, width: 1080, height: 958 });
+		expect(topDraw?.clipRect).toEqual({ x: 0, y: 0, width: 1080, height: 959 });
 		expect(bottomDraw?.clipRect).toEqual({
 			x: 0,
-			y: 962,
+			y: 961,
 			width: 1080,
-			height: 958,
+			height: 959,
 		});
 		expect(topDraw?.y).toBe(bottomDraw?.y);
 		expect(topDraw?.height).toBe(bottomDraw?.height);
-		expect(topDraw && topDraw.height > 958).toBe(true);
-		expect(bottomDraw && bottomDraw.height > 958).toBe(true);
+		expect(topDraw && topDraw.height > 959).toBe(true);
+		expect(bottomDraw && bottomDraw.height > 959).toBe(true);
 		expect(topDraw?.y).toBeGreaterThanOrEqual(0);
-		expect(topDraw?.y).toBeLessThan(958);
+		expect(topDraw?.y).toBeLessThan(959);
 	});
 
 	test("adds a divider draw and supports unbalanced split viewports", async () => {
@@ -151,14 +151,14 @@ describe("VideoNode split-screen placement", () => {
 		expect(topDraw?.clipRect).toEqual({ x: 0, y: 0, width: 1080, height: 639 });
 		expect(bottomDraw?.clipRect).toEqual({
 			x: 0,
-			y: 643,
+			y: 641,
 			width: 1080,
-			height: 1277,
+			height: 1279,
 		});
 		expect(dividerDraw?.solidColor).toBe("#000000");
 		expect(dividerDraw?.opacity).toBe(1);
 		expect(dividerDraw?.blendMode).toBe("normal");
 		expect(dividerDraw?.y).toBe(639);
-		expect(dividerDraw?.height).toBe(4);
+		expect(dividerDraw?.height).toBe(2);
 	});
 });

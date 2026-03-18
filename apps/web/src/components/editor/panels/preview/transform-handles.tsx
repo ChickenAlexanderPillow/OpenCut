@@ -89,6 +89,10 @@ export function TransformHandles({
 	const {
 		selectedWithBounds,
 		hasVisualSelection,
+		showRotationHandle,
+		splitSlotControls,
+		onSplitSlotScaleChange,
+		onSplitSlotScaleCommit,
 		snapLines,
 		handleCornerPointerDown,
 		handleRotationPointerDown,
@@ -140,6 +144,13 @@ export function TransformHandles({
 		canvasX: rotationHandle.x,
 		canvasY: rotationHandle.y,
 	});
+	const splitSlotControlCenter = splitSlotControls
+		? toOverlay({
+				canvasX: splitSlotControls.bounds.cx,
+				canvasY:
+					splitSlotControls.bounds.cy + splitSlotControls.bounds.height / 2 - 42,
+			})
+		: null;
 
 	return (
 		<div className="pointer-events-none absolute inset-0" aria-hidden>
@@ -148,37 +159,71 @@ export function TransformHandles({
 				canvasRef={canvasRef}
 				containerRef={containerRef}
 			/>
-			<BoundingBoxOutline
-				center={center}
-				outlineWidth={outlineWidth}
-				outlineHeight={outlineHeight}
-				rotation={bounds.rotation}
-			/>
-			{CORNERS.map((corner) => {
-				const cornerPosition = getCornerPosition({ bounds, corner });
-				const screen = toOverlay({
-					canvasX: cornerPosition.x,
-					canvasY: cornerPosition.y,
-				});
-				return (
-					<CornerHandle
-						key={corner}
-						corner={corner}
-						screen={screen}
-						onPointerDown={(event) =>
-							handleCornerPointerDown({ event, corner })
+			{!splitSlotControls && (
+				<BoundingBoxOutline
+					center={center}
+					outlineWidth={outlineWidth}
+					outlineHeight={outlineHeight}
+					rotation={bounds.rotation}
+				/>
+			)}
+			{!splitSlotControls &&
+				CORNERS.map((corner) => {
+					const cornerPosition = getCornerPosition({ bounds, corner });
+					const screen = toOverlay({
+						canvasX: cornerPosition.x,
+						canvasY: cornerPosition.y,
+					});
+					return (
+						<CornerHandle
+							key={corner}
+							corner={corner}
+							screen={screen}
+							onPointerDown={(event) =>
+								handleCornerPointerDown({ event, corner })
+							}
+							onPointerMove={(event) => handlePointerMove({ event })}
+							onPointerUp={(event) => handlePointerUp({ event })}
+						/>
+					);
+				})}
+			{splitSlotControls && splitSlotControlCenter && (
+				<div
+					className="pointer-events-auto absolute rounded-md border border-white/35 bg-black/65 px-3 py-2 text-white shadow-lg backdrop-blur-sm"
+					style={{
+						left: splitSlotControlCenter.x - 70,
+						top: splitSlotControlCenter.y - 18,
+						width: 140,
+					}}
+				>
+					<div className="mb-1 text-[10px] font-medium uppercase tracking-[0.18em] text-white/70">
+						Scale
+					</div>
+					<input
+						type="range"
+						min={0.5}
+						max={4}
+						step={0.01}
+						value={splitSlotControls.scale}
+						className="w-full accent-white"
+						onChange={(event) =>
+							onSplitSlotScaleChange({
+								nextScale: Number(event.currentTarget.value),
+							})
 						}
-						onPointerMove={(event) => handlePointerMove({ event })}
-						onPointerUp={(event) => handlePointerUp({ event })}
+						onPointerUp={() => onSplitSlotScaleCommit()}
+						onMouseUp={() => onSplitSlotScaleCommit()}
 					/>
-				);
-			})}
-			<RotationHandle
-				screen={rotationHandleScreen}
-				onPointerDown={(event) => handleRotationPointerDown({ event })}
-				onPointerMove={(event) => handlePointerMove({ event })}
-				onPointerUp={(event) => handlePointerUp({ event })}
-			/>
+				</div>
+			)}
+			{showRotationHandle && !splitSlotControls && (
+				<RotationHandle
+					screen={rotationHandleScreen}
+					onPointerDown={(event) => handleRotationPointerDown({ event })}
+					onPointerMove={(event) => handlePointerMove({ event })}
+					onPointerUp={(event) => handlePointerUp({ event })}
+				/>
+			)}
 		</div>
 	);
 }

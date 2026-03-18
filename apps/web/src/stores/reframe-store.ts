@@ -13,6 +13,7 @@ interface SplitPreviewState {
 interface ReframeStore {
 	selectedPresetIdByElementId: Record<string, string | null>;
 	selectedSplitPreviewByElementId: Record<string, SplitPreviewState | null>;
+	selectedSplitEditSlotIdByElementId: Record<string, string | null>;
 	selectedSectionStartTimeByElementId: Record<string, number | null>;
 	setSelectedPresetId: (params: {
 		elementId: string;
@@ -27,14 +28,20 @@ interface ReframeStore {
 		elementId: string;
 		startTime: number | null;
 	}) => void;
+	setSelectedSplitEditSlotId: (params: {
+		elementId: string;
+		slotId: string | null;
+	}) => void;
 	clearSelectedPresetId: (params: { elementId: string }) => void;
 	clearSelectedSplitPreviewSlots: (params: { elementId: string }) => void;
+	clearSelectedSplitEditSlotId: (params: { elementId: string }) => void;
 	clearSelectedSectionStartTime: (params: { elementId: string }) => void;
 }
 
 export const useReframeStore = create<ReframeStore>((set) => ({
 	selectedPresetIdByElementId: {},
 	selectedSplitPreviewByElementId: {},
+	selectedSplitEditSlotIdByElementId: {},
 	selectedSectionStartTimeByElementId: {},
 	setSelectedPresetId: ({ elementId, presetId }) =>
 		set((state) => {
@@ -50,12 +57,19 @@ export const useReframeStore = create<ReframeStore>((set) => ({
 			if (presetId) {
 				delete nextSplitPreviewByElementId[elementId];
 			}
+			const nextSplitEditSlotIdByElementId = {
+				...state.selectedSplitEditSlotIdByElementId,
+			};
+			if (presetId) {
+				delete nextSplitEditSlotIdByElementId[elementId];
+			}
 			return {
 				selectedPresetIdByElementId: {
 					...state.selectedPresetIdByElementId,
 					[elementId]: presetId,
 				},
 				selectedSplitPreviewByElementId: nextSplitPreviewByElementId,
+				selectedSplitEditSlotIdByElementId: nextSplitEditSlotIdByElementId,
 			};
 		}),
 	setSelectedSplitPreviewSlots: ({ elementId, slots, viewportBalance }) =>
@@ -99,6 +113,18 @@ export const useReframeStore = create<ReframeStore>((set) => ({
 				},
 			};
 		}),
+	setSelectedSplitEditSlotId: ({ elementId, slotId }) =>
+		set((state) => {
+			if (state.selectedSplitEditSlotIdByElementId[elementId] === slotId) {
+				return state;
+			}
+			return {
+				selectedSplitEditSlotIdByElementId: {
+					...state.selectedSplitEditSlotIdByElementId,
+					[elementId]: slotId,
+				},
+			};
+		}),
 	clearSelectedPresetId: ({ elementId }) =>
 		set((state) => {
 			if (!(elementId in state.selectedPresetIdByElementId)) {
@@ -119,6 +145,17 @@ export const useReframeStore = create<ReframeStore>((set) => ({
 			delete next[elementId];
 			return {
 				selectedSplitPreviewByElementId: next,
+			};
+		}),
+	clearSelectedSplitEditSlotId: ({ elementId }) =>
+		set((state) => {
+			if (!(elementId in state.selectedSplitEditSlotIdByElementId)) {
+				return state;
+			}
+			const next = { ...state.selectedSplitEditSlotIdByElementId };
+			delete next[elementId];
+			return {
+				selectedSplitEditSlotIdByElementId: next,
 			};
 		}),
 	clearSelectedSectionStartTime: ({ elementId }) =>

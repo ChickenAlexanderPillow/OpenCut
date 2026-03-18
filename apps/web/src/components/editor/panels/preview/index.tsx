@@ -350,6 +350,9 @@ function RenderTreeController() {
 	const clearSelectedSplitPreviewSlots = useReframeStore(
 		(state) => state.clearSelectedSplitPreviewSlots,
 	);
+	const clearSelectedSplitEditSlotId = useReframeStore(
+		(state) => state.clearSelectedSplitEditSlotId,
+	);
 	const clearSelectedSectionStartTime = useReframeStore(
 		(state) => state.clearSelectedSectionStartTime,
 	);
@@ -436,6 +439,7 @@ function RenderTreeController() {
 			if (!selectedElementIds.has(elementId)) {
 				clearSelectedPresetId({ elementId });
 				clearSelectedSplitPreviewSlots({ elementId });
+				clearSelectedSplitEditSlotId({ elementId });
 				clearSelectedSectionStartTime({ elementId });
 			}
 		}
@@ -444,6 +448,7 @@ function RenderTreeController() {
 		selectedPresetIdByElementId,
 		selectedSplitPreviewByElementId,
 		clearSelectedSplitPreviewSlots,
+		clearSelectedSplitEditSlotId,
 		clearSelectedPresetId,
 		clearSelectedSectionStartTime,
 	]);
@@ -484,6 +489,7 @@ function RenderTreeController() {
 			if (isWithinSelectedSection) continue;
 			clearSelectedPresetId({ elementId });
 			clearSelectedSplitPreviewSlots({ elementId });
+			clearSelectedSplitEditSlotId({ elementId });
 		}
 	}, [
 		playbackTime,
@@ -493,6 +499,7 @@ function RenderTreeController() {
 		selectedSectionStartTimeByElementId,
 		clearSelectedPresetId,
 		clearSelectedSplitPreviewSlots,
+		clearSelectedSplitEditSlotId,
 	]);
 
 	const previousPausedPreviewTimeRef = useRef<number | null>(null);
@@ -517,6 +524,7 @@ function RenderTreeController() {
 		for (const elementId of previewElementIds) {
 			clearSelectedPresetId({ elementId });
 			clearSelectedSplitPreviewSlots({ elementId });
+			clearSelectedSplitEditSlotId({ elementId });
 		}
 	}, [
 		playbackTime,
@@ -525,6 +533,7 @@ function RenderTreeController() {
 		selectedSplitPreviewByElementId,
 		clearSelectedPresetId,
 		clearSelectedSplitPreviewSlots,
+		clearSelectedSplitEditSlotId,
 	]);
 
 	useDeepCompareEffect(() => {

@@ -1,4 +1,5 @@
 import type { TimelineTrack } from "@/types/timeline";
+import { isGeneratedCaptionElement } from "@/lib/captions/caption-track";
 
 export type PreviewFormatVariant = "project" | "square";
 
@@ -29,10 +30,7 @@ export function remapCaptionTransformsForPreviewVariant({
 }): TimelineTrack[] {
 	const scaleX = previewCanvas.width / Math.max(1, sourceCanvas.width);
 	const scaleY = previewCanvas.height / Math.max(1, sourceCanvas.height);
-	if (
-		Math.abs(scaleX - 1) < 0.0001 &&
-		Math.abs(scaleY - 1) < 0.0001
-	) {
+	if (Math.abs(scaleX - 1) < 0.0001 && Math.abs(scaleY - 1) < 0.0001) {
 		return tracks;
 	}
 
@@ -41,11 +39,7 @@ export function remapCaptionTransformsForPreviewVariant({
 		return {
 			...track,
 			elements: track.elements.map((element) => {
-				const isCaptionElement =
-					(element.captionWordTimings?.length ?? 0) > 0 ||
-					element.name.startsWith("Caption ") ||
-					element.captionStyle?.linkedToCaptionGroup === true;
-				if (isCaptionElement) {
+				if (isGeneratedCaptionElement(element)) {
 					return element;
 				}
 				return {

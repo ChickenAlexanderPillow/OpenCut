@@ -1,6 +1,6 @@
 import type { TimelineTrack } from "@/types/timeline";
 
-function isGeneratedCaptionElement(element: unknown): boolean {
+export function isGeneratedCaptionElement(element: unknown): boolean {
 	if (!element || typeof element !== "object") return false;
 	const candidate = element as {
 		type?: string;
@@ -10,11 +10,10 @@ function isGeneratedCaptionElement(element: unknown): boolean {
 	};
 	return (
 		candidate.type === "text" &&
-		(
-			(candidate.captionWordTimings?.length ?? 0) > 0 ||
+		((candidate.captionWordTimings?.length ?? 0) > 0 ||
 			Boolean(candidate.captionSourceRef) ||
-			(typeof candidate.name === "string" && candidate.name.startsWith("Caption "))
-		)
+			(typeof candidate.name === "string" &&
+				candidate.name.startsWith("Caption ")))
 	);
 }
 
@@ -29,11 +28,14 @@ export function findCaptionTrackIdInScene({
 	tracks: TimelineTrack[];
 }): string | null {
 	const namedTrack = tracks.find(
-		(track) => track.type === "text" && track.name.trim().toLowerCase() === "captions",
+		(track) =>
+			track.type === "text" && track.name.trim().toLowerCase() === "captions",
 	);
 	if (namedTrack) return namedTrack.id;
 
-	const generatedTrack = tracks.find((track) => hasGeneratedCaptions({ track }));
+	const generatedTrack = tracks.find((track) =>
+		hasGeneratedCaptions({ track }),
+	);
 	if (generatedTrack) return generatedTrack.id;
 
 	return null;
