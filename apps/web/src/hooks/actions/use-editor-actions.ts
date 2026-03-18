@@ -44,11 +44,16 @@ import { useProjectProcessStore } from "@/stores/project-process-store";
 import { useClipGenerationStore } from "@/stores/clip-generation-store";
 import { buildClipCandidatesFromTranscript } from "@/lib/clips/candidate-builder";
 import { buildClipCandidatesFromTranscriptV2 } from "@/lib/clips/v2/candidate-builder";
-import { selectTopCandidatesWithQualityGate } from "@/lib/clips/scoring";
+import {
+	selectTopCandidatesWithCoverageBackfill,
+	selectTopCandidatesWithQualityGate,
+} from "@/lib/clips/scoring";
 import {
 	buildClipTranscriptEntryFromLinkedExternalTranscript,
 	getOrCreateClipTranscriptForAsset,
+	PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
 } from "@/lib/clips/transcript";
+import { evaluateTranscriptSuitability } from "@/lib/external-projects/transcript-suitability";
 import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
 import { resolveBlueHighlightCaptionPreset } from "@/constants/caption-presets";
 import { findCaptionTrackIdInScene } from "@/lib/captions/caption-track";
@@ -3468,13 +3473,17 @@ export function useEditorActions() {
 							buildClipTranscriptEntryFromLinkedExternalTranscript({
 								asset: mediaAsset,
 								modelId: DEFAULT_TRANSCRIPTION_MODEL,
-								language: "auto",
+								language: PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
 								externalTranscript: linkedTranscript,
-								requireSuitability: false,
 							});
 						if (!derived) {
+							const suitability = evaluateTranscriptSuitability({
+								transcriptText: linkedTranscript.transcriptText,
+								segments: linkedTranscript.segments,
+								audioDurationSeconds: linkedTranscript.audioDurationSeconds,
+							});
 							throw new Error(
-								`Linked transcript is empty/invalid for media ${mediaAsset.name} (${mediaLinkedProjectResolved.externalProjectId}).`,
+								`Linked transcript is unsuitable for clip generation for media ${mediaAsset.name} (${mediaLinkedProjectResolved.externalProjectId}): ${suitability.reasons.join(", ") || "unknown suitability failure"}.`,
 							);
 						}
 						transcriptResult = {
@@ -3661,6 +3670,7 @@ export function useEditorActions() {
 						progress: 99,
 						progressMessage: `Scoring clip candidates (${scoredCandidates.length}/${candidateDraftsResolved.length})...`,
 					});
+					const minDesiredClipCount = Math.min(3, MAX_VIRAL_CLIP_COUNT);
 					const strictCandidates = selectTopCandidatesWithQualityGate({
 						candidates: scoredCandidates,
 						minScore: MIN_VIRAL_CLIP_SCORE,
@@ -3669,26 +3679,61 @@ export function useEditorActions() {
 						excludeFailureFlags: ["cutoff_start"],
 					});
 					const selectedCandidates =
-						strictCandidates.length >= Math.min(3, MAX_VIRAL_CLIP_COUNT)
+						strictCandidates.length >= minDesiredClipCount
 							? strictCandidates
 							: (() => {
-									const relaxed = selectTopCandidatesWithQualityGate({
+									const relaxed = selectTopCandidatesWithCoverageBackfill({
 										candidates: scoredCandidates,
 										minScore: Math.max(45, MIN_VIRAL_CLIP_SCORE - 8),
 										maxOverlapRatio: 0.2,
 										maxCount: MAX_VIRAL_CLIP_COUNT,
 										excludeFailureFlags: [],
+										minDesiredCount: minDesiredClipCount,
+										backfillMinScore: 38,
+										backfillMaxOverlapRatio: 0.2,
+										coverageBucketSeconds: VIRAL_CLIP_TARGET_SECONDS,
 									});
-									if (relaxed.length === 0) return strictCandidates;
+									const baseline = relaxed.length === 0 ? strictCandidates : relaxed;
+									if (baseline.length >= minDesiredClipCount) {
+										return baseline;
+									}
+									const rescue = selectTopCandidatesWithCoverageBackfill({
+										candidates: scoredCandidates,
+										minScore: 0,
+										maxOverlapRatio: 0.35,
+										maxCount: MAX_VIRAL_CLIP_COUNT,
+										excludeFailureFlags: [],
+										minDesiredCount: minDesiredClipCount,
+										backfillMinScore: 0,
+										backfillMaxOverlapRatio: 0.35,
+										coverageBucketSeconds: VIRAL_CLIP_TARGET_SECONDS,
+										requireCleanBoundariesInBackfill: false,
+										excludeCutoffFailuresInBackfill: false,
+									});
 									const byId = new Map(
-										[...strictCandidates, ...relaxed].map((candidate) => [
+										[...strictCandidates, ...baseline, ...rescue].map((candidate) => [
 											candidate.id,
 											candidate,
 										]),
 									);
-									return Array.from(byId.values())
+									const resolved = Array.from(byId.values())
 										.sort((a, b) => b.scoreOverall - a.scoreOverall)
 										.slice(0, MAX_VIRAL_CLIP_COUNT);
+									console.info("Clip candidate selection diagnostics", {
+										sourceMediaId: mediaAsset.id,
+										draftCount: candidateDraftsResolved.length,
+										scoredCount: scoredCandidates.length,
+										strictCount: strictCandidates.length,
+										relaxedCount: relaxed.length,
+										rescueCount: rescue.length,
+										selectedCount: resolved.length,
+										selectedWindows: resolved.map((candidate) => ({
+											startTime: candidate.startTime,
+											endTime: candidate.endTime,
+											scoreOverall: candidate.scoreOverall,
+										})),
+									});
+									return resolved;
 								})();
 
 					if (selectedCandidates.length === 0) {

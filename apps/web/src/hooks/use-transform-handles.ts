@@ -34,6 +34,7 @@ import {
 } from "@/lib/reframe/video-reframe";
 import {
 	buildSplitScreenUpdates,
+	getEditableSplitSlotRegions,
 	getSplitSlotViewportBounds,
 	resolveEditableSplitSlotState,
 	updateSplitSlotBindingsWithTransform,
@@ -155,6 +156,10 @@ export function useTransformHandles({
 	const selectedSplitEditSlotIdByElementId = useReframeStore(
 		(state) => state.selectedSplitEditSlotIdByElementId,
 	);
+	const hoveredSplitSlot = useReframeStore((state) => state.hoveredSplitSlot);
+	const hoveredSplitControlSlot = useReframeStore(
+		(state) => state.hoveredSplitControlSlot,
+	);
 
 	const tracks = editor.timeline.getTracks();
 	const currentTime = editor.playback.getCurrentTime();
@@ -227,15 +232,22 @@ export function useTransformHandles({
 						localTime: clipLocalTime,
 						splitPreview:
 							selectedSplitPreviewByElementId[normalizedElement.id] ?? null,
+						preferredSlotId: slotId,
 					});
 					if (!editableSplitState) return null;
-					const bounds = getSplitSlotViewportBounds({
-						layoutPreset: editableSplitState.layoutPreset,
-						viewportBalance: editableSplitState.viewportBalance,
-						slotId,
-						canvasWidth: canvasSize.width,
-						canvasHeight: canvasSize.height,
-					});
+					const bounds =
+						getEditableSplitSlotRegions({
+							editableState: editableSplitState,
+							canvasWidth: canvasSize.width,
+							canvasHeight: canvasSize.height,
+						}).find((region) => region.slotId === slotId)?.bounds ??
+						getSplitSlotViewportBounds({
+							layoutPreset: editableSplitState.layoutPreset,
+							viewportBalance: editableSplitState.viewportBalance,
+							slotId,
+							canvasWidth: canvasSize.width,
+							canvasHeight: canvasSize.height,
+						});
 					if (!bounds) return null;
 					return {
 						slotId,
@@ -274,13 +286,17 @@ export function useTransformHandles({
 			slotId,
 			nextTransform,
 		}: {
-			element: Extract<ReturnType<typeof normalizeVideoReframeState>, { type: "video" }>;
+			element: Extract<
+				ReturnType<typeof normalizeVideoReframeState>,
+				{ type: "video" }
+			>;
 			slotId: string;
 			nextTransform: Pick<Transform, "position" | "scale">;
 		}) => {
 			const mediaAsset =
-				editor.media.getAssets().find((asset) => asset.id === element.mediaId) ??
-				null;
+				editor.media
+					.getAssets()
+					.find((asset) => asset.id === element.mediaId) ?? null;
 			if (
 				mediaAsset?.type !== "video" ||
 				!Number.isFinite(mediaAsset.width) ||
@@ -328,10 +344,10 @@ export function useTransformHandles({
 			const track = editor.timeline.getTrackById({ trackId });
 			const element =
 				track?.type === "video"
-					? track.elements.find(
+					? (track.elements.find(
 							(candidate) =>
 								candidate.type === "video" && candidate.id === elementId,
-						) ?? null
+						) ?? null)
 					: null;
 			if (!element || element.type !== "video") return;
 			const normalizedElement = normalizeVideoReframeState({ element });
@@ -356,6 +372,15 @@ export function useTransformHandles({
 	);
 	const splitSlotControls =
 		selectedSplitSlotContext &&
+		(selectedSplitEditSlotIdByElementId[
+			selectedSplitSlotContext.normalizedElement.id
+		] === selectedSplitSlotContext.slotId ||
+			(hoveredSplitSlot?.elementId ===
+				selectedSplitSlotContext.normalizedElement.id &&
+				hoveredSplitSlot.slotId === selectedSplitSlotContext.slotId) ||
+			(hoveredSplitControlSlot?.elementId ===
+				selectedSplitSlotContext.normalizedElement.id &&
+				hoveredSplitControlSlot.slotId === selectedSplitSlotContext.slotId)) &&
 		(() => {
 			const activeBinding =
 				selectedSplitSlotContext.editableSplitState.slots.find(
@@ -365,7 +390,8 @@ export function useTransformHandles({
 				editor.media
 					.getAssets()
 					.find(
-						(asset) => asset.id === selectedSplitSlotContext.normalizedElement.mediaId,
+						(asset) =>
+							asset.id === selectedSplitSlotContext.normalizedElement.mediaId,
 					) ?? null;
 			if (
 				!activeBinding ||
@@ -376,12 +402,14 @@ export function useTransformHandles({
 				return null;
 			}
 			return {
+				elementId: selectedSplitSlotContext.normalizedElement.id,
 				slotId: selectedSplitSlotContext.slotId,
 				bounds: selectedSplitSlotContext.bounds,
 				scale: resolveVideoSplitScreenSlotTransformFromState({
 					baseTransform: selectedSplitSlotContext.normalizedElement.transform,
 					duration: selectedSplitSlotContext.normalizedElement.duration,
-					reframePresets: selectedSplitSlotContext.normalizedElement.reframePresets,
+					reframePresets:
+						selectedSplitSlotContext.normalizedElement.reframePresets,
 					reframeSwitches:
 						selectedSplitSlotContext.normalizedElement.reframeSwitches,
 					defaultReframePresetId:
@@ -392,7 +420,8 @@ export function useTransformHandles({
 					canvasHeight: canvasSize.height,
 					sourceWidth: mediaAsset.width as number,
 					sourceHeight: mediaAsset.height as number,
-					layoutPreset: selectedSplitSlotContext.editableSplitState.layoutPreset,
+					layoutPreset:
+						selectedSplitSlotContext.editableSplitState.layoutPreset,
 					viewportBalance:
 						selectedSplitSlotContext.editableSplitState.viewportBalance,
 				}).scale,
@@ -402,52 +431,101 @@ export function useTransformHandles({
 	const handleSplitSlotScaleChange = useCallback(
 		({ nextScale }: { nextScale: number }) => {
 			if (!selectedSplitSlotContext) return;
+			const mediaAsset =
+				editor.media
+					.getAssets()
+					.find(
+						(asset) =>
+							asset.id === selectedSplitSlotContext.normalizedElement.mediaId,
+					) ?? null;
+			if (
+				mediaAsset?.type !== "video" ||
+				!Number.isFinite(mediaAsset.width) ||
+				!Number.isFinite(mediaAsset.height)
+			) {
+				return;
+			}
+			const sourceWidth = mediaAsset.width as number;
+			const sourceHeight = mediaAsset.height as number;
+			const currentTransform = resolveVideoSplitScreenSlotTransformFromState({
+				baseTransform: selectedSplitSlotContext.normalizedElement.transform,
+				duration: selectedSplitSlotContext.normalizedElement.duration,
+				reframePresets:
+					selectedSplitSlotContext.normalizedElement.reframePresets,
+				reframeSwitches:
+					selectedSplitSlotContext.normalizedElement.reframeSwitches,
+				defaultReframePresetId:
+					selectedSplitSlotContext.normalizedElement.defaultReframePresetId,
+				localTime: selectedSplitSlotContext.clipLocalTime,
+				slot: selectedSplitSlotContext.editableSplitState.slots.find(
+					(binding) => binding.slotId === selectedSplitSlotContext.slotId,
+				) ?? {
+					slotId: selectedSplitSlotContext.slotId,
+					presetId: null,
+				},
+				canvasWidth: canvasSize.width,
+				canvasHeight: canvasSize.height,
+				sourceWidth,
+				sourceHeight,
+				layoutPreset: selectedSplitSlotContext.editableSplitState.layoutPreset,
+				viewportBalance:
+					selectedSplitSlotContext.editableSplitState.viewportBalance,
+			});
+			const clampedScale = Math.max(MIN_SCALE, nextScale);
+			const slotCoverScale = Math.max(
+				1e-6,
+				Math.max(
+					selectedSplitSlotContext.bounds.width / sourceWidth,
+					selectedSplitSlotContext.bounds.height / sourceHeight,
+				),
+			);
+			const slotCenter = {
+				x: selectedSplitSlotContext.bounds.cx,
+				y: selectedSplitSlotContext.bounds.cy,
+			};
+			const canvasCenter = {
+				x: canvasSize.width / 2,
+				y: canvasSize.height / 2,
+			};
+			const currentSourceCenter = {
+				x:
+					sourceWidth / 2 +
+					(slotCenter.x - canvasCenter.x - currentTransform.position.x) /
+						(slotCoverScale * Math.max(MIN_SCALE, currentTransform.scale)),
+				y:
+					sourceHeight / 2 +
+					(slotCenter.y - canvasCenter.y - currentTransform.position.y) /
+						(slotCoverScale * Math.max(MIN_SCALE, currentTransform.scale)),
+			};
 			updateSplitSlotPreviewTransform({
 				element: selectedSplitSlotContext.normalizedElement,
 				slotId: selectedSplitSlotContext.slotId,
 				nextTransform: {
-					position: resolveVideoSplitScreenSlotTransformFromState({
-						baseTransform: selectedSplitSlotContext.normalizedElement.transform,
-						duration: selectedSplitSlotContext.normalizedElement.duration,
-						reframePresets:
-							selectedSplitSlotContext.normalizedElement.reframePresets,
-						reframeSwitches:
-							selectedSplitSlotContext.normalizedElement.reframeSwitches,
-						defaultReframePresetId:
-							selectedSplitSlotContext.normalizedElement.defaultReframePresetId,
-						localTime: selectedSplitSlotContext.clipLocalTime,
-						slot:
-							selectedSplitSlotContext.editableSplitState.slots.find(
-								(binding) => binding.slotId === selectedSplitSlotContext.slotId,
-							) ?? {
-								slotId: selectedSplitSlotContext.slotId,
-								presetId: null,
-							},
-						canvasWidth: canvasSize.width,
-						canvasHeight: canvasSize.height,
-						sourceWidth:
-							editor.media
-								.getAssets()
-								.find(
-									(asset) =>
-										asset.id === selectedSplitSlotContext.normalizedElement.mediaId,
-								)?.width ?? canvasSize.width,
-						sourceHeight:
-							editor.media
-								.getAssets()
-								.find(
-									(asset) =>
-										asset.id === selectedSplitSlotContext.normalizedElement.mediaId,
-								)?.height ?? canvasSize.height,
-						layoutPreset: selectedSplitSlotContext.editableSplitState.layoutPreset,
-						viewportBalance:
-							selectedSplitSlotContext.editableSplitState.viewportBalance,
-					}).position,
-					scale: Math.max(MIN_SCALE, nextScale),
+					position: {
+						x:
+							slotCenter.x -
+							canvasCenter.x -
+							(currentSourceCenter.x - sourceWidth / 2) *
+								slotCoverScale *
+								clampedScale,
+						y:
+							slotCenter.y -
+							canvasCenter.y -
+							(currentSourceCenter.y - sourceHeight / 2) *
+								slotCoverScale *
+								clampedScale,
+					},
+					scale: clampedScale,
 				},
 			});
 		},
-		[canvasSize.height, canvasSize.width, editor.media, selectedSplitSlotContext, updateSplitSlotPreviewTransform],
+		[
+			canvasSize.height,
+			canvasSize.width,
+			editor.media,
+			selectedSplitSlotContext,
+			updateSplitSlotPreviewTransform,
+		],
 	);
 
 	const handleCornerPointerDown = useCallback(
@@ -479,7 +557,8 @@ export function useTransformHandles({
 			const initialTransform =
 				selectedSplitSlotContext &&
 				normalizedVideoElement &&
-				selectedSplitSlotContext.normalizedElement.id === normalizedVideoElement.id
+				selectedSplitSlotContext.normalizedElement.id ===
+					normalizedVideoElement.id
 					? (() => {
 							const mediaAsset =
 								editor.media
@@ -519,7 +598,8 @@ export function useTransformHandles({
 								canvasHeight: canvasSize.height,
 								sourceWidth,
 								sourceHeight,
-								layoutPreset: selectedSplitSlotContext.editableSplitState.layoutPreset,
+								layoutPreset:
+									selectedSplitSlotContext.editableSplitState.layoutPreset,
 								viewportBalance:
 									selectedSplitSlotContext.editableSplitState.viewportBalance,
 							});
@@ -564,7 +644,11 @@ export function useTransformHandles({
 
 	const handleRotationPointerDown = useCallback(
 		({ event }: { event: React.PointerEvent }) => {
-			if (!selectedWithBounds || !canvasRef.current || selectedSplitSlotContext) {
+			if (
+				!selectedWithBounds ||
+				!canvasRef.current ||
+				selectedSplitSlotContext
+			) {
 				return;
 			}
 			event.stopPropagation();
@@ -680,10 +764,10 @@ export function useTransformHandles({
 					const track = editor.timeline.getTrackById({ trackId });
 					const element =
 						track?.type === "video"
-							? track.elements.find(
+							? (track.elements.find(
 									(candidate) =>
 										candidate.type === "video" && candidate.id === elementId,
-								) ?? null
+								) ?? null)
 							: null;
 					if (!element || element.type !== "video") return;
 					updateSplitSlotPreviewTransform({
@@ -759,7 +843,13 @@ export function useTransformHandles({
 				});
 			}
 		},
-		[activeHandle, canvasRef, editor, isShiftHeldRef, updateSplitSlotPreviewTransform],
+		[
+			activeHandle,
+			canvasRef,
+			editor,
+			isShiftHeldRef,
+			updateSplitSlotPreviewTransform,
+		],
 	);
 
 	const handlePointerUp = useCallback(
@@ -798,6 +888,7 @@ export function useTransformHandles({
 			hasVisualSelection && !selectedSplitInteractionContext
 				? true
 				: Boolean(selectedSplitSlotContext),
+		hasSelectedSplitSlot: Boolean(selectedSplitSlotContext),
 		showRotationHandle: !selectedSplitSlotContext,
 		splitSlotControls,
 		onSplitSlotScaleChange: handleSplitSlotScaleChange,

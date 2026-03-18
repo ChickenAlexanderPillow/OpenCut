@@ -15,6 +15,8 @@ interface ReframeStore {
 	selectedSplitPreviewByElementId: Record<string, SplitPreviewState | null>;
 	selectedSplitEditSlotIdByElementId: Record<string, string | null>;
 	selectedSectionStartTimeByElementId: Record<string, number | null>;
+	hoveredSplitSlot: { elementId: string; slotId: string } | null;
+	hoveredSplitControlSlot: { elementId: string; slotId: string } | null;
 	setSelectedPresetId: (params: {
 		elementId: string;
 		presetId: string | null;
@@ -32,10 +34,21 @@ interface ReframeStore {
 		elementId: string;
 		slotId: string | null;
 	}) => void;
+	setHoveredSplitSlot: (params: {
+		elementId: string;
+		slotId: string | null;
+	}) => void;
+	setHoveredSplitControlSlot: (params: {
+		elementId: string;
+		slotId: string | null;
+	}) => void;
 	clearSelectedPresetId: (params: { elementId: string }) => void;
 	clearSelectedSplitPreviewSlots: (params: { elementId: string }) => void;
 	clearSelectedSplitEditSlotId: (params: { elementId: string }) => void;
+	clearAllSelectedSplitEditSlotIds: () => void;
 	clearSelectedSectionStartTime: (params: { elementId: string }) => void;
+	clearHoveredSplitSlot: () => void;
+	clearHoveredSplitControlSlot: () => void;
 }
 
 export const useReframeStore = create<ReframeStore>((set) => ({
@@ -43,6 +56,8 @@ export const useReframeStore = create<ReframeStore>((set) => ({
 	selectedSplitPreviewByElementId: {},
 	selectedSplitEditSlotIdByElementId: {},
 	selectedSectionStartTimeByElementId: {},
+	hoveredSplitSlot: null,
+	hoveredSplitControlSlot: null,
 	setSelectedPresetId: ({ elementId, presetId }) =>
 		set((state) => {
 			if (
@@ -125,6 +140,33 @@ export const useReframeStore = create<ReframeStore>((set) => ({
 				},
 			};
 		}),
+	setHoveredSplitSlot: ({ elementId, slotId }) =>
+		set((state) => {
+			const nextHoveredSlot = slotId ? { elementId, slotId } : null;
+			if (
+				state.hoveredSplitSlot?.elementId === nextHoveredSlot?.elementId &&
+				state.hoveredSplitSlot?.slotId === nextHoveredSlot?.slotId
+			) {
+				return state;
+			}
+			return {
+				hoveredSplitSlot: nextHoveredSlot,
+			};
+		}),
+	setHoveredSplitControlSlot: ({ elementId, slotId }) =>
+		set((state) => {
+			const nextHoveredControlSlot = slotId ? { elementId, slotId } : null;
+			if (
+				state.hoveredSplitControlSlot?.elementId ===
+					nextHoveredControlSlot?.elementId &&
+				state.hoveredSplitControlSlot?.slotId === nextHoveredControlSlot?.slotId
+			) {
+				return state;
+			}
+			return {
+				hoveredSplitControlSlot: nextHoveredControlSlot,
+			};
+		}),
 	clearSelectedPresetId: ({ elementId }) =>
 		set((state) => {
 			if (!(elementId in state.selectedPresetIdByElementId)) {
@@ -158,6 +200,15 @@ export const useReframeStore = create<ReframeStore>((set) => ({
 				selectedSplitEditSlotIdByElementId: next,
 			};
 		}),
+	clearAllSelectedSplitEditSlotIds: () =>
+		set((state) => {
+			if (Object.keys(state.selectedSplitEditSlotIdByElementId).length === 0) {
+				return state;
+			}
+			return {
+				selectedSplitEditSlotIdByElementId: {},
+			};
+		}),
 	clearSelectedSectionStartTime: ({ elementId }) =>
 		set((state) => {
 			if (!(elementId in state.selectedSectionStartTimeByElementId)) {
@@ -167,6 +218,24 @@ export const useReframeStore = create<ReframeStore>((set) => ({
 			delete next[elementId];
 			return {
 				selectedSectionStartTimeByElementId: next,
+			};
+		}),
+	clearHoveredSplitSlot: () =>
+		set((state) => {
+			if (!state.hoveredSplitSlot) {
+				return state;
+			}
+			return {
+				hoveredSplitSlot: null,
+			};
+		}),
+	clearHoveredSplitControlSlot: () =>
+		set((state) => {
+			if (!state.hoveredSplitControlSlot) {
+				return state;
+			}
+			return {
+				hoveredSplitControlSlot: null,
 			};
 		}),
 }));

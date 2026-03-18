@@ -274,4 +274,48 @@ describe("sentence unit candidate builder", () => {
 		);
 		expect(run1).toEqual(run2);
 	});
+
+	test("backfills later timeline coverage when heuristics favor the intro", () => {
+		const introSegments = Array.from({ length: 12 }, (_, index) => {
+			const start = index * 8;
+			const end = start + 8;
+			return {
+				text:
+					index % 2 === 0
+						? "Prediction markets looked unstoppable, but bubbles always look smart before they burst."
+						: "That is why chasing momentum can spread risk far beyond the original market.",
+				start,
+				end,
+			};
+		});
+		const laterSegments = [
+			{
+				text: "Now switching gears to studio setup for talking-head videos.",
+				start: 120,
+				end: 130,
+			},
+			{
+				text: "A single key light and a practical in the background makes the frame feel deliberate.",
+				start: 130,
+				end: 145,
+			},
+			{
+				text: "That visual clarity improves retention because the message feels more trustworthy.",
+				start: 145,
+				end: 158,
+			},
+		];
+
+		const candidates = buildClipCandidatesFromTranscript({
+			mediaDuration: 180,
+			minClipSeconds: 18,
+			targetClipSeconds: 36,
+			maxClipSeconds: 65,
+			maxOutput: 8,
+			segments: [...introSegments, ...laterSegments],
+		});
+
+		expect(candidates.length).toBeGreaterThan(1);
+		expect(candidates.some((candidate) => candidate.startTime >= 120)).toBeTrue();
+	});
 });

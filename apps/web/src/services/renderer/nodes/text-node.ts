@@ -330,22 +330,54 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		return this.cachedTimelineCaptionWords;
 	}
 
-	private getEffectiveCaptionStyle({
+	private resolveEffectiveCaptionPresentation({
 		time,
 	}: {
 		time: number;
-	}): CaptionStyleValue {
+	}): {
+		captionStyle: CaptionStyleValue;
+		fontSize: number;
+		background: TextElement["background"];
+	} {
 		const baseStyle = (this.params.captionStyle ?? {}) as CaptionStyleValue;
 		const splitOverrides = baseStyle.splitScreenOverrides;
-		if (!splitOverrides) return baseStyle;
-		if (splitOverrides.enabled === false) return baseStyle;
-		if (!this.resolveActiveSplitViewport({ time, captionStyle: baseStyle })) {
-			return baseStyle;
+		if (!splitOverrides || splitOverrides.enabled === false) {
+			return {
+				captionStyle: baseStyle,
+				fontSize: this.params.fontSize,
+				background: this.params.background,
+			};
 		}
+		if (!this.resolveActiveSplitViewport({ time, captionStyle: baseStyle })) {
+			return {
+				captionStyle: baseStyle,
+				fontSize: this.params.fontSize,
+				background: this.params.background,
+			};
+		}
+		const overrideFontSize =
+			typeof splitOverrides.fontSize === "number" &&
+			Number.isFinite(splitOverrides.fontSize) &&
+			splitOverrides.fontSize > 0
+				? splitOverrides.fontSize
+				: this.params.fontSize;
+		const overridePaddingY =
+			typeof splitOverrides.backgroundPaddingY === "number" &&
+			Number.isFinite(splitOverrides.backgroundPaddingY)
+				? splitOverrides.backgroundPaddingY
+				: (this.params.background.paddingY ??
+					DEFAULT_TEXT_ELEMENT.background.paddingY);
 		return {
-			...baseStyle,
-			...splitOverrides,
-			splitScreenOverrides: splitOverrides,
+			captionStyle: {
+				...baseStyle,
+				...splitOverrides,
+				splitScreenOverrides: splitOverrides,
+			},
+			fontSize: overrideFontSize,
+			background: {
+				...this.params.background,
+				paddingY: overridePaddingY,
+			},
 		};
 	}
 
@@ -400,14 +432,11 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		const dividerBottom = divider ? divider.y + divider.height : undefined;
 		const preferredAnchor =
 			captionStyle.splitScreenOverrides?.slotAnchor ?? "auto";
-		const resolvedSlotId =
-			activeSplitScreen.viewportBalance === "unbalanced"
-				? "bottom"
-				: preferredAnchor === "auto"
-					? "bottom"
-					: preferredAnchor;
+		const resolvedSlotId = preferredAnchor === "auto" ? "top" : preferredAnchor;
 		const viewport =
-			viewports.get(resolvedSlotId) ?? Array.from(viewports.values())[0] ?? null;
+			viewports.get(resolvedSlotId) ??
+			Array.from(viewports.values())[0] ??
+			null;
 		return viewport
 			? {
 					slotId: resolvedSlotId,
@@ -527,10 +556,14 @@ export class TextNode extends BaseNode<TextNodeParams> {
 
 		renderer.context.save();
 
+		const effectivePresentation = this.resolveEffectiveCaptionPresentation({
+			time,
+		});
+		const { captionStyle, fontSize, background } = effectivePresentation;
 		const fontWeight = this.params.fontWeight === "bold" ? "bold" : "normal";
 		const fontStyle = this.params.fontStyle === "italic" ? "italic" : "normal";
 		const scaledFontSize = scaleFontSize({
-			fontSize: this.params.fontSize,
+			fontSize,
 			canvasHeight: this.params.canvasHeight,
 		});
 		const fontFamily = quoteFontFamily({ fontFamily: this.params.fontFamily });
@@ -548,7 +581,6 @@ export class TextNode extends BaseNode<TextNodeParams> {
 
 		const letterSpacing = this.params.letterSpacing ?? 0;
 		const lineHeight = this.params.lineHeight ?? DEFAULT_LINE_HEIGHT;
-		const captionStyle = this.getEffectiveCaptionStyle({ time });
 		if ("letterSpacing" in renderer.context) {
 			(
 				renderer.context as CanvasRenderingContext2D & { letterSpacing: string }
@@ -616,7 +648,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 						: 0;
 		const lineHeightPx = scaledFontSize * lineHeight;
 		const fontSizeRatio = getBackgroundFontSizeRatio({
-			fontSize: this.params.fontSize,
+			fontSize,
 			canvasHeight: this.params.canvasHeight,
 			referenceCanvasHeight: this.params.backgroundReferenceCanvasHeight,
 		});
@@ -659,7 +691,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 					lineMetrics: candidateMetrics,
 					lineHeightPx,
 					fallbackFontSize: scaledFontSize,
-					background: this.params.background,
+					background,
 					backgroundMode,
 					fontSizeRatio,
 				});
@@ -789,7 +821,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			lineMetrics,
 			lineHeightPx,
 			fallbackFontSize: scaledFontSize,
-			background: this.params.background,
+			background,
 			backgroundMode,
 			fontSizeRatio,
 		});
@@ -829,11 +861,11 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			height: number;
 		}> = [];
 		if (
-			this.params.background.color &&
-			this.params.background.color !== "transparent" &&
+			background.color &&
+			background.color !== "transparent" &&
 			lineCount > 0
 		) {
-			const { color, cornerRadius = 0 } = this.params.background;
+			const { color, cornerRadius = 0 } = background;
 			renderer.context.fillStyle = color;
 			if (backgroundMode === "line-fit") {
 				lineBackgroundRects = getLineFitBackgroundRects({
@@ -842,7 +874,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 					lineMetrics,
 					lineHeightPx,
 					fallbackFontSize: scaledFontSize,
-					background: this.params.background,
+					background,
 					fontSizeRatio,
 				});
 				for (const lineRect of lineBackgroundRects) {
@@ -861,7 +893,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 				backgroundRect = getTextBackgroundRect({
 					textAlign: this.params.textAlign,
 					block,
-					background: this.params.background,
+					background,
 					fontSizeRatio,
 				});
 				if (backgroundRect) {

@@ -328,15 +328,13 @@ export function rebuildVideoReframeStateFromAngleSections({
 			if (section.isSplit === previousIsSplit) {
 				return result;
 			}
-			return [
-				...result,
-				{
-					id: generateUUID(),
-					startTime: section.startTime,
-					enabled: section.isSplit,
-					slots: baseSplitScreen.slots,
-				},
-			];
+			result.push({
+				id: generateUUID(),
+				startTime: section.startTime,
+				enabled: section.isSplit,
+				slots: baseSplitScreen.slots,
+			});
+			return result;
 		}, []);
 
 	return {
@@ -698,7 +696,10 @@ export function getVideoSplitScreenDividers({
 			x: 0,
 			y: Math.round(topViewport.y + topViewport.height),
 			width,
-			height: Math.max(0, bottomViewport.y - (topViewport.y + topViewport.height)),
+			height: Math.max(
+				0,
+				bottomViewport.y - (topViewport.y + topViewport.height),
+			),
 		},
 	];
 }
@@ -868,7 +869,7 @@ function normalizeVideoSplitScreenState({
 		.filter(
 			(section, index, list) =>
 				index === 0 ||
-				Math.abs(section.startTime - list[index - 1]!.startTime) >
+				Math.abs(section.startTime - (list[index - 1]?.startTime ?? 0)) >
 					REFRAME_SWITCH_TIME_EPSILON,
 		);
 
@@ -1041,8 +1042,11 @@ export function deriveVideoAngleSections({
 
 	const sections: VideoAngleSection[] = [];
 	for (let index = 0; index < sortedBoundaries.length - 1; index++) {
-		const startTime = sortedBoundaries[index]!;
-		const endTime = sortedBoundaries[index + 1]!;
+		const startTime = sortedBoundaries[index];
+		const endTime = sortedBoundaries[index + 1];
+		if (startTime === undefined || endTime === undefined) {
+			continue;
+		}
 		if (endTime - startTime <= REFRAME_SWITCH_TIME_EPSILON) {
 			continue;
 		}
@@ -1107,7 +1111,10 @@ export function getVideoReframeSectionAtTime({
 	const safeTime = Math.max(0, Math.min(element.duration, localTime));
 	const sections = deriveVideoReframeSections({ element });
 	for (let index = 0; index < sections.length; index++) {
-		const section = sections[index]!;
+		const section = sections[index];
+		if (!section) {
+			continue;
+		}
 		const isLast = index === sections.length - 1;
 		if (safeTime + REFRAME_SWITCH_TIME_EPSILON < section.startTime) {
 			continue;
@@ -1145,7 +1152,10 @@ export function getVideoAngleSectionAtTime({
 	const safeTime = Math.max(0, Math.min(element.duration, localTime));
 	const sections = deriveVideoAngleSections({ element });
 	for (let index = 0; index < sections.length; index++) {
-		const section = sections[index]!;
+		const section = sections[index];
+		if (!section) {
+			continue;
+		}
 		const isLast = index === sections.length - 1;
 		if (safeTime + REFRAME_SWITCH_TIME_EPSILON < section.startTime) {
 			continue;
@@ -1806,7 +1816,10 @@ export function getVideoSplitScreenSectionAtTime({
 	const safeTime = Math.max(0, Math.min(element.duration, localTime));
 	const sections = splitScreen.sections;
 	for (let index = 0; index < sections.length; index++) {
-		const section = sections[index]!;
+		const section = sections[index];
+		if (!section) {
+			continue;
+		}
 		const nextStartTime = sections[index + 1]?.startTime ?? element.duration;
 		const isLast = index === sections.length - 1;
 		if (safeTime + REFRAME_SWITCH_TIME_EPSILON < section.startTime) continue;
@@ -1852,7 +1865,10 @@ export function deriveVideoSplitScreenSectionRanges({
 	const ranges: VideoSplitScreenSectionRange[] = [];
 	let currentStart = 0;
 	for (let index = 0; index < splitScreen.sections.length; index++) {
-		const section = splitScreen.sections[index]!;
+		const section = splitScreen.sections[index];
+		if (!section) {
+			continue;
+		}
 		if (section.startTime > currentStart + REFRAME_SWITCH_TIME_EPSILON) {
 			ranges.push({
 				startTime: currentStart,
@@ -1957,7 +1973,10 @@ export function resolveVideoSplitScreenAtTimeFromState({
 	const sections = splitScreen.sections ?? [];
 	let activeSection: VideoSplitScreenSection | null = null;
 	for (let index = 0; index < sections.length; index++) {
-		const section = sections[index]!;
+		const section = sections[index];
+		if (!section) {
+			continue;
+		}
 		const nextStartTime = sections[index + 1]?.startTime ?? duration;
 		const isLast = index === sections.length - 1;
 		if (safeTime + REFRAME_SWITCH_TIME_EPSILON < section.startTime) continue;

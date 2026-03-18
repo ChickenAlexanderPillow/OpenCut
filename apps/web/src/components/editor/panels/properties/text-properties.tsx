@@ -243,6 +243,13 @@ function captureCaptionPresetSnapshot({
 						slotAnchor: clampSplitScreenSlotAnchor(
 							element.captionStyle.splitScreenOverrides.slotAnchor,
 						),
+						fontSize:
+							element.captionStyle.splitScreenOverrides.fontSize ??
+							element.fontSize,
+						backgroundPaddingY:
+							element.captionStyle.splitScreenOverrides.backgroundPaddingY ??
+							element.background.paddingY ??
+							DEFAULT_TEXT_BACKGROUND.paddingY,
 						fitInCanvas:
 							element.captionStyle.splitScreenOverrides.fitInCanvas ??
 							element.captionStyle?.fitInCanvas ??
@@ -2301,7 +2308,6 @@ function BackgroundSection({
 							<NumberField
 								icon="H"
 								value={paddingY.displayValue}
-								min={0}
 								onFocus={paddingY.onFocus}
 								onChange={paddingY.onChange}
 								onBlur={paddingY.onBlur}

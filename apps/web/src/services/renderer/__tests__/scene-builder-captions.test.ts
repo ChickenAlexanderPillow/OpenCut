@@ -50,7 +50,11 @@ function createAudioElement({
 	};
 }
 
-function createCaption({ sourceMediaElementId }: { sourceMediaElementId: string }): TextElement {
+function createCaption({
+	sourceMediaElementId,
+}: {
+	sourceMediaElementId: string;
+}): TextElement {
 	return {
 		...DEFAULT_TEXT_ELEMENT,
 		id: "caption-1",
@@ -100,7 +104,9 @@ describe("scene builder live caption source resolution", () => {
 			id: "audio-1",
 			startTime: 10,
 			duration: 2,
-			words: [{ id: "w0", text: "skip", startTime: 0, endTime: 0.4, removed: true }],
+			words: [
+				{ id: "w0", text: "skip", startTime: 0, endTime: 0.4, removed: true },
+			],
 		});
 		const caption = createCaption({ sourceMediaElementId: source.id });
 
@@ -116,13 +122,17 @@ describe("scene builder live caption source resolution", () => {
 			id: "audio-1",
 			startTime: 10,
 			duration: 2,
-			words: [{ id: "shared:word:0", text: "alpha", startTime: 0, endTime: 0.4 }],
+			words: [
+				{ id: "shared:word:0", text: "alpha", startTime: 0, endTime: 0.4 },
+			],
 		});
 		const companion = createAudioElement({
 			id: "audio-2",
 			startTime: 10,
 			duration: 2,
-			words: [{ id: "shared:word:0", text: "beta", startTime: 0, endTime: 0.5 }],
+			words: [
+				{ id: "shared:word:0", text: "beta", startTime: 0, endTime: 0.5 },
+			],
 		});
 		const caption = createCaption({ sourceMediaElementId: source.id });
 
@@ -161,7 +171,9 @@ describe("scene builder live caption source resolution", () => {
 				id: "audio-1",
 				startTime: 10,
 				duration: 2,
-				words: [{ id: "shared:word:0", text: "stale", startTime: 0, endTime: 0.4 }],
+				words: [
+					{ id: "shared:word:0", text: "stale", startTime: 0, endTime: 0.4 },
+				],
 			}),
 			mediaId: "shared-media",
 			transcriptDraft: undefined,
@@ -228,7 +240,9 @@ describe("scene builder live caption source resolution", () => {
 			id: "audio-2",
 			startTime: 10,
 			duration: 2,
-			words: [{ id: "shared:word:0", text: "beta", startTime: 0, endTime: 0.5 }],
+			words: [
+				{ id: "shared:word:0", text: "beta", startTime: 0, endTime: 0.5 },
+			],
 		});
 		const caption = createCaption({ sourceMediaElementId: "audio-missing" });
 
@@ -268,9 +282,27 @@ describe("scene builder live caption source resolution", () => {
 			startTime: 5,
 			duration: 3,
 			words: [
-				{ id: "w0", text: "first", startTime: 0.0, endTime: 0.3, removed: false },
-				{ id: "w1", text: "muted", startTime: 0.6, endTime: 0.9, removed: true },
-				{ id: "w2", text: "third", startTime: 1.0, endTime: 1.3, removed: false },
+				{
+					id: "w0",
+					text: "first",
+					startTime: 0.0,
+					endTime: 0.3,
+					removed: false,
+				},
+				{
+					id: "w1",
+					text: "muted",
+					startTime: 0.6,
+					endTime: 0.9,
+					removed: true,
+				},
+				{
+					id: "w2",
+					text: "third",
+					startTime: 1.0,
+					endTime: 1.3,
+					removed: false,
+				},
 			],
 		});
 		const caption = createCaption({ sourceMediaElementId: source.id });
@@ -298,8 +330,20 @@ describe("scene builder live caption source resolution", () => {
 			version: 1 as const,
 			source: "word-level" as const,
 			words: [
-				{ id: "w0", text: "hello", startTime: 0.0, endTime: 0.3, removed: false },
-				{ id: "w1", text: "world", startTime: 0.35, endTime: 0.7, removed: false },
+				{
+					id: "w0",
+					text: "hello",
+					startTime: 0.0,
+					endTime: 0.3,
+					removed: false,
+				},
+				{
+					id: "w1",
+					text: "world",
+					startTime: 0.35,
+					endTime: 0.7,
+					removed: false,
+				},
 			],
 			cuts: [],
 			updatedAt: "2026-03-06T12:00:00.000Z",
@@ -473,7 +517,10 @@ describe("scene builder live caption source resolution", () => {
 			  }
 			| undefined;
 		expect(textNode?.params?.content).toBe("right");
-		expect(textNode?.params?.captionWordTimings?.[0]?.startTime).toBeCloseTo(1, 3);
+		expect(textNode?.params?.captionWordTimings?.[0]?.startTime).toBeCloseTo(
+			1,
+			3,
+		);
 	});
 
 	test("passes split-screen config through to video nodes", () => {
@@ -643,11 +690,135 @@ describe("scene builder live caption source resolution", () => {
 
 		const textNode = scene.children.find(
 			(node) => node.constructor.name === "TextNode",
-		) as { params?: { captionSourceVideo?: { splitScreen?: VideoElement["splitScreen"] } } } | undefined;
+		) as
+			| {
+					params?: {
+						captionSourceVideo?: { splitScreen?: VideoElement["splitScreen"] };
+					};
+			  }
+			| undefined;
 
-		expect(textNode?.params?.captionSourceVideo?.splitScreen?.enabled).toBe(true);
-		expect(textNode?.params?.captionSourceVideo?.splitScreen?.layoutPreset).toBe(
-			"top-bottom",
+		expect(textNode?.params?.captionSourceVideo?.splitScreen?.enabled).toBe(
+			true,
 		);
+		expect(
+			textNode?.params?.captionSourceVideo?.splitScreen?.layoutPreset,
+		).toBe("top-bottom");
+	});
+
+	test("uses aligned split-screen video companion for audio-linked caption placement", () => {
+		const video: VideoElement = {
+			id: "video-right",
+			type: "video",
+			mediaId: "video-asset",
+			name: "Video Right",
+			startTime: 1,
+			duration: 1,
+			trimStart: 1,
+			trimEnd: 0,
+			transform: {
+				position: { x: 0, y: 0 },
+				scale: 1,
+				rotate: 0,
+			},
+			opacity: 1,
+			reframePresets: [
+				{
+					id: "subject-left",
+					name: "Subject Left",
+					transform: {
+						position: { x: -120, y: 0 },
+						scale: 2,
+					},
+				},
+				{
+					id: "subject-right",
+					name: "Subject Right",
+					transform: {
+						position: { x: 120, y: 0 },
+						scale: 2,
+					},
+				},
+			],
+			defaultReframePresetId: "subject-left",
+			splitScreen: {
+				enabled: true,
+				layoutPreset: "top-bottom",
+				viewportBalance: "unbalanced",
+				slots: [
+					{ slotId: "top", mode: "fixed-preset", presetId: "subject-left" },
+					{ slotId: "bottom", mode: "fixed-preset", presetId: "subject-right" },
+				],
+				sections: [],
+			},
+		};
+		const audio = createAudioElement({
+			id: "audio-right",
+			startTime: 1,
+			duration: 1,
+			words: [{ id: "w-right", text: "right", startTime: 0.0, endTime: 0.4 }],
+		});
+		const caption = createCaption({ sourceMediaElementId: audio.id });
+
+		const scene = buildScene({
+			tracks: [
+				{
+					id: "video-track",
+					type: "video",
+					name: "Video",
+					isMain: true,
+					muted: false,
+					hidden: false,
+					elements: [video],
+				},
+				{
+					id: "audio-track",
+					type: "audio",
+					name: "Audio",
+					muted: false,
+					elements: [audio],
+				},
+				{
+					id: "text-track",
+					type: "text",
+					name: "Text",
+					hidden: false,
+					elements: [caption],
+				},
+			],
+			mediaAssets: [
+				{
+					id: "video-asset",
+					name: "video.mp4",
+					type: "video",
+					width: 1920,
+					height: 1080,
+					duration: 5,
+					file: new File(["video"], "video.mp4", { type: "video/mp4" }),
+					url: "https://example.com/video.mp4",
+				},
+			],
+			duration: 5,
+			canvasSize: { width: 1080, height: 1920 },
+			background: { type: "color", color: "#000000" },
+		});
+
+		const textNode = scene.children.find(
+			(node) => node.constructor.name === "TextNode",
+		) as
+			| {
+					params?: {
+						captionSourceVideo?: {
+							splitScreen?: VideoElement["splitScreen"];
+							startTime?: number;
+						};
+					};
+			  }
+			| undefined;
+
+		expect(textNode?.params?.captionSourceVideo?.startTime).toBe(1);
+		expect(
+			textNode?.params?.captionSourceVideo?.splitScreen?.viewportBalance,
+		).toBe("unbalanced");
 	});
 });

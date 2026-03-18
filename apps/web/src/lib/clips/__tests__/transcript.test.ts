@@ -1,7 +1,59 @@
 import { describe, expect, test } from "bun:test";
-import { clipTranscriptSegmentsForWindow } from "@/lib/clips/transcript";
+import {
+	buildClipTranscriptCacheEntryForAsset,
+	clipTranscriptSegmentsForWindow,
+	getOrCreateClipTranscriptForAsset,
+	PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
+} from "@/lib/clips/transcript";
+import type { MediaAsset } from "@/types/assets";
+import type { TProject } from "@/types/project";
+
+function buildTestAsset(): MediaAsset {
+	return {
+		id: "media-1",
+		name: "clip.mp4",
+		type: "video",
+		size: 1024,
+		lastModified: 0,
+		duration: 180,
+		width: 1920,
+		height: 1080,
+		fps: 30,
+		file: new File(["test"], "clip.mp4", { type: "video/mp4" }),
+	};
+}
+
+function buildTestProject(): TProject {
+	return {
+		metadata: {
+			id: "project-1",
+			name: "Project",
+			duration: 180,
+			createdAt: new Date("2026-01-01T00:00:00.000Z"),
+			updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+		},
+		scenes: [],
+		currentSceneId: "scene-1",
+		settings: {
+			fps: 30,
+			canvasSize: {
+				width: 1920,
+				height: 1080,
+			},
+			background: {
+				type: "color",
+				color: "#000000",
+			},
+		},
+		version: 1,
+	};
+}
 
 describe("clipTranscriptSegmentsForWindow", () => {
+	test("defaults clip transcript language to english", () => {
+		expect(PROJECT_MEDIA_TRANSCRIPT_LANGUAGE).toBe("en");
+	});
+
 	test("rebases segment timestamps to clip start", () => {
 		const clipped = clipTranscriptSegmentsForWindow({
 			segments: [
@@ -29,5 +81,57 @@ describe("clipTranscriptSegmentsForWindow", () => {
 		});
 
 		expect(clipped).toEqual([{ text: "inside", start: 10, end: 11 }]);
+	});
+
+	test("does not prefer an unsuitable media-linked transcript over a valid cached transcript", async () => {
+		const asset = buildTestAsset();
+		const cached = buildClipTranscriptCacheEntryForAsset({
+			asset,
+			modelId: "whisper-large-v3",
+			language: "auto",
+			text:
+				"This cached transcript covers the full source and includes multiple sections across the timeline.",
+			segments: [
+				{ text: "Full transcript intro section.", start: 0, end: 20 },
+				{ text: "Middle section with more content.", start: 70, end: 92 },
+				{ text: "Late section with a clean standalone ending.", start: 140, end: 165 },
+				{ text: "Closing context that still belongs in the source.", start: 165, end: 178 },
+				{ text: "Final sentence.", start: 178, end: 180 },
+			],
+		});
+		const project: TProject = {
+			...buildTestProject(),
+			externalMediaLinks: {
+				[asset.id]: {
+					sourceSystem: "thumbnail_decoupled",
+					externalProjectId: "external-1",
+					linkedAt: new Date("2026-01-01T00:00:00.000Z").toISOString(),
+				},
+			},
+			externalTranscriptCache: {
+				"thumbnail_decoupled:external-1": {
+					sourceSystem: "thumbnail_decoupled",
+					externalProjectId: "external-1",
+					transcriptText: "Short intro only.",
+					segments: [{ text: "Short intro only.", start: 0, end: 8 }],
+					segmentsCount: 1,
+					audioDurationSeconds: 180,
+					updatedAt: new Date("2026-01-01T00:00:00.000Z").toISOString(),
+				},
+			},
+			clipTranscriptCache: {
+				[cached.cacheKey]: cached.transcript,
+			},
+		};
+
+		const result = await getOrCreateClipTranscriptForAsset({
+			project,
+			asset,
+			modelId: "whisper-large-v3",
+			language: "auto",
+		});
+
+		expect(result.source).toBe("cache");
+		expect(result.transcript.segments).toEqual(cached.transcript.segments);
 	});
 });

@@ -1,4 +1,7 @@
-import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
+import {
+	DEFAULT_TEXT_BACKGROUND,
+	DEFAULT_TEXT_ELEMENT,
+} from "@/constants/text-constants";
 import type { TextElement } from "@/types/timeline";
 
 export const BLUE_HIGHLIGHT_CAPTION_STYLE: NonNullable<TextElement["captionStyle"]> =
@@ -21,6 +24,16 @@ export const BLUE_HIGHLIGHT_CAPTION_STYLE: NonNullable<TextElement["captionStyle
 		linkedToCaptionGroup: true,
 		anchorToSafeAreaBottom: true,
 		safeAreaBottomOffset: 0,
+		splitScreenOverrides: {
+			enabled: true,
+			anchorToSplitViewport: true,
+			fontSize: 4,
+			backgroundPaddingY: DEFAULT_TEXT_BACKGROUND.paddingY - 5,
+			wordsOnScreen: 3,
+			maxLinesOnScreen: 1,
+			anchorToSafeAreaBottom: true,
+			safeAreaBottomOffset: 0,
+		},
 	};
 
 export const BLUE_HIGHLIGHT_CAPTION_TEXT_PROPS: Pick<

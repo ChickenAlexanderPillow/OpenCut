@@ -125,7 +125,7 @@ Lower-memory Docker option (skips `local-transcribe`):
 bun run docker:up:core
 ```
 
-Web-only shortcut (same stack as `docker:up:core`):
+Web-only shortcut (rebuilds/starts `web` without stopping an already-running `local-transcribe`):
 
 ```bash
 bun run docker:up:web

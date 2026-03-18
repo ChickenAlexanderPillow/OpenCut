@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PanelView } from "@/components/editor/panels/assets/views/base-view";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { invokeAction } from "@/lib/actions";
@@ -53,6 +54,81 @@ function buildClipPreviewUrl({
 
 const CLIP_PREVIEW_PLAY_EVENT = "opencut:clips-preview-play";
 const TIMELINE_PLAYBACK_STATE_EVENT = "opencut:timeline-playback-state";
+const CLIP_GENERATION_SKELETON_IDS = ["alpha", "beta", "gamma"] as const;
+const CLIP_REGENERATION_SKELETON_IDS = ["refresh-a", "refresh-b"] as const;
+
+function ClipCandidateSkeletonCard() {
+	return (
+		<div className="space-y-2.5 rounded-md border bg-background/70 p-2.5">
+			<div className="flex items-start justify-between gap-2">
+				<div className="min-w-0 flex-1 space-y-1.5">
+					<Skeleton className="bg-muted/50 h-4 w-2/3" />
+					<Skeleton className="bg-muted/50 h-3 w-28" />
+				</div>
+				<div className="flex items-center gap-1.5">
+					<Skeleton className="bg-muted/50 h-7 w-12 rounded-sm" />
+					<Skeleton className="bg-muted/50 h-7 w-7 rounded-sm" />
+					<Skeleton className="bg-muted/50 h-7 w-7 rounded-sm" />
+					<Skeleton className="bg-muted/50 h-7 w-7 rounded-sm" />
+				</div>
+			</div>
+			<Skeleton className="bg-muted/50 aspect-video w-full rounded-sm" />
+			<div className="flex items-center gap-2">
+				<Skeleton className="bg-muted/50 h-6 w-6 rounded-sm" />
+				<Skeleton className="bg-muted/50 h-3 w-24" />
+				<Skeleton className="bg-muted/50 h-1.5 flex-1 rounded-full" />
+			</div>
+			<div className="flex flex-wrap gap-1">
+				<Skeleton className="bg-muted/50 h-5 w-14 rounded-sm" />
+				<Skeleton className="bg-muted/50 h-5 w-16 rounded-sm" />
+				<Skeleton className="bg-muted/50 h-5 w-20 rounded-sm" />
+				<Skeleton className="bg-muted/50 h-5 w-14 rounded-sm" />
+				<Skeleton className="bg-muted/50 h-5 w-18 rounded-sm" />
+			</div>
+			<div className="rounded-sm border border-dashed p-2">
+				<div className="space-y-1.5">
+					<Skeleton className="bg-muted/50 h-3 w-full" />
+					<Skeleton className="bg-muted/50 h-3 w-11/12" />
+				</div>
+			</div>
+			<div className="space-y-1.5">
+				<Skeleton className="bg-muted/50 h-3 w-full" />
+				<Skeleton className="bg-muted/50 h-3 w-5/6" />
+			</div>
+			<div className="space-y-1">
+				<Skeleton className="bg-muted/50 h-3 w-16" />
+				<Skeleton className="bg-muted/50 min-h-[56px] w-full rounded-md" />
+			</div>
+		</div>
+	);
+}
+
+function ClipGenerationSkeleton({
+	title,
+	showSpinner = false,
+	cardCount = 3,
+}: {
+	title: string;
+	showSpinner?: boolean;
+	cardCount?: number;
+}) {
+	return (
+		<div className="space-y-2">
+			<div className="space-y-1">
+				<div className="flex items-center justify-between gap-2">
+					<div className="flex min-w-0 items-center gap-2">
+						{showSpinner ? <Spinner className="size-4" /> : null}
+						<div className="truncate text-sm font-semibold">{title}</div>
+					</div>
+				</div>
+				<div className="border-t" />
+			</div>
+			{CLIP_GENERATION_SKELETON_IDS.slice(0, cardCount).map((skeletonId) => (
+				<ClipCandidateSkeletonCard key={`${title}-skeleton-${skeletonId}`} />
+			))}
+		</div>
+	);
+}
 
 function buildWindowTranscriptText({
 	segments,
@@ -151,7 +227,8 @@ function CandidateCard({
 		candidate,
 		feedbackModel,
 	});
-	const resolvedRating = candidate.userFeedback?.rating ?? candidate.userRating ?? 0;
+	const resolvedRating =
+		candidate.userFeedback?.rating ?? candidate.userRating ?? 0;
 	const isThumbUpActive = resolvedRating === 1;
 	const isThumbDownActive = resolvedRating === -1;
 	const resolvedFeedbackComment = (
@@ -166,11 +243,11 @@ function CandidateCard({
 		setPreviewError(null);
 		setIsPlaying(false);
 		setClipTime(0);
-	}, [clipPreviewUrl, candidate.id]);
+	}, [clipPreviewUrl]);
 
 	useEffect(() => {
 		setCommentDraft(resolvedFeedbackComment);
-	}, [candidate.id, resolvedFeedbackComment]);
+	}, [resolvedFeedbackComment]);
 
 	const handleVideoTimeUpdate = () => {
 		const video = videoRef.current;
@@ -201,7 +278,10 @@ function CandidateCard({
 				setIsPlaying(false);
 			}
 		};
-		window.addEventListener(CLIP_PREVIEW_PLAY_EVENT, onOtherPreviewPlay as EventListener);
+		window.addEventListener(
+			CLIP_PREVIEW_PLAY_EVENT,
+			onOtherPreviewPlay as EventListener,
+		);
 		return () => {
 			window.removeEventListener(
 				CLIP_PREVIEW_PLAY_EVENT,
@@ -261,7 +341,10 @@ function CandidateCard({
 				setIsPlaying(false);
 				return;
 			}
-			if (video.currentTime < candidate.startTime || video.currentTime >= candidate.endTime) {
+			if (
+				video.currentTime < candidate.startTime ||
+				video.currentTime >= candidate.endTime
+			) {
 				video.currentTime = candidate.startTime;
 			}
 			video.muted = false;
@@ -290,7 +373,10 @@ function CandidateCard({
 				setIsPlaying(false);
 				return;
 			}
-			if (audio.currentTime < candidate.startTime || audio.currentTime >= candidate.endTime) {
+			if (
+				audio.currentTime < candidate.startTime ||
+				audio.currentTime >= candidate.endTime
+			) {
 				audio.currentTime = candidate.startTime;
 			}
 			audio.muted = false;
@@ -331,7 +417,10 @@ function CandidateCard({
 	};
 
 	const handleSeekWithinClip = ({ nextClipTime }: { nextClipTime: number }) => {
-		const boundedClipTime = Math.max(0, Math.min(candidate.duration, nextClipTime));
+		const boundedClipTime = Math.max(
+			0,
+			Math.min(candidate.duration, nextClipTime),
+		);
 		setClipTime(boundedClipTime);
 		const targetTime = candidate.startTime + boundedClipTime;
 
@@ -353,10 +442,12 @@ function CandidateCard({
 		<div className="space-y-2.5 rounded-md border bg-background/70 p-2.5">
 			<div className="flex items-start justify-between gap-2">
 				<div>
-					<div className="text-sm font-medium leading-tight">{candidate.title}</div>
+					<div className="text-sm font-medium leading-tight">
+						{candidate.title}
+					</div>
 					<div className="text-muted-foreground text-xs">
-						{formatTime(candidate.startTime)} - {formatTime(candidate.endTime)} (
-						{Math.round(candidate.duration)}s)
+						{formatTime(candidate.startTime)} - {formatTime(candidate.endTime)}{" "}
+						({Math.round(candidate.duration)}s)
 					</div>
 				</div>
 				<div className="flex items-center gap-1.5">
@@ -412,7 +503,9 @@ function CandidateCard({
 								<span>Loading preview...</span>
 							</div>
 						) : previewError ? (
-							<span className="text-xs text-muted-foreground">{previewError}</span>
+							<span className="text-xs text-muted-foreground">
+								{previewError}
+							</span>
 						) : null}
 					</div>
 					<video
@@ -451,7 +544,11 @@ function CandidateCard({
 						aria-label={isMuted ? "Unmute preview" : "Mute preview"}
 						title={isMuted ? "Unmute preview" : "Mute preview"}
 					>
-						{isMuted ? <VolumeX className="size-3.5" /> : <Volume2 className="size-3.5" />}
+						{isMuted ? (
+							<VolumeX className="size-3.5" />
+						) : (
+							<Volume2 className="size-3.5" />
+						)}
 					</Button>
 				</div>
 			) : clipPreviewUrl && mediaType === "audio" ? (
@@ -463,9 +560,13 @@ function CandidateCard({
 								<span>Loading preview...</span>
 							</div>
 						) : previewError ? (
-							<span className="text-xs text-muted-foreground">{previewError}</span>
+							<span className="text-xs text-muted-foreground">
+								{previewError}
+							</span>
 						) : (
-							<span className="text-xs text-muted-foreground">Preview ready</span>
+							<span className="text-xs text-muted-foreground">
+								Preview ready
+							</span>
 						)}
 					</div>
 					<audio
@@ -512,7 +613,11 @@ function CandidateCard({
 						aria-label={isPlaying ? "Pause preview" : "Play preview"}
 						title={isPlaying ? "Pause preview" : "Play preview"}
 					>
-						{isPlaying ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+						{isPlaying ? (
+							<Pause className="size-3.5" />
+						) : (
+							<Play className="size-3.5" />
+						)}
 					</Button>
 					<div className="text-muted-foreground shrink-0 tabular-nums">
 						{formatTime(clipTime)} / {formatTime(candidate.duration)}
@@ -538,7 +643,10 @@ function CandidateCard({
 								style={{
 									width: `${Math.max(
 										0,
-										Math.min(100, (clipTime / Math.max(0.001, candidate.duration)) * 100),
+										Math.min(
+											100,
+											(clipTime / Math.max(0.001, candidate.duration)) * 100,
+										),
 									)}%`,
 								}}
 							/>
@@ -615,22 +723,28 @@ export function Clips() {
 	const mediaAssets = editor.media.getAssets();
 	const {
 		status,
-		progress,
-		progressMessage,
 		error,
 		sourceMediaId: generatingSourceMediaId,
 		hydrate,
 		reset,
 	} = useClipGenerationStore();
-	const clipFocusMediaId = useAssetsPanelStore((state) => state.clipFocusMediaId);
+	const clipFocusMediaId = useAssetsPanelStore(
+		(state) => state.clipFocusMediaId,
+	);
 	const clearClipSectionFocus = useAssetsPanelStore(
 		(state) => state.clearClipSectionFocus,
 	);
 	const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
-	const [importingCandidateId, setImportingCandidateId] = useState<string | null>(null);
+	const [importingCandidateId, setImportingCandidateId] = useState<
+		string | null
+	>(null);
 
 	const mediaById = useMemo(
 		() => new Map(mediaAssets.map((asset) => [asset.id, asset])),
+		[mediaAssets],
+	);
+	const videoAssets = useMemo(
+		() => mediaAssets.filter((asset) => asset.type === "video"),
 		[mediaAssets],
 	);
 	const groups = useMemo(() => {
@@ -639,9 +753,15 @@ export function Clips() {
 			.filter((entry) => entry.candidates.length > 0 || Boolean(entry.error))
 			.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 	}, [project.clipGenerationCache]);
+	const emptyStateTargetMedia =
+		(clipFocusMediaId ? mediaById.get(clipFocusMediaId) : null) ??
+		videoAssets[0] ??
+		null;
 
 	const isGeneratingSessionStatus =
-		status === "extracting" || status === "transcribing" || status === "scoring";
+		status === "extracting" ||
+		status === "transcribing" ||
+		status === "scoring";
 
 	useEffect(() => {
 		if (!clipFocusMediaId) return;
@@ -668,7 +788,8 @@ export function Clips() {
 			!process.label.startsWith("Importing clips") &&
 			!process.label.startsWith("Preparing clip imports"),
 	);
-	const isGenerating = isGeneratingSessionStatus && Boolean(activeClipGenerationProcess);
+	const isGenerating =
+		isGeneratingSessionStatus && Boolean(activeClipGenerationProcess);
 	const isGeneratingCurrentMedia =
 		isGenerating &&
 		Boolean(generatingSourceMediaId) &&
@@ -698,7 +819,8 @@ export function Clips() {
 			const existingRating: -1 | 0 | 1 =
 				entry.userFeedback?.rating ?? entry.userRating ?? 0;
 			const nextRating = updates.rating ?? existingRating;
-			const existingComment = entry.userComment ?? entry.userFeedback?.comment ?? "";
+			const existingComment =
+				entry.userComment ?? entry.userFeedback?.comment ?? "";
 			const nextCommentRaw = updates.comment ?? existingComment;
 			const nextComment = nextCommentRaw.trim();
 			return {
@@ -748,49 +870,44 @@ export function Clips() {
 		>
 			{error && <div className="text-xs text-red-500">{error}</div>}
 			{groups.length === 0 && !isGeneratingCurrentMedia && (
-				<div className="text-muted-foreground text-xs">
-					No stored clip groups for this project. Use the clip icon on media in Assets to
-					generate clips.
+				<div className="flex min-h-[220px] items-center justify-center">
+					{emptyStateTargetMedia ? (
+						<Button
+							type="button"
+							size="lg"
+							onClick={() =>
+								invokeAction("generate-viral-clips", {
+									sourceMediaId: emptyStateTargetMedia.id,
+								})
+							}
+						>
+							Generate clips
+						</Button>
+					) : (
+						<div className="text-muted-foreground text-xs">
+							Add a video in Assets to generate clips.
+						</div>
+					)}
 				</div>
 			)}
 			{isGeneratingCurrentMedia && generatingSourceMediaId && (
-				<div className="rounded-md border p-3">
-					<div className="mb-2 flex items-center gap-2">
-						<Spinner className="size-4" />
-						<div className="text-sm font-medium">
-							{mediaById.get(generatingSourceMediaId)?.name ??
-								`Generating clips (${generatingSourceMediaId.slice(0, 8)}...)`}
-						</div>
-					</div>
-					<div className="text-muted-foreground text-xs">
-						{progressMessage ??
-							activeClipGenerationProcess?.label ??
-							"Generating clips..."}
-					</div>
-					<div className="bg-muted mt-2 h-1.5 w-full overflow-hidden rounded-full">
-						<div
-							className="bg-foreground h-full transition-all duration-300"
-							style={{
-								width: `${Math.max(
-									4,
-									Math.min(100, typeof progress === "number" ? progress : 12),
-								)}%`,
-							}}
-						/>
-					</div>
-					<div className="text-muted-foreground mt-1 text-[11px]">
-						{typeof progress === "number"
-							? `${Math.round(progress)}%`
-							: "In progress"}
-					</div>
-				</div>
+				<ClipGenerationSkeleton
+					title={
+						mediaById.get(generatingSourceMediaId)?.name ??
+						`Generating clips (${generatingSourceMediaId.slice(0, 8)}...)`
+					}
+					showSpinner
+				/>
 			)}
 
 			{groups.map((group) => {
 				const sourceMedia = mediaById.get(group.sourceMediaId) ?? null;
 				const transcriptSegments = (() => {
 					const clipCache = project.clipTranscriptCache ?? {};
-					if (group.transcriptRef?.cacheKey && clipCache[group.transcriptRef.cacheKey]) {
+					if (
+						group.transcriptRef?.cacheKey &&
+						clipCache[group.transcriptRef.cacheKey]
+					) {
 						return clipCache[group.transcriptRef.cacheKey]?.segments ?? [];
 					}
 					const fallbackEntries = Object.entries(clipCache)
@@ -854,28 +971,16 @@ export function Clips() {
 							</div>
 							<div className="border-t" />
 						</div>
-						{group.error && <div className="text-xs text-red-400">{group.error}</div>}
+						{group.error && (
+							<div className="text-xs text-red-400">{group.error}</div>
+						)}
 						{processingThisGroup && (
-							<div className="rounded-md border p-2">
-								<div className="mb-1 flex items-center gap-2 text-xs">
-									<Spinner className="size-3.5" />
-									<span>
-										{progressMessage ??
-											activeClipGenerationProcess?.label ??
-											"Generating clips..."}
-									</span>
-								</div>
-								<div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
-									<div
-										className="bg-foreground h-full transition-all duration-300"
-										style={{
-											width: `${Math.max(
-												4,
-												Math.min(100, typeof progress === "number" ? progress : 12),
-											)}%`,
-										}}
+							<div className="space-y-2">
+								{CLIP_REGENERATION_SKELETON_IDS.map((skeletonId) => (
+									<ClipCandidateSkeletonCard
+										key={`${group.sourceMediaId}-processing-skeleton-${skeletonId}`}
 									/>
-								</div>
+								))}
 							</div>
 						)}
 						{rankedCandidates.map((candidate) => (
@@ -888,8 +993,7 @@ export function Clips() {
 										segments: transcriptSegments,
 										startTime: candidate.startTime,
 										endTime: candidate.endTime,
-									})
-										.trim() || candidate.transcriptSnippet
+									}).trim() || candidate.transcriptSnippet
 								}
 								mediaUrl={previewSource?.url ?? null}
 								mediaFile={sourceMedia?.file ?? null}
@@ -924,7 +1028,9 @@ export function Clips() {
 										updates: { comment },
 									});
 								}}
-								isImporting={importingCandidateId === candidate.id && hasClipImportProcess}
+								isImporting={
+									importingCandidateId === candidate.id && hasClipImportProcess
+								}
 							/>
 						))}
 					</div>

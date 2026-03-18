@@ -38,4 +38,3 @@ describe("resolvePreviewRenderBackend", () => {
 		).toBe("canvas2d");
 	});
 });
-

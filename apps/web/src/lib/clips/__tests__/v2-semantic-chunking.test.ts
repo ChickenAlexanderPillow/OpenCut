@@ -62,4 +62,50 @@ describe("semantic chunking v2", () => {
 			expect(candidate.endTime).toBeLessThanOrEqual(180);
 		}
 	});
+
+	test("preserves later semantic chunks when the intro yields many strong windows", () => {
+		const introSegments = Array.from({ length: 18 }, (_, index) => {
+			const start = index * 7;
+			const end = start + 7;
+			return {
+				text:
+					index % 3 === 0
+						? "Prediction markets looked unstoppable, but tulip bulbs looked unstoppable too."
+						: index % 3 === 1
+							? "That is why a bubble feels exciting right before it becomes dangerous."
+							: "The key risk is that momentum turns into contagion and hurts everyone downstream.",
+				start,
+				end,
+			};
+		});
+		const laterSegments = [
+			{
+				text: "Now switching gears to studio lighting for talking head videos.",
+				start: 145,
+				end: 154,
+			},
+			{
+				text: "A key light and a practical in the background instantly make the frame feel deliberate.",
+				start: 154,
+				end: 167,
+			},
+			{
+				text: "That small setup change improves retention because the image feels more trustworthy.",
+				start: 167,
+				end: 180,
+			},
+		];
+
+		const candidates = buildClipCandidatesFromTranscriptV2({
+			mediaDuration: 220,
+			minClipSeconds: 18,
+			targetClipSeconds: 36,
+			maxClipSeconds: 65,
+			maxOutput: 8,
+			segments: [...introSegments, ...laterSegments],
+		});
+
+		expect(candidates.length).toBeGreaterThan(1);
+		expect(candidates.some((candidate) => candidate.startTime >= 145)).toBeTrue();
+	});
 });

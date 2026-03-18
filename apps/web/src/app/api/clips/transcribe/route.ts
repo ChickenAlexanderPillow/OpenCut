@@ -1,6 +1,11 @@
 import { webEnv } from "@opencut/env/web";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
+import {
+	buildLocalWhisperXFormData,
+	buildOpenAITranscriptionFormData,
+	resolveRequestedClipTranscriptionLanguage,
+} from "./request-utils";
 
 const OPENAI_TRANSCRIPTIONS_URL =
 	"https://api.openai.com/v1/audio/transcriptions";
@@ -179,9 +184,11 @@ function hasMonotonicWords({
 async function callLocalWhisperX({
 	file,
 	requestedModel,
+	language,
 }: {
 	file: File;
 	requestedModel: string;
+	language?: string | null;
 }): Promise<{
 	segments: Array<{ text: string; start: number; end: number }>;
 	model: string;
@@ -196,21 +203,16 @@ async function callLocalWhisperX({
 		throw new Error("LOCAL_TRANSCRIBE_URL is not configured");
 	}
 
-	const form = new FormData();
-	form.append("file", file, file.name || "clip.wav");
-	form.append(
-		"model",
-		requestedModel || webEnv.LOCAL_TRANSCRIBE_MODEL || "medium",
-	);
-	form.append("device", webEnv.LOCAL_TRANSCRIBE_DEVICE || "cuda");
-	form.append(
-		"compute_type",
-		webEnv.LOCAL_TRANSCRIBE_COMPUTE_TYPE || "int8_float16",
-	);
-	form.append(
-		"vad_filter",
-		(process.env.LOCAL_TRANSCRIBE_VAD_FILTER ?? "false").trim() || "false",
-	);
+	const form = buildLocalWhisperXFormData({
+		file,
+		requestedModel,
+		language,
+		defaultModel: webEnv.LOCAL_TRANSCRIBE_MODEL || "medium",
+		device: webEnv.LOCAL_TRANSCRIBE_DEVICE || "cuda",
+		computeType: webEnv.LOCAL_TRANSCRIBE_COMPUTE_TYPE || "int8_float16",
+		vadFilter:
+			(process.env.LOCAL_TRANSCRIBE_VAD_FILTER ?? "false").trim() || "false",
+	});
 
 	const controller = new AbortController();
 	const timeout = webEnv.LOCAL_TRANSCRIBE_TIMEOUT_MS ?? 120000;
@@ -291,22 +293,18 @@ async function callOpenAITranscriptions({
 	apiKey,
 	file,
 	model,
+	language,
 }: {
 	apiKey: string;
 	file: File;
 	model: string;
+	language?: string | null;
 }): Promise<Response> {
-	const normalizedModel = model.toLowerCase();
-	const responseFormat = normalizedModel.startsWith("gpt-4o")
-		? "json"
-		: "verbose_json";
-	const openAIForm = new FormData();
-	openAIForm.append("file", file, file.name || "clip.wav");
-	openAIForm.append("model", model);
-	openAIForm.append("response_format", responseFormat);
-	openAIForm.append("temperature", "0");
-	openAIForm.append("timestamp_granularities[]", "word");
-	openAIForm.append("timestamp_granularities[]", "segment");
+	const openAIForm = buildOpenAITranscriptionFormData({
+		file,
+		model,
+		language,
+	});
 
 	return await fetch(OPENAI_TRANSCRIPTIONS_URL, {
 		method: "POST",
@@ -365,6 +363,9 @@ export async function POST(request: NextRequest) {
 			(form.get("model") ?? webEnv.LOCAL_TRANSCRIBE_MODEL ?? "medium")
 				.toString()
 				.trim() || "medium";
+		const language = resolveRequestedClipTranscriptionLanguage({
+			language: form.get("language"),
+		});
 		if (!(file instanceof File)) {
 			return NextResponse.json({ error: "file is required" }, { status: 400 });
 		}
@@ -383,6 +384,7 @@ export async function POST(request: NextRequest) {
 						const result = await callLocalWhisperX({
 							file,
 							requestedModel: model,
+							language,
 						});
 						console.info("Clip transcription metrics", {
 							engine: result.engine,
@@ -449,6 +451,7 @@ export async function POST(request: NextRequest) {
 					apiKey: openAiApiKey,
 					file,
 					model: "whisper-1",
+					language,
 				});
 				if (!openAiResponse.ok) {
 					const body = await openAiResponse.text();

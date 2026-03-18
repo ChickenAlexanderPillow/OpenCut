@@ -29,7 +29,8 @@ import {
 } from "@/lib/reframe/video-reframe";
 import {
 	buildSplitScreenUpdates,
-	getSplitSlotIdAtCanvasPoint,
+	getEditableSplitSlotIdAtCanvasPoint,
+	getEditableSplitSlotRegions,
 	getSplitSlotViewportBounds,
 	resolveEditableSplitSlotState,
 	updateSplitSlotBindingsWithTransform,
@@ -63,6 +64,23 @@ interface DragState {
 	};
 }
 
+type SplitInteractionState = {
+	trackId: string;
+	elementId: string;
+	canvasSize: { width: number; height: number };
+	regions: Array<{
+		slotId: string;
+		bounds: {
+			cx: number;
+			cy: number;
+			width: number;
+			height: number;
+			rotation: number;
+		};
+	}>;
+	activeSlotId: string | null;
+};
+
 export function usePreviewInteraction({
 	canvasRef,
 }: {
@@ -83,6 +101,7 @@ export function usePreviewInteraction({
 	} | null>(null);
 	const dragStateRef = useRef<DragState | null>(null);
 	const wasPlayingRef = useRef(editor.playback.getIsPlaying());
+	const playbackTimeRef = useRef(editor.playback.getCurrentTime());
 	const editingTextRef = useRef(editingText);
 	const dragAxisLockRef = useRef<DragAxisLock>(null);
 	const axisLockSnapshotRef = useRef<{ deltaX: number; deltaY: number } | null>(
@@ -128,21 +147,38 @@ export function usePreviewInteraction({
 	const setSelectedSplitPreviewSlots = useReframeStore(
 		(state) => state.setSelectedSplitPreviewSlots,
 	);
-	const setSelectedSplitEditSlotId = useReframeStore(
-		(state) => state.setSelectedSplitEditSlotId,
-	);
 	const selectedSplitPreviewByElementId = useReframeStore(
 		(state) => state.selectedSplitPreviewByElementId,
 	);
 	const selectedSplitEditSlotIdByElementId = useReframeStore(
 		(state) => state.selectedSplitEditSlotIdByElementId,
 	);
+	const hoveredSplitSlot = useReframeStore((state) => state.hoveredSplitSlot);
+	const hoveredSplitControlSlot = useReframeStore(
+		(state) => state.hoveredSplitControlSlot,
+	);
 	const clearSelectedSplitEditSlotId = useReframeStore(
 		(state) => state.clearSelectedSplitEditSlotId,
 	);
-	const [hoveredSplitSlotId, setHoveredSplitSlotId] = useState<string | null>(
-		null,
+	const clearAllSelectedSplitEditSlotIds = useReframeStore(
+		(state) => state.clearAllSelectedSplitEditSlotIds,
 	);
+	const setSelectedSplitEditSlotId = useReframeStore(
+		(state) => state.setSelectedSplitEditSlotId,
+	);
+	const setHoveredSplitSlot = useReframeStore(
+		(state) => state.setHoveredSplitSlot,
+	);
+	const clearHoveredSplitSlotState = useReframeStore(
+		(state) => state.clearHoveredSplitSlot,
+	);
+	const [hoverSplitInteraction, setHoverSplitInteraction] =
+		useState<SplitInteractionState | null>(null);
+
+	const clearHoveredSplitSlot = useCallback(() => {
+		clearHoveredSplitSlotState();
+		setHoverSplitInteraction(null);
+	}, [clearHoveredSplitSlotState]);
 
 	const getLocalTimeForElement = useCallback(
 		({ element }: { element: { startTime: number; duration: number } }) =>
@@ -156,10 +192,110 @@ export function usePreviewInteraction({
 		[editor.playback],
 	);
 
+	const getPreviewElementsWithBounds = useCallback(() => {
+		const tracks = editor.timeline.getTracks();
+		const currentTime = editor.playback.getCurrentTime();
+		const mediaAssets = editor.media.getAssets();
+		const projectCanvas = editor.project.getActive().settings.canvasSize;
+		const canvasSize = getPreviewCanvasSize({
+			projectWidth: projectCanvas.width,
+			projectHeight: projectCanvas.height,
+			previewFormatVariant,
+		});
+		const previewTracks =
+			previewFormatVariant === "square"
+				? remapCaptionTransformsForPreviewVariant({
+						tracks,
+						sourceCanvas: projectCanvas,
+						previewCanvas: canvasSize,
+					})
+				: tracks;
+		const previewTracksWithSelectedReframe =
+			applySelectedReframePresetPreviewToTracks({
+				tracks: previewTracks,
+				selectedPresetIdByElementId:
+					useReframeStore.getState().selectedPresetIdByElementId,
+				selectedSplitPreviewByElementId:
+					useReframeStore.getState().selectedSplitPreviewByElementId,
+				selectedElementIds: new Set(
+					editor.selection
+						.getSelectedElements()
+						.map((selection) => selection.elementId),
+				),
+			});
+		return {
+			canvasSize,
+			elementsWithBounds: getVisibleElementsWithBounds({
+				tracks: previewTracksWithSelectedReframe,
+				currentTime,
+				canvasSize,
+				backgroundReferenceCanvasSize: projectCanvas,
+				mediaAssets,
+			}),
+		};
+	}, [
+		editor.media,
+		editor.playback,
+		editor.project,
+		editor.selection,
+		editor.timeline,
+		previewFormatVariant,
+	]);
+
+	const resolveSplitInteractionForVideo = useCallback(
+		({
+			trackId,
+			element,
+		}: {
+			trackId: string;
+			element: VideoElement;
+		}): SplitInteractionState | null => {
+			const normalizedElement = normalizeVideoReframeState({ element });
+			const projectCanvas = editor.project.getActive().settings.canvasSize;
+			const canvasSize = getPreviewCanvasSize({
+				projectWidth: projectCanvas.width,
+				projectHeight: projectCanvas.height,
+				previewFormatVariant,
+			});
+			const localTime = getLocalTimeForElement({ element: normalizedElement });
+			const editableSplitState = resolveEditableSplitSlotState({
+				element: normalizedElement,
+				localTime,
+				splitPreview:
+					selectedSplitPreviewByElementId[normalizedElement.id] ?? null,
+				preferredSlotId:
+					selectedSplitEditSlotIdByElementId[normalizedElement.id] ?? null,
+			});
+			if (!editableSplitState) return null;
+			return {
+				trackId,
+				elementId: normalizedElement.id,
+				canvasSize,
+				regions: getEditableSplitSlotRegions({
+					editableState: editableSplitState,
+					canvasWidth: canvasSize.width,
+					canvasHeight: canvasSize.height,
+				}),
+				activeSlotId:
+					selectedSplitEditSlotIdByElementId[normalizedElement.id] ??
+					editableSplitState.singleViewSlotId,
+			};
+		},
+		[
+			editor.project,
+			getLocalTimeForElement,
+			previewFormatVariant,
+			selectedSplitEditSlotIdByElementId,
+			selectedSplitPreviewByElementId,
+		],
+	);
+
 	const selectedSplitInteraction = useMemo(() => {
 		const selectedElement = editor.selection.getSelectedElements()[0] ?? null;
 		if (!selectedElement) return null;
-		const track = editor.timeline.getTrackById({ trackId: selectedElement.trackId });
+		const track = editor.timeline.getTrackById({
+			trackId: selectedElement.trackId,
+		});
 		const element =
 			track?.type === "video"
 				? (track.elements.find(
@@ -169,50 +305,15 @@ export function usePreviewInteraction({
 					) ?? null)
 				: null;
 		if (!element || element.type !== "video") return null;
-		const normalizedElement = normalizeVideoReframeState({ element });
-		const projectCanvas = editor.project.getActive().settings.canvasSize;
-		const canvasSize = getPreviewCanvasSize({
-			projectWidth: projectCanvas.width,
-			projectHeight: projectCanvas.height,
-			previewFormatVariant,
-		});
-		const localTime = getLocalTimeForElement({ element: normalizedElement });
-		const editableSplitState = resolveEditableSplitSlotState({
-			element: normalizedElement,
-			localTime,
-			splitPreview: selectedSplitPreviewByElementId[normalizedElement.id] ?? null,
-		});
-		if (!editableSplitState) return null;
-		const regions = editableSplitState.slots
-			.map((slot) => {
-				const bounds = getSplitSlotViewportBounds({
-					layoutPreset: editableSplitState.layoutPreset,
-					viewportBalance: editableSplitState.viewportBalance,
-					slotId: slot.slotId,
-					canvasWidth: canvasSize.width,
-					canvasHeight: canvasSize.height,
-				});
-				return bounds ? { slotId: slot.slotId, bounds } : null;
-			})
-			.filter(
-				(region): region is { slotId: string; bounds: NonNullable<typeof region>["bounds"] } =>
-					Boolean(region),
-			);
-		return {
+		return resolveSplitInteractionForVideo({
 			trackId: selectedElement.trackId,
-			elementId: normalizedElement.id,
-			canvasSize,
-			regions,
-			activeSlotId:
-				selectedSplitEditSlotIdByElementId[normalizedElement.id] ?? null,
-		};
-	}, [
-		editor,
-		getLocalTimeForElement,
-		previewFormatVariant,
-		selectedSplitEditSlotIdByElementId,
-		selectedSplitPreviewByElementId,
-	]);
+			element,
+		});
+	}, [editor, resolveSplitInteractionForVideo]);
+	const selectedSplitSlotId = selectedSplitInteraction
+		? (selectedSplitEditSlotIdByElementId[selectedSplitInteraction.elementId] ??
+			null)
+		: null;
 
 	const commitSplitSlotPreview = useCallback(
 		({ trackId, elementId }: { trackId: string; elementId: string }) => {
@@ -259,8 +360,9 @@ export function usePreviewInteraction({
 			nextTransform: Pick<Transform, "position" | "scale">;
 		}) => {
 			const mediaAsset =
-				editor.media.getAssets().find((asset) => asset.id === element.mediaId) ??
-				null;
+				editor.media
+					.getAssets()
+					.find((asset) => asset.id === element.mediaId) ?? null;
 			if (
 				mediaAsset?.type !== "video" ||
 				!Number.isFinite(mediaAsset.width) ||
@@ -318,61 +420,39 @@ export function usePreviewInteraction({
 	useEffect(() => {
 		const unsubscribe = editor.playback.subscribe(() => {
 			const isPlaying = editor.playback.getIsPlaying();
+			const currentTime = editor.playback.getCurrentTime();
+			if (
+				!dragStateRef.current &&
+				Math.abs(currentTime - playbackTimeRef.current) > 1e-6
+			) {
+				clearAllSelectedSplitEditSlotIds();
+				clearHoveredSplitSlotState();
+				setHoverSplitInteraction(null);
+			}
+			playbackTimeRef.current = currentTime;
 			if (isPlaying && !wasPlayingRef.current && editingTextRef.current) {
 				commitTextEdit();
 			}
 			wasPlayingRef.current = isPlaying;
 		});
 		return unsubscribe;
-	}, [editor.playback, commitTextEdit]);
+	}, [
+		clearAllSelectedSplitEditSlotIds,
+		clearHoveredSplitSlotState,
+		commitTextEdit,
+		editor.playback,
+	]);
 
 	const handleDoubleClick = useCallback(
 		({ clientX, clientY }: React.MouseEvent) => {
 			if (!canvasRef.current || editingText) return;
 
-			const tracks = editor.timeline.getTracks();
-			const currentTime = editor.playback.getCurrentTime();
-			const mediaAssets = editor.media.getAssets();
-			const projectCanvas = editor.project.getActive().settings.canvasSize;
-			const canvasSize = getPreviewCanvasSize({
-				projectWidth: projectCanvas.width,
-				projectHeight: projectCanvas.height,
-				previewFormatVariant,
-			});
-			const previewTracks =
-				previewFormatVariant === "square"
-					? remapCaptionTransformsForPreviewVariant({
-							tracks,
-							sourceCanvas: projectCanvas,
-							previewCanvas: canvasSize,
-						})
-					: tracks;
-			const previewTracksWithSelectedReframe =
-				applySelectedReframePresetPreviewToTracks({
-					tracks: previewTracks,
-					selectedPresetIdByElementId:
-						useReframeStore.getState().selectedPresetIdByElementId,
-					selectedSplitPreviewByElementId:
-						useReframeStore.getState().selectedSplitPreviewByElementId,
-					selectedElementIds: new Set(
-						editor.selection
-							.getSelectedElements()
-							.map((selection) => selection.elementId),
-					),
-				});
+			const { elementsWithBounds } = getPreviewElementsWithBounds();
 
 			const startPos = screenToCanvas({
 				clientX,
 				clientY,
 				canvas: canvasRef.current,
-			});
-
-			const elementsWithBounds = getVisibleElementsWithBounds({
-				tracks: previewTracksWithSelectedReframe,
-				currentTime,
-				canvasSize,
-				backgroundReferenceCanvasSize: projectCanvas,
-				mediaAssets,
 			});
 
 			const hit = hitTest({
@@ -400,12 +480,7 @@ export function usePreviewInteraction({
 				originalOpacity: textElement.opacity,
 			});
 		},
-		[
-			canvasRef,
-			editor,
-			editingText,
-			previewFormatVariant,
-		],
+		[canvasRef, editor, editingText, getPreviewElementsWithBounds],
 	);
 
 	const handlePointerDown = useCallback(
@@ -420,36 +495,7 @@ export function usePreviewInteraction({
 			if (editingText) return;
 			if (button !== 0) return;
 
-			const tracks = editor.timeline.getTracks();
-			const currentTime = editor.playback.getCurrentTime();
-			const mediaAssets = editor.media.getAssets();
-			const projectCanvas = editor.project.getActive().settings.canvasSize;
-			const canvasSize = getPreviewCanvasSize({
-				projectWidth: projectCanvas.width,
-				projectHeight: projectCanvas.height,
-				previewFormatVariant,
-			});
-			const previewTracks =
-				previewFormatVariant === "square"
-					? remapCaptionTransformsForPreviewVariant({
-							tracks,
-							sourceCanvas: projectCanvas,
-							previewCanvas: canvasSize,
-						})
-					: tracks;
-			const previewTracksWithSelectedReframe =
-				applySelectedReframePresetPreviewToTracks({
-					tracks: previewTracks,
-					selectedPresetIdByElementId:
-						useReframeStore.getState().selectedPresetIdByElementId,
-					selectedSplitPreviewByElementId:
-						useReframeStore.getState().selectedSplitPreviewByElementId,
-					selectedElementIds: new Set(
-						editor.selection
-							.getSelectedElements()
-							.map((selection) => selection.elementId),
-					),
-				});
+			const { canvasSize, elementsWithBounds } = getPreviewElementsWithBounds();
 
 			const startPos = screenToCanvas({
 				clientX,
@@ -457,18 +503,12 @@ export function usePreviewInteraction({
 				canvas: canvasRef.current,
 			});
 
-			const elementsWithBounds = getVisibleElementsWithBounds({
-				tracks: previewTracksWithSelectedReframe,
-				currentTime,
-				canvasSize,
-				backgroundReferenceCanvasSize: projectCanvas,
-				mediaAssets,
-			});
-
 			const hit = hitTest({
 				canvasX: startPos.x,
 				canvasY: startPos.y,
-				elementsWithBounds,
+				elementsWithBounds: elementsWithBounds.filter(
+					(entry) => !isGeneratedCaptionElement(entry.element),
+				),
 			});
 
 			if (!hit) {
@@ -476,13 +516,13 @@ export function usePreviewInteraction({
 				return;
 			}
 
-			editor.selection.setSelectedElements({
-				elements: [{ trackId: hit.trackId, elementId: hit.elementId }],
-			});
-
 			if (isGeneratedCaptionElement(hit.element)) {
 				return;
 			}
+
+			editor.selection.setSelectedElements({
+				elements: [{ trackId: hit.trackId, elementId: hit.elementId }],
+			});
 
 			const splitEditSlotId =
 				hit.element.type === "video"
@@ -490,7 +530,7 @@ export function usePreviewInteraction({
 							hit.element.id
 						] ?? null)
 					: null;
-			if (hit.element.type === "video" && splitEditSlotId) {
+			if (hit.element.type === "video") {
 				const normalizedElement = normalizeVideoReframeState({
 					element: hit.element,
 				});
@@ -505,10 +545,35 @@ export function usePreviewInteraction({
 					element: normalizedElement,
 					localTime,
 					splitPreview,
+					preferredSlotId: splitEditSlotId,
 				});
+				const slotIdAtPoint = editableSplitState
+					? getEditableSplitSlotIdAtCanvasPoint({
+							editableState: editableSplitState,
+							canvasWidth: canvasSize.width,
+							canvasHeight: canvasSize.height,
+							canvasX: startPos.x,
+							canvasY: startPos.y,
+						})
+					: null;
+				if (slotIdAtPoint) {
+					setSelectedSplitEditSlotId({
+						elementId: normalizedElement.id,
+						slotId: slotIdAtPoint,
+					});
+				}
+				if (!splitEditSlotId || slotIdAtPoint !== splitEditSlotId) {
+					if (!slotIdAtPoint) {
+						clearSelectedSplitEditSlotId({ elementId: normalizedElement.id });
+					}
+					if (slotIdAtPoint) {
+						return;
+					}
+				}
+				const activeSlotId = splitEditSlotId;
 				const activeBinding =
 					editableSplitState?.slots.find(
-						(binding) => binding.slotId === splitEditSlotId,
+						(binding) => binding.slotId === activeSlotId,
 					) ?? null;
 				const mediaAsset =
 					editor.media
@@ -523,15 +588,7 @@ export function usePreviewInteraction({
 				) {
 					const sourceWidth = mediaAsset.width as number;
 					const sourceHeight = mediaAsset.height as number;
-					const slotIdAtPoint = getSplitSlotIdAtCanvasPoint({
-						layoutPreset: editableSplitState.layoutPreset,
-						viewportBalance: editableSplitState.viewportBalance,
-						canvasWidth: canvasSize.width,
-						canvasHeight: canvasSize.height,
-						canvasX: startPos.x,
-						canvasY: startPos.y,
-					});
-					if (slotIdAtPoint === splitEditSlotId) {
+					if (activeSlotId && slotIdAtPoint === activeSlotId) {
 						const initialTransform =
 							resolveVideoSplitScreenSlotTransformFromState({
 								baseTransform: normalizedElement.transform,
@@ -549,13 +606,19 @@ export function usePreviewInteraction({
 								layoutPreset: editableSplitState.layoutPreset,
 								viewportBalance: editableSplitState.viewportBalance,
 							});
-						const viewportBounds = getSplitSlotViewportBounds({
-							layoutPreset: editableSplitState.layoutPreset,
-							viewportBalance: editableSplitState.viewportBalance,
-							slotId: splitEditSlotId,
-							canvasWidth: canvasSize.width,
-							canvasHeight: canvasSize.height,
-						});
+						const viewportBounds =
+							getEditableSplitSlotRegions({
+								editableState: editableSplitState,
+								canvasWidth: canvasSize.width,
+								canvasHeight: canvasSize.height,
+							}).find((region) => region.slotId === activeSlotId)?.bounds ??
+							getSplitSlotViewportBounds({
+								layoutPreset: editableSplitState.layoutPreset,
+								viewportBalance: editableSplitState.viewportBalance,
+								slotId: activeSlotId,
+								canvasWidth: canvasSize.width,
+								canvasHeight: canvasSize.height,
+							});
 						if (!viewportBounds) {
 							return;
 						}
@@ -571,7 +634,7 @@ export function usePreviewInteraction({
 							splitSlot: {
 								trackId: hit.trackId,
 								elementId: hit.elementId,
-								slotId: splitEditSlotId,
+								slotId: activeSlotId,
 								initialTransform,
 							},
 						};
@@ -594,6 +657,7 @@ export function usePreviewInteraction({
 			);
 
 			if (draggableElements.length === 0) return;
+			const currentTime = editor.playback.getCurrentTime();
 
 			dragStateRef.current = {
 				startX: startPos.x,
@@ -655,27 +719,52 @@ export function usePreviewInteraction({
 			editor,
 			editingText,
 			getLocalTimeForElement,
-			previewFormatVariant,
+			getPreviewElementsWithBounds,
+			setSelectedSplitEditSlotId,
 		],
 	);
 
 	const handlePointerMove = useCallback(
 		({ clientX, clientY }: React.PointerEvent) => {
-			if (canvasRef.current && !dragStateRef.current && selectedSplitInteraction) {
+			if (canvasRef.current && !dragStateRef.current) {
 				const position = screenToCanvas({
 					clientX,
 					clientY,
 					canvas: canvasRef.current,
 				});
+				const { elementsWithBounds } = getPreviewElementsWithBounds();
+				const hit = hitTest({
+					canvasX: position.x,
+					canvasY: position.y,
+					elementsWithBounds: elementsWithBounds.filter(
+						(entry) => entry.element.type === "video",
+					),
+				});
+				const hoveredInteraction =
+					hit && hit.element.type === "video"
+						? resolveSplitInteractionForVideo({
+								trackId: hit.trackId,
+								element: hit.element,
+							})
+						: null;
+				setHoverSplitInteraction(hoveredInteraction);
 				const hoveredRegion =
-					selectedSplitInteraction.regions.find(
+					hoveredInteraction?.regions.find(
 						(region) =>
 							position.x >= region.bounds.cx - region.bounds.width / 2 &&
 							position.x <= region.bounds.cx + region.bounds.width / 2 &&
 							position.y >= region.bounds.cy - region.bounds.height / 2 &&
 							position.y <= region.bounds.cy + region.bounds.height / 2,
 					) ?? null;
-				setHoveredSplitSlotId(hoveredRegion?.slotId ?? null);
+				const nextSlotId = hoveredRegion?.slotId ?? null;
+				if (nextSlotId && hoveredInteraction) {
+					setHoveredSplitSlot({
+						elementId: hoveredInteraction.elementId,
+						slotId: nextSlotId,
+					});
+				} else {
+					clearHoveredSplitSlotState();
+				}
 			}
 			if (!dragStateRef.current || !isDragging || !canvasRef.current) return;
 
@@ -811,10 +900,13 @@ export function usePreviewInteraction({
 		[
 			isDragging,
 			canvasRef,
+			clearHoveredSplitSlotState,
 			editor,
+			getPreviewElementsWithBounds,
 			isShiftHeldRef,
 			previewFormatVariant,
-			selectedSplitInteraction,
+			resolveSplitInteractionForVideo,
+			setHoveredSplitSlot,
 			syncDragAxisLock,
 			updateSplitSlotPreviewTransform,
 		],
@@ -910,15 +1002,48 @@ export function usePreviewInteraction({
 		};
 	}, [canvasRef, commitSplitSlotPreview, editor, isDragging, syncDragAxisLock]);
 
+	useEffect(() => {
+		if (selectedSplitInteraction) return;
+		clearHoveredSplitSlotState();
+		setHoverSplitInteraction(null);
+	}, [clearHoveredSplitSlotState, selectedSplitInteraction]);
+
+	const hoveredSplitSlotId =
+		hoveredSplitSlot &&
+		(hoverSplitInteraction?.elementId === hoveredSplitSlot.elementId ||
+			selectedSplitInteraction?.elementId === hoveredSplitSlot.elementId)
+			? hoveredSplitSlot.slotId
+			: null;
+	const activeSplitControlSlotId =
+		hoveredSplitControlSlot &&
+		selectedSplitInteraction?.elementId === hoveredSplitControlSlot.elementId
+			? hoveredSplitControlSlot.slotId
+			: null;
+	const splitSlotRegions =
+		hoverSplitInteraction?.regions ??
+		(selectedSplitSlotId || activeSplitControlSlotId || isDragging
+			? (selectedSplitInteraction?.regions ?? [])
+			: []);
+
 	return {
 		onPointerDown: handlePointerDown,
 		onPointerMove: handlePointerMove,
 		onPointerUp: handlePointerUp,
 		onDoubleClick: handleDoubleClick,
+		onPointerLeave: clearHoveredSplitSlot,
+		onPointerCancel: clearHoveredSplitSlot,
 		snapLines,
 		hoveredSplitSlotId,
-		splitSlotRegions: selectedSplitInteraction?.regions ?? [],
-		activeSplitSlotId: selectedSplitInteraction?.activeSlotId ?? null,
+		selectedSplitSlotId,
+		splitSlotRegions,
+		activeSplitSlotId:
+			hoveredSplitSlotId ??
+			activeSplitControlSlotId ??
+			(isDragging
+				? (selectedSplitInteraction?.activeSlotId ??
+					hoverSplitInteraction?.activeSlotId ??
+					null)
+				: null),
 		editingText,
 		commitTextEdit,
 		cancelTextEdit,

@@ -127,7 +127,9 @@ async function transcode({
 	mediaType,
 	timeoutMs = 120_000,
 	sourceInfo,
-}: Omit<WorkerMessage, "type">): Promise<Extract<WorkerResponse, { type: "complete" }>> {
+}: Omit<WorkerMessage, "type">): Promise<
+	Extract<WorkerResponse, { type: "complete" }>
+> {
 	if (!fileData || fileData.byteLength === 0) {
 		throw new Error("Input file is empty");
 	}
@@ -136,7 +138,10 @@ async function transcode({
 
 	const extension = getFileExtension({ fileName });
 	const inputName = `${requestId}-input.${extension}`;
-	const outputName = mediaType === "video" ? `${requestId}-output.mp4` : `${requestId}-output.m4a`;
+	const outputName =
+		mediaType === "video"
+			? `${requestId}-output.mp4`
+			: `${requestId}-output.m4a`;
 
 	currentRequestId = requestId;
 

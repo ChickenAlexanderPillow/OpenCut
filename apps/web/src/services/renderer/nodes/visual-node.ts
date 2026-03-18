@@ -97,16 +97,14 @@ export abstract class VisualNode<
 	}): "in" | "out" | null {
 		const inTransition = this.params.transitions?.in;
 		if (
-			inTransition &&
-			inTransition.presetId.includes("motion-blur") &&
+			inTransition?.presetId.includes("motion-blur") &&
 			elapsed <= inTransition.duration
 		) {
 			return "in";
 		}
 		const outTransition = this.params.transitions?.out;
 		if (
-			outTransition &&
-			outTransition.presetId.includes("motion-blur") &&
+			outTransition?.presetId.includes("motion-blur") &&
 			elapsed >= Math.max(0, this.params.duration - outTransition.duration)
 		) {
 			return "out";

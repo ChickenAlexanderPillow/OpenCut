@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { useTransformHandles } from "@/hooks/use-transform-handles";
 import { useEditor } from "@/hooks/use-editor";
 import { isVisualElement } from "@/lib/timeline/element-utils";
@@ -11,6 +12,8 @@ import { cn } from "@/utils/ui";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Rotate01Icon } from "@hugeicons/core-free-icons";
 import { usePreviewStore } from "@/stores/preview-store";
+import { useReframeStore } from "@/stores/reframe-store";
+import { Slider } from "@/components/ui/slider";
 
 const HANDLE_SIZE = 10;
 const ROTATION_HANDLE_OFFSET = 24;
@@ -89,6 +92,7 @@ export function TransformHandles({
 	const {
 		selectedWithBounds,
 		hasVisualSelection,
+		hasSelectedSplitSlot,
 		showRotationHandle,
 		splitSlotControls,
 		onSplitSlotScaleChange,
@@ -102,12 +106,23 @@ export function TransformHandles({
 
 	const editor = useEditor({ subscribeTo: ["project"] });
 	const { previewFormatVariant } = usePreviewStore();
+	const setHoveredSplitControlSlot = useReframeStore(
+		(state) => state.setHoveredSplitControlSlot,
+	);
+	const clearHoveredSplitControlSlot = useReframeStore(
+		(state) => state.clearHoveredSplitControlSlot,
+	);
 	const projectCanvas = editor.project.getActive().settings.canvasSize;
 	const canvasSize = getPreviewCanvasSize({
 		projectWidth: projectCanvas.width,
 		projectHeight: projectCanvas.height,
 		previewFormatVariant,
 	});
+
+	useEffect(() => {
+		if (splitSlotControls) return;
+		clearHoveredSplitControlSlot();
+	}, [clearHoveredSplitControlSlot, splitSlotControls]);
 
 	if (!hasVisualSelection || !selectedWithBounds) return null;
 
@@ -144,12 +159,32 @@ export function TransformHandles({
 		canvasX: rotationHandle.x,
 		canvasY: rotationHandle.y,
 	});
-	const splitSlotControlCenter = splitSlotControls
-		? toOverlay({
-				canvasX: splitSlotControls.bounds.cx,
-				canvasY:
-					splitSlotControls.bounds.cy + splitSlotControls.bounds.height / 2 - 42,
-			})
+	const splitSlotControlWidth = splitSlotControls
+		? Math.max(
+				74,
+				Math.min(116, splitSlotControls.bounds.width * displayScale.x - 20),
+			)
+		: 0;
+	const splitSlotControlHeight = 24;
+	const splitSlotControlGap = 6;
+	const splitSlotControlPosition = splitSlotControls
+		? (() => {
+				const slotCenter = toOverlay({
+					canvasX: splitSlotControls.bounds.cx,
+					canvasY: splitSlotControls.bounds.cy,
+				});
+				const slotWidth = splitSlotControls.bounds.width * displayScale.x;
+				const slotHeight = splitSlotControls.bounds.height * displayScale.y;
+				return {
+					left: slotCenter.x - splitSlotControlWidth / 2,
+					top:
+						slotCenter.y +
+						slotHeight / 2 -
+						splitSlotControlHeight -
+						splitSlotControlGap,
+					maxWidth: slotWidth - 12,
+				};
+			})()
 		: null;
 
 	return (
@@ -159,7 +194,7 @@ export function TransformHandles({
 				canvasRef={canvasRef}
 				containerRef={containerRef}
 			/>
-			{!splitSlotControls && (
+			{!hasSelectedSplitSlot && (
 				<BoundingBoxOutline
 					center={center}
 					outlineWidth={outlineWidth}
@@ -167,7 +202,7 @@ export function TransformHandles({
 					rotation={bounds.rotation}
 				/>
 			)}
-			{!splitSlotControls &&
+			{!hasSelectedSplitSlot &&
 				CORNERS.map((corner) => {
 					const cornerPosition = getCornerPosition({ bounds, corner });
 					const screen = toOverlay({
@@ -187,32 +222,46 @@ export function TransformHandles({
 						/>
 					);
 				})}
-			{splitSlotControls && splitSlotControlCenter && (
+			{splitSlotControls && splitSlotControlPosition && (
+				/* biome-ignore lint/a11y/noStaticElementInteractions: wrapper only stops propagation for nested slider */
 				<div
-					className="pointer-events-auto absolute rounded-md border border-white/35 bg-black/65 px-3 py-2 text-white shadow-lg backdrop-blur-sm"
+					className="pointer-events-auto absolute flex items-center"
 					style={{
-						left: splitSlotControlCenter.x - 70,
-						top: splitSlotControlCenter.y - 18,
-						width: 140,
+						left: splitSlotControlPosition.left,
+						top: splitSlotControlPosition.top,
+						width: Math.min(
+							splitSlotControlWidth,
+							Math.max(56, splitSlotControlPosition.maxWidth),
+						),
+						height: splitSlotControlHeight,
 					}}
+					onPointerEnter={() =>
+						setHoveredSplitControlSlot({
+							elementId: splitSlotControls.elementId,
+							slotId: splitSlotControls.slotId,
+						})
+					}
+					onPointerLeave={() => clearHoveredSplitControlSlot()}
+					onPointerDown={(event) => event.stopPropagation()}
+					onMouseDown={(event) => event.stopPropagation()}
 				>
-					<div className="mb-1 text-[10px] font-medium uppercase tracking-[0.18em] text-white/70">
-						Scale
-					</div>
-					<input
-						type="range"
+					<Slider
 						min={0.5}
 						max={4}
 						step={0.01}
-						value={splitSlotControls.scale}
-						className="w-full accent-white"
-						onChange={(event) =>
+						value={[splitSlotControls.scale]}
+						className="w-full cursor-default"
+						onValueChange={(value) =>
 							onSplitSlotScaleChange({
-								nextScale: Number(event.currentTarget.value),
+								nextScale: value[0] ?? splitSlotControls.scale,
 							})
 						}
-						onPointerUp={() => onSplitSlotScaleCommit()}
-						onMouseUp={() => onSplitSlotScaleCommit()}
+						onValueCommit={(value) => {
+							onSplitSlotScaleChange({
+								nextScale: value[0] ?? splitSlotControls.scale,
+							});
+							onSplitSlotScaleCommit();
+						}}
 					/>
 				</div>
 			)}

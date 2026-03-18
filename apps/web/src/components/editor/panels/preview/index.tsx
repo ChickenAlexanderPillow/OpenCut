@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useCallback, useMemo, useRef, useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import useDeepCompareEffect from "use-deep-compare-effect";
@@ -335,8 +336,6 @@ function RenderTreeController() {
 	const isPlaying = editor.playback.getIsPlaying();
 	const mediaAssets = editor.media.getAssets();
 	const activeProject = editor.project.getActive();
-	const activeSceneRevision =
-		editor.scenes.getActiveScene()?.updatedAt?.getTime?.() ?? 0;
 	const activeProjectId = activeProject.metadata.id;
 	const selectedPresetIdByElementId = useReframeStore(
 		(state) => state.selectedPresetIdByElementId,
@@ -370,7 +369,7 @@ function RenderTreeController() {
 	const previewVideoFrameRateCap = projectFps;
 	const hasMotionBlurTransition = useMemo(
 		() => hasMotionBlurTransitionInTracks({ tracks }),
-		[tracks, activeSceneRevision],
+		[tracks],
 	);
 	const previewVideoProxyScale = hasMotionBlurTransition
 		? 1
@@ -390,7 +389,7 @@ function RenderTreeController() {
 			}
 		}
 		return false;
-	}, [mediaAssets, tracks, activeSceneRevision]);
+	}, [mediaAssets, tracks]);
 
 	const { width, height } = usePreviewSize();
 
@@ -610,7 +609,6 @@ function RenderTreeController() {
 		editor.renderer.setRenderTree({ renderTree });
 	}, [
 		tracks,
-		activeSceneRevision,
 		mediaAssets,
 		activeProject?.settings.background,
 		activeProject?.brandOverlays,
@@ -748,7 +746,7 @@ function PreviewCanvas({
 	}, [nativeWidth, nativeHeight, containerSize.width, containerSize.height]);
 	useEffect(() => {
 		previousDisplaySizeRef.current = displaySize;
-	}, [displaySize.width, displaySize.height]);
+	}, [displaySize]);
 
 	const renderTree = editor.renderer.getRenderTree();
 
@@ -934,6 +932,7 @@ function PreviewCanvas({
 	}, [previewRendererMode]);
 
 	useEffect(() => {
+		void freezeFrameToken;
 		const sourceCanvas =
 			activeSurface === "webgpu"
 				? webgpuCanvasRef.current
@@ -971,6 +970,9 @@ function PreviewCanvas({
 			: transitionHoldSize;
 
 	useEffect(() => {
+		void previewFormatVariant;
+		void nativeWidth;
+		void nativeHeight;
 		setSafeAreaOverlayReady(false);
 		let raf1 = 0;
 		let raf2 = 0;
@@ -1005,13 +1007,14 @@ function PreviewCanvas({
 						}}
 					>
 						{freezeFrameDataUrl && (
-							<img
+							<Image
 								alt=""
+								fill
 								className="pointer-events-none absolute inset-0"
 								src={freezeFrameDataUrl}
+								unoptimized
 								style={{
-									width: effectiveDisplaySize.width,
-									height: effectiveDisplaySize.height,
+									objectFit: "fill",
 									display:
 										showFrozenFrame && !isRenderReadyForSize ? "block" : "none",
 								}}
@@ -1078,9 +1081,7 @@ function PreviewCanvas({
 												left:
 													(divider.x / nativeWidth) *
 													effectiveDisplaySize.width,
-												top:
-													scaledTop -
-													(visibleHeight - scaledHeight) / 2,
+												top: scaledTop - (visibleHeight - scaledHeight) / 2,
 												width:
 													(divider.width / nativeWidth) *
 													effectiveDisplaySize.width,

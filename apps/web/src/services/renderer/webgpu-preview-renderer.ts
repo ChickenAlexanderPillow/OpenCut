@@ -659,7 +659,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 		draw,
 	}: {
 		draw: WebGPUVisualDrawData;
-	}): Float32Array {
+	}): Float32Array<ArrayBuffer> {
 		const cx = draw.x + draw.width / 2;
 		const cy = draw.y + draw.height / 2;
 		const theta = (draw.rotation * Math.PI) / 180;
@@ -688,7 +688,12 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 			const c = corners[idx];
 			data.push(c.x, c.y, c.u, c.v);
 		}
-		return new Float32Array(data);
+		const vertexBuffer = new ArrayBuffer(
+			data.length * Float32Array.BYTES_PER_ELEMENT,
+		);
+		const vertices = new Float32Array(vertexBuffer);
+		vertices.set(data);
+		return vertices;
 	}
 
 	private drawSplitDividerOverlays({
@@ -885,7 +890,12 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 		usedWebGPU: boolean;
 		reasonIfFallback?: string;
 		shouldDisableWebGPU?: boolean;
-		dividerRects?: Array<{ x: number; y: number; width: number; height: number }>;
+		dividerRects?: Array<{
+			x: number;
+			y: number;
+			width: number;
+			height: number;
+		}>;
 		stats?: {
 			externalVideoFrames: number;
 			copiedTextureUploads: number;
@@ -1067,7 +1077,6 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				const selectedExternalPipeline = usePlusBlend
 					? externalPipelinePlus
 					: externalPipeline;
-				const videoFrameSource = draw.source as VideoFrame;
 				const videoFrame = resolvedSource.source as VideoFrame;
 				const externalTexture = device.importExternalTexture({
 					source: videoFrame,

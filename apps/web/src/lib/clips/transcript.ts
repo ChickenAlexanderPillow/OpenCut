@@ -22,7 +22,7 @@ import type { ExternalProjectTranscriptCacheEntry } from "@/types/external-proje
 export const CLIP_TRANSCRIPT_CACHE_VERSION = 1;
 export const PROJECT_MEDIA_TRANSCRIPT_MODEL: TranscriptionModelId =
 	DEFAULT_TRANSCRIPTION_MODEL;
-export const PROJECT_MEDIA_TRANSCRIPT_LANGUAGE: TranscriptionLanguage = "auto";
+export const PROJECT_MEDIA_TRANSCRIPT_LANGUAGE: TranscriptionLanguage = "en";
 const CHUNKED_TRANSCRIPTION_DURATION_THRESHOLD_SECONDS = 4 * 60;
 const CHUNKED_TRANSCRIPTION_FILE_SIZE_THRESHOLD_BYTES = 180 * 1024 * 1024;
 const CHUNKED_TRANSCRIPTION_MIN_WINDOW_SECONDS = 60;
@@ -1180,7 +1180,6 @@ export async function getOrCreateClipTranscriptForAsset({
 			modelId,
 			language: resolvedLanguage,
 			externalTranscript: linkedTranscriptForMedia,
-			requireSuitability: false,
 		});
 		if (derived) {
 			return {

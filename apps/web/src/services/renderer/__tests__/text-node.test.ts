@@ -68,6 +68,7 @@ function createFakeRenderer() {
 	};
 
 	return {
+		context,
 		operations,
 		translations,
 		renderer: {
@@ -186,7 +187,11 @@ describe("TextNode caption gap rendering", () => {
 					layoutPreset: "top-bottom",
 					slots: [
 						{ slotId: "top", mode: "fixed-preset", presetId: "subject-left" },
-						{ slotId: "bottom", mode: "fixed-preset", presetId: "subject-right" },
+						{
+							slotId: "bottom",
+							mode: "fixed-preset",
+							presetId: "subject-right",
+						},
 					],
 					sections: [],
 				},
@@ -240,7 +245,11 @@ describe("TextNode caption gap rendering", () => {
 					viewportBalance: "unbalanced",
 					slots: [
 						{ slotId: "top", mode: "fixed-preset", presetId: "subject-left" },
-						{ slotId: "bottom", mode: "fixed-preset", presetId: "subject-right" },
+						{
+							slotId: "bottom",
+							mode: "fixed-preset",
+							presetId: "subject-right",
+						},
 					],
 					sections: [],
 				},
@@ -256,7 +265,50 @@ describe("TextNode caption gap rendering", () => {
 		expect((translations[0]?.[1] ?? 0) < 360).toBe(true);
 	});
 
-	test("forces unbalanced split captions onto the lower side even if top anchor is selected", async () => {
+	test("applies split-screen font and background padding overrides", async () => {
+		const node = new TextNode({
+			...createCaptionNode().params,
+			background: {
+				...DEFAULT_TEXT_ELEMENT.background,
+				color: "#000000b9",
+			},
+			captionStyle: {
+				anchorToSafeAreaBottom: true,
+				safeAreaBottomOffset: 0,
+				splitScreenOverrides: {
+					slotAnchor: "bottom",
+					fontSize: 4,
+					backgroundPaddingY: DEFAULT_TEXT_ELEMENT.background.paddingY - 5,
+				},
+			},
+			captionSourceVideo: {
+				startTime: 10,
+				duration: 2,
+				trimStart: 0,
+				defaultReframePresetId: "subject-left",
+				splitScreen: {
+					enabled: true,
+					layoutPreset: "top-bottom",
+					slots: [
+						{ slotId: "top", mode: "fixed-preset", presetId: "subject-left" },
+						{
+							slotId: "bottom",
+							mode: "fixed-preset",
+							presetId: "subject-right",
+						},
+					],
+					sections: [],
+				},
+			},
+		});
+		const { renderer, context } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.39 });
+
+		expect(context.font).toContain("32px");
+	});
+
+	test("keeps unbalanced split captions above the divider when top anchor is selected", async () => {
 		const node = new TextNode({
 			...createCaptionNode().params,
 			captionStyle: {
@@ -295,7 +347,11 @@ describe("TextNode caption gap rendering", () => {
 					viewportBalance: "unbalanced",
 					slots: [
 						{ slotId: "top", mode: "fixed-preset", presetId: "subject-left" },
-						{ slotId: "bottom", mode: "fixed-preset", presetId: "subject-right" },
+						{
+							slotId: "bottom",
+							mode: "fixed-preset",
+							presetId: "subject-right",
+						},
 					],
 					sections: [],
 				},
@@ -306,8 +362,6 @@ describe("TextNode caption gap rendering", () => {
 		await node.render({ renderer, time: 10.39 });
 
 		expect(operations).toContain("fillText");
-		expect((translations[0]?.[1] ?? 0) > 240).toBe(true);
-		expect((translations[0]?.[1] ?? 0) < 360).toBe(true);
+		expect((translations[0]?.[1] ?? 0) < 240).toBe(true);
 	});
-
 });

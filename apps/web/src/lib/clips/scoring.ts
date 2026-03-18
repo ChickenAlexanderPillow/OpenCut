@@ -533,4 +533,119 @@ export function selectTopCandidatesWithQualityGate({
 	return selected;
 }
 
+function getTemporalCoverageBucketIndex({
+	startTime,
+	bucketSizeSeconds,
+}: {
+	startTime: number;
+	bucketSizeSeconds: number;
+}): number {
+	if (bucketSizeSeconds <= 0) return 0;
+	return Math.max(0, Math.floor(startTime / bucketSizeSeconds));
+}
+
+export function selectTopCandidatesWithCoverageBackfill({
+	candidates,
+	minScore = 60,
+	maxOverlapRatio = 0,
+	maxCount = 5,
+	excludeFailureFlags = ["cutoff_start", "cutoff_end"],
+	minDesiredCount = 3,
+	backfillMinScore = 40,
+	backfillMaxOverlapRatio = 0.2,
+	coverageBucketSeconds = 30,
+	requireCleanBoundariesInBackfill = true,
+	excludeCutoffFailuresInBackfill = true,
+}: {
+	candidates: ClipCandidate[];
+	minScore?: number;
+	maxOverlapRatio?: number;
+	maxCount?: number;
+	excludeFailureFlags?: string[];
+	minDesiredCount?: number;
+	backfillMinScore?: number;
+	backfillMaxOverlapRatio?: number;
+	coverageBucketSeconds?: number;
+	requireCleanBoundariesInBackfill?: boolean;
+	excludeCutoffFailuresInBackfill?: boolean;
+}): ClipCandidate[] {
+	const selected = selectTopCandidatesWithQualityGate({
+		candidates,
+		minScore,
+		maxOverlapRatio,
+		maxCount,
+		excludeFailureFlags,
+	});
+	if (selected.length >= Math.min(minDesiredCount, maxCount)) {
+		return selected;
+	}
+
+	const selectedIds = new Set(selected.map((candidate) => candidate.id));
+	const coveredBuckets = new Set(
+		selected.map((candidate) =>
+			getTemporalCoverageBucketIndex({
+				startTime: candidate.startTime,
+				bucketSizeSeconds: coverageBucketSeconds,
+			}),
+		),
+	);
+
+	const backfillPool = candidates
+		.filter((candidate) => {
+			if (selectedIds.has(candidate.id)) return false;
+			if (candidate.scoreOverall < backfillMinScore) return false;
+			const failureFlags = candidate.failureFlags ?? [];
+			if (
+				excludeCutoffFailuresInBackfill &&
+				(failureFlags.includes("cutoff_start") ||
+					failureFlags.includes("cutoff_end"))
+			) {
+				return false;
+			}
+			if (
+				requireCleanBoundariesInBackfill &&
+				candidate.qaDiagnostics &&
+				(!candidate.qaDiagnostics.startsClean ||
+					!candidate.qaDiagnostics.endsClean)
+			) {
+				return false;
+			}
+			return true;
+		})
+		.sort((a, b) => {
+			const aBucket = getTemporalCoverageBucketIndex({
+				startTime: a.startTime,
+				bucketSizeSeconds: coverageBucketSeconds,
+			});
+			const bBucket = getTemporalCoverageBucketIndex({
+				startTime: b.startTime,
+				bucketSizeSeconds: coverageBucketSeconds,
+			});
+			const aNewBucket = coveredBuckets.has(aBucket) ? 0 : 1;
+			const bNewBucket = coveredBuckets.has(bBucket) ? 0 : 1;
+			if (bNewBucket !== aNewBucket) return bNewBucket - aNewBucket;
+			if (b.scoreOverall !== a.scoreOverall) return b.scoreOverall - a.scoreOverall;
+			return a.startTime - b.startTime;
+		});
+
+	for (const candidate of backfillPool) {
+		const overlaps = selected.some((existing) => {
+			if (!hasTemporalOverlap({ a: candidate, b: existing })) return false;
+			return overlapRatio({ a: candidate, b: existing }) > backfillMaxOverlapRatio;
+		});
+		if (overlaps) continue;
+		selected.push(candidate);
+		selectedIds.add(candidate.id);
+		coveredBuckets.add(
+			getTemporalCoverageBucketIndex({
+				startTime: candidate.startTime,
+				bucketSizeSeconds: coverageBucketSeconds,
+			}),
+		);
+		if (selected.length >= maxCount) break;
+	}
+
+	return selected;
+}
+
 export const scoredCandidatesResponseZodSchema = scoredCandidatesResponseSchema;

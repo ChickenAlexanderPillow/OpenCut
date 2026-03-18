@@ -18,9 +18,7 @@ import { isMainTrack } from "@/lib/timeline";
 import { DEFAULT_BRAND_OVERLAYS } from "@/constants/brand-overlay-constants";
 import { resolveLogoOverlayTransform } from "@/lib/branding/logo-overlay";
 import type { VideoCache } from "@/services/video-cache/service";
-import {
-	buildTranscriptTimelineSnapshot,
-} from "@/lib/transcript-editor/snapshot";
+import { buildTranscriptTimelineSnapshot } from "@/lib/transcript-editor/snapshot";
 import {
 	getTranscriptApplied,
 	getTranscriptDraft,
@@ -56,7 +54,9 @@ function isAlignedTranscriptCompanion({
 	const trimAligned = Math.abs(candidate.trimStart - target.trimStart) < 0.05;
 	const endAligned =
 		Math.abs(
-			candidate.trimStart + candidate.duration - (target.trimStart + target.duration),
+			candidate.trimStart +
+				candidate.duration -
+				(target.trimStart + target.duration),
 		) < 0.05;
 	if (startAligned && trimAligned && endAligned) return true;
 
@@ -79,8 +79,7 @@ function isAlignedTranscriptCompanion({
 		Math.min(target.duration, candidate.duration),
 	);
 	return (
-		timelineOverlap / minDuration >= 0.8 &&
-		sourceOverlap / minDuration >= 0.8
+		timelineOverlap / minDuration >= 0.8 && sourceOverlap / minDuration >= 0.8
 	);
 }
 
@@ -97,10 +96,47 @@ function resolveTranscriptCompanionForCaptionSource({
 		if (candidate.id === sourceMedia.id) continue;
 		if (getEditableMediaSourceId(candidate) !== targetSourceId) continue;
 		if ((getTranscriptDraft(candidate)?.words.length ?? 0) === 0) continue;
-		if (!isAlignedTranscriptCompanion({ target: sourceMedia, candidate })) continue;
+		if (!isAlignedTranscriptCompanion({ target: sourceMedia, candidate }))
+			continue;
 		return candidate;
 	}
 	return null;
+}
+
+function resolveCaptionPlacementVideoCompanion({
+	sourceMedia,
+	candidates,
+}: {
+	sourceMedia: VideoElement | AudioElement;
+	candidates: Array<VideoElement | AudioElement>;
+}): VideoElement | null {
+	if (sourceMedia.type === "video") return sourceMedia;
+	let best: VideoElement | null = null;
+	let bestScore = Number.NEGATIVE_INFINITY;
+	for (const candidate of candidates) {
+		if (candidate.id === sourceMedia.id || candidate.type !== "video") continue;
+		const startDistance = Math.abs(candidate.startTime - sourceMedia.startTime);
+		const trimDistance = Math.abs(candidate.trimStart - sourceMedia.trimStart);
+		const endDistance = Math.abs(
+			candidate.trimStart +
+				candidate.duration -
+				(sourceMedia.trimStart + sourceMedia.duration),
+		);
+		const overlap = Math.max(
+			0,
+			Math.min(
+				candidate.startTime + candidate.duration,
+				sourceMedia.startTime + sourceMedia.duration,
+			) - Math.max(candidate.startTime, sourceMedia.startTime),
+		);
+		const score =
+			overlap - startDistance * 4 - trimDistance * 3 - endDistance * 3;
+		if (score > bestScore) {
+			bestScore = score;
+			best = candidate;
+		}
+	}
+	return best;
 }
 
 function resolveCaptionSourceMediaHeuristically({
@@ -121,7 +157,8 @@ function resolveCaptionSourceMediaHeuristically({
 		const candidateEnd = candidate.startTime + candidate.duration;
 		const overlap = Math.max(
 			0,
-			Math.min(elementEnd, candidateEnd) - Math.max(element.startTime, candidate.startTime),
+			Math.min(elementEnd, candidateEnd) -
+				Math.max(element.startTime, candidate.startTime),
 		);
 		const overlapScore = overlap;
 		const startDistance = Math.abs(element.startTime - candidate.startTime);
@@ -144,7 +181,11 @@ export function resolveLiveCaptionElementFromTranscriptSource({
 }): TextElement | null {
 	const transcriptDraft = getTranscriptDraft(sourceMedia);
 	const transcriptApplied = getTranscriptApplied(sourceMedia);
-	if (!transcriptDraft || transcriptDraft.words.length === 0 || !transcriptApplied) {
+	if (
+		!transcriptDraft ||
+		transcriptDraft.words.length === 0 ||
+		!transcriptApplied
+	) {
 		return null;
 	}
 	// Salt snapshot revision with media timing so preview caption timing cannot
@@ -261,8 +302,7 @@ export function buildScene(params: BuildSceneParams) {
 					// Preview decode path uses original media with runtime downscale in video-cache.
 					// Some generated proxy encodes decode slower than source on certain systems.
 					mediaAsset.file;
-				const resolvedUrl =
-					mediaAsset.url;
+				const resolvedUrl = mediaAsset.url;
 				if (!resolvedFile || !resolvedUrl) {
 					continue;
 				}
@@ -281,7 +321,8 @@ export function buildScene(params: BuildSceneParams) {
 							timeOffset: stableElement.startTime,
 							trimStart: stableElement.trimStart,
 							trimEnd: stableElement.trimEnd,
-							transcriptCuts: getTranscriptApplied(stableElement)?.removedRanges ?? [],
+							transcriptCuts:
+								getTranscriptApplied(stableElement)?.removedRanges ?? [],
 							transform: stableElement.transform,
 							reframePresets: stableElement.reframePresets,
 							reframeSwitches: stableElement.reframeSwitches,
@@ -324,10 +365,6 @@ export function buildScene(params: BuildSceneParams) {
 				const sourceMediaFromRef = sourceMediaId
 					? mediaElementById.get(sourceMediaId)
 					: null;
-				const captionPlacementSourceMedia =
-					sourceMediaFromRef && sourceMediaFromRef.type === "video"
-						? sourceMediaFromRef
-						: null;
 				const sourceMediaFromRefOrCompanion =
 					sourceMediaFromRef && isEditableMediaElement(sourceMediaFromRef)
 						? (getTranscriptDraft(sourceMediaFromRef)?.words.length ?? 0) > 0
@@ -335,7 +372,7 @@ export function buildScene(params: BuildSceneParams) {
 							: resolveTranscriptCompanionForCaptionSource({
 									sourceMedia: sourceMediaFromRef,
 									candidates: transcriptMediaCandidates,
-							  })
+								})
 						: null;
 				const sourceMedia =
 					sourceMediaFromRefOrCompanion ??
@@ -345,11 +382,16 @@ export function buildScene(params: BuildSceneParams) {
 						? resolveCaptionSourceMediaHeuristically({
 								element: stableElement,
 								candidates: transcriptMediaCandidates,
-						  })
+							})
 						: null);
 				const captionSourceVideo =
-					captionPlacementSourceMedia ??
-					(sourceMedia?.type === "video" ? sourceMedia : null);
+					(sourceMediaFromRef?.type === "video" ? sourceMediaFromRef : null) ??
+					(sourceMedia && isEditableMediaElement(sourceMedia)
+						? resolveCaptionPlacementVideoCompanion({
+								sourceMedia,
+								candidates: Array.from(mediaElementById.values()),
+							})
+						: null);
 				const resolvedTextElement =
 					sourceMedia && isEditableMediaElement(sourceMedia)
 						? resolveLiveCaptionElementFromTranscriptSource({
@@ -378,7 +420,7 @@ export function buildScene(params: BuildSceneParams) {
 											captionSourceVideo.defaultReframePresetId,
 										splitScreen: captionSourceVideo.splitScreen,
 									},
-							  }
+								}
 							: {}),
 						backgroundReferenceCanvasHeight:
 							params.backgroundReferenceCanvasSize?.height ?? canvasSize.height,
@@ -407,8 +449,7 @@ export function buildScene(params: BuildSceneParams) {
 	}
 
 	const overlayNodes = [];
-	const logoOverlay =
-		params.brandOverlays?.logo ?? DEFAULT_BRAND_OVERLAYS.logo;
+	const logoOverlay = params.brandOverlays?.logo ?? DEFAULT_BRAND_OVERLAYS.logo;
 	if (logoOverlay.enabled) {
 		const legacyMediaId =
 			(logoOverlay as unknown as { mediaId?: string | null }).mediaId ?? null;
@@ -426,10 +467,8 @@ export function buildScene(params: BuildSceneParams) {
 						preset: logoOverlay.preset,
 						scaleMultiplier: logoOverlay.scale ?? 1,
 						canvasSize,
-						mediaWidth:
-							logoOverlay.sourceWidth ?? legacyAsset?.width,
-						mediaHeight:
-							logoOverlay.sourceHeight ?? legacyAsset?.height,
+						mediaWidth: logoOverlay.sourceWidth ?? legacyAsset?.width,
+						mediaHeight: logoOverlay.sourceHeight ?? legacyAsset?.height,
 					}),
 					opacity: 1,
 					blendMode: "normal",

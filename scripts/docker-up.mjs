@@ -56,7 +56,9 @@ function stopService(service) {
 	}
 }
 
-if (mode === "core" || mode === "web") {
+if (mode === "web") {
+	runCompose(["web"]);
+} else if (mode === "core") {
 	stopService("local-transcribe");
 	runCompose(coreServices, coreEnv);
 } else if (mode === "full") {

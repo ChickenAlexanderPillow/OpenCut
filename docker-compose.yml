@@ -34,6 +34,8 @@ services:
       context: ./services/local-transcribe-whisperx
       dockerfile: Dockerfile
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
     ports:
       - "8765:8765"
     volumes:

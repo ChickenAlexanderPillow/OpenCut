@@ -845,6 +845,163 @@ function buildWindowCandidatesFromSentenceUnits({
 	return candidates;
 }
 
+function buildCoverageCandidatesFromSentenceUnits({
+	units,
+	mediaDuration,
+	minClipSeconds,
+	maxClipSeconds,
+	targetClipSeconds,
+}: {
+	units: SentenceUnit[];
+	mediaDuration: number;
+	minClipSeconds: number;
+	maxClipSeconds: number;
+	targetClipSeconds: number;
+}): Array<{
+	startIndex: number;
+	endIndex: number;
+	startTime: number;
+	endTime: number;
+	duration: number;
+	localScore: number;
+	transcriptSnippet: string;
+}> {
+	if (units.length === 0 || mediaDuration <= 0) return [];
+	const bucketSize = Math.max(minClipSeconds, targetClipSeconds);
+	const bucketCount = Math.max(1, Math.ceil(mediaDuration / bucketSize));
+	const results: Array<{
+		startIndex: number;
+		endIndex: number;
+		startTime: number;
+		endTime: number;
+		duration: number;
+		localScore: number;
+		transcriptSnippet: string;
+	}> = [];
+
+	for (let bucketIndex = 0; bucketIndex < bucketCount; bucketIndex++) {
+		const bucketStart = bucketIndex * bucketSize;
+		const bucketEnd = Math.min(mediaDuration, bucketStart + bucketSize);
+		const bucketMidpoint = bucketStart + (bucketEnd - bucketStart) / 2;
+		let bestCandidate:
+			| {
+					startIndex: number;
+					endIndex: number;
+					startTime: number;
+					endTime: number;
+					duration: number;
+					localScore: number;
+					transcriptSnippet: string;
+			  }
+			| null = null;
+
+		for (let startIndex = 0; startIndex < units.length; startIndex++) {
+			const first = units[startIndex];
+			if (!first) continue;
+			if (first.start > bucketEnd + maxClipSeconds) break;
+			for (let endIndex = startIndex; endIndex < units.length; endIndex++) {
+				const last = units[endIndex];
+				if (!last) continue;
+				const startTime = first.start;
+				const endTime = last.end;
+				const duration = Math.max(0, endTime - startTime);
+				if (duration < minClipSeconds) continue;
+				if (duration > maxClipSeconds) break;
+
+				const midpoint = startTime + duration / 2;
+				const midpointDistance = Math.abs(midpoint - bucketMidpoint);
+				if (midpointDistance > bucketSize * 0.9) continue;
+
+				const transcriptSnippet = buildSnippetFromUnits({
+					units,
+					startIndex,
+					endIndex,
+				});
+				const wordCount = transcriptSnippet.match(/\S+/g) ?? [];
+				if (wordCount.length < 8) continue;
+				const selected = units.slice(startIndex, endIndex + 1);
+				const hasAnswer = hasAnswerAfterQuestion({
+					units,
+					startIndex,
+					endIndex,
+				});
+				const trailingUnanswered = hasTrailingUnansweredQuestion({
+					units,
+					startIndex,
+					endIndex,
+				});
+				const hasLateQuestionCue = selected
+					.slice(Math.max(0, selected.length - 2))
+					.some((unit) => containsQuestionCue(unit.text));
+				const tailHasInterviewerSetup = selected
+					.slice(Math.max(0, selected.length - 2))
+					.some((unit) => isInterviewerSetup(unit.text));
+				if (
+					selected.some((unit) => unit.isQuestion || unit.hasQuestionCue) &&
+					!hasAnswer
+				) {
+					continue;
+				}
+				if (trailingUnanswered) continue;
+				if (hasLateQuestionCue && !hasAnswer) continue;
+				if (tailHasInterviewerSetup) continue;
+				if (
+					selected.some((unit) => isInterviewerSetup(unit.text)) &&
+					!hasAnswer
+				) {
+					continue;
+				}
+
+				const localScore = buildLocalWindowScore({
+					units,
+					startIndex,
+					endIndex,
+					duration,
+					targetClipSeconds,
+				});
+				const adjustedScore =
+					localScore -
+					Math.min(20, midpointDistance * 0.35) -
+					Math.min(10, Math.abs(duration - targetClipSeconds) * 0.25);
+				const candidate = {
+					startIndex,
+					endIndex,
+					startTime,
+					endTime,
+					duration,
+					localScore: adjustedScore,
+					transcriptSnippet,
+				};
+				if (!bestCandidate) {
+					bestCandidate = candidate;
+					continue;
+				}
+				if (candidate.localScore > bestCandidate.localScore + 0.5) {
+					bestCandidate = candidate;
+					continue;
+				}
+				if (
+					Math.abs(candidate.localScore - bestCandidate.localScore) <= 0.5 &&
+					midpointDistance <
+						Math.abs(
+							bestCandidate.startTime +
+								bestCandidate.duration / 2 -
+								bucketMidpoint,
+						)
+				) {
+					bestCandidate = candidate;
+				}
+			}
+		}
+
+		if (bestCandidate) {
+			results.push(bestCandidate);
+		}
+	}
+
+	return results;
+}
+
 export function buildClipCandidatesFromTranscript({
 	segments,
 	mediaDuration,
@@ -866,12 +1023,20 @@ export function buildClipCandidatesFromTranscript({
 	});
 	if (units.length === 0) return [];
 
-	const rawCandidates = buildWindowCandidatesFromSentenceUnits({
+	const heuristicCandidates = buildWindowCandidatesFromSentenceUnits({
 		units,
 		minClipSeconds,
 		maxClipSeconds,
 		targetClipSeconds,
 	});
+	const coverageCandidates = buildCoverageCandidatesFromSentenceUnits({
+		units,
+		mediaDuration,
+		minClipSeconds,
+		maxClipSeconds,
+		targetClipSeconds,
+	});
+	const rawCandidates = [...heuristicCandidates, ...coverageCandidates];
 	if (rawCandidates.length === 0) return [];
 
 	const deduped: ClipCandidateDraft[] = [];
@@ -884,6 +1049,32 @@ export function buildClipCandidatesFromTranscript({
 					bStart: existing.startTime,
 					bEnd: existing.endTime,
 				}) > 0.9,
+		);
+		if (duplicate) continue;
+		deduped.push({
+			id: generateUUID(),
+			startTime: roundToHundredth(candidate.startTime),
+			endTime: roundToHundredth(candidate.endTime),
+			duration: roundToHundredth(candidate.duration),
+			transcriptSnippet: candidate.transcriptSnippet,
+			localScore: candidate.localScore,
+		});
+		if (deduped.length >= maxOutput) break;
+	}
+
+	if (deduped.length >= Math.min(3, maxOutput)) {
+		return deduped;
+	}
+
+	for (const candidate of coverageCandidates.sort((a, b) => b.localScore - a.localScore)) {
+		const duplicate = deduped.some(
+			(existing) =>
+				overlapRatio({
+					aStart: candidate.startTime,
+					aEnd: candidate.endTime,
+					bStart: existing.startTime,
+					bEnd: existing.endTime,
+				}) > 0.75,
 		);
 		if (duplicate) continue;
 		deduped.push({

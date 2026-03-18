@@ -9,6 +9,7 @@ import type {
 import {
 	buildDefaultVideoSplitScreenBindings,
 	deriveVideoSplitScreenSlotAdjustmentFromTransform,
+	getActiveReframePresetIdFromState,
 	getVideoSplitScreenViewports,
 	normalizeVideoReframeState,
 	resolveVideoSplitScreenAtTimeFromState,
@@ -25,16 +26,79 @@ export interface EditableSplitSlotState {
 	layoutPreset: VideoSplitScreenLayoutPreset;
 	viewportBalance: VideoSplitScreenViewportBalance;
 	slots: VideoSplitScreenSlotBinding[];
+	isSplitActive: boolean;
+	singleViewSlotId: string | null;
+}
+
+function getDefaultSplitScreen({
+	element,
+	viewportBalance,
+}: {
+	element: VideoElement;
+	viewportBalance: VideoSplitScreenViewportBalance;
+}): VideoSplitScreen {
+	return {
+		enabled: false,
+		layoutPreset: "top-bottom",
+		viewportBalance,
+		slots: buildDefaultVideoSplitScreenBindings({
+			layoutPreset: "top-bottom",
+			presets: element.reframePresets ?? [],
+		}),
+		sections: [],
+	};
+}
+
+function resolveSingleViewSlotId({
+	slots,
+	duration,
+	defaultReframePresetId,
+	reframeSwitches,
+	localTime,
+	preferredSlotId,
+}: {
+	slots: VideoSplitScreenSlotBinding[];
+	duration: number;
+	defaultReframePresetId?: string | null;
+	reframeSwitches?: VideoElement["reframeSwitches"];
+	localTime: number;
+	preferredSlotId?: string | null;
+}): string | null {
+	if (slots.length === 0) return null;
+	if (
+		preferredSlotId &&
+		slots.some((slot) => slot.slotId === preferredSlotId)
+	) {
+		return preferredSlotId;
+	}
+	const activePresetId = getActiveReframePresetIdFromState({
+		defaultReframePresetId,
+		reframeSwitches,
+		duration,
+		localTime,
+	});
+	const fixedMatch =
+		slots.find(
+			(slot) =>
+				slot.mode === "fixed-preset" &&
+				slot.presetId &&
+				slot.presetId === activePresetId,
+		)?.slotId ?? null;
+	if (fixedMatch) return fixedMatch;
+	const followActive = slots.find((slot) => slot.mode === "follow-active");
+	return followActive?.slotId ?? slots[0]?.slotId ?? null;
 }
 
 export function resolveEditableSplitSlotState({
 	element,
 	localTime,
 	splitPreview,
+	preferredSlotId,
 }: {
 	element: VideoElement;
 	localTime: number;
 	splitPreview?: SplitPreviewStateInput | null;
+	preferredSlotId?: string | null;
 }): EditableSplitSlotState | null {
 	const normalizedElement = normalizeVideoReframeState({ element });
 	const previewSlots = splitPreview?.slots ?? null;
@@ -42,24 +106,27 @@ export function resolveEditableSplitSlotState({
 		splitPreview?.viewportBalance ??
 		normalizedElement.splitScreen?.viewportBalance ??
 		"balanced";
-	const splitScreen: VideoSplitScreen | undefined = previewSlots?.length
+	const baseSplitScreen =
+		normalizedElement.splitScreen ??
+		getDefaultSplitScreen({
+			element: normalizedElement,
+			viewportBalance: previewViewportBalance,
+		});
+	const splitScreen: VideoSplitScreen = previewSlots?.length
 		? {
-				enabled: false,
-				layoutPreset:
-					normalizedElement.splitScreen?.layoutPreset ?? "top-bottom",
+				...baseSplitScreen,
 				viewportBalance: previewViewportBalance,
 				slots: previewSlots,
-				sections: [
-					{
-						id: "__preview-selected-split__",
-						startTime: 0,
-						enabled: true,
-						slots: previewSlots,
-					},
-				],
+				sections: (baseSplitScreen.sections ?? []).map((section) =>
+					section.enabled === false
+						? section
+						: {
+								...section,
+								slots: previewSlots,
+							},
+				),
 			}
-		: normalizedElement.splitScreen;
-	if (!splitScreen) return null;
+		: baseSplitScreen;
 	const resolved = resolveVideoSplitScreenAtTimeFromState({
 		duration: normalizedElement.duration,
 		splitScreen,
@@ -67,13 +134,108 @@ export function resolveEditableSplitSlotState({
 		reframeSwitches: normalizedElement.reframeSwitches,
 		localTime,
 	});
-	if (!resolved) return null;
+	const effectiveSlots =
+		(resolved?.slots as VideoSplitScreenSlotBinding[] | undefined) ??
+		splitScreen.slots;
+	const singleViewSlotId = resolveSingleViewSlotId({
+		slots: effectiveSlots,
+		duration: normalizedElement.duration,
+		defaultReframePresetId: normalizedElement.defaultReframePresetId,
+		reframeSwitches: normalizedElement.reframeSwitches,
+		localTime,
+		preferredSlotId,
+	});
 	return {
 		element: normalizedElement,
-		layoutPreset: resolved.layoutPreset,
-		viewportBalance: resolved.viewportBalance ?? "balanced",
-		slots: resolved.slots as VideoSplitScreenSlotBinding[],
+		layoutPreset: resolved?.layoutPreset ?? splitScreen.layoutPreset,
+		viewportBalance:
+			resolved?.viewportBalance ?? splitScreen.viewportBalance ?? "balanced",
+		slots: effectiveSlots,
+		isSplitActive: Boolean(resolved),
+		singleViewSlotId,
 	};
+}
+
+export function getEditableSplitSlotRegions({
+	editableState,
+	canvasWidth,
+	canvasHeight,
+}: {
+	editableState: EditableSplitSlotState;
+	canvasWidth: number;
+	canvasHeight: number;
+}): Array<{
+	slotId: string;
+	bounds: {
+		cx: number;
+		cy: number;
+		width: number;
+		height: number;
+		rotation: number;
+	};
+}> {
+	if (!editableState.isSplitActive) {
+		if (!editableState.singleViewSlotId) return [];
+		return [
+			{
+				slotId: editableState.singleViewSlotId,
+				bounds: {
+					cx: canvasWidth / 2,
+					cy: canvasHeight / 2,
+					width: canvasWidth,
+					height: canvasHeight,
+					rotation: 0,
+				},
+			},
+		];
+	}
+	return editableState.slots
+		.map((slot) => {
+			const bounds = getSplitSlotViewportBounds({
+				layoutPreset: editableState.layoutPreset,
+				viewportBalance: editableState.viewportBalance,
+				slotId: slot.slotId,
+				canvasWidth,
+				canvasHeight,
+			});
+			return bounds ? { slotId: slot.slotId, bounds } : null;
+		})
+		.filter(
+			(
+				region,
+			): region is {
+				slotId: string;
+				bounds: NonNullable<typeof region>["bounds"];
+			} => Boolean(region),
+		);
+}
+
+export function getEditableSplitSlotIdAtCanvasPoint({
+	editableState,
+	canvasWidth,
+	canvasHeight,
+	canvasX,
+	canvasY,
+}: {
+	editableState: EditableSplitSlotState;
+	canvasWidth: number;
+	canvasHeight: number;
+	canvasX: number;
+	canvasY: number;
+}): string | null {
+	const region =
+		getEditableSplitSlotRegions({
+			editableState,
+			canvasWidth,
+			canvasHeight,
+		}).find(
+			(candidate) =>
+				canvasX >= candidate.bounds.cx - candidate.bounds.width / 2 &&
+				canvasX <= candidate.bounds.cx + candidate.bounds.width / 2 &&
+				canvasY >= candidate.bounds.cy - candidate.bounds.height / 2 &&
+				canvasY <= candidate.bounds.cy + candidate.bounds.height / 2,
+		) ?? null;
+	return region?.slotId ?? null;
 }
 
 export function getSplitSlotIdAtCanvasPoint({
@@ -172,18 +334,20 @@ export function updateSplitSlotBindingsWithTransform({
 }): VideoSplitScreenSlotBinding[] {
 	return bindings.map((binding) => {
 		if (binding.slotId !== slotId) return binding;
-		const baseResolvedTransform = resolveVideoSplitScreenSlotTransformFromState({
-			baseTransform: element.transform,
-			duration: element.duration,
-			reframePresets: element.reframePresets,
-			reframeSwitches: element.reframeSwitches,
-			defaultReframePresetId: element.defaultReframePresetId,
-			localTime,
-			slot: {
-				slotId: binding.slotId,
-				presetId: binding.presetId ?? null,
+		const baseResolvedTransform = resolveVideoSplitScreenSlotTransformFromState(
+			{
+				baseTransform: element.transform,
+				duration: element.duration,
+				reframePresets: element.reframePresets,
+				reframeSwitches: element.reframeSwitches,
+				defaultReframePresetId: element.defaultReframePresetId,
+				localTime,
+				slot: {
+					slotId: binding.slotId,
+					presetId: binding.presetId ?? null,
+				},
 			},
-		});
+		);
 		return {
 			...binding,
 			transformAdjustmentsBySlotId: {

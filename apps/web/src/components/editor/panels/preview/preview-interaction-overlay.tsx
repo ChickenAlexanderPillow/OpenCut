@@ -2,10 +2,7 @@ import { usePreviewInteraction } from "@/hooks/use-preview-interaction";
 import { TransformHandles } from "./transform-handles";
 import { SnapGuides } from "./snap-guides";
 import { TextEditOverlay } from "./text-edit-overlay";
-import {
-	canvasToOverlay,
-	getDisplayScale,
-} from "@/lib/preview/preview-coords";
+import { canvasToOverlay, getDisplayScale } from "@/lib/preview/preview-coords";
 import { useEditor } from "@/hooks/use-editor";
 import { usePreviewStore } from "@/stores/preview-store";
 import { getPreviewCanvasSize } from "@/lib/preview/preview-format";
@@ -22,8 +19,11 @@ export function PreviewInteractionOverlay({
 		onPointerMove,
 		onPointerUp,
 		onDoubleClick,
+		onPointerLeave,
+		onPointerCancel,
 		snapLines,
 		hoveredSplitSlotId,
+		selectedSplitSlotId,
 		splitSlotRegions,
 		activeSplitSlotId,
 		editingText,
@@ -50,10 +50,15 @@ export function PreviewInteractionOverlay({
 			{/* biome-ignore lint/a11y/noStaticElementInteractions: canvas overlay, pointer-only interaction */}
 			<div
 				className="absolute inset-0 pointer-events-auto"
+				style={{
+					cursor: hoveredSplitSlotId || activeSplitSlotId ? "grab" : "default",
+				}}
 				onPointerDown={onPointerDown}
 				onPointerMove={onPointerMove}
 				onPointerUp={onPointerUp}
 				onDoubleClick={onDoubleClick}
+				onPointerLeave={onPointerLeave}
+				onPointerCancel={onPointerCancel}
 			/>
 			{canvasRect &&
 				containerRect &&
@@ -66,35 +71,28 @@ export function PreviewInteractionOverlay({
 						containerRect,
 						canvasSize,
 					});
+					const isSelected = region.slotId === selectedSplitSlotId;
 					const isActive = region.slotId === activeSplitSlotId;
 					const isHovered = region.slotId === hoveredSplitSlotId;
 					return (
 						<div
 							key={region.slotId}
-							className="pointer-events-none absolute rounded-sm transition-colors"
+							className="pointer-events-none absolute transition-colors"
 							style={{
 								left: center.x - (region.bounds.width * displayScale.x) / 2,
 								top: center.y - (region.bounds.height * displayScale.y) / 2,
 								width: region.bounds.width * displayScale.x,
 								height: region.bounds.height * displayScale.y,
-								border: isActive
-									? "2px solid rgba(255,255,255,0.92)"
-									: isHovered
-										? "2px solid rgba(255,255,255,0.55)"
-										: "1px solid rgba(255,255,255,0.2)",
-								background: isActive
-									? "rgba(255,255,255,0.08)"
-									: isHovered
-										? "rgba(255,255,255,0.04)"
-										: "transparent",
+								border: isSelected
+									? "2px solid rgba(59,130,246,0.95)"
+									: isActive
+										? "2px solid rgba(255,255,255,0.92)"
+										: isHovered
+											? "2px solid rgba(255,255,255,0.55)"
+											: "1px solid rgba(255,255,255,0.2)",
+								background: "transparent",
 							}}
-						>
-							{isHovered && !isActive && (
-								<div className="absolute left-2 top-2 rounded bg-black/70 px-2 py-1 text-[10px] uppercase tracking-[0.16em] text-white/75">
-									Double-click to edit
-								</div>
-							)}
-						</div>
+						></div>
 					);
 				})}
 			{editingText ? (

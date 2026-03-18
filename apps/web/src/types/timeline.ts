@@ -311,6 +311,8 @@ export interface TextElement extends BaseTimelineElement {
 			enabled?: boolean;
 			anchorToSplitViewport?: boolean;
 			slotAnchor?: "auto" | "top" | "bottom" | "left" | "right";
+			fontSize?: number;
+			backgroundPaddingY?: number;
 			fitInCanvas?: boolean;
 			wordsOnScreen?: number;
 			maxLinesOnScreen?: number;

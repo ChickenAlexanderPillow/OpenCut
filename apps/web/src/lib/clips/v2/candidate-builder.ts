@@ -8,6 +8,7 @@ import type { TranscriptionSegment } from "@/types/transcription";
 
 const DEFAULT_MAX_OUTPUT = 18;
 const DEFAULT_GLOBAL_POOL_MULTIPLIER = 6;
+const DEFAULT_PER_CHUNK_POOL_SIZE = 4;
 const V2_INTERNAL_MAX_OVERLAP_RATIO = 0.72;
 
 function overlapRatio({
@@ -68,6 +69,103 @@ function getChunkIndexForCandidate({
 	return -1;
 }
 
+function getTemporalBucketIndex({
+	startTime,
+	mediaDuration,
+	bucketSizeSeconds,
+}: {
+	startTime: number;
+	mediaDuration: number;
+	bucketSizeSeconds: number;
+}): number {
+	if (mediaDuration <= 0 || bucketSizeSeconds <= 0) return 0;
+	const bucketCount = Math.max(1, Math.ceil(mediaDuration / bucketSizeSeconds));
+	return Math.max(
+		0,
+		Math.min(bucketCount - 1, Math.floor(startTime / bucketSizeSeconds)),
+	);
+}
+
+function buildDiversifiedCandidatePool({
+	segments,
+	chunks,
+	mediaDuration,
+	minClipSeconds,
+	maxClipSeconds,
+	targetClipSeconds,
+	maxOutput,
+}: {
+	segments: TranscriptionSegment[];
+	chunks: SemanticTranscriptChunk[];
+	mediaDuration: number;
+	minClipSeconds: number;
+	maxClipSeconds: number;
+	targetClipSeconds: number;
+	maxOutput: number;
+}): ClipCandidateDraft[] {
+	const perChunkPoolSize = Math.max(
+		DEFAULT_PER_CHUNK_POOL_SIZE,
+		Math.ceil(maxOutput / 2),
+	);
+	const globalPoolSize = Math.max(
+		maxOutput,
+		Math.max(
+			40,
+			maxOutput * DEFAULT_GLOBAL_POOL_MULTIPLIER,
+			chunks.length * perChunkPoolSize,
+		),
+	);
+
+	const pooledCandidates = buildClipCandidatesFromTranscript({
+		segments,
+		mediaDuration,
+		minClipSeconds,
+		maxClipSeconds,
+		targetClipSeconds,
+		maxOutput: globalPoolSize,
+	});
+	if (chunks.length === 0) {
+		return pooledCandidates;
+	}
+
+	for (const chunk of chunks) {
+		const chunkCandidates = buildClipCandidatesFromTranscript({
+			segments: chunk.segments,
+			mediaDuration,
+			minClipSeconds,
+			maxClipSeconds,
+			targetClipSeconds,
+			maxOutput: perChunkPoolSize,
+		});
+		pooledCandidates.push(...chunkCandidates);
+	}
+
+	const dedupedPool: ClipCandidateDraft[] = [];
+	for (const candidate of pooledCandidates.sort((a, b) => {
+		if (b.localScore !== a.localScore) return b.localScore - a.localScore;
+		return a.startTime - b.startTime;
+	})) {
+		const isDuplicate = dedupedPool.some((existing) => {
+			const sameBoundaryWindow =
+				Math.abs(existing.startTime - candidate.startTime) <= 0.25 &&
+				Math.abs(existing.endTime - candidate.endTime) <= 0.25;
+			if (sameBoundaryWindow) return true;
+			return (
+				overlapRatio({
+					aStart: existing.startTime,
+					aEnd: existing.endTime,
+					bStart: candidate.startTime,
+					bEnd: candidate.endTime,
+				}) > 0.94
+			);
+		});
+		if (isDuplicate) continue;
+		dedupedPool.push(candidate);
+	}
+
+	return dedupedPool;
+}
+
 export function buildClipCandidatesFromTranscriptV2({
 	segments,
 	mediaDuration,
@@ -83,29 +181,26 @@ export function buildClipCandidatesFromTranscriptV2({
 	targetClipSeconds?: number;
 	maxOutput?: number;
 }): ClipCandidateDraft[] {
-	const poolSize = Math.max(
-		maxOutput,
-		Math.max(40, maxOutput * DEFAULT_GLOBAL_POOL_MULTIPLIER),
-	);
-	const globalCandidates = buildClipCandidatesFromTranscript({
-		segments,
-		mediaDuration,
-		minClipSeconds,
-		maxClipSeconds,
-		targetClipSeconds,
-		maxOutput: poolSize,
-	});
-	if (globalCandidates.length === 0) return [];
-
 	const chunks = buildSemanticChunksFromTranscript({
 		segments,
 		mediaDuration,
 	});
+	const globalCandidates = buildDiversifiedCandidatePool({
+		segments,
+		chunks,
+		mediaDuration,
+		minClipSeconds,
+		maxClipSeconds,
+		targetClipSeconds,
+		maxOutput,
+	});
+	if (globalCandidates.length === 0) return [];
 	if (chunks.length === 0) {
 		return globalCandidates.slice(0, maxOutput);
 	}
 
 	const maxPerChunk = Math.max(2, Math.ceil(maxOutput / 2));
+	const temporalBucketSizeSeconds = Math.max(targetClipSeconds, minClipSeconds);
 	const ranked = globalCandidates
 		.map((candidate) => {
 			const chunkIndex = getChunkIndexForCandidate({
@@ -127,6 +222,11 @@ export function buildClipCandidatesFromTranscriptV2({
 				...candidate,
 				_rankScore: candidate.localScore + coherenceBoost - coherencePenalty,
 				_chunkIndex: chunkIndex,
+				_temporalBucketIndex: getTemporalBucketIndex({
+					startTime: candidate.startTime,
+					mediaDuration,
+					bucketSizeSeconds: temporalBucketSizeSeconds,
+				}),
 			};
 		})
 		.sort((a, b) => {
@@ -137,9 +237,11 @@ export function buildClipCandidatesFromTranscriptV2({
 
 	const selected: ClipCandidateDraft[] = [];
 	const countByChunk = new Map<number, number>();
+	const countByTemporalBucket = new Map<number, number>();
 	const selectedIds = new Set<string>();
 
-	// Coverage pass: keep at least one strong candidate from each semantic chunk.
+	// Coverage pass: keep at least one strong candidate from each semantic chunk
+	// and from each coarse timeline bucket so the intro cannot monopolize the list.
 	const bestByChunk = new Map<number, (typeof ranked)[number]>();
 	for (const candidate of ranked) {
 		if (candidate._chunkIndex < 0) continue;
@@ -152,11 +254,30 @@ export function buildClipCandidatesFromTranscriptV2({
 			bestByChunk.set(candidate._chunkIndex, candidate);
 		}
 	}
-	const coverageSeeds = Array.from(bestByChunk.values()).sort((a, b) => {
+	const bestByTemporalBucket = new Map<number, (typeof ranked)[number]>();
+	for (const candidate of ranked) {
+		const existing = bestByTemporalBucket.get(candidate._temporalBucketIndex);
+		if (!existing || candidate._rankScore > existing._rankScore) {
+			bestByTemporalBucket.set(candidate._temporalBucketIndex, candidate);
+		}
+	}
+	const temporalCoverageSeeds = Array.from(bestByTemporalBucket.entries())
+		.sort((a, b) => a[0] - b[0])
+		.map(([, candidate]) => candidate);
+	const chunkCoverageSeeds = Array.from(bestByChunk.values()).sort((a, b) => {
 		if (b._rankScore !== a._rankScore) return b._rankScore - a._rankScore;
 		if (b.localScore !== a.localScore) return b.localScore - a.localScore;
 		return a.startTime - b.startTime;
 	});
+	const coverageSeeds = [
+		...temporalCoverageSeeds,
+		...chunkCoverageSeeds.filter(
+			(candidate) =>
+				!temporalCoverageSeeds.some(
+					(existing) => existing.id === candidate.id,
+				),
+		),
+	];
 
 	for (const candidate of coverageSeeds) {
 		const overlap = selected.some(
@@ -180,6 +301,12 @@ export function buildClipCandidatesFromTranscriptV2({
 		selectedIds.add(candidate.id);
 		const chunkCount = countByChunk.get(candidate._chunkIndex) ?? 0;
 		countByChunk.set(candidate._chunkIndex, chunkCount + 1);
+		const temporalBucketCount =
+			countByTemporalBucket.get(candidate._temporalBucketIndex) ?? 0;
+		countByTemporalBucket.set(
+			candidate._temporalBucketIndex,
+			temporalBucketCount + 1,
+		);
 		if (selected.length >= maxOutput) break;
 	}
 
@@ -209,9 +336,15 @@ export function buildClipCandidatesFromTranscriptV2({
 		if (candidate._chunkIndex >= 0) {
 			countByChunk.set(candidate._chunkIndex, chunkCount + 1);
 		}
+		const temporalBucketCount =
+			countByTemporalBucket.get(candidate._temporalBucketIndex) ?? 0;
+		countByTemporalBucket.set(
+			candidate._temporalBucketIndex,
+			temporalBucketCount + 1,
+		);
 		if (selected.length >= maxOutput) break;
 	}
 
-	if (selected.length > 0) return selected;
+	if (selected.length > 0) return selected.slice(0, maxOutput);
 	return globalCandidates.slice(0, maxOutput);
 }

@@ -41,6 +41,8 @@ interface VideoSinkData {
 	prefetchSamplePromise: Promise<void> | null;
 	lastAccessAt: number;
 	estimatedBytes: number;
+	sampleGeneration: number;
+	disposed: boolean;
 }
 
 export class VideoCache {
@@ -262,6 +264,58 @@ export class VideoCache {
 			sample.close();
 		} catch {}
 	}
+
+	private isSampleStateCurrent({
+		sinkData,
+		sampleGeneration,
+	}: {
+		sinkData: VideoSinkData;
+		sampleGeneration: number;
+	}): boolean {
+		return !sinkData.disposed && sinkData.sampleGeneration === sampleGeneration;
+	}
+
+	private invalidateSampleState({
+		sinkData,
+		disposed = false,
+	}: {
+		sinkData: VideoSinkData;
+		disposed?: boolean;
+	}): void {
+		sinkData.sampleGeneration += 1;
+		sinkData.disposed = disposed || sinkData.disposed;
+
+		const sampleIterator = sinkData.sampleIterator;
+		sinkData.sampleIterator = null;
+		if (sampleIterator) {
+			void sampleIterator.return();
+		}
+
+		this.closeSample({ sample: sinkData.currentSample });
+		this.closeSample({ sample: sinkData.nextSample });
+		sinkData.currentSample = null;
+		sinkData.nextSample = null;
+		sinkData.prefetchingSample = false;
+		sinkData.prefetchSamplePromise = null;
+		sinkData.lastSampleTime = -1;
+	}
+
+	private closeSampleIfInvalid({
+		sinkData,
+		sampleGeneration,
+		sample,
+	}: {
+		sinkData: VideoSinkData;
+		sampleGeneration: number;
+		sample: VideoSample | null;
+	}): boolean {
+		if (!sample) return true;
+		if (this.isSampleStateCurrent({ sinkData, sampleGeneration })) {
+			return false;
+		}
+		this.closeSample({ sample });
+		return true;
+	}
 	private async iterateToTime({
 		sinkData,
 		targetTime,
@@ -373,6 +427,16 @@ export class VideoCache {
 					await sinkData.prefetchSamplePromise;
 				}
 
+				const sampleGeneration = sinkData.sampleGeneration;
+				if (
+					!this.isSampleStateCurrent({
+						sinkData,
+						sampleGeneration,
+					})
+				) {
+					return null;
+				}
+
 				if (
 					sinkData.nextSample &&
 					sinkData.nextSample.timestamp <= targetTime + 0.05
@@ -381,8 +445,19 @@ export class VideoCache {
 					sinkData.currentSample = sinkData.nextSample;
 					sinkData.nextSample = null;
 				} else {
-					const { value: sample, done } = await sinkData.sampleIterator.next();
+					const sampleIterator = sinkData.sampleIterator;
+					if (!sampleIterator) break;
+					const { value: sample, done } = await sampleIterator.next();
 					if (done || !sample) break;
+					if (
+						this.closeSampleIfInvalid({
+							sinkData,
+							sampleGeneration,
+							sample,
+						})
+					) {
+						return null;
+					}
 					this.closeSample({ sample: sinkData.currentSample });
 					sinkData.currentSample = sample;
 				}
@@ -400,7 +475,7 @@ export class VideoCache {
 			}
 		} catch (error) {
 			console.warn("Sample iterator failed, will restart:", error);
-			sinkData.sampleIterator = null;
+			this.invalidateSampleState({ sinkData });
 		}
 
 		return null;
@@ -418,23 +493,45 @@ export class VideoCache {
 				await sinkData.prefetchSamplePromise;
 			}
 
-			if (sinkData.sampleIterator) {
-				await sinkData.sampleIterator.return();
-				sinkData.sampleIterator = null;
+			if (sinkData.disposed) {
+				return null;
 			}
 
-			this.closeSample({ sample: sinkData.nextSample });
-			sinkData.nextSample = null;
+			this.invalidateSampleState({ sinkData });
 			sinkData.sampleIterator = sinkData.sampleSink.samples(time);
+			const sampleGeneration = sinkData.sampleGeneration;
 			sinkData.lastSampleTime = time;
 
-			const { value: sample } = await sinkData.sampleIterator.next();
+			const sampleIterator = sinkData.sampleIterator;
+			if (!sampleIterator) {
+				return null;
+			}
+
+			const { value: sample } = await sampleIterator.next();
 			if (sample) {
+				if (
+					this.closeSampleIfInvalid({
+						sinkData,
+						sampleGeneration,
+						sample,
+					})
+				) {
+					return null;
+				}
 				this.closeSample({ sample: sinkData.currentSample });
 				sinkData.currentSample = sample;
 				try {
-					const { value: next } = await sinkData.sampleIterator.next();
+					const { value: next } = await sampleIterator.next();
 					if (next) {
+						if (
+							this.closeSampleIfInvalid({
+								sinkData,
+								sampleGeneration,
+								sample: next,
+							})
+						) {
+							return null;
+						}
 						sinkData.nextSample = next;
 					}
 				} catch (e) {
@@ -444,6 +541,7 @@ export class VideoCache {
 			}
 		} catch (error) {
 			console.warn("Failed to seek video sample:", error);
+			this.invalidateSampleState({ sinkData });
 		}
 		return null;
 	}
@@ -512,21 +610,39 @@ export class VideoCache {
 			return;
 		}
 
+		const sampleGeneration = sinkData.sampleGeneration;
+		const sampleIterator = sinkData.sampleIterator;
 		try {
-			const { value: sample, done } = await sinkData.sampleIterator.next();
+			const { value: sample, done } = await sampleIterator.next();
 			if (done || !sample) {
 				sinkData.prefetchingSample = false;
 				sinkData.prefetchSamplePromise = null;
+				return;
+			}
+			if (
+				this.closeSampleIfInvalid({
+					sinkData,
+					sampleGeneration,
+					sample,
+				})
+			) {
 				return;
 			}
 			this.closeSample({ sample: sinkData.nextSample });
 			sinkData.nextSample = sample;
 		} catch (error) {
 			console.warn("Sample prefetch failed:", error);
-			sinkData.sampleIterator = null;
+			this.invalidateSampleState({ sinkData });
 		} finally {
-			sinkData.prefetchingSample = false;
-			sinkData.prefetchSamplePromise = null;
+			if (
+				this.isSampleStateCurrent({
+					sinkData,
+					sampleGeneration,
+				})
+			) {
+				sinkData.prefetchingSample = false;
+				sinkData.prefetchSamplePromise = null;
+			}
 		}
 	}
 	private async ensureSink({
@@ -565,7 +681,11 @@ export class VideoCache {
 		}
 	}
 
-	private evictIfNeeded({ preserveMediaId }: { preserveMediaId?: string }): void {
+	private evictIfNeeded({
+		preserveMediaId,
+	}: {
+		preserveMediaId?: string;
+	}): void {
 		const shouldEvictByCount = this.sinks.size >= VideoCache.MAX_SINKS;
 		const shouldEvictByBytes =
 			this.totalEstimatedBytes > VideoCache.MAX_TOTAL_ESTIMATED_BYTES;
@@ -588,12 +708,9 @@ export class VideoCache {
 	private disposeSinkData({ sinkData }: { sinkData: VideoSinkData }): void {
 		if (sinkData.iterator) {
 			void sinkData.iterator.return();
+			sinkData.iterator = null;
 		}
-		if (sinkData.sampleIterator) {
-			void sinkData.sampleIterator.return();
-		}
-		this.closeSample({ sample: sinkData.currentSample });
-		this.closeSample({ sample: sinkData.nextSample });
+		this.invalidateSampleState({ sinkData, disposed: true });
 
 		try {
 			(sinkData.sink as unknown as { dispose?: () => void }).dispose?.();
@@ -676,6 +793,8 @@ export class VideoCache {
 				prefetchSamplePromise: null,
 				lastAccessAt: Date.now(),
 				estimatedBytes,
+				sampleGeneration: 0,
+				disposed: false,
 			});
 			this.totalEstimatedBytes += estimatedBytes;
 			this.evictIfNeeded({ preserveMediaId: mediaId });

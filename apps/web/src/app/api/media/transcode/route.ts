@@ -1,11 +1,41 @@
 import { webEnv } from "@opencut/env/web";
 import { NextResponse, type NextRequest } from "next/server";
 
+function resolveLocalTranscodeBaseUrl(): string | null {
+	return (
+		webEnv.LOCAL_TRANSCRIBE_URL ??
+		webEnv.NEXT_PUBLIC_LOCAL_TRANSCRIBE_URL ??
+		null
+	);
+}
+
+function resolveLocalTranscodeApiKey(): string | null {
+	return (
+		webEnv.LOCAL_TRANSCRIBE_API_KEY ??
+		webEnv.NEXT_PUBLIC_LOCAL_TRANSCRIBE_API_KEY ??
+		null
+	);
+}
+
+function getOptionalFormValue(
+	formData: FormData,
+	key: string,
+): string | undefined {
+	const value = formData.get(key);
+	return typeof value === "string" && value.trim().length > 0
+		? value.trim()
+		: undefined;
+}
+
 export async function POST(request: NextRequest) {
 	try {
-		if (!webEnv.LOCAL_TRANSCRIBE_URL) {
+		const localTranscodeBaseUrl = resolveLocalTranscodeBaseUrl();
+		if (!localTranscodeBaseUrl) {
 			return NextResponse.json(
-				{ error: "LOCAL_TRANSCRIBE_URL is not configured" },
+				{
+					error:
+						"LOCAL_TRANSCRIBE_URL or NEXT_PUBLIC_LOCAL_TRANSCRIBE_URL must be configured",
+				},
 				{ status: 503 },
 			);
 		}
@@ -20,26 +50,61 @@ export async function POST(request: NextRequest) {
 
 		const timeoutMs = webEnv.LOCAL_TRANSCODE_TIMEOUT_MS ?? 1800000;
 		const controller = new AbortController();
-		const timeoutId = setTimeout(() => controller.abort("Transcode timed out"), timeoutMs);
+		const timeoutId = setTimeout(
+			() => controller.abort("Transcode timed out"),
+			timeoutMs,
+		);
 
 		try {
+			const formData = await request.formData();
+			const fileEntry = formData.get("file");
+			const mediaType = getOptionalFormValue(formData, "media_type");
+			if (!(fileEntry instanceof File)) {
+				return NextResponse.json(
+					{ error: "file is required" },
+					{ status: 400 },
+				);
+			}
+			if (mediaType !== "video" && mediaType !== "audio") {
+				return NextResponse.json(
+					{ error: "media_type must be video or audio" },
+					{ status: 400 },
+				);
+			}
+
 			const upstreamHeaders: Record<string, string> = {
-				"content-type": contentType,
+				"x-media-type": mediaType,
+				"x-file-name": fileEntry.name || "import-media",
+				"content-type": fileEntry.type || "application/octet-stream",
 			};
-			if (webEnv.LOCAL_TRANSCRIBE_API_KEY) {
-				upstreamHeaders.Authorization = `Bearer ${webEnv.LOCAL_TRANSCRIBE_API_KEY}`;
+			const apiKey = resolveLocalTranscodeApiKey();
+			if (apiKey) {
+				upstreamHeaders.Authorization = `Bearer ${apiKey}`;
+			}
+
+			const sourceWidth = getOptionalFormValue(formData, "source_width");
+			const sourceHeight = getOptionalFormValue(formData, "source_height");
+			const sourceFps = getOptionalFormValue(formData, "source_fps");
+			if (sourceWidth) {
+				upstreamHeaders["x-source-width"] = sourceWidth;
+			}
+			if (sourceHeight) {
+				upstreamHeaders["x-source-height"] = sourceHeight;
+			}
+			if (sourceFps) {
+				upstreamHeaders["x-source-fps"] = sourceFps;
 			}
 
 			const fetchInit: RequestInit & { duplex: "half" } = {
 				method: "POST",
 				headers: upstreamHeaders,
-				body: request.body,
+				body: fileEntry.stream(),
 				signal: controller.signal,
 				duplex: "half",
 			};
 
 			const response = await fetch(
-				`${webEnv.LOCAL_TRANSCRIBE_URL.replace(/\/$/, "")}/v1/transcode-import`,
+				`${localTranscodeBaseUrl.replace(/\/$/, "")}/v1/transcode-import-stream`,
 				fetchInit,
 			);
 
@@ -83,7 +148,9 @@ export async function POST(request: NextRequest) {
 		}
 	} catch (error) {
 		const message =
-			error instanceof Error ? error.message : "Unexpected transcode route error";
+			error instanceof Error
+				? error.message
+				: "Unexpected transcode route error";
 		return NextResponse.json({ error: message }, { status: 500 });
 	}
 }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	mergeScoredCandidates,
+	selectTopCandidatesWithCoverageBackfill,
 	selectTopCandidatesWithQualityGate,
 } from "@/lib/clips/scoring";
 import type { ClipCandidateDraft } from "@/types/clip-generation";
@@ -291,5 +292,193 @@ describe("clip scoring", () => {
 		});
 
 		expect(results.map((item) => item.id)).toEqual(["b"]);
+	});
+
+	test("backfills later clean clips when the gate would otherwise return only one intro", () => {
+		const results = selectTopCandidatesWithCoverageBackfill({
+			candidates: [
+				{
+					id: "intro",
+					startTime: 0,
+					endTime: 34,
+					duration: 34,
+					title: "Intro",
+					rationale: "Intro",
+					transcriptSnippet: "Big opening claim with payoff.",
+					scoreOverall: 91,
+					scoreBreakdown: {
+						hook: 91,
+						emotion: 88,
+						shareability: 89,
+						clarity: 92,
+						momentum: 90,
+					},
+					qaDiagnostics: {
+						startsClean: true,
+						endsClean: true,
+						hasTailQuestionSetup: false,
+						hasConsequenceChain: true,
+						hasStrongStance: true,
+						repetitionRisk: "low",
+						infoDensity: "high",
+					},
+				},
+				{
+					id: "mid",
+					startTime: 66,
+					endTime: 98,
+					duration: 32,
+					title: "Mid",
+					rationale: "Mid",
+					transcriptSnippet: "Concrete mid-section takeaway with a clean ending.",
+					scoreOverall: 43,
+					scoreBreakdown: {
+						hook: 45,
+						emotion: 40,
+						shareability: 41,
+						clarity: 48,
+						momentum: 42,
+					},
+					qaDiagnostics: {
+						startsClean: true,
+						endsClean: true,
+						hasTailQuestionSetup: false,
+						hasConsequenceChain: false,
+						hasStrongStance: false,
+						repetitionRisk: "low",
+						infoDensity: "medium",
+					},
+				},
+				{
+					id: "late",
+					startTime: 132,
+					endTime: 162,
+					duration: 30,
+					title: "Late",
+					rationale: "Late",
+					transcriptSnippet: "Later section with a distinct standalone point.",
+					scoreOverall: 41,
+					scoreBreakdown: {
+						hook: 42,
+						emotion: 39,
+						shareability: 39,
+						clarity: 46,
+						momentum: 41,
+					},
+					qaDiagnostics: {
+						startsClean: true,
+						endsClean: true,
+						hasTailQuestionSetup: false,
+						hasConsequenceChain: false,
+						hasStrongStance: false,
+						repetitionRisk: "low",
+						infoDensity: "medium",
+					},
+				},
+			],
+			minScore: 56,
+			maxCount: 5,
+			minDesiredCount: 3,
+			backfillMinScore: 40,
+			coverageBucketSeconds: 36,
+		});
+
+		expect(results.map((item) => item.id)).toEqual(["intro", "mid", "late"]);
+	});
+
+	test("rescue backfill can use later clips even when boundary diagnostics are imperfect", () => {
+		const results = selectTopCandidatesWithCoverageBackfill({
+			candidates: [
+				{
+					id: "intro",
+					startTime: 0,
+					endTime: 34,
+					duration: 34,
+					title: "Intro",
+					rationale: "Intro",
+					transcriptSnippet: "Big opening claim with payoff.",
+					scoreOverall: 91,
+					scoreBreakdown: {
+						hook: 91,
+						emotion: 88,
+						shareability: 89,
+						clarity: 92,
+						momentum: 90,
+					},
+					qaDiagnostics: {
+						startsClean: true,
+						endsClean: true,
+						hasTailQuestionSetup: false,
+						hasConsequenceChain: true,
+						hasStrongStance: true,
+						repetitionRisk: "low",
+						infoDensity: "high",
+					},
+				},
+				{
+					id: "late-a",
+					startTime: 92,
+					endTime: 122,
+					duration: 30,
+					title: "Late A",
+					rationale: "Late A",
+					transcriptSnippet: "Later strong point.",
+					scoreOverall: 27,
+					scoreBreakdown: {
+						hook: 28,
+						emotion: 24,
+						shareability: 22,
+						clarity: 33,
+						momentum: 27,
+					},
+					failureFlags: ["cutoff_start"],
+					qaDiagnostics: {
+						startsClean: false,
+						endsClean: true,
+						hasTailQuestionSetup: false,
+						hasConsequenceChain: false,
+						hasStrongStance: false,
+						repetitionRisk: "low",
+						infoDensity: "medium",
+					},
+				},
+				{
+					id: "late-b",
+					startTime: 140,
+					endTime: 171,
+					duration: 31,
+					title: "Late B",
+					rationale: "Late B",
+					transcriptSnippet: "Another later point.",
+					scoreOverall: 24,
+					scoreBreakdown: {
+						hook: 25,
+						emotion: 22,
+						shareability: 21,
+						clarity: 30,
+						momentum: 24,
+					},
+					failureFlags: ["cutoff_end"],
+					qaDiagnostics: {
+						startsClean: true,
+						endsClean: false,
+						hasTailQuestionSetup: false,
+						hasConsequenceChain: false,
+						hasStrongStance: false,
+						repetitionRisk: "low",
+						infoDensity: "medium",
+					},
+				},
+			],
+			minScore: 56,
+			maxCount: 5,
+			minDesiredCount: 3,
+			backfillMinScore: 0,
+			coverageBucketSeconds: 36,
+			requireCleanBoundariesInBackfill: false,
+			excludeCutoffFailuresInBackfill: false,
+		});
+
+		expect(results.map((item) => item.id)).toEqual(["intro", "late-a", "late-b"]);
 	});
 });

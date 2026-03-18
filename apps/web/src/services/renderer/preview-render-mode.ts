@@ -13,4 +13,3 @@ export function resolvePreviewRenderBackend({
 	if (mode === "webgpu") return "webgpu";
 	return runtimeFallbackReason ? "canvas2d" : "webgpu";
 }
-
