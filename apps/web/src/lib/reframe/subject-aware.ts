@@ -7,6 +7,10 @@ import type {
 	VideoReframeSwitch,
 } from "@/types/timeline";
 import { generateUUID } from "@/utils/id";
+import {
+	DEFAULT_MOTION_TRACKING_STRENGTH,
+	normalizeMotionTrackingStrength,
+} from "./motion-tracking";
 import { buildVideoReframePreset } from "./video-reframe";
 import type { MotionTrackingTransformKeyframe } from "./motion-tracking";
 
@@ -568,15 +572,30 @@ function buildMotionTrackingSampleTimes({
 	});
 }
 
+function lerpMotionTrackingSetting(
+	min: number,
+	max: number,
+	trackingStrength: number,
+): number {
+	return min + (max - min) * normalizeMotionTrackingStrength(trackingStrength);
+}
+
 function smoothObservationSegment({
 	observations,
+	trackingStrength = DEFAULT_MOTION_TRACKING_STRENGTH,
 }: {
 	observations: SubjectTrackingObservation[];
+	trackingStrength?: number;
 }): SubjectTrackingObservation[] {
 	if (observations.length <= 1) return observations.map((observation) => ({
 		time: observation.time,
 		box: observation.box ? { ...observation.box } : null,
 	}));
+
+	const normalizedStrength = normalizeMotionTrackingStrength(trackingStrength);
+	const positionBlend = lerpMotionTrackingSetting(0.14, 0.5, normalizedStrength);
+	const sizeBlend = lerpMotionTrackingSetting(0.08, 0.26, normalizedStrength);
+	const fitBlend = lerpMotionTrackingSetting(0.12, 0.34, normalizedStrength);
 
 	const forward: SubjectTrackingObservation[] = [];
 	let previousForward: SubjectBox | null = null;
@@ -593,30 +612,38 @@ function smoothObservationSegment({
 			continue;
 		}
 		const nextBox: SubjectBox = {
-			centerX: previousForward.centerX + (currentBox.centerX - previousForward.centerX) * 0.24,
-			centerY: previousForward.centerY + (currentBox.centerY - previousForward.centerY) * 0.24,
-			width: previousForward.width + (currentBox.width - previousForward.width) * 0.12,
-			height: previousForward.height + (currentBox.height - previousForward.height) * 0.12,
+			centerX:
+				previousForward.centerX +
+				(currentBox.centerX - previousForward.centerX) * positionBlend,
+			centerY:
+				previousForward.centerY +
+				(currentBox.centerY - previousForward.centerY) * positionBlend,
+			width:
+				previousForward.width +
+				(currentBox.width - previousForward.width) * sizeBlend,
+			height:
+				previousForward.height +
+				(currentBox.height - previousForward.height) * sizeBlend,
 			anchorX:
 				(previousForward.anchorX ?? previousForward.centerX) +
 				((currentBox.anchorX ?? currentBox.centerX) -
 					(previousForward.anchorX ?? previousForward.centerX)) *
-					0.24,
+					positionBlend,
 			anchorY:
 				(previousForward.anchorY ?? previousForward.centerY) +
 				((currentBox.anchorY ?? currentBox.centerY) -
 					(previousForward.anchorY ?? previousForward.centerY)) *
-					0.24,
+					positionBlend,
 			fitWidth:
 				(previousForward.fitWidth ?? previousForward.width) +
 				((currentBox.fitWidth ?? currentBox.width) -
 					(previousForward.fitWidth ?? previousForward.width)) *
-					0.18,
+					fitBlend,
 			fitHeight:
 				(previousForward.fitHeight ?? previousForward.height) +
 				((currentBox.fitHeight ?? currentBox.height) -
 					(previousForward.fitHeight ?? previousForward.height)) *
-					0.18,
+					fitBlend,
 		};
 		forward.push({ time: observation.time, box: nextBox });
 		previousForward = nextBox;
@@ -638,30 +665,38 @@ function smoothObservationSegment({
 			continue;
 		}
 		const nextBox: SubjectBox = {
-			centerX: previousBackward.centerX + (currentBox.centerX - previousBackward.centerX) * 0.24,
-			centerY: previousBackward.centerY + (currentBox.centerY - previousBackward.centerY) * 0.24,
-			width: previousBackward.width + (currentBox.width - previousBackward.width) * 0.12,
-			height: previousBackward.height + (currentBox.height - previousBackward.height) * 0.12,
+			centerX:
+				previousBackward.centerX +
+				(currentBox.centerX - previousBackward.centerX) * positionBlend,
+			centerY:
+				previousBackward.centerY +
+				(currentBox.centerY - previousBackward.centerY) * positionBlend,
+			width:
+				previousBackward.width +
+				(currentBox.width - previousBackward.width) * sizeBlend,
+			height:
+				previousBackward.height +
+				(currentBox.height - previousBackward.height) * sizeBlend,
 			anchorX:
 				(previousBackward.anchorX ?? previousBackward.centerX) +
 				((currentBox.anchorX ?? currentBox.centerX) -
 					(previousBackward.anchorX ?? previousBackward.centerX)) *
-					0.24,
+					positionBlend,
 			anchorY:
 				(previousBackward.anchorY ?? previousBackward.centerY) +
 				((currentBox.anchorY ?? currentBox.centerY) -
 					(previousBackward.anchorY ?? previousBackward.centerY)) *
-					0.24,
+					positionBlend,
 			fitWidth:
 				(previousBackward.fitWidth ?? previousBackward.width) +
 				((currentBox.fitWidth ?? currentBox.width) -
 					(previousBackward.fitWidth ?? previousBackward.width)) *
-					0.18,
+					fitBlend,
 			fitHeight:
 				(previousBackward.fitHeight ?? previousBackward.height) +
 				((currentBox.fitHeight ?? currentBox.height) -
 					(previousBackward.fitHeight ?? previousBackward.height)) *
-					0.18,
+					fitBlend,
 		};
 		smoothedReverse.push({ time: observation.time, box: nextBox });
 		previousBackward = nextBox;
@@ -1110,11 +1145,14 @@ export function choosePrimarySubjectBox({
 
 function smoothTrackedObservations({
 	observations,
+	trackingStrength = DEFAULT_MOTION_TRACKING_STRENGTH,
 }: {
 	observations: SubjectTrackingObservation[];
+	trackingStrength?: number;
 }): SubjectTrackingObservation[] {
 	if (observations.length === 0) return [];
-	const maxHoldSeconds = 1.25;
+	const normalizedStrength = normalizeMotionTrackingStrength(trackingStrength);
+	const maxHoldSeconds = lerpMotionTrackingSetting(1.4, 0.45, normalizedStrength);
 	const heldObservations: SubjectTrackingObservation[] = [];
 	let previousTracked: SubjectTrackingObservation | null = null;
 	for (const observation of observations) {
@@ -1142,7 +1180,12 @@ function smoothTrackedObservations({
 	for (const observation of heldObservations) {
 		if (!observation.box) {
 			if (segment.length > 0) {
-				smoothed.push(...smoothObservationSegment({ observations: segment }));
+				smoothed.push(
+					...smoothObservationSegment({
+						observations: segment,
+						trackingStrength: normalizedStrength,
+					}),
+				);
 				segment = [];
 			}
 			smoothed.push(observation);
@@ -1151,7 +1194,12 @@ function smoothTrackedObservations({
 		segment.push(observation);
 	}
 	if (segment.length > 0) {
-		smoothed.push(...smoothObservationSegment({ observations: segment }));
+		smoothed.push(
+			...smoothObservationSegment({
+				observations: segment,
+				trackingStrength: normalizedStrength,
+			}),
+		);
 	}
 	return smoothed;
 }
@@ -1159,6 +1207,7 @@ function smoothTrackedObservations({
 function coalesceMotionTrackingKeyframes({
 	trackedTransforms,
 	animateScale,
+	trackingStrength = DEFAULT_MOTION_TRACKING_STRENGTH,
 }: {
 	trackedTransforms: Array<
 		SubjectTrackingObservation & {
@@ -1166,11 +1215,23 @@ function coalesceMotionTrackingKeyframes({
 		}
 	>;
 	animateScale: boolean;
+	trackingStrength?: number;
 }): MotionTrackingTransformKeyframe[] {
 	if (trackedTransforms.length === 0) return [];
 	const keyframes: MotionTrackingTransformKeyframe[] = [];
 	let previousTracked: MotionTrackingTransformKeyframe | null = null;
-	const forcedSpacingSeconds = 0.9;
+	const normalizedStrength = normalizeMotionTrackingStrength(trackingStrength);
+	const forcedSpacingSeconds = lerpMotionTrackingSetting(
+		1.15,
+		0.35,
+		normalizedStrength,
+	);
+	const positionThresholdPx = lerpMotionTrackingSetting(
+		12,
+		3,
+		normalizedStrength,
+	);
+	const scaleThreshold = lerpMotionTrackingSetting(0.05, 0.012, normalizedStrength);
 
 	for (const [observationIndex, observation] of trackedTransforms.entries()) {
 		const isFirst = observationIndex === 0;
@@ -1182,9 +1243,11 @@ function coalesceMotionTrackingKeyframes({
 			!previousTracked ||
 			isFirst ||
 			isLast ||
-			Math.abs(observation.transform.position.x - previousTracked.position.x) >= 6 ||
-			Math.abs(observation.transform.position.y - previousTracked.position.y) >= 6 ||
-			(animateScale && Math.abs(nextScale - previousTracked.scale) >= 0.02) ||
+			Math.abs(observation.transform.position.x - previousTracked.position.x) >=
+				positionThresholdPx ||
+			Math.abs(observation.transform.position.y - previousTracked.position.y) >=
+				positionThresholdPx ||
+			(animateScale && Math.abs(nextScale - previousTracked.scale) >= scaleThreshold) ||
 			observation.time - previousTracked.time >= forcedSpacingSeconds;
 		if (!shouldInsert) continue;
 		keyframes.push({
@@ -1205,6 +1268,7 @@ function coalesceMotionTrackingKeyframes({
 function smoothTrackedTransformScales({
 	trackedTransforms,
 	animateScale,
+	trackingStrength = DEFAULT_MOTION_TRACKING_STRENGTH,
 }: {
 	trackedTransforms: Array<
 		SubjectTrackingObservation & {
@@ -1212,6 +1276,7 @@ function smoothTrackedTransformScales({
 		}
 	>;
 	animateScale: boolean;
+	trackingStrength?: number;
 }): Array<
 	SubjectTrackingObservation & {
 		transform: ReturnType<typeof derivePresetTransform>;
@@ -1225,8 +1290,9 @@ function smoothTrackedTransformScales({
 			},
 		}));
 	}
-	const maxScaleStep = 0.035;
-	const smoothing = 0.12;
+	const normalizedStrength = normalizeMotionTrackingStrength(trackingStrength);
+	const maxScaleStep = lerpMotionTrackingSetting(0.018, 0.07, normalizedStrength);
+	const smoothing = lerpMotionTrackingSetting(0.08, 0.4, normalizedStrength);
 	let previousScale = trackedTransforms[0]!.transform.scale;
 	return trackedTransforms.map((entry, index) => {
 		if (index === 0) {
@@ -1263,6 +1329,7 @@ export function buildMotionTrackingKeyframesFromObservations({
 	sourceHeight,
 	baseScale,
 	animateScale,
+	trackingStrength = DEFAULT_MOTION_TRACKING_STRENGTH,
 }: {
 	observations: SubjectTrackingObservation[];
 	canvasSize: { width: number; height: number };
@@ -1270,12 +1337,17 @@ export function buildMotionTrackingKeyframesFromObservations({
 	sourceHeight: number;
 	baseScale: number;
 	animateScale: boolean;
+	trackingStrength?: number;
 }): {
 	keyframes: MotionTrackingTransformKeyframe[];
 	sampleCount: number;
 	trackedSampleCount: number;
 } {
-	const smoothedObservations = smoothTrackedObservations({ observations });
+	const normalizedStrength = normalizeMotionTrackingStrength(trackingStrength);
+	const smoothedObservations = smoothTrackedObservations({
+		observations,
+		trackingStrength: normalizedStrength,
+	});
 	const trackedTransforms = smoothedObservations.flatMap((observation) => {
 		if (!observation.box) return [];
 		return [
@@ -1294,31 +1366,37 @@ export function buildMotionTrackingKeyframesFromObservations({
 	const smoothedTrackedTransforms = smoothTrackedTransformScales({
 		trackedTransforms,
 		animateScale,
+		trackingStrength: normalizedStrength,
 	});
 	return {
-		keyframes: smoothedTrackedTransforms.map((observation, observationIndex) => ({
-			id: generateUUID(),
-			time: Math.max(0, observation.time + observationIndex * 1e-6),
-			position: {
-				x: observation.transform.position.x,
-				y: observation.transform.position.y,
-			},
-			scale: animateScale
-				? observation.transform.scale
-				: (smoothedTrackedTransforms[0]?.transform.scale ?? baseScale),
-			subjectCenter: observation.box
-				? {
-						x: observation.box.anchorX ?? observation.box.centerX,
-						y: observation.box.anchorY ?? observation.box.centerY,
-				  }
-				: undefined,
-			subjectSize: observation.box
-				? {
-						width: observation.box.fitWidth ?? observation.box.width,
-						height: observation.box.fitHeight ?? observation.box.height,
-				  }
-				: undefined,
-		})),
+		keyframes: coalesceMotionTrackingKeyframes({
+			trackedTransforms: smoothedTrackedTransforms,
+			animateScale,
+			trackingStrength: normalizedStrength,
+		}).map((keyframe) => {
+			const observation =
+				smoothedTrackedTransforms.find(
+					(entry) => Math.abs(entry.time - keyframe.time) <= 1e-3,
+				) ?? null;
+			return {
+				...keyframe,
+				scale: animateScale
+					? keyframe.scale
+					: (smoothedTrackedTransforms[0]?.transform.scale ?? baseScale),
+				subjectCenter: observation?.box
+					? {
+							x: observation.box.anchorX ?? observation.box.centerX,
+							y: observation.box.anchorY ?? observation.box.centerY,
+					  }
+					: undefined,
+				subjectSize: observation?.box
+					? {
+							width: observation.box.fitWidth ?? observation.box.width,
+							height: observation.box.fitHeight ?? observation.box.height,
+					  }
+					: undefined,
+			};
+		}),
 		sampleCount: observations.length,
 		trackedSampleCount: smoothedTrackedTransforms.length,
 	};
@@ -2073,7 +2151,8 @@ export async function analyzeGeneratedClipMotionTracking({
 	targetTransform,
 	targetSubjectHint,
 	targetSubjectSeed,
-	animateScale = true,
+	animateScale = false,
+	trackingStrength = DEFAULT_MOTION_TRACKING_STRENGTH,
 	signal,
 }: {
 	asset: MediaAsset;
@@ -2085,6 +2164,7 @@ export async function analyzeGeneratedClipMotionTracking({
 	targetSubjectHint?: TrackingSubjectHint | null;
 	targetSubjectSeed?: VideoReframeSubjectSeed | null;
 	animateScale?: boolean;
+	trackingStrength?: number;
 	signal?: AbortSignal;
 }): Promise<{
 	keyframes: MotionTrackingTransformKeyframe[];
@@ -2290,6 +2370,7 @@ export async function analyzeGeneratedClipMotionTracking({
 				sourceHeight,
 				baseScale,
 				animateScale,
+				trackingStrength,
 			});
 			return {
 				keyframes: result.keyframes,

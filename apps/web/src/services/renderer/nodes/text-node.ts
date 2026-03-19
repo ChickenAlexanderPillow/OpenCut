@@ -277,6 +277,8 @@ type CaptionSplitViewport = {
 	height: number;
 };
 
+const UNBALANCED_BOTTOM_SLOT_DIVIDER_GAP = 20;
+
 export class TextNode extends BaseNode<TextNodeParams> {
 	private cachedCaptionTimingsRef: Array<{
 		word: string;
@@ -484,6 +486,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			Boolean(splitViewport) &&
 			splitViewport?.slotId === "bottom" &&
 			anchorsToBottomEdge &&
+			splitViewport?.viewportBalance !== "unbalanced" &&
 			splitViewport.y + splitViewport.height >= this.params.canvasHeight;
 		const placementCanvasWidth = shouldUseCanvasBottomPlacement
 			? this.params.canvasWidth
@@ -497,6 +500,12 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		const placementOffsetY = shouldUseCanvasBottomPlacement
 			? 0
 			: (splitViewport?.y ?? 0);
+		const shouldAnchorUnbalancedBottomSlotToDivider =
+			Boolean(splitViewport) &&
+			splitViewport?.slotId === "bottom" &&
+			splitViewport?.viewportBalance === "unbalanced" &&
+			anchorsToBottomEdge &&
+			!shouldUseCanvasBottomPlacement;
 		const anchoredPositionY = resolveSafeAreaAnchoredPositionY({
 			canvasWidth: placementCanvasWidth,
 			canvasHeight: placementCanvasHeight,
@@ -508,11 +517,15 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			anchorToSafeAreaTop: captionStyle.anchorToSafeAreaTop ?? false,
 			safeAreaTopOffset: captionStyle.safeAreaTopOffset ?? 0,
 		});
+		const resolvedPositionY = shouldAnchorUnbalancedBottomSlotToDivider
+			? -visualRect.top * this.params.transform.scale +
+				UNBALANCED_BOTTOM_SLOT_DIVIDER_GAP
+			: anchoredPositionY;
 		const placement = resolveTextPlacement({
 			canvasWidth: placementCanvasWidth,
 			canvasHeight: placementCanvasHeight,
 			positionX: this.params.transform.position.x + placementCanvasWidth / 2,
-			positionY: anchoredPositionY,
+			positionY: resolvedPositionY,
 			scale: this.params.transform.scale,
 			visualRect,
 			fitInCanvas,

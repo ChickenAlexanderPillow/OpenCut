@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
+	applyVideoReframeTransformAdjustment,
 	applyPresetToVideoAngleSection,
 	applySplitScreenToVideoAngleSection,
 	applySelectedReframePresetPreviewToTracks,
 	buildDefaultVideoSplitScreenBindings,
+	buildTransformForSourceCenter,
+	deriveVideoReframeTransformAdjustment,
 	deriveVideoReframeTransformFromSplitSlotTransform,
 	deriveVideoAngleSections,
+	deriveVideoSplitScreenSlotAdjustmentFromTransform,
+	getSourceCenterForTransform,
 	deriveVideoSplitScreenSectionRanges,
 	getVideoSplitScreenDividers,
 	getVideoSplitScreenViewports,
@@ -23,6 +28,7 @@ import {
 	resolveVideoReframeTransform,
 	resolveVideoReframeTransformFromState,
 } from "../video-reframe";
+import { resolveMotionTrackedReframeTransform } from "../motion-tracking";
 import type { TimelineTrack, VideoElement } from "@/types/timeline";
 
 const baseElement: VideoElement = {
@@ -231,6 +237,83 @@ test("uses the default preset before the first switch", () => {
 		expect(transform.position.y).toBeCloseTo(-28, 6);
 		expect(transform.scale).toBeCloseTo(2.2, 6);
 		expect(transform.rotate).toBe(12);
+	});
+
+	test("preset manual scale keeps the framing center fixed", () => {
+		const trackedPreset = {
+			...baseElement.reframePresets![1]!,
+			motionTracking: {
+				enabled: true,
+				mode: "subject-single-v1" as const,
+				source: "baked-keyframes" as const,
+				animateScale: true,
+				keyframes: [
+					{
+						id: "mt-1",
+						time: 0,
+						position: { x: 120, y: -40 },
+						scale: 2.5,
+					},
+				],
+			},
+		};
+		const trackedTransform = resolveMotionTrackedReframeTransform({
+			baseTransform: trackedPreset.transform,
+			motionTracking: trackedPreset.motionTracking,
+			localTime: 5,
+		});
+		const containScale = Math.min(1080 / 1920, 1920 / 1080);
+		const sourceCenter = getSourceCenterForTransform({
+			transform: trackedTransform,
+			baseScale: containScale,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+		});
+		const scaledTransform = buildTransformForSourceCenter({
+			sourceCenter,
+			scale: trackedTransform.scale * 1.25,
+			baseScale: containScale,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			rotate: 12,
+		});
+		const adjustment = deriveVideoReframeTransformAdjustment({
+			baseTransform: trackedTransform,
+			finalTransform: scaledTransform,
+		});
+		const adjustedTransform = applyVideoReframeTransformAdjustment({
+			transform: trackedTransform,
+			adjustment,
+		});
+
+		expect(adjustedTransform.position.x).toBeCloseTo(scaledTransform.position.x, 6);
+		expect(adjustedTransform.position.y).toBeCloseTo(scaledTransform.position.y, 6);
+		expect(adjustedTransform.scale).toBeCloseTo(scaledTransform.scale, 6);
+
+		const resolved = resolveVideoReframeTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: [
+				baseElement.reframePresets![0]!,
+				{
+					...trackedPreset,
+					transformAdjustment: adjustment,
+				},
+			],
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+		});
+		const resolvedCenter = getSourceCenterForTransform({
+			transform: resolved,
+			baseScale: containScale,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+		});
+
+		expect(resolvedCenter.x).toBeCloseTo(sourceCenter.x, 6);
+		expect(resolvedCenter.y).toBeCloseTo(sourceCenter.y, 6);
+		expect(resolved.scale).toBeCloseTo(scaledTransform.scale, 6);
 	});
 
 	test("replaces a switch when inserting at the same timestamp", () => {
@@ -752,6 +835,211 @@ test("uses the default preset before the first switch", () => {
 		expect(sourceCenter.x).toBeCloseTo(300, 5);
 		expect(sourceCenter.y).toBeCloseTo(213.80009144947405, 5);
 		expect(resolved.scale).toBeLessThan(2.5);
+	});
+
+	test("split-screen manual Y adjustment does not introduce X drift", () => {
+		const trackedPresets = [
+			baseElement.reframePresets![0]!,
+			{
+				...baseElement.reframePresets![1]!,
+				motionTracking: {
+					enabled: true,
+					mode: "subject-single-v1",
+					source: "baked-keyframes",
+					animateScale: true,
+					keyframes: [
+						{
+							id: "track-1",
+							time: 0,
+							position: { x: 120, y: -40 },
+							scale: 2.5,
+							subjectCenter: { x: 300, y: 240 },
+							subjectSize: { width: 240, height: 420 },
+						},
+					],
+				},
+			},
+		];
+		const autoTransform = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: trackedPresets,
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: "subject",
+			},
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+		});
+		const finalTransform = {
+			position: {
+				x: autoTransform.position.x,
+				y: autoTransform.position.y + 120,
+			},
+			scale: autoTransform.scale,
+		};
+		const adjustment = deriveVideoSplitScreenSlotAdjustmentFromTransform({
+			baseTransform: baseElement.transform,
+			adjustmentBaseTransform: autoTransform,
+			finalTransform,
+			slotId: "bottom",
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+		});
+		const resolved = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: trackedPresets,
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: "subject",
+				transformAdjustmentsBySlotId: {
+					bottom: adjustment,
+				},
+			},
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+		});
+
+		expect(resolved.position.x).toBeCloseTo(finalTransform.position.x, 6);
+		expect(resolved.position.y).toBeCloseTo(finalTransform.position.y, 6);
+		expect(resolved.scale).toBeCloseTo(finalTransform.scale, 6);
+	});
+
+	test("split-screen manual scale keeps the slot framing center fixed", () => {
+		const trackedPresets = [
+			baseElement.reframePresets![0]!,
+			{
+				...baseElement.reframePresets![1]!,
+				motionTracking: {
+					enabled: true,
+					mode: "subject-single-v1",
+					source: "baked-keyframes",
+					animateScale: true,
+					keyframes: [
+						{
+							id: "track-1",
+							time: 0,
+							position: { x: 120, y: -40 },
+							scale: 2.5,
+							subjectCenter: { x: 300, y: 240 },
+							subjectSize: { width: 240, height: 420 },
+						},
+					],
+				},
+			},
+		];
+		const viewport = getVideoSplitScreenViewports({
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+			width: 1080,
+			height: 1920,
+		}).get("bottom");
+		expect(viewport).toBeDefined();
+		if (!viewport) return;
+		const autoTransform = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: trackedPresets,
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: "subject",
+			},
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+		});
+		const slotCoverScale = Math.max(
+			viewport.width / 1920,
+			viewport.height / 1080,
+		);
+		const sourceCenter = getSourceCenterForTransform({
+			transform: autoTransform,
+			baseScale: slotCoverScale,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+		});
+		const scaledTransform = buildTransformForSourceCenter({
+			sourceCenter,
+			scale: autoTransform.scale * 1.25,
+			baseScale: slotCoverScale,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			rotate: autoTransform.rotate,
+		});
+		const adjustment = deriveVideoSplitScreenSlotAdjustmentFromTransform({
+			baseTransform: baseElement.transform,
+			adjustmentBaseTransform: autoTransform,
+			finalTransform: scaledTransform,
+			slotId: "bottom",
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+		});
+		const resolved = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: trackedPresets,
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: "subject",
+				transformAdjustmentsBySlotId: {
+					bottom: adjustment,
+				},
+			},
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+		});
+		const autoCenter = getSourceCenterForTransform({
+			transform: autoTransform,
+			baseScale: slotCoverScale,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+		});
+		const resolvedCenter = getSourceCenterForTransform({
+			transform: resolved,
+			baseScale: slotCoverScale,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+		});
+
+		expect(resolvedCenter.x).toBeCloseTo(autoCenter.x, 5);
+		expect(resolvedCenter.y).toBeCloseTo(autoCenter.y, 5);
+		expect(resolved.scale).toBeCloseTo(scaledTransform.scale, 6);
 	});
 
 	test("converts split-slot framing into equivalent full-screen framing", () => {

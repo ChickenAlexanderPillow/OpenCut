@@ -5,12 +5,21 @@ import { PanelView } from "./base-view";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
-	DropdownMenuCheckboxItem,
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+	Dialog,
+	DialogBody,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
 import { cn } from "@/utils/ui";
 import { useEditor } from "@/hooks/use-editor";
 import { useElementSelection } from "@/hooks/timeline/element/use-element-selection";
@@ -24,9 +33,13 @@ import {
 	getVideoElementSourceRange,
 } from "@/lib/reframe/subject-aware";
 import {
+	applyVideoReframeTransformAdjustment,
 	buildDefaultVideoSplitScreenBindings,
+	buildTransformForSourceCenter,
+	deriveVideoReframeTransformAdjustment,
 	deriveVideoSplitScreenSlotAdjustmentFromTransform,
 	deriveVideoAngleSections,
+	getSourceCenterForTransform,
 	getVideoSplitScreenVariantKey,
 	getVideoAngleSectionAtTime,
 	getVideoAngleSectionByStartTime,
@@ -34,25 +47,29 @@ import {
 	getVideoReframeSectionAtTime,
 	getVideoReframeSectionByStartTime,
 	getVideoSplitScreenSectionAtTime,
+	getVideoSplitScreenViewports,
 	normalizeVideoReframeState,
 	rebuildVideoReframeStateFromAngleSections,
 	replaceOrInsertReframeSwitch,
 	resolveVideoSplitScreenSlotTransformFromState,
 } from "@/lib/reframe/video-reframe";
 import {
+	DEFAULT_MOTION_TRACKING_STRENGTH,
 	mergeMotionTrackingKeyframes,
+	normalizeMotionTrackingStrength,
 	offsetMotionTrackingKeyframes,
+	resolveMotionTrackedReframeTransform,
 } from "@/lib/reframe/motion-tracking";
 import {
 	ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS,
 } from "@/lib/reframe/split-slot-config";
 import {
-	ArrowUpDown,
 	CircleDot,
 	Ellipsis,
 	GripHorizontal,
 	Plus,
 	RefreshCw,
+	RotateCcw,
 	ScanFace,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -73,7 +90,7 @@ export function ReframeView() {
 				? ["timeline", "selection", "project", "media", "playback"]
 				: ["timeline", "selection", "project", "media"],
 	});
-	const { selectedElements } = useElementSelection();
+	const { selectedElements, selectElement } = useElementSelection();
 	const selectedPresetIdByElementId = useReframeStore(
 		(state) => state.selectedPresetIdByElementId,
 	);
@@ -88,6 +105,9 @@ export function ReframeView() {
 	);
 	const setSelectedSplitPreviewSlots = useReframeStore(
 		(state) => state.setSelectedSplitPreviewSlots,
+	);
+	const clearSelectedSplitPreviewSlots = useReframeStore(
+		(state) => state.clearSelectedSplitPreviewSlots,
 	);
 	const setSelectedSectionStartTime = useReframeStore(
 		(state) => state.setSelectedSectionStartTime,
@@ -210,6 +230,19 @@ export function ReframeView() {
 	const [trackingStatusByPresetId, setTrackingStatusByPresetId] = useState<
 		Record<string, { tone: "default" | "success" | "warning"; message: string }>
 	>({});
+	const [trackingSettingsPresetId, setTrackingSettingsPresetId] = useState<
+		string | null
+	>(null);
+	const [trackingSettingsElementRef, setTrackingSettingsElementRef] = useState<{
+		trackId: string;
+		elementId: string;
+	} | null>(null);
+	const [trackingSettingsPresetSnapshot, setTrackingSettingsPresetSnapshot] =
+		useState<VideoReframePreset | null>(null);
+	const [trackingStrengthDraft, setTrackingStrengthDraft] = useState(
+		DEFAULT_MOTION_TRACKING_STRENGTH,
+	);
+	const [trackingAnimateScaleDraft, setTrackingAnimateScaleDraft] = useState(true);
 	const [selectedSplitSectionId, setSelectedSplitSectionId] = useState<
 		string | null
 	>(null);
@@ -259,7 +292,10 @@ export function ReframeView() {
 			preset.transform.position.x.toFixed(3),
 			preset.transform.position.y.toFixed(3),
 			preset.transform.scale.toFixed(4),
-			preset.motionTracking?.animateScale ?? true ? "scale:1" : "scale:0",
+			preset.motionTracking?.animateScale ?? false ? "scale:1" : "scale:0",
+			`strength:${normalizeMotionTrackingStrength(
+				preset.motionTracking?.trackingStrength,
+			).toFixed(2)}`,
 		].join("|");
 	};
 	const buildMotionTrackingPresetSignature = ({
@@ -272,7 +308,10 @@ export function ReframeView() {
 			preset.transform.position.x.toFixed(3),
 			preset.transform.position.y.toFixed(3),
 			preset.transform.scale.toFixed(4),
-			preset.motionTracking?.animateScale ?? true ? "scale:1" : "scale:0",
+			preset.motionTracking?.animateScale ?? false ? "scale:1" : "scale:0",
+			`strength:${normalizeMotionTrackingStrength(
+				preset.motionTracking?.trackingStrength,
+			).toFixed(2)}`,
 		].join("|");
 	const getTrackingSubjectHint = ({
 		preset,
@@ -368,6 +407,52 @@ export function ReframeView() {
 		}
 		return `${bakedKeyframeCount} baked keyframes`;
 	};
+	const formatTrackingStrengthLabel = (trackingStrength: number) => {
+		const percentage = Math.round(
+			normalizeMotionTrackingStrength(trackingStrength) * 100,
+		);
+		if (percentage <= 35) return `${percentage}% · smoother`;
+		if (percentage >= 70) return `${percentage}% · more reactive`;
+		return `${percentage}% · balanced`;
+	};
+	const openTrackingSettingsDialog = (preset: VideoReframePreset) => {
+		setTrackingSettingsPresetId(preset.id);
+		setTrackingSettingsPresetSnapshot(preset);
+		setTrackingSettingsElementRef(
+			normalizedVideo
+				? {
+						trackId: normalizedVideo.trackId,
+						elementId: normalizedVideo.element.id,
+				  }
+				: null,
+		);
+		setTrackingStrengthDraft(
+			normalizeMotionTrackingStrength(preset.motionTracking?.trackingStrength),
+		);
+		setTrackingAnimateScaleDraft(preset.motionTracking?.animateScale ?? false);
+		if (normalizedVideo) {
+			setSelectedPresetId({
+				elementId: normalizedVideo.element.id,
+				presetId: preset.id,
+			});
+		}
+	};
+	const trackingSettingsPreset =
+		trackingSettingsPresetId && normalizedVideo
+			? (normalizedVideo.element.reframePresets?.find(
+					(preset) => preset.id === trackingSettingsPresetId,
+				) ??
+				(trackingSettingsPresetSnapshot?.id === trackingSettingsPresetId
+					? trackingSettingsPresetSnapshot
+					: null))
+			: (trackingSettingsPresetSnapshot?.id === trackingSettingsPresetId
+					? trackingSettingsPresetSnapshot
+					: null);
+	const getDisplayedPresetAdjustment = (preset: VideoReframePreset) => ({
+		x: preset.manualTransformAdjustment?.positionOffset.x ?? 0,
+		y: preset.manualTransformAdjustment?.positionOffset.y ?? 0,
+		scale: preset.manualTransformAdjustment?.scaleMultiplier ?? 1,
+	});
 	const handleAnalyzeReframes = async () => {
 		if (!normalizedVideo) return;
 		if (!selectedMediaAsset || selectedMediaAsset.type !== "video") {
@@ -559,7 +644,10 @@ export function ReframeView() {
 							...sharedCoveredMotionTracking,
 							enabled: true,
 							cacheKey: cacheKey ?? sharedCoveredMotionTracking.cacheKey,
-							animateScale: preset.motionTracking?.animateScale ?? true,
+							animateScale: preset.motionTracking?.animateScale ?? false,
+							trackingStrength: normalizeMotionTrackingStrength(
+								preset.motionTracking?.trackingStrength,
+							),
 						},
 					},
 				});
@@ -623,7 +711,10 @@ export function ReframeView() {
 				targetTransform: analysisPreset.transform,
 				targetSubjectHint: getTrackingSubjectHint({ preset: analysisPreset }),
 				targetSubjectSeed: analysisPreset.subjectSeed,
-				animateScale: analysisPreset.motionTracking?.animateScale ?? true,
+				animateScale: analysisPreset.motionTracking?.animateScale ?? false,
+				trackingStrength: normalizeMotionTrackingStrength(
+					analysisPreset.motionTracking?.trackingStrength,
+				),
 				signal: controller.signal,
 			});
 			const mergedKeyframes =
@@ -647,7 +738,10 @@ export function ReframeView() {
 							mode: "subject-single-v1",
 							source: "baked-keyframes",
 							lastAnalyzedAt: new Date().toISOString(),
-							animateScale: analysisPreset.motionTracking?.animateScale ?? true,
+							animateScale: analysisPreset.motionTracking?.animateScale ?? false,
+							trackingStrength: normalizeMotionTrackingStrength(
+								analysisPreset.motionTracking?.trackingStrength,
+							),
 							cacheKey: cacheKey ?? undefined,
 							sourceAssetId: desiredScope.assetId,
 							sourceStartTime: desiredScope.startTime,
@@ -739,14 +833,7 @@ export function ReframeView() {
 				trackId: normalizedVideo.trackId,
 				elementId: normalizedVideo.element.id,
 				presetId: preset.id,
-				updates: {
-					motionTracking: preset.motionTracking
-						? {
-								...preset.motionTracking,
-								enabled: false,
-						  }
-						: undefined,
-				},
+				updates: buildFrozenTrackedTransformUpdates({ preset }),
 			});
 			return;
 		}
@@ -762,14 +849,17 @@ export function ReframeView() {
 				elementId: normalizedVideo.element.id,
 				presetId: preset.id,
 				updates: {
-					motionTracking: {
-						...sharedCachedMotionTracking,
-						enabled: true,
-						cacheKey: cacheKey ?? sharedCachedMotionTracking.cacheKey,
-						animateScale: preset.motionTracking?.animateScale ?? true,
+						motionTracking: {
+							...sharedCachedMotionTracking,
+							enabled: true,
+							cacheKey: cacheKey ?? sharedCachedMotionTracking.cacheKey,
+							animateScale: preset.motionTracking?.animateScale ?? false,
+							trackingStrength: normalizeMotionTrackingStrength(
+								preset.motionTracking?.trackingStrength,
+							),
+						},
 					},
-				},
-			});
+				});
 			setTrackingStatusByPresetId((current) => ({
 				...current,
 				[preset.id]: {
@@ -804,12 +894,15 @@ export function ReframeView() {
 				elementId: normalizedVideo.element.id,
 				presetId: preset.id,
 				updates: {
-					motionTracking: {
-						...existingMotionTracking,
-						enabled: true,
+						motionTracking: {
+							...existingMotionTracking,
+							enabled: true,
+							trackingStrength: normalizeMotionTrackingStrength(
+								existingMotionTracking.trackingStrength,
+							),
+						},
 					},
-				},
-			});
+				});
 			setTrackingStatusByPresetId((current) => ({
 				...current,
 				[preset.id]: {
@@ -822,6 +915,70 @@ export function ReframeView() {
 			return;
 		}
 		await handleAnalyzeMotionTracking({ preset });
+	};
+	const buildFrozenTrackedTransformUpdates = ({
+		preset,
+	}: {
+		preset: VideoReframePreset;
+	}) => {
+		if (!preset.motionTracking?.enabled) {
+			return {
+				motionTracking: preset.motionTracking,
+			};
+		}
+		const frozenTrackedTransform = resolveMotionTrackedReframeTransform({
+			baseTransform: preset.transform,
+			motionTracking: preset.motionTracking,
+			localTime,
+		});
+		return {
+			transform: frozenTrackedTransform,
+			motionTracking: {
+				...preset.motionTracking,
+				enabled: false,
+			},
+		};
+	};
+	const saveTrackingSettings = async () => {
+		if (!trackingSettingsPreset || !normalizedVideo) return;
+		const nextTrackingStrength = normalizeMotionTrackingStrength(
+			trackingStrengthDraft,
+		);
+		const nextMotionTracking: VideoMotionTracking = trackingSettingsPreset.motionTracking
+			? {
+					...trackingSettingsPreset.motionTracking,
+					animateScale: trackingAnimateScaleDraft,
+					trackingStrength: nextTrackingStrength,
+					cacheKey: undefined,
+				}
+			: {
+					enabled: false,
+					mode: "subject-single-v1",
+					source: "baked-keyframes",
+					animateScale: trackingAnimateScaleDraft,
+					trackingStrength: nextTrackingStrength,
+					keyframes: [],
+				};
+		const nextPreset = {
+			...trackingSettingsPreset,
+			motionTracking: nextMotionTracking,
+		};
+		editor.timeline.updateVideoReframePreset({
+			trackId: normalizedVideo.trackId,
+			elementId: normalizedVideo.element.id,
+			presetId: trackingSettingsPreset.id,
+			updates: {
+				motionTracking: nextMotionTracking,
+			},
+		});
+		setTrackingSettingsPresetId(null);
+		setTrackingSettingsElementRef(null);
+		setTrackingSettingsPresetSnapshot(null);
+		setTrackingAnimateScaleDraft(false);
+		await handleAnalyzeMotionTracking({
+			preset: nextPreset,
+			forceFresh: true,
+		});
 	};
 
 	const splitScreen = normalizedVideo?.element.splitScreen ?? null;
@@ -911,10 +1068,12 @@ export function ReframeView() {
 		splitSectionAtFocus?.enabled !== false ? splitSectionAtFocus : null;
 	const selectedSplitSectionEnabled = editingSplitSection?.enabled !== false;
 	const activeSplitSection =
-		previewSelectedPresetId || !previewSplitBindings?.length
-			? selectedSplitSectionEnabled
-				? editingSplitSection
-				: activeFocusedSplitSection
+		previewSelectedPresetId
+			? null
+			: !previewSplitBindings?.length
+				? selectedSplitSectionEnabled
+					? editingSplitSection
+					: activeFocusedSplitSection
 			: {
 					id: "__preview-split__",
 					startTime: focusedSectionStartTime ?? 0,
@@ -940,6 +1099,25 @@ export function ReframeView() {
 		},
 		[],
 	);
+	useEffect(() => {
+		if (
+			!trackingSettingsPresetId ||
+			!trackingSettingsElementRef ||
+			selectedElements.some(
+				(selection) =>
+					selection.trackId === trackingSettingsElementRef.trackId &&
+					selection.elementId === trackingSettingsElementRef.elementId,
+			)
+		) {
+			return;
+		}
+		selectElement(trackingSettingsElementRef);
+	}, [
+		selectElement,
+		selectedElements,
+		trackingSettingsElementRef,
+		trackingSettingsPresetId,
+	]);
 
 	useEffect(() => {
 		if (!normalizedVideo) return;
@@ -1050,6 +1228,12 @@ export function ReframeView() {
 			},
 			pushHistory,
 		});
+		if (pushHistory) {
+			clearSelectedSplitPreviewSlots({
+				elementId: normalizedVideo.element.id,
+			});
+			return;
+		}
 		setSelectedSplitPreviewSlots({
 			elementId: normalizedVideo.element.id,
 			slots,
@@ -1149,29 +1333,8 @@ export function ReframeView() {
 				),
 			},
 		});
-		setSelectedSplitPreviewSlots({
+		clearSelectedSplitPreviewSlots({
 			elementId: normalizedVideo.element.id,
-			slots: editableSplitBindings,
-			viewportBalance,
-		});
-	};
-
-	const swapSplitBindings = () => {
-		if (!normalizedVideo) return;
-		const bindings = editableSplitBindings;
-		if (bindings.length < 2) return;
-		const swappedBindings = bindings.map((binding, index, list) => {
-			const sourceBinding = list[(index + 1) % list.length] ?? binding;
-			return {
-				...sourceBinding,
-				slotId: binding.slotId,
-				transformAdjustmentsBySlotId: sourceBinding.transformAdjustmentsBySlotId
-					? { ...sourceBinding.transformAdjustmentsBySlotId }
-					: undefined,
-			};
-		});
-		updateBaseSplitBindings({
-			slots: swappedBindings,
 		});
 	};
 
@@ -1248,6 +1411,59 @@ export function ReframeView() {
 		});
 	};
 
+	const getAutoSplitSlotTransform = (
+		binding: VideoSplitScreenSlotBinding,
+	) => {
+		if (
+			!normalizedVideo ||
+			selectedMediaAsset?.type !== "video" ||
+			!Number.isFinite(selectedMediaAsset.width) ||
+			!Number.isFinite(selectedMediaAsset.height)
+		) {
+			const slotPreset =
+				normalizedVideo?.element.reframePresets?.find(
+					(preset) => preset.id === binding.presetId,
+				) ?? null;
+			return {
+				position: slotPreset?.transform.position ?? { x: 0, y: 0 },
+				scale:
+					slotPreset?.transform.scale ??
+					normalizedVideo?.element.transform.scale ??
+					1,
+			};
+		}
+		const projectCanvas = editor.project.getActive().settings.canvasSize;
+		return resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: normalizedVideo.element.transform,
+			duration: normalizedVideo.element.duration,
+			reframePresets: normalizedVideo.element.reframePresets,
+			reframeSwitches: normalizedVideo.element.reframeSwitches,
+			defaultReframePresetId: normalizedVideo.element.defaultReframePresetId,
+			localTime,
+			slot: {
+				slotId: binding.slotId,
+				presetId: binding.presetId ?? null,
+			},
+			canvasWidth: projectCanvas.width,
+			canvasHeight: projectCanvas.height,
+			sourceWidth: selectedMediaAsset.width,
+			sourceHeight: selectedMediaAsset.height,
+			layoutPreset: splitScreen?.layoutPreset ?? "top-bottom",
+			viewportBalance: effectiveSplitViewportBalance,
+		});
+	};
+
+	const getSplitSlotManualDelta = (binding: VideoSplitScreenSlotBinding) => {
+		const liveTransform = getSplitSlotTransform(binding);
+		const autoTransform = getAutoSplitSlotTransform(binding);
+		return {
+			x: liveTransform.position.x - autoTransform.position.x,
+			y: liveTransform.position.y - autoTransform.position.y,
+			scale:
+				liveTransform.scale / Math.max(1e-6, autoTransform.scale) - 1,
+		};
+	};
+
 	const updateSplitSlotTransform = ({
 		slotId,
 		updates,
@@ -1273,39 +1489,61 @@ export function ReframeView() {
 		const sourceWidth = selectedMediaAsset.width!;
 		const sourceHeight = selectedMediaAsset.height!;
 		const projectCanvas = editor.project.getActive().settings.canvasSize;
-		const applyOverride = (bindings: VideoSplitScreenSlotBinding[]) =>
+		const applyAdjustment = (bindings: VideoSplitScreenSlotBinding[]) =>
 			bindings.map((binding) => {
 				if (binding.slotId !== slotId) {
 					return binding;
 				}
-				const currentTransform = getSplitSlotTransform(binding);
-				const nextTransform = {
+				const autoTransform = getAutoSplitSlotTransform(binding);
+				const currentManualDelta = getSplitSlotManualDelta(binding);
+				const translatedTransform = {
 					position: {
-						x: updates.x ?? currentTransform.position.x,
-						y: updates.y ?? currentTransform.position.y,
+						x: autoTransform.position.x + (updates.x ?? currentManualDelta.x),
+						y: autoTransform.position.y + (updates.y ?? currentManualDelta.y),
 					},
-					scale: updates.scale ?? currentTransform.scale,
+					scale: autoTransform.scale,
 				};
-				const baseResolvedTransform =
-					resolveVideoSplitScreenSlotTransformFromState({
-						baseTransform: normalizedVideo.element.transform,
-						duration: normalizedVideo.element.duration,
-						reframePresets: normalizedVideo.element.reframePresets,
-						reframeSwitches: normalizedVideo.element.reframeSwitches,
-						defaultReframePresetId:
-							normalizedVideo.element.defaultReframePresetId,
-						localTime,
-						slot: {
-							slotId: binding.slotId,
-							presetId: binding.presetId ?? null,
-						},
+				const viewport = getVideoSplitScreenViewports({
+					layoutPreset: splitScreen?.layoutPreset ?? "top-bottom",
+					viewportBalance: effectiveSplitViewportBalance,
+					width: projectCanvas.width,
+					height: projectCanvas.height,
+				}).get(binding.slotId);
+				const nextScale =
+					autoTransform.scale *
+					Math.max(0.05, 1 + (updates.scale ?? currentManualDelta.scale));
+				const nextTransform = {
+					position: translatedTransform.position,
+					scale: nextScale,
+				};
+				if (viewport) {
+					const slotCoverScale = Math.max(
+						viewport.width / Math.max(1, sourceWidth),
+						viewport.height / Math.max(1, sourceHeight),
+					);
+					const sourceCenter = getSourceCenterForTransform({
+						transform: translatedTransform,
+						baseScale: slotCoverScale,
+						sourceWidth,
+						sourceHeight,
 					});
+					const centeredTransform = buildTransformForSourceCenter({
+						sourceCenter,
+						scale: nextScale,
+						baseScale: slotCoverScale,
+						sourceWidth,
+						sourceHeight,
+						rotate: normalizedVideo.element.transform.rotate,
+					});
+					nextTransform.position = centeredTransform.position;
+				}
 				return withBindingSlotAdjustment({
 					binding,
 					transformAdjustment:
 						deriveVideoSplitScreenSlotAdjustmentFromTransform({
-							baseTransform: baseResolvedTransform,
+							baseTransform: normalizedVideo.element.transform,
 							finalTransform: nextTransform,
+							adjustmentBaseTransform: autoTransform,
 							slotId: binding.slotId,
 							layoutPreset: splitScreen?.layoutPreset ?? "top-bottom",
 							viewportBalance: effectiveSplitViewportBalance,
@@ -1318,7 +1556,7 @@ export function ReframeView() {
 			});
 
 		updateBaseSplitBindings({
-			slots: applyOverride(
+			slots: applyAdjustment(
 				splitScreen?.slots ?? buildInitialSplitScreen().slots,
 			),
 			pushHistory,
@@ -1340,21 +1578,98 @@ export function ReframeView() {
 	}) => {
 		if (!normalizedVideo) return;
 		activatePresetPreview({ presetId: preset.id });
+		const currentDisplayedAdjustment = getDisplayedPresetAdjustment(preset);
+		const nextDisplayedAdjustment = {
+			x: updates.x ?? currentDisplayedAdjustment.x,
+			y: updates.y ?? currentDisplayedAdjustment.y,
+			scale: updates.scale ?? currentDisplayedAdjustment.scale,
+		};
 		const currentAdjustment = preset.transformAdjustment ?? {
 			positionOffset: { x: 0, y: 0 },
 			scaleMultiplier: 1,
 		};
+		if (
+			selectedMediaAsset?.type === "video" &&
+			Number.isFinite(selectedMediaAsset.width) &&
+			Number.isFinite(selectedMediaAsset.height)
+		) {
+			const sourceWidth = Number(selectedMediaAsset.width);
+			const sourceHeight = Number(selectedMediaAsset.height);
+			const trackedTransform = resolveMotionTrackedReframeTransform({
+				baseTransform: preset.transform,
+				motionTracking: preset.motionTracking,
+				localTime,
+			});
+			const currentTransform = applyVideoReframeTransformAdjustment({
+				transform: trackedTransform,
+				adjustment: currentAdjustment,
+			});
+			const translatedTransform = {
+				position: {
+					x: trackedTransform.position.x + nextDisplayedAdjustment.x,
+					y: trackedTransform.position.y + nextDisplayedAdjustment.y,
+				},
+				scale: currentTransform.scale,
+			};
+			const nextScale = trackedTransform.scale * nextDisplayedAdjustment.scale;
+			const projectCanvas = editor.project.getActive().settings.canvasSize;
+			const fullContainScale = Math.min(
+				projectCanvas.width / Math.max(1, sourceWidth),
+				projectCanvas.height / Math.max(1, sourceHeight),
+			);
+			const sourceCenter = getSourceCenterForTransform({
+				transform: translatedTransform,
+				baseScale: fullContainScale,
+				sourceWidth,
+				sourceHeight,
+			});
+			const centeredTransform = buildTransformForSourceCenter({
+				sourceCenter,
+				scale: nextScale,
+				baseScale: fullContainScale,
+				sourceWidth,
+				sourceHeight,
+				rotate: normalizedVideo.element.transform.rotate,
+			});
+			editor.timeline.updateVideoReframePreset({
+				trackId: normalizedVideo.trackId,
+				elementId: normalizedVideo.element.id,
+				presetId: preset.id,
+				updates: {
+					manualTransformAdjustment: {
+						positionOffset: {
+							x: nextDisplayedAdjustment.x,
+							y: nextDisplayedAdjustment.y,
+						},
+						scaleMultiplier: nextDisplayedAdjustment.scale,
+					},
+					transformAdjustment: deriveVideoReframeTransformAdjustment({
+						baseTransform: trackedTransform,
+						finalTransform: centeredTransform,
+					}),
+				},
+				pushHistory,
+			});
+			return;
+		}
 		editor.timeline.updateVideoReframePreset({
 			trackId: normalizedVideo.trackId,
 			elementId: normalizedVideo.element.id,
 			presetId: preset.id,
 			updates: {
+				manualTransformAdjustment: {
+					positionOffset: {
+						x: nextDisplayedAdjustment.x,
+						y: nextDisplayedAdjustment.y,
+					},
+					scaleMultiplier: nextDisplayedAdjustment.scale,
+				},
 				transformAdjustment: {
 					positionOffset: {
-						x: updates.x ?? currentAdjustment.positionOffset.x,
-						y: updates.y ?? currentAdjustment.positionOffset.y,
+						x: nextDisplayedAdjustment.x,
+						y: nextDisplayedAdjustment.y,
 					},
-					scaleMultiplier: updates.scale ?? currentAdjustment.scaleMultiplier,
+					scaleMultiplier: nextDisplayedAdjustment.scale,
 				},
 			},
 			pushHistory,
@@ -1517,7 +1832,8 @@ export function ReframeView() {
 	]);
 
 	return (
-		<PanelView title="Reframe" contentClassName="space-y-3 pb-3">
+		<>
+			<PanelView title="Reframe" contentClassName="space-y-3 pb-3">
 			{!normalizedVideo ? (
 				<div className="text-muted-foreground rounded-md border p-3 text-sm">
 					Select a single video clip to edit reframe presets and switch markers.
@@ -1646,8 +1962,9 @@ export function ReframeView() {
 												{(() => {
 													const hasTrackedData =
 														(preset.motionTracking?.keyframes?.length ?? 0) > 0;
-													const canReanalyze =
-														preset.motionTracking?.enabled || hasTrackedData;
+													const isTrackingEnabled = Boolean(
+														preset.motionTracking?.enabled,
+													);
 													const isAnalyzingTracking = Boolean(
 														analyzingTrackingPresetIds[preset.id],
 													);
@@ -1655,31 +1972,24 @@ export function ReframeView() {
 												<Button
 													type="button"
 													size="icon"
-													variant={
-														preset.motionTracking?.enabled ? "secondary" : "ghost"
-													}
+													variant={isTrackingEnabled ? "secondary" : "ghost"}
 													className={cn(
 														"h-7 w-7",
 														isAnalyzingTracking && "pointer-events-none",
-														!preset.motionTracking?.enabled &&
-															(preset.motionTracking?.keyframes?.length ?? 0) > 0 &&
+														!isTrackingEnabled &&
+															hasTrackedData &&
 															"text-muted-foreground",
 													)}
 													title={
-														canReanalyze
-															? "Re-analyze motion tracking"
-															: "Analyze and enable motion tracking"
+														isTrackingEnabled
+															? "Disable motion tracking"
+															: hasTrackedData
+																? "Enable cached motion tracking"
+																: "Analyze and enable motion tracking"
 													}
 													onClick={(event) => {
 														event.stopPropagation();
-														void (
-															canReanalyze
-																? handleAnalyzeMotionTracking({
-																		preset,
-																		forceFresh: true,
-																  })
-																: toggleMotionTrackingForPreset({ preset })
-														);
+														void toggleMotionTrackingForPreset({ preset });
 													}}
 												>
 													<ScanFace
@@ -1691,23 +2001,6 @@ export function ReframeView() {
 												</Button>
 													);
 												})()}
-												<Button
-													type="button"
-													size="icon"
-													variant="ghost"
-													className="h-7 w-7"
-													disabled={Boolean(analyzingTrackingPresetIds[preset.id])}
-													title="Re-analyze motion tracking"
-													onClick={(event) => {
-														event.stopPropagation();
-														void handleAnalyzeMotionTracking({
-															preset,
-															forceFresh: true,
-														});
-													}}
-												>
-													<RefreshCw className="size-4" />
-												</Button>
 												<DropdownMenu>
 													<DropdownMenuTrigger asChild>
 														<Button
@@ -1732,14 +2025,9 @@ export function ReframeView() {
 																	trackId: normalizedVideo.trackId,
 																	elementId: normalizedVideo.element.id,
 																	presetId: preset.id,
-																	updates: {
-																		motionTracking: preset.motionTracking
-																			? {
-																					...preset.motionTracking,
-																					enabled: false,
-																			  }
-																			: undefined,
-																	},
+																	updates: buildFrozenTrackedTransformUpdates({
+																		preset,
+																	}),
 																});
 															}}
 														>
@@ -1760,33 +2048,16 @@ export function ReframeView() {
 															<RefreshCw className="mr-2 size-4" />
 															Re-analyze
 														</DropdownMenuItem>
-														<DropdownMenuCheckboxItem
-															checked={preset.motionTracking?.animateScale ?? true}
-															onCheckedChange={(checked) => {
-																editor.timeline.updateVideoReframePreset({
-																	trackId: normalizedVideo.trackId,
-																	elementId: normalizedVideo.element.id,
-																	presetId: preset.id,
-																	updates: {
-																		motionTracking: preset.motionTracking
-																			? {
-																					...preset.motionTracking,
-																					animateScale: Boolean(checked),
-																					cacheKey: undefined,
-																			  }
-																			: {
-																					enabled: false,
-																					mode: "subject-single-v1",
-																					source: "baked-keyframes",
-																					animateScale: Boolean(checked),
-																					keyframes: [],
-																			  },
-																	},
-																});
+														<DropdownMenuItem
+															disabled={Boolean(
+																analyzingTrackingPresetIds[preset.id],
+															)}
+															onClick={() => {
+																openTrackingSettingsDialog(preset);
 															}}
 														>
-															Animate scale
-														</DropdownMenuCheckboxItem>
+															Advanced tracking settings
+														</DropdownMenuItem>
 														<DropdownMenuItem
 															disabled={(preset.motionTracking?.keyframes?.length ?? 0) === 0}
 															onClick={() => {
@@ -1813,14 +2084,27 @@ export function ReframeView() {
 												</DropdownMenu>
 											</div>
 										</div>
-										<div className="mt-2 grid grid-cols-3 gap-2">
+									<div className="mt-2 grid grid-cols-3 gap-2">
+										{(() => {
+											const displayedAdjustment =
+												getDisplayedPresetAdjustment(preset);
+											return (
+												<>
 											<ReframeScrubber
 												label="X"
-												value={preset.transformAdjustment?.positionOffset.x ?? 0}
+												value={displayedAdjustment.x}
 												min={-1200}
 												max={1200}
 												step={1}
 												formatValue={(value) => Math.round(value).toString()}
+												canReset={Math.abs(displayedAdjustment.x) > 1e-6}
+												onReset={() =>
+													updatePresetTransform({
+														preset,
+														updates: { x: 0 },
+														pushHistory: true,
+													})
+												}
 												onChange={(value, pushHistory) =>
 													updatePresetTransform({
 														preset,
@@ -1831,11 +2115,19 @@ export function ReframeView() {
 											/>
 											<ReframeScrubber
 												label="Y"
-												value={preset.transformAdjustment?.positionOffset.y ?? 0}
+												value={displayedAdjustment.y}
 												min={-1200}
 												max={1200}
 												step={1}
 												formatValue={(value) => Math.round(value).toString()}
+												canReset={Math.abs(displayedAdjustment.y) > 1e-6}
+												onReset={() =>
+													updatePresetTransform({
+														preset,
+														updates: { y: 0 },
+														pushHistory: true,
+													})
+												}
 												onChange={(value, pushHistory) =>
 													updatePresetTransform({
 														preset,
@@ -1846,12 +2138,22 @@ export function ReframeView() {
 											/>
 											<ReframeScrubber
 												label="Scale"
-												value={preset.transformAdjustment?.scaleMultiplier ?? 1}
-												min={0.5}
+												value={displayedAdjustment.scale}
+												min={0.01}
 												max={2}
 												step={0.01}
 												dragScale={0.01}
 												formatValue={(value) => value.toFixed(2)}
+												canReset={
+													Math.abs(displayedAdjustment.scale - 1) > 1e-6
+												}
+												onReset={() =>
+													updatePresetTransform({
+														preset,
+														updates: { scale: 1 },
+														pushHistory: true,
+													})
+												}
 												onChange={(value, pushHistory) =>
 													updatePresetTransform({
 														preset,
@@ -1860,6 +2162,9 @@ export function ReframeView() {
 													})
 												}
 											/>
+												</>
+											);
+										})()}
 										</div>
 										<div
 											className={cn(
@@ -1961,7 +2266,7 @@ export function ReframeView() {
 									</div>
 								)}
 								<div className="grid gap-2">
-									{editableSplitBindings.map((binding, index) => (
+									{editableSplitBindings.map((binding) => (
 										<div
 											key={binding.slotId}
 											className="grid grid-cols-[90px_minmax(0,1fr)] items-center gap-2"
@@ -1990,11 +2295,14 @@ export function ReframeView() {
 																			"border-primary bg-primary/8 text-primary",
 																		isUsedByOtherSlot &&
 																			!isActive &&
-																			"cursor-not-allowed opacity-40",
+																			"border-dashed",
 																	)}
-																	title={preset.name}
+																	title={
+																		isUsedByOtherSlot && !isActive
+																			? `${preset.name} (selecting this will switch the other slot)`
+																			: preset.name
+																	}
 																	aria-pressed={isActive}
-																	disabled={isUsedByOtherSlot && !isActive}
 																	onClick={(event) => {
 																		event.stopPropagation();
 																		updateSplitBindings({
@@ -2015,17 +2323,30 @@ export function ReframeView() {
 											</div>
 											{(() => {
 												const slotTransform = getSplitSlotTransform(binding);
+												const slotAdjustment =
+													getSplitSlotManualDelta(binding);
 												return (
 													<div className="col-span-2 mt-2">
+														<div className="mb-2 text-[11px] text-muted-foreground">
+															{`x ${Math.round(slotTransform.position.x)}  y ${Math.round(slotTransform.position.y)}  scale ${slotTransform.scale.toFixed(2)}`}
+														</div>
 														<div className="grid grid-cols-3 gap-2">
 															<ReframeScrubber
 																label="X"
-																value={slotTransform.position.x}
+																value={slotAdjustment.x}
 																min={-1200}
 																max={1200}
 																step={1}
 																formatValue={(value) =>
-																	Math.round(value).toString()
+																	`${value >= 0 ? "+" : ""}${Math.round(value)}`
+																}
+																canReset={Math.abs(slotAdjustment.x) > 1e-6}
+																onReset={() =>
+																	updateSplitSlotTransform({
+																		slotId: binding.slotId,
+																		updates: { x: 0 },
+																		pushHistory: true,
+																	})
 																}
 																onChange={(value, pushHistory) =>
 																	updateSplitSlotTransform({
@@ -2037,12 +2358,20 @@ export function ReframeView() {
 															/>
 															<ReframeScrubber
 																label="Y"
-																value={slotTransform.position.y}
+																value={slotAdjustment.y}
 																min={-1200}
 																max={1200}
 																step={1}
 																formatValue={(value) =>
-																	Math.round(value).toString()
+																	`${value >= 0 ? "+" : ""}${Math.round(value)}`
+																}
+																canReset={Math.abs(slotAdjustment.y) > 1e-6}
+																onReset={() =>
+																	updateSplitSlotTransform({
+																		slotId: binding.slotId,
+																		updates: { y: 0 },
+																		pushHistory: true,
+																	})
 																}
 																onChange={(value, pushHistory) =>
 																	updateSplitSlotTransform({
@@ -2054,16 +2383,30 @@ export function ReframeView() {
 															/>
 															<ReframeScrubber
 																label="Scale"
-																value={slotTransform.scale}
-																min={0.5}
-																max={8}
+																value={slotAdjustment.scale}
+																min={-0.99}
+																max={7}
 																step={0.01}
 																dragScale={0.01}
-																formatValue={(value) => value.toFixed(2)}
+																formatValue={(value) =>
+																	`${value >= 0 ? "+" : ""}${value.toFixed(2)}`
+																}
+																canReset={
+																	Math.abs(slotAdjustment.scale) > 1e-6
+																}
+																onReset={() =>
+																	updateSplitSlotTransform({
+																		slotId: binding.slotId,
+																		updates: { scale: 1 },
+																		pushHistory: true,
+																	})
+																}
 																onChange={(value, pushHistory) =>
 																	updateSplitSlotTransform({
 																		slotId: binding.slotId,
-																		updates: { scale: value },
+																		updates: {
+																			scale: Math.max(0.001, 1 + value),
+																		},
 																		pushHistory,
 																	})
 																}
@@ -2072,24 +2415,6 @@ export function ReframeView() {
 													</div>
 												);
 											})()}
-											{editableSplitBindings.length === 2 && index === 0 ? (
-												<div className="col-span-2 flex justify-center py-1">
-													<Button
-														size="icon"
-														variant="secondary"
-														onClick={(event) => {
-															event.stopPropagation();
-															swapSplitBindings();
-														}}
-														disabled={editableSplitBindings.length < 2}
-														title="Flip top and bottom"
-														aria-label="Flip top and bottom"
-														className="h-8 w-8"
-													>
-														<ArrowUpDown className="size-4" />
-													</Button>
-												</div>
-											) : null}
 										</div>
 									))}
 								</div>
@@ -2259,7 +2584,105 @@ export function ReframeView() {
 					</div>
 				</>
 			)}
-		</PanelView>
+			</PanelView>
+			<Dialog
+				open={trackingSettingsPresetId !== null}
+				onOpenChange={(open) => {
+					if (!open) {
+						setTrackingSettingsPresetId(null);
+						setTrackingSettingsElementRef(null);
+						setTrackingSettingsPresetSnapshot(null);
+						setTrackingAnimateScaleDraft(false);
+					}
+				}}
+			>
+				<DialogContent className="sm:max-w-md">
+					<DialogHeader>
+						<DialogTitle>Motion Tracking Settings</DialogTitle>
+						<DialogDescription>
+							{trackingSettingsPreset
+								? `Adjust how strongly ${trackingSettingsPreset.name} follows subject movement. Saving re-bakes the tracked keyframes.`
+								: "Adjust how strongly motion tracking follows subject movement."}
+						</DialogDescription>
+					</DialogHeader>
+					<DialogBody className="gap-4">
+						<div className="space-y-3">
+							<div className="flex items-center justify-between gap-3">
+								<div>
+									<div className="text-sm font-medium">Tracking strength</div>
+									<div className="text-muted-foreground text-xs">
+										Higher values react faster. Lower values stay smoother.
+									</div>
+								</div>
+								<div className="text-sm font-medium">
+									{formatTrackingStrengthLabel(trackingStrengthDraft)}
+								</div>
+							</div>
+							<Slider
+								min={0}
+								max={100}
+								step={1}
+								value={[
+									Math.round(
+										normalizeMotionTrackingStrength(trackingStrengthDraft) * 100,
+									),
+								]}
+								onValueChange={(values) => {
+									setTrackingStrengthDraft((values[0] ?? 0) / 100);
+								}}
+							/>
+							<div className="text-muted-foreground flex justify-between text-[11px]">
+								<span>Smoother</span>
+								<span>More reactive</span>
+							</div>
+						</div>
+						<label className="flex items-start justify-between gap-3 rounded-md border p-3">
+							<div>
+								<div className="text-sm font-medium">Animate scale</div>
+								<div className="text-muted-foreground text-xs">
+									Include zoom changes when re-baking motion tracking keyframes.
+								</div>
+							</div>
+							<input
+								type="checkbox"
+								className="mt-0.5"
+								checked={trackingAnimateScaleDraft}
+								onChange={(event) => {
+									setTrackingAnimateScaleDraft(event.target.checked);
+								}}
+							/>
+						</label>
+					</DialogBody>
+					<DialogFooter>
+						<Button
+							variant="ghost"
+							onClick={() => {
+								setTrackingSettingsPresetId(null);
+								setTrackingSettingsElementRef(null);
+								setTrackingSettingsPresetSnapshot(null);
+								setTrackingAnimateScaleDraft(false);
+							}}
+						>
+							Cancel
+						</Button>
+						<Button
+							disabled={
+								!trackingSettingsPreset ||
+								Boolean(
+									trackingSettingsPreset &&
+										analyzingTrackingPresetIds[trackingSettingsPreset.id],
+								)
+							}
+							onClick={() => {
+								void saveTrackingSettings();
+							}}
+						>
+							Save and update tracking
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+		</>
 	);
 }
 
@@ -2373,6 +2796,8 @@ function ReframeScrubber({
 	dragScale = step,
 	formatValue,
 	disabled = false,
+	canReset = false,
+	onReset,
 	onChange,
 }: {
 	label: string;
@@ -2383,6 +2808,8 @@ function ReframeScrubber({
 	dragScale?: number;
 	formatValue: (value: number) => string;
 	disabled?: boolean;
+	canReset?: boolean;
+	onReset?: (() => void) | undefined;
 	onChange: (value: number, pushHistory: boolean) => void;
 }) {
 	const [isHovering, setIsHovering] = useState(false);
@@ -2559,7 +2986,27 @@ function ReframeScrubber({
 			onMouseEnter={() => setIsHovering(true)}
 			onMouseLeave={() => setIsHovering(false)}
 		>
-			<div className="text-[10px] uppercase tracking-[0.14em]">{label}</div>
+			<div className="flex items-center justify-between gap-2">
+				<div className="text-[10px] uppercase tracking-[0.14em]">{label}</div>
+				{onReset ? (
+					<button
+						type="button"
+						className={cn(
+							"text-muted-foreground hover:text-foreground h-5 w-5 rounded-sm transition-opacity",
+							!canReset && "pointer-events-none opacity-30",
+						)}
+						disabled={!canReset}
+						onClick={(event) => {
+							event.stopPropagation();
+							onReset();
+						}}
+						aria-label={`Reset ${label}`}
+						title={`Reset ${label}`}
+					>
+						<RotateCcw className="mx-auto size-3" />
+					</button>
+				) : null}
+			</div>
 			{isEditing ? (
 				<Input
 					autoFocus

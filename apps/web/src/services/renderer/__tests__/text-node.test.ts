@@ -206,7 +206,7 @@ describe("TextNode caption gap rendering", () => {
 		expect((translations[0]?.[1] ?? 0) > 360).toBe(true);
 	});
 
-	test("defaults auto split anchor to the bottom slot for bottom-anchored captions", async () => {
+	test("defaults auto split anchor to the bottom slot near the divider for bottom-anchored captions", async () => {
 		const node = new TextNode({
 			...createCaptionNode().params,
 			captionStyle: {
@@ -241,10 +241,11 @@ describe("TextNode caption gap rendering", () => {
 
 		expect(operations).toContain("fillText");
 		expect(translations.length).toBeGreaterThan(0);
-		expect((translations[0]?.[1] ?? 0) > 600).toBe(true);
+		expect((translations[0]?.[1] ?? 0) > 240).toBe(true);
+		expect((translations[0]?.[1] ?? 0) < 400).toBe(true);
 	});
 
-	test("ignores top slot preference for unbalanced bottom-anchored captions", async () => {
+	test("ignores top slot preference for unbalanced bottom-anchored captions and keeps them in the bottom slot", async () => {
 		const node = new TextNode({
 			...createCaptionNode().params,
 			captionStyle: {
@@ -281,10 +282,11 @@ describe("TextNode caption gap rendering", () => {
 
 		expect(operations).toContain("fillText");
 		expect(translations.length).toBeGreaterThan(0);
-		expect((translations[0]?.[1] ?? 0) > 600).toBe(true);
+		expect((translations[0]?.[1] ?? 0) > 240).toBe(true);
+		expect((translations[0]?.[1] ?? 0) < 400).toBe(true);
 	});
 
-	test("anchors unbalanced split captions to the bottom slot bottom edge", async () => {
+	test("anchors unbalanced split captions near the divider at the top of the bottom slot", async () => {
 		const node = new TextNode({
 			...createCaptionNode().params,
 			captionStyle: {
@@ -339,7 +341,8 @@ describe("TextNode caption gap rendering", () => {
 
 		expect(operations).toContain("fillText");
 		expect(translations.length).toBeGreaterThan(0);
-		expect((translations[0]?.[1] ?? 0) > 600).toBe(true);
+		expect((translations[0]?.[1] ?? 0) > 240).toBe(true);
+		expect((translations[0]?.[1] ?? 0) < 400).toBe(true);
 	});
 
 	test("applies split-screen font and background padding overrides", async () => {

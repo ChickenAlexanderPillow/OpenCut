@@ -84,6 +84,7 @@ export interface VideoMotionTracking {
 	source: "baked-keyframes";
 	lastAnalyzedAt?: string;
 	animateScale?: boolean;
+	trackingStrength?: number;
 	cacheKey?: string;
 	sourceAssetId?: string;
 	sourceStartTime?: number;
@@ -118,6 +119,7 @@ export interface VideoReframePreset {
 	name: string;
 	transform: VideoReframePresetTransform;
 	transformAdjustment?: VideoReframeTransformAdjustment;
+	manualTransformAdjustment?: VideoReframeTransformAdjustment;
 	autoSeeded?: boolean;
 	subjectSeed?: VideoReframeSubjectSeed;
 	motionTracking?: VideoMotionTracking;

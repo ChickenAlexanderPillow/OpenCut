@@ -4,6 +4,17 @@ function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, value));
 }
 
+export const DEFAULT_MOTION_TRACKING_STRENGTH = 0.55;
+
+export function normalizeMotionTrackingStrength(
+	trackingStrength: number | null | undefined,
+): number {
+	if (!Number.isFinite(trackingStrength)) {
+		return DEFAULT_MOTION_TRACKING_STRENGTH;
+	}
+	return clamp(trackingStrength ?? DEFAULT_MOTION_TRACKING_STRENGTH, 0, 1);
+}
+
 export interface MotionTrackingTransformKeyframe {
 	id: string;
 	time: number;
@@ -161,9 +172,10 @@ export function resolveMotionTrackedReframeTransform({
 		x: lerp(pair.left.position.x, pair.right.position.x, pair.progress),
 		y: lerp(pair.left.position.y, pair.right.position.y, pair.progress),
 	};
+	const lockedTrackedScale = keyframes[0]?.scale ?? baseTransform.scale;
 	const interpolatedScale = motionTracking.animateScale
 		? lerp(pair.left.scale, pair.right.scale, pair.progress)
-		: baseTransform.scale;
+		: lockedTrackedScale;
 	return {
 		position: interpolatedPosition,
 		scale: interpolatedScale,
@@ -218,15 +230,18 @@ export function resolveMotionTrackedSubjectFrame({
 		localTime,
 	});
 	if (!tracked?.subjectCenter) return null;
+	const resolvedSubjectSize = motionTracking.animateScale
+		? tracked.subjectSize
+		: keyframes.find((keyframe) => keyframe.subjectSize)?.subjectSize;
 	return {
 		center: {
 			x: tracked.subjectCenter.x,
 			y: tracked.subjectCenter.y,
 		},
-		size: tracked.subjectSize
+		size: resolvedSubjectSize
 			? {
-					width: tracked.subjectSize.width,
-					height: tracked.subjectSize.height,
+					width: resolvedSubjectSize.width,
+					height: resolvedSubjectSize.height,
 			  }
 			: null,
 	};

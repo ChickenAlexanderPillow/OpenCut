@@ -16,6 +16,7 @@ import type {
 import { generateUUID } from "@/utils/id";
 import {
 	clampMotionTrackingToDuration,
+	normalizeMotionTrackingStrength,
 	resolveMotionTrackedSubjectFrame,
 	resolveMotionTrackedSubjectCenter,
 	resolveMotionTrackedReframeTransform,
@@ -277,7 +278,7 @@ function getFitBaseScale({
 		: Math.min(widthRatio, heightRatio);
 }
 
-function getSourceCenterForTransform({
+export function getSourceCenterForTransform({
 	transform,
 	baseScale,
 	sourceWidth,
@@ -295,7 +296,7 @@ function getSourceCenterForTransform({
 	};
 }
 
-function buildTransformForSourceCenter({
+export function buildTransformForSourceCenter({
 	sourceCenter,
 	scale,
 	baseScale,
@@ -1009,6 +1010,9 @@ export function normalizeVideoReframeState({
 		motionTracking
 			? {
 					...motionTracking,
+					trackingStrength: normalizeMotionTrackingStrength(
+						motionTracking.trackingStrength,
+					),
 					keyframes: (motionTracking.keyframes ?? [])
 						.filter(
 							(keyframe) =>
@@ -1052,6 +1056,9 @@ export function normalizeVideoReframeState({
 			},
 			transformAdjustment: normalizeVideoReframeTransformAdjustment(
 				preset.transformAdjustment,
+			),
+			manualTransformAdjustment: normalizeVideoReframeTransformAdjustment(
+				preset.manualTransformAdjustment,
 			),
 			subjectSeed:
 				preset.subjectSeed &&
@@ -1774,6 +1781,7 @@ function deriveSplitSlotSeedTransformFromBase({
 export function deriveVideoSplitScreenSlotAdjustmentFromTransform({
 	baseTransform,
 	finalTransform,
+	adjustmentBaseTransform,
 	slotId,
 	layoutPreset,
 	viewportBalance = DEFAULT_SPLIT_VIEWPORT_BALANCE,
@@ -1784,6 +1792,7 @@ export function deriveVideoSplitScreenSlotAdjustmentFromTransform({
 }: {
 	baseTransform: Transform;
 	finalTransform: Pick<Transform, "position" | "scale">;
+	adjustmentBaseTransform?: Pick<Transform, "position" | "scale">;
 	slotId: string;
 	layoutPreset: VideoSplitScreenLayoutPreset;
 	viewportBalance?: VideoSplitScreenViewportBalance;
@@ -1821,8 +1830,9 @@ export function deriveVideoSplitScreenSlotAdjustmentFromTransform({
 		sourceHeight,
 		fitMode: "cover",
 	});
+	const referenceTransform = adjustmentBaseTransform ?? seedTransform;
 	const seedCenter = getSourceCenterForTransform({
-		transform: seedTransform,
+		transform: referenceTransform,
 		baseScale: slotCoverScale,
 		sourceWidth,
 		sourceHeight,
@@ -1838,7 +1848,8 @@ export function deriveVideoSplitScreenSlotAdjustmentFromTransform({
 			x: finalCenter.x - seedCenter.x,
 			y: finalCenter.y - seedCenter.y,
 		},
-		scaleMultiplier: finalTransform.scale / Math.max(1e-6, seedTransform.scale),
+		scaleMultiplier:
+			finalTransform.scale / Math.max(1e-6, referenceTransform.scale),
 	};
 }
 
@@ -1942,8 +1953,20 @@ function resolveVideoSplitScreenSlotTransformWithViewport({
 		}
 		return seedTransform;
 	}
+	const adjustmentBaseTransform = trackedSubjectCenter
+		? deriveAutoSplitSlotTransformFromTrackedSubject({
+				trackedSubjectCenter,
+				trackedSubjectSize,
+				viewport,
+				canvasWidth,
+				canvasHeight,
+				sourceWidth,
+				sourceHeight,
+				rotate: baseResolvedTransform.rotate,
+			})
+		: seedTransform;
 	const seedCenter = getSourceCenterForTransform({
-		transform: seedTransform,
+		transform: adjustmentBaseTransform,
 		baseScale: slotCoverScale,
 		sourceWidth,
 		sourceHeight,
@@ -1953,7 +1976,7 @@ function resolveVideoSplitScreenSlotTransformWithViewport({
 			x: seedCenter.x + appliedAdjustment.sourceCenterOffset.x,
 			y: seedCenter.y + appliedAdjustment.sourceCenterOffset.y,
 		},
-		scale: seedTransform.scale * appliedAdjustment.scaleMultiplier,
+		scale: adjustmentBaseTransform.scale * appliedAdjustment.scaleMultiplier,
 		baseScale: slotCoverScale,
 		sourceWidth,
 		sourceHeight,

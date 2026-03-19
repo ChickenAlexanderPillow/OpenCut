@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { buildMotionTrackingKeyframesFromObservations } from "../subject-aware";
-import { splitMotionTrackingAtTime } from "../motion-tracking";
+import {
+	resolveMotionTrackedReframeTransform,
+	resolveMotionTrackedSubjectFrame,
+	splitMotionTrackingAtTime,
+} from "../motion-tracking";
 
 describe("motion tracking keyframe generation", () => {
 	test("smooths stable single-subject movement into monotonic baked keyframes", () => {
@@ -286,6 +290,75 @@ describe("motion tracking keyframe generation", () => {
 		expect(split.right?.keyframes[0]?.position.x).toBeCloseTo(50, 6);
 		expect(split.right?.keyframes[0]?.position.y).toBeCloseTo(20, 6);
 		expect(split.right?.keyframes[0]?.scale).toBeCloseTo(1.2, 6);
+	});
+
+	test("holds a stable subject size when animateScale is disabled", () => {
+		const resolved = resolveMotionTrackedSubjectFrame({
+			motionTracking: {
+				enabled: true,
+				mode: "subject-single-v1",
+				source: "baked-keyframes",
+				animateScale: false,
+				keyframes: [
+					{
+						id: "a",
+						time: 0,
+						position: { x: 0, y: 0 },
+						scale: 1,
+						subjectCenter: { x: 100, y: 120 },
+						subjectSize: { width: 180, height: 300 },
+					},
+					{
+						id: "b",
+						time: 1,
+						position: { x: 20, y: -10 },
+						scale: 1.5,
+						subjectCenter: { x: 180, y: 200 },
+						subjectSize: { width: 320, height: 520 },
+					},
+				],
+			},
+			localTime: 1,
+		});
+
+		expect(resolved?.center.x).toBeCloseTo(180, 6);
+		expect(resolved?.center.y).toBeCloseTo(200, 6);
+		expect(resolved?.size?.width).toBeCloseTo(180, 6);
+		expect(resolved?.size?.height).toBeCloseTo(300, 6);
+	});
+
+	test("locks to the initial tracked scale when animateScale is disabled", () => {
+		const resolved = resolveMotionTrackedReframeTransform({
+			baseTransform: {
+				position: { x: 0, y: 0 },
+				scale: 0.75,
+			},
+			motionTracking: {
+				enabled: true,
+				mode: "subject-single-v1",
+				source: "baked-keyframes",
+				animateScale: false,
+				keyframes: [
+					{
+						id: "a",
+						time: 0,
+						position: { x: 10, y: 20 },
+						scale: 1.4,
+					},
+					{
+						id: "b",
+						time: 1,
+						position: { x: 30, y: 40 },
+						scale: 2.2,
+					},
+				],
+			},
+			localTime: 0.8,
+		});
+
+		expect(resolved.position.x).toBeCloseTo(26, 6);
+		expect(resolved.position.y).toBeCloseTo(36, 6);
+		expect(resolved.scale).toBeCloseTo(1.4, 6);
 	});
 
 	test("can snap a split clip to the first retained tracked pose", () => {
