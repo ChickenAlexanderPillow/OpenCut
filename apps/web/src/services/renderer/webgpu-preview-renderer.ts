@@ -1159,10 +1159,6 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				fps: this.fps,
 				clear: true,
 			});
-			this.drawSplitDividerOverlays({
-				draws,
-				overlayCanvas,
-			});
 		} else if (partition.cpuPostNodes.length > 0) {
 			const fallbackCtx = targetCanvas.getContext("2d");
 			if (!fallbackCtx) {
