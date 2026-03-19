@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEditor } from "@/hooks/use-editor";
 import { useShiftKey } from "@/hooks/use-shift-key";
-import type { TextElement, Transform, VideoElement } from "@/types/timeline";
+import type {
+	TextElement,
+	Transform,
+	VideoElement,
+	VideoReframeTransformAdjustment,
+} from "@/types/timeline";
 import { getVisibleElementsWithBounds } from "@/lib/preview/element-bounds";
 import { hitTest } from "@/lib/preview/hit-test";
 import {
@@ -35,6 +40,10 @@ import {
 	resolveEditableSplitSlotState,
 	updateSplitSlotBindingsWithTransform,
 } from "@/lib/reframe/split-slot-edit";
+import {
+	ENABLE_MANUAL_REFRAME_PRESET_ADJUSTMENTS,
+	ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS,
+} from "@/lib/reframe/split-slot-config";
 import { useReframeStore } from "@/stores/reframe-store";
 
 const MIN_DRAG_DISTANCE = 0.5;
@@ -54,6 +63,7 @@ interface DragState {
 				elementId: string;
 				initialTransform: Transform;
 				reframePresetId: string | null;
+				initialReframeTransformAdjustment?: VideoReframeTransformAdjustment | null;
 		  }>
 		| [];
 	splitSlot?: {
@@ -250,6 +260,7 @@ export function usePreviewInteraction({
 			trackId: string;
 			element: VideoElement;
 		}): SplitInteractionState | null => {
+			if (!ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS) return null;
 			const normalizedElement = normalizeVideoReframeState({ element });
 			const projectCanvas = editor.project.getActive().settings.canvasSize;
 			const canvasSize = getPreviewCanvasSize({
@@ -525,12 +536,16 @@ export function usePreviewInteraction({
 			});
 
 			const splitEditSlotId =
+				ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS &&
 				hit.element.type === "video"
 					? (useReframeStore.getState().selectedSplitEditSlotIdByElementId[
 							hit.element.id
 						] ?? null)
 					: null;
-			if (hit.element.type === "video") {
+			if (
+				ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS &&
+				hit.element.type === "video"
+			) {
 				const normalizedElement = normalizeVideoReframeState({
 					element: hit.element,
 				});
@@ -659,37 +674,36 @@ export function usePreviewInteraction({
 			if (draggableElements.length === 0) return;
 			const currentTime = editor.playback.getCurrentTime();
 
-			dragStateRef.current = {
-				startX: startPos.x,
-				startY: startPos.y,
-				mode: "element",
-				bounds: {
-					width: hit.bounds.width,
-					height: hit.bounds.height,
-				},
-				elements: draggableElements.map(({ track, element }) => {
-					const normalizedElement =
-						element.type === "video"
-							? normalizeVideoReframeState({ element })
-							: element;
-					const reframePresetId =
-						normalizedElement.type === "video"
-							? getSelectedOrActiveReframePresetId({
-									element: normalizedElement,
-									localTime: Math.max(
-										0,
-										Math.min(
-											normalizedElement.duration,
-											currentTime - normalizedElement.startTime,
-										),
+			const dragEntries = draggableElements.flatMap(({ track, element }) => {
+				const normalizedElement =
+					element.type === "video"
+						? normalizeVideoReframeState({ element })
+						: element;
+				const resolvedReframePresetId =
+					normalizedElement.type === "video"
+						? getSelectedOrActiveReframePresetId({
+								element: normalizedElement,
+								localTime: Math.max(
+									0,
+									Math.min(
+										normalizedElement.duration,
+										currentTime - normalizedElement.startTime,
 									),
-									selectedPresetId:
-										useReframeStore.getState().selectedPresetIdByElementId[
-											normalizedElement.id
-										] ?? null,
-								})
-							: null;
-					return {
+								),
+								selectedPresetId:
+									useReframeStore.getState().selectedPresetIdByElementId[
+										normalizedElement.id
+									] ?? null,
+						  })
+						: null;
+				if (
+					resolvedReframePresetId &&
+					!ENABLE_MANUAL_REFRAME_PRESET_ADJUSTMENTS
+				) {
+					return [];
+				}
+				return [
+					{
 						trackId: track.id,
 						elementId: element.id,
 						initialTransform: resolveElementTransformAtTime({
@@ -703,9 +717,31 @@ export function usePreviewInteraction({
 								),
 							),
 						}),
-						reframePresetId,
-					};
-				}),
+						reframePresetId:
+							ENABLE_MANUAL_REFRAME_PRESET_ADJUSTMENTS
+								? resolvedReframePresetId
+								: null,
+						initialReframeTransformAdjustment:
+							ENABLE_MANUAL_REFRAME_PRESET_ADJUSTMENTS &&
+							resolvedReframePresetId &&
+							normalizedElement.type === "video"
+								? (normalizedElement.reframePresets?.find(
+										(preset) => preset.id === resolvedReframePresetId,
+								  )?.transformAdjustment ?? null)
+								: null,
+					},
+				];
+			});
+			if (dragEntries.length === 0) return;
+			dragStateRef.current = {
+				startX: startPos.x,
+				startY: startPos.y,
+				mode: "element",
+				bounds: {
+					width: hit.bounds.width,
+					height: hit.bounds.height,
+				},
+				elements: dragEntries,
 			};
 			dragAxisLockRef.current = null;
 			axisLockSnapshotRef.current = null;
@@ -876,18 +912,28 @@ export function usePreviewInteraction({
 				}));
 
 			for (const entry of dragStateRef.current.elements) {
-				if (!entry.reframePresetId) continue;
+				if (
+					!entry.reframePresetId ||
+					!ENABLE_MANUAL_REFRAME_PRESET_ADJUSTMENTS
+				) {
+					continue;
+				}
 				editor.timeline.updateVideoReframePreset({
 					trackId: entry.trackId,
 					elementId: entry.elementId,
 					presetId: entry.reframePresetId,
 					updates: {
-						transform: {
-							position: {
-								x: entry.initialTransform.position.x + deltaSnappedX,
-								y: entry.initialTransform.position.y + deltaSnappedY,
+						transformAdjustment: {
+							positionOffset: {
+								x:
+									(entry.initialReframeTransformAdjustment?.positionOffset.x ??
+										0) + deltaSnappedX,
+								y:
+									(entry.initialReframeTransformAdjustment?.positionOffset.y ??
+										0) + deltaSnappedY,
 							},
-							scale: entry.initialTransform.scale,
+							scaleMultiplier:
+								entry.initialReframeTransformAdjustment?.scaleMultiplier ?? 1,
 						},
 					},
 					pushHistory: false,

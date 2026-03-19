@@ -8,7 +8,6 @@ import { useEditor } from "@/hooks/use-editor";
 import { useRafLoop } from "@/hooks/use-raf-loop";
 import { useContainerSize } from "@/hooks/use-container-size";
 import { useFullscreen } from "@/hooks/use-fullscreen";
-import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import type { RootNode } from "@/services/renderer/nodes/root-node";
 import { buildScene } from "@/services/renderer/scene-builder";
 import { getLastFrameTime } from "@/lib/time";
@@ -20,7 +19,6 @@ import { PreviewContextMenu } from "./context-menu";
 import { PreviewToolbar } from "./toolbar";
 import { videoCache } from "@/services/video-cache/service";
 import { WebGPUPreviewRenderer } from "@/services/renderer/webgpu-preview-renderer";
-import { resolvePreviewRenderBackend } from "@/services/renderer/preview-render-mode";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/ui";
 import type { TBackground } from "@/types/project";
@@ -654,19 +652,14 @@ function PreviewCanvas({
 	onToggleFullscreen: () => void;
 	containerRef: React.RefObject<HTMLElement | null>;
 }) {
-	const canvas2dRef = useRef<HTMLCanvasElement>(null);
 	const webgpuCanvasRef = useRef<HTMLCanvasElement>(null);
 	const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
 	const outerContainerRef = useRef<HTMLDivElement>(null);
 	const canvasBoundsRef = useRef<HTMLDivElement>(null);
 	const lastFrameRef = useRef(-1);
 	const lastSceneRef = useRef<RootNode | null>(null);
-	const runtimeFallbackRef = useRef<string | null>(null);
 	const [isPageVisible, setIsPageVisible] = useState(
 		typeof document === "undefined" ? true : !document.hidden,
-	);
-	const [activeSurface, setActiveSurface] = useState<"canvas2d" | "webgpu">(
-		"canvas2d",
 	);
 	const [safeAreaOverlayReady, setSafeAreaOverlayReady] = useState(true);
 	const [isRenderReadyForSize, setIsRenderReadyForSize] = useState(true);
@@ -706,14 +699,6 @@ function PreviewCanvas({
 			: activeProject.settings.background.type === "blur"
 				? "transparent"
 				: activeProject.settings.background.color;
-
-	const renderer = useMemo(() => {
-		return new CanvasRenderer({
-			width: nativeWidth,
-			height: nativeHeight,
-			fps: Math.max(1, activeProject.settings.fps),
-		});
-	}, [nativeWidth, nativeHeight, activeProject.settings.fps]);
 
 	const webgpuRenderer = useMemo(
 		() =>
@@ -772,14 +757,14 @@ function PreviewCanvas({
 		const time = editor.playback.getCurrentTime();
 		const lastFrameTime = getLastFrameTime({
 			duration: renderTree.duration,
-			fps: renderer.fps,
+			fps: projectFps,
 		});
 		const rawRenderTime = Math.min(time, lastFrameTime);
 		const renderTime =
 			Number.isFinite(renderFrameRateCap) && renderFrameRateCap > 0
 				? Math.floor(rawRenderTime * renderFrameRateCap) / renderFrameRateCap
 				: rawRenderTime;
-		const frame = Math.floor(renderTime * renderer.fps);
+		const frame = Math.floor(renderTime * projectFps);
 
 		if (frame === lastFrameRef.current && renderTree === lastSceneRef.current) {
 			return;
@@ -794,92 +779,34 @@ function PreviewCanvas({
 			time: number;
 			frameNumber: number;
 		}) => {
-			const canvas2d = canvas2dRef.current;
 			const webgpuCanvas = webgpuCanvasRef.current;
-			if (!canvas2d || !webgpuCanvas) return;
-
-			const setSurface = ({ active }: { active: "webgpu" | "canvas2d" }) => {
-				setActiveSurface((prev) => (prev === active ? prev : active));
-			};
+			if (!webgpuCanvas) return;
 
 			renderingRef.current = true;
 			lastSceneRef.current = scene;
 			lastFrameRef.current = frameNumber;
 			const renderStart = performance.now();
-			const renderPromise = (() => {
-				const backend = resolvePreviewRenderBackend({
-					mode: previewRendererMode,
-					runtimeFallbackReason: runtimeFallbackRef.current,
-				});
-				if (backend === "canvas2d") {
-					const overlayCtx = overlayCanvasRef.current?.getContext("2d");
-					if (overlayCtx && overlayCanvasRef.current) {
-						overlayCtx.clearRect(
-							0,
-							0,
-							overlayCanvasRef.current.width,
-							overlayCanvasRef.current.height,
-						);
-					}
-					setWebgpuDividerRects([]);
-					setSurface({ active: "canvas2d" });
-					return renderer.renderToCanvas({
-						node: scene,
-						time,
-						targetCanvas: canvas2d,
-					});
-				}
-
-				return webgpuRenderer
-					.renderToCanvas({
-						rootNode: scene,
-						time,
-						targetCanvas: webgpuCanvas,
-						overlayCanvas: overlayCanvasRef.current ?? undefined,
-					})
-					.then((result) => {
-						if (!result.usedWebGPU) {
-							setWebgpuDividerRects([]);
-							setSurface({ active: "canvas2d" });
-							if (
-								previewRendererMode === "auto" &&
-								result.shouldDisableWebGPU
-							) {
-								runtimeFallbackRef.current =
-									result.reasonIfFallback ?? "WebGPU fallback";
-							}
-							return renderer.renderToCanvas({
-								node: scene,
-								time,
-								targetCanvas: canvas2d,
-							});
-						}
-						setWebgpuDividerRects(result.dividerRects ?? []);
-						setSurface({ active: "webgpu" });
-					})
-					.catch((error) => {
-						const message =
-							error instanceof Error ? error.message : "WebGPU render failure";
-						// Scene-level mismatches should not permanently disable WebGPU.
-						// Only latch off for likely fatal/device-level failures.
-						const lower = message.toLowerCase();
-						const fatal =
-							lower.includes("device") ||
-							lower.includes("adapter") ||
-							lower.includes("webgpu") ||
-							lower.includes("context");
-						if (fatal && previewRendererMode === "auto") {
-							runtimeFallbackRef.current = message;
-						}
+			const renderPromise = webgpuRenderer
+				.renderToCanvas({
+					rootNode: scene,
+					time,
+					targetCanvas: webgpuCanvas,
+					overlayCanvas: overlayCanvasRef.current ?? undefined,
+				})
+				.then((result) => {
+					if (!result.usedWebGPU) {
 						setWebgpuDividerRects([]);
-						setSurface({ active: "canvas2d" });
-						return renderer.renderToCanvas({
-							node: scene,
-							time,
-							targetCanvas: canvas2d,
-						});
-					});
-			})();
+						lastFrameRef.current = -1;
+						lastSceneRef.current = null;
+						return;
+					}
+					setWebgpuDividerRects(result.dividerRects ?? []);
+				})
+				.catch(() => {
+					setWebgpuDividerRects([]);
+					lastFrameRef.current = -1;
+					lastSceneRef.current = null;
+				});
 			void renderPromise.then(() => {
 				if (!renderReadyRef.current) {
 					renderReadyRef.current = true;
@@ -913,12 +840,10 @@ function PreviewCanvas({
 
 		runRender({ scene: renderTree, time: renderTime, frameNumber: frame });
 	}, [
-		renderer,
 		renderTree,
 		editor.playback,
 		renderFrameRateCap,
 		webgpuRenderer,
-		previewRendererMode,
 	]);
 
 	useEffect(() => {
@@ -941,18 +866,14 @@ function PreviewCanvas({
 	useRafLoop(render, { enabled: isPageVisible });
 
 	useEffect(() => {
-		void previewRendererMode;
-		runtimeFallbackRef.current = null;
 		setWebgpuDividerRects([]);
-		setActiveSurface("canvas2d");
+		lastFrameRef.current = -1;
+		lastSceneRef.current = null;
 	}, [previewRendererMode]);
 
 	useEffect(() => {
 		void freezeFrameToken;
-		const sourceCanvas =
-			activeSurface === "webgpu"
-				? webgpuCanvasRef.current
-				: canvas2dRef.current;
+		const sourceCanvas = webgpuCanvasRef.current;
 		if (!sourceCanvas) return;
 		const composite = document.createElement("canvas");
 		composite.width = sourceCanvas.width;
@@ -978,7 +899,7 @@ function PreviewCanvas({
 		}
 		lastFrameRef.current = -1;
 		lastSceneRef.current = null;
-	}, [freezeFrameToken, activeSurface]);
+	}, [freezeFrameToken]);
 
 	const effectiveDisplaySize =
 		isRenderReadyForSize || !transitionHoldSize
@@ -1003,8 +924,7 @@ function PreviewCanvas({
 		};
 	}, [previewFormatVariant, nativeWidth, nativeHeight]);
 
-	const interactionCanvasRef =
-		activeSurface === "webgpu" ? webgpuCanvasRef : canvas2dRef;
+	const interactionCanvasRef = webgpuCanvasRef;
 
 	return (
 		<div
@@ -1037,21 +957,6 @@ function PreviewCanvas({
 							/>
 						)}
 						<canvas
-							ref={canvas2dRef}
-							width={nativeWidth}
-							height={nativeHeight}
-							className="absolute inset-0 block border"
-							style={{
-								width: effectiveDisplaySize.width,
-								height: effectiveDisplaySize.height,
-								display:
-									activeSurface === "canvas2d" && isRenderReadyForSize
-										? "block"
-										: "none",
-								background: previewBackgroundColor,
-							}}
-						/>
-						<canvas
 							ref={webgpuCanvasRef}
 							width={nativeWidth}
 							height={nativeHeight}
@@ -1059,11 +964,8 @@ function PreviewCanvas({
 							style={{
 								width: effectiveDisplaySize.width,
 								height: effectiveDisplaySize.height,
-								display:
-									activeSurface === "webgpu" && isRenderReadyForSize
-										? "block"
-										: "none",
-								background: "transparent",
+								display: isRenderReadyForSize ? "block" : "none",
+								background: previewBackgroundColor,
 							}}
 						/>
 						<canvas
@@ -1077,7 +979,7 @@ function PreviewCanvas({
 								background: "transparent",
 							}}
 						/>
-						{activeSurface === "webgpu" && webgpuDividerRects.length > 0 && (
+						{webgpuDividerRects.length > 0 && (
 							<div
 								className="pointer-events-none absolute inset-0 z-10"
 								aria-hidden

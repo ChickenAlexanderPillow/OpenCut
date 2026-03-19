@@ -2,6 +2,8 @@ import type { MediaAsset } from "@/types/assets";
 import type {
 	VideoElement,
 	VideoReframePreset,
+	VideoReframeSubjectSeed,
+	VideoReframePresetTransform,
 	VideoReframeSwitch,
 } from "@/types/timeline";
 import { generateUUID } from "@/utils/id";
@@ -20,6 +22,10 @@ type SubjectBox = {
 	centerY: number;
 	width: number;
 	height: number;
+	anchorX?: number;
+	anchorY?: number;
+	fitWidth?: number;
+	fitHeight?: number;
 };
 
 type SubjectObservation = {
@@ -33,6 +39,33 @@ type SubjectTrackingObservation = {
 };
 
 type AutoSectionKind = "Subject" | "Subject Left" | "Subject Right";
+type TrackingSubjectHint = "left" | "right" | "center";
+type SourceViewportBounds = {
+	left: number;
+	right: number;
+	top: number;
+	bottom: number;
+};
+
+function buildSubjectSeed({
+	box,
+	identity,
+}: {
+	box: SubjectBox;
+	identity: VideoReframeSubjectSeed["identity"];
+}): VideoReframeSubjectSeed {
+	return {
+		center: {
+			x: box.anchorX ?? box.centerX,
+			y: box.anchorY ?? box.centerY,
+		},
+		size: {
+			width: box.fitWidth ?? box.width,
+			height: box.fitHeight ?? box.height,
+		},
+		identity,
+	};
+}
 
 type VisionRuntime = Awaited<ReturnType<typeof loadVisionRuntime>>;
 
@@ -431,6 +464,60 @@ function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, value));
 }
 
+function getSourceCenterForTransform({
+	transform,
+	canvasSize,
+	sourceWidth,
+	sourceHeight,
+}: {
+	transform: VideoReframePresetTransform;
+	canvasSize: { width: number; height: number };
+	sourceWidth: number;
+	sourceHeight: number;
+}): { x: number; y: number } {
+	const containScale = Math.min(
+		canvasSize.width / Math.max(1, sourceWidth),
+		canvasSize.height / Math.max(1, sourceHeight),
+	);
+	const totalScale = Math.max(1e-6, containScale * transform.scale);
+	return {
+		x: sourceWidth / 2 - transform.position.x / totalScale,
+		y: sourceHeight / 2 - transform.position.y / totalScale,
+	};
+}
+
+function getSourceViewportBoundsForTransform({
+	transform,
+	canvasSize,
+	sourceWidth,
+	sourceHeight,
+}: {
+	transform: VideoReframePresetTransform;
+	canvasSize: { width: number; height: number };
+	sourceWidth: number;
+	sourceHeight: number;
+}): SourceViewportBounds {
+	const containScale = Math.min(
+		canvasSize.width / Math.max(1, sourceWidth),
+		canvasSize.height / Math.max(1, sourceHeight),
+	);
+	const totalScale = Math.max(1e-6, containScale * transform.scale);
+	const center = getSourceCenterForTransform({
+		transform,
+		canvasSize,
+		sourceWidth,
+		sourceHeight,
+	});
+	const halfWidth = canvasSize.width / (2 * totalScale);
+	const halfHeight = canvasSize.height / (2 * totalScale);
+	return {
+		left: center.x - halfWidth,
+		right: center.x + halfWidth,
+		top: center.y - halfHeight,
+		bottom: center.y + halfHeight,
+	};
+}
+
 function buildObservationSampleTimes({
 	startTime,
 	duration,
@@ -510,6 +597,26 @@ function smoothObservationSegment({
 			centerY: previousForward.centerY + (currentBox.centerY - previousForward.centerY) * 0.24,
 			width: previousForward.width + (currentBox.width - previousForward.width) * 0.12,
 			height: previousForward.height + (currentBox.height - previousForward.height) * 0.12,
+			anchorX:
+				(previousForward.anchorX ?? previousForward.centerX) +
+				((currentBox.anchorX ?? currentBox.centerX) -
+					(previousForward.anchorX ?? previousForward.centerX)) *
+					0.24,
+			anchorY:
+				(previousForward.anchorY ?? previousForward.centerY) +
+				((currentBox.anchorY ?? currentBox.centerY) -
+					(previousForward.anchorY ?? previousForward.centerY)) *
+					0.24,
+			fitWidth:
+				(previousForward.fitWidth ?? previousForward.width) +
+				((currentBox.fitWidth ?? currentBox.width) -
+					(previousForward.fitWidth ?? previousForward.width)) *
+					0.18,
+			fitHeight:
+				(previousForward.fitHeight ?? previousForward.height) +
+				((currentBox.fitHeight ?? currentBox.height) -
+					(previousForward.fitHeight ?? previousForward.height)) *
+					0.18,
 		};
 		forward.push({ time: observation.time, box: nextBox });
 		previousForward = nextBox;
@@ -535,6 +642,26 @@ function smoothObservationSegment({
 			centerY: previousBackward.centerY + (currentBox.centerY - previousBackward.centerY) * 0.24,
 			width: previousBackward.width + (currentBox.width - previousBackward.width) * 0.12,
 			height: previousBackward.height + (currentBox.height - previousBackward.height) * 0.12,
+			anchorX:
+				(previousBackward.anchorX ?? previousBackward.centerX) +
+				((currentBox.anchorX ?? currentBox.centerX) -
+					(previousBackward.anchorX ?? previousBackward.centerX)) *
+					0.24,
+			anchorY:
+				(previousBackward.anchorY ?? previousBackward.centerY) +
+				((currentBox.anchorY ?? currentBox.centerY) -
+					(previousBackward.anchorY ?? previousBackward.centerY)) *
+					0.24,
+			fitWidth:
+				(previousBackward.fitWidth ?? previousBackward.width) +
+				((currentBox.fitWidth ?? currentBox.width) -
+					(previousBackward.fitWidth ?? previousBackward.width)) *
+					0.18,
+			fitHeight:
+				(previousBackward.fitHeight ?? previousBackward.height) +
+				((currentBox.fitHeight ?? currentBox.height) -
+					(previousBackward.fitHeight ?? previousBackward.height)) *
+					0.18,
 		};
 		smoothedReverse.push({ time: observation.time, box: nextBox });
 		previousBackward = nextBox;
@@ -555,6 +682,22 @@ function smoothObservationSegment({
 				centerY: (observation.box.centerY + pairedForward.box.centerY) / 2,
 				width: (observation.box.width + pairedForward.box.width) / 2,
 				height: (observation.box.height + pairedForward.box.height) / 2,
+				anchorX:
+					((observation.box.anchorX ?? observation.box.centerX) +
+						(pairedForward.box.anchorX ?? pairedForward.box.centerX)) /
+					2,
+				anchorY:
+					((observation.box.anchorY ?? observation.box.centerY) +
+						(pairedForward.box.anchorY ?? pairedForward.box.centerY)) /
+					2,
+				fitWidth:
+					((observation.box.fitWidth ?? observation.box.width) +
+						(pairedForward.box.fitWidth ?? pairedForward.box.width)) /
+					2,
+				fitHeight:
+					((observation.box.fitHeight ?? observation.box.height) +
+						(pairedForward.box.fitHeight ?? pairedForward.box.height)) /
+					2,
 			},
 		};
 	});
@@ -714,6 +857,10 @@ function extractPoseBox({
 		centerY: (minY + maxY) / 2,
 		width: Math.max(1, (maxX - minX) * 1.2),
 		height: Math.max(1, (maxY - minY) * 1.25),
+		anchorX: (minX + maxX) / 2,
+		anchorY: minY + (maxY - minY) * 0.28,
+		fitWidth: Math.max(1, (maxX - minX) * 0.78),
+		fitHeight: Math.max(1, (maxY - minY) * 0.5),
 	};
 }
 
@@ -729,7 +876,9 @@ function dedupePresetNames(
 }
 
 function getBoxArea(box: SubjectBox): number {
-	return Math.max(1, box.width) * Math.max(1, box.height);
+	return (
+		Math.max(1, box.fitWidth ?? box.width) * Math.max(1, box.fitHeight ?? box.height)
+	);
 }
 
 function getBoxDistance(left: SubjectBox, right: SubjectBox): number {
@@ -737,14 +886,18 @@ function getBoxDistance(left: SubjectBox, right: SubjectBox): number {
 }
 
 function getBoxIoU(left: SubjectBox, right: SubjectBox): number {
-	const leftLeft = left.centerX - left.width / 2;
-	const leftRight = left.centerX + left.width / 2;
-	const leftTop = left.centerY - left.height / 2;
-	const leftBottom = left.centerY + left.height / 2;
-	const rightLeft = right.centerX - right.width / 2;
-	const rightRight = right.centerX + right.width / 2;
-	const rightTop = right.centerY - right.height / 2;
-	const rightBottom = right.centerY + right.height / 2;
+	const leftComparableWidth = left.fitWidth ?? left.width;
+	const leftComparableHeight = left.fitHeight ?? left.height;
+	const rightComparableWidth = right.fitWidth ?? right.width;
+	const rightComparableHeight = right.fitHeight ?? right.height;
+	const leftLeft = left.centerX - leftComparableWidth / 2;
+	const leftRight = left.centerX + leftComparableWidth / 2;
+	const leftTop = left.centerY - leftComparableHeight / 2;
+	const leftBottom = left.centerY + leftComparableHeight / 2;
+	const rightLeft = right.centerX - rightComparableWidth / 2;
+	const rightRight = right.centerX + rightComparableWidth / 2;
+	const rightTop = right.centerY - rightComparableHeight / 2;
+	const rightBottom = right.centerY + rightComparableHeight / 2;
 	const intersectionWidth = Math.max(
 		0,
 		Math.min(leftRight, rightRight) - Math.max(leftLeft, rightLeft),
@@ -758,51 +911,201 @@ function getBoxIoU(left: SubjectBox, right: SubjectBox): number {
 	return unionArea > 0 ? intersectionArea / unionArea : 0;
 }
 
-function choosePrimarySubjectBox({
+function getBoxOverlapWithViewport(
+	box: SubjectBox,
+	viewportBounds: SourceViewportBounds,
+): number {
+	const comparableWidth = box.fitWidth ?? box.width;
+	const comparableHeight = box.fitHeight ?? box.height;
+	const left = box.centerX - comparableWidth / 2;
+	const right = box.centerX + comparableWidth / 2;
+	const top = box.centerY - comparableHeight / 2;
+	const bottom = box.centerY + comparableHeight / 2;
+	const intersectionWidth = Math.max(
+		0,
+		Math.min(right, viewportBounds.right) - Math.max(left, viewportBounds.left),
+	);
+	const intersectionHeight = Math.max(
+		0,
+		Math.min(bottom, viewportBounds.bottom) - Math.max(top, viewportBounds.top),
+	);
+	const intersectionArea = intersectionWidth * intersectionHeight;
+	return intersectionArea / Math.max(1, comparableWidth * comparableHeight);
+}
+
+export function choosePrimarySubjectBox({
 	candidates,
 	previousBox,
 	sourceWidth,
 	sourceHeight,
+	targetCenterHint,
+	targetSubjectHint,
+	targetViewportBounds,
+	targetSubjectSeed,
 }: {
 	candidates: SubjectBox[];
 	previousBox: SubjectBox | null;
 	sourceWidth: number;
 	sourceHeight: number;
+	targetCenterHint?: { x: number; y: number } | null;
+	targetSubjectHint?: TrackingSubjectHint | null;
+	targetViewportBounds?: SourceViewportBounds | null;
+	targetSubjectSeed?: VideoReframeSubjectSeed | null;
 }): SubjectBox | null {
 	if (candidates.length === 0) return null;
 	if (!previousBox) {
-		const frameCenterX = sourceWidth / 2;
-		const frameCenterY = sourceHeight / 2;
-		return [...candidates].sort((left, right) => {
+		const frameCenterX = targetCenterHint?.x ?? sourceWidth / 2;
+		const frameCenterY = targetCenterHint?.y ?? sourceHeight / 2;
+		const sideWeight =
+			targetSubjectHint === "left" || targetSubjectHint === "right" ? 0.45 : 0;
+		const viewportMatchedCandidates =
+			targetViewportBounds
+				? candidates.filter(
+						(candidate) =>
+							getBoxOverlapWithViewport(candidate, targetViewportBounds) >= 0.18,
+				  )
+				: [];
+		const initialCandidates =
+			viewportMatchedCandidates.length > 0
+				? viewportMatchedCandidates
+				: candidates;
+		const scoredInitialCandidates = initialCandidates.map((candidate) => {
+			const centerPenalty =
+				Math.hypot(candidate.centerX - frameCenterX, candidate.centerY - frameCenterY) /
+				Math.max(1, Math.hypot(frameCenterX, frameCenterY));
+			const viewportOverlap = targetViewportBounds
+				? getBoxOverlapWithViewport(candidate, targetViewportBounds)
+				: 0;
+			const seedDistancePenalty = targetSubjectSeed
+				? Math.hypot(
+						(candidate.anchorX ?? candidate.centerX) - targetSubjectSeed.center.x,
+						(candidate.anchorY ?? candidate.centerY) - targetSubjectSeed.center.y,
+				  ) /
+				  Math.max(1, Math.hypot(sourceWidth, sourceHeight))
+				: 0;
+			const seedAreaScore =
+				targetSubjectSeed?.size
+					? 1 -
+					  Math.abs(
+							getBoxArea(candidate) -
+								targetSubjectSeed.size.width * targetSubjectSeed.size.height,
+					  ) /
+							Math.max(
+								getBoxArea(candidate),
+								targetSubjectSeed.size.width * targetSubjectSeed.size.height,
+								1,
+							)
+					: 0;
+			const sidePreference =
+				targetSubjectHint === "left"
+					? 1 - candidate.centerX / Math.max(1, sourceWidth)
+					: targetSubjectHint === "right"
+						? candidate.centerX / Math.max(1, sourceWidth)
+						: 0;
+			const score =
+				getBoxArea(candidate) *
+					(1 +
+						sidePreference * sideWeight +
+						viewportOverlap * 0.9 +
+						(targetSubjectSeed ? seedAreaScore * 0.45 : 0)) -
+				centerPenalty * getBoxArea(candidate) * 0.2 -
+				seedDistancePenalty * getBoxArea(candidate) * 0.75;
+			return {
+				candidate,
+				score,
+				viewportOverlap,
+			};
+		});
+		const bestInitialScore = Math.max(
+			...scoredInitialCandidates.map((entry) => entry.score),
+		);
+		const viableInitialCandidates = scoredInitialCandidates.filter(
+			(entry) => entry.score >= bestInitialScore * 0.9,
+		);
+		if (targetSubjectHint === "left") {
+			return [...viableInitialCandidates]
+				.sort((left, right) => {
+					if (Math.abs(left.candidate.centerX - right.candidate.centerX) > 1e-3) {
+						return left.candidate.centerX - right.candidate.centerX;
+					}
+					return right.score - left.score;
+				})[0]?.candidate ?? null;
+		}
+		if (targetSubjectHint === "right") {
+			return [...viableInitialCandidates]
+				.sort((left, right) => {
+					if (Math.abs(left.candidate.centerX - right.candidate.centerX) > 1e-3) {
+						return right.candidate.centerX - left.candidate.centerX;
+					}
+					return right.score - left.score;
+				})[0]?.candidate ?? null;
+		}
+		return [...scoredInitialCandidates].sort((left, right) => {
 			const leftCenterPenalty =
-				Math.hypot(left.centerX - frameCenterX, left.centerY - frameCenterY) /
-				Math.max(1, Math.hypot(frameCenterX, frameCenterY));
+				Math.hypot(
+					left.candidate.centerX - frameCenterX,
+					left.candidate.centerY - frameCenterY,
+				) / Math.max(1, Math.hypot(frameCenterX, frameCenterY));
 			const rightCenterPenalty =
-				Math.hypot(right.centerX - frameCenterX, right.centerY - frameCenterY) /
-				Math.max(1, Math.hypot(frameCenterX, frameCenterY));
-			const leftScore = getBoxArea(left) - leftCenterPenalty * getBoxArea(left) * 0.2;
+				Math.hypot(
+					right.candidate.centerX - frameCenterX,
+					right.candidate.centerY - frameCenterY,
+				) / Math.max(1, Math.hypot(frameCenterX, frameCenterY));
+			const leftScore =
+				getBoxArea(left.candidate) *
+					(1 + left.viewportOverlap * 0.9) -
+				leftCenterPenalty * getBoxArea(left.candidate) * 0.2;
 			const rightScore =
-				getBoxArea(right) - rightCenterPenalty * getBoxArea(right) * 0.2;
+				getBoxArea(right.candidate) *
+					(1 + right.viewportOverlap * 0.9) -
+				rightCenterPenalty * getBoxArea(right.candidate) * 0.2;
 			return rightScore - leftScore;
-		})[0]!;
+		})[0]!.candidate;
 	}
 
 	const frameDiagonal = Math.max(1, Math.hypot(sourceWidth, sourceHeight));
-	return [...candidates].sort((left, right) => {
-		const leftScore =
-			getBoxIoU(left, previousBox) * 4 +
-			(1 - getBoxDistance(left, previousBox) / frameDiagonal) * 2 +
-			(1 -
-				Math.abs(getBoxArea(left) - getBoxArea(previousBox)) /
-					Math.max(getBoxArea(left), getBoxArea(previousBox), 1));
-		const rightScore =
-			getBoxIoU(right, previousBox) * 4 +
-			(1 - getBoxDistance(right, previousBox) / frameDiagonal) * 2 +
-			(1 -
-				Math.abs(getBoxArea(right) - getBoxArea(previousBox)) /
-					Math.max(getBoxArea(right), getBoxArea(previousBox), 1));
-		return rightScore - leftScore;
-	})[0]!;
+	const scoredCandidates = candidates.map((candidate) => {
+		const overlapScore = getBoxIoU(candidate, previousBox) * 5;
+		const distanceScore =
+			(1 - getBoxDistance(candidate, previousBox) / frameDiagonal) * 2.5;
+		const areaScore =
+			1 -
+			Math.abs(getBoxArea(candidate) - getBoxArea(previousBox)) /
+				Math.max(getBoxArea(candidate), getBoxArea(previousBox), 1);
+		return {
+			candidate,
+			score: overlapScore + distanceScore + areaScore,
+			distanceRatio: getBoxDistance(candidate, previousBox) / frameDiagonal,
+			overlap: getBoxIoU(candidate, previousBox),
+			areaScore,
+		};
+	});
+	const bestMatch = [...scoredCandidates].sort(
+		(left, right) => right.score - left.score,
+	)[0];
+	if (!bestMatch) return null;
+	const maxReacquireDistancePx = Math.max(
+		sourceWidth * 0.11,
+		(previousBox.fitWidth ?? previousBox.width) * 1.45,
+	);
+	const maxReacquireVerticalDistancePx = Math.max(
+		sourceHeight * 0.12,
+		(previousBox.fitHeight ?? previousBox.height) * 0.85,
+	);
+	const bestHorizontalDistance = Math.abs(
+		bestMatch.candidate.centerX - previousBox.centerX,
+	);
+	const bestVerticalDistance = Math.abs(
+		bestMatch.candidate.centerY - previousBox.centerY,
+	);
+	const isWeakMatch =
+		bestMatch.overlap < 0.1 &&
+		bestMatch.distanceRatio > 0.16 &&
+		bestMatch.areaScore < 0.72;
+	const isOutsideReacquireWindow =
+		bestHorizontalDistance > maxReacquireDistancePx ||
+		bestVerticalDistance > maxReacquireVerticalDistancePx;
+	return isWeakMatch || isOutsideReacquireWindow ? null : bestMatch.candidate;
 }
 
 function smoothTrackedObservations({
@@ -811,7 +1114,7 @@ function smoothTrackedObservations({
 	observations: SubjectTrackingObservation[];
 }): SubjectTrackingObservation[] {
 	if (observations.length === 0) return [];
-	const maxHoldSeconds = 0.35;
+	const maxHoldSeconds = 1.25;
 	const heldObservations: SubjectTrackingObservation[] = [];
 	let previousTracked: SubjectTrackingObservation | null = null;
 	for (const observation of observations) {
@@ -899,6 +1202,60 @@ function coalesceMotionTrackingKeyframes({
 	return keyframes;
 }
 
+function smoothTrackedTransformScales({
+	trackedTransforms,
+	animateScale,
+}: {
+	trackedTransforms: Array<
+		SubjectTrackingObservation & {
+			transform: ReturnType<typeof derivePresetTransform>;
+		}
+	>;
+	animateScale: boolean;
+}): Array<
+	SubjectTrackingObservation & {
+		transform: ReturnType<typeof derivePresetTransform>;
+	}
+> {
+	if (!animateScale || trackedTransforms.length <= 1) {
+		return trackedTransforms.map((entry) => ({
+			...entry,
+			transform: {
+				...entry.transform,
+			},
+		}));
+	}
+	const maxScaleStep = 0.035;
+	const smoothing = 0.12;
+	let previousScale = trackedTransforms[0]!.transform.scale;
+	return trackedTransforms.map((entry, index) => {
+		if (index === 0) {
+			return {
+				...entry,
+				transform: {
+					...entry.transform,
+				},
+			};
+		}
+		const targetScale = entry.transform.scale;
+		const smoothedTarget =
+			previousScale + (targetScale - previousScale) * smoothing;
+		const nextScale = clamp(
+			smoothedTarget,
+			previousScale - maxScaleStep,
+			previousScale + maxScaleStep,
+		);
+		previousScale = nextScale;
+		return {
+			...entry,
+			transform: {
+				...entry.transform,
+				scale: nextScale,
+			},
+		};
+	});
+}
+
 export function buildMotionTrackingKeyframesFromObservations({
 	observations,
 	canvasSize,
@@ -934,8 +1291,12 @@ export function buildMotionTrackingKeyframesFromObservations({
 			},
 		];
 	});
+	const smoothedTrackedTransforms = smoothTrackedTransformScales({
+		trackedTransforms,
+		animateScale,
+	});
 	return {
-		keyframes: trackedTransforms.map((observation, observationIndex) => ({
+		keyframes: smoothedTrackedTransforms.map((observation, observationIndex) => ({
 			id: generateUUID(),
 			time: Math.max(0, observation.time + observationIndex * 1e-6),
 			position: {
@@ -944,10 +1305,22 @@ export function buildMotionTrackingKeyframesFromObservations({
 			},
 			scale: animateScale
 				? observation.transform.scale
-				: (trackedTransforms[0]?.transform.scale ?? baseScale),
+				: (smoothedTrackedTransforms[0]?.transform.scale ?? baseScale),
+			subjectCenter: observation.box
+				? {
+						x: observation.box.anchorX ?? observation.box.centerX,
+						y: observation.box.anchorY ?? observation.box.centerY,
+				  }
+				: undefined,
+			subjectSize: observation.box
+				? {
+						width: observation.box.fitWidth ?? observation.box.width,
+						height: observation.box.fitHeight ?? observation.box.height,
+				  }
+				: undefined,
 		})),
 		sampleCount: observations.length,
-		trackedSampleCount: trackedTransforms.length,
+		trackedSampleCount: smoothedTrackedTransforms.length,
 	};
 }
 
@@ -1077,6 +1450,98 @@ function buildTwoSubjectClusters({
 	);
 }
 
+function filterCandidatesByIdentityCluster({
+	candidates,
+	clusters,
+	targetIdentity,
+}: {
+	candidates: SubjectBox[];
+	clusters: SubjectBox[][];
+	targetIdentity: "left" | "right";
+}): SubjectBox[] {
+	if (candidates.length === 0 || clusters.length < 2) {
+		return candidates;
+	}
+	const leftCenter = buildSubjectBoxFromDetections(clusters[0]!).centerX;
+	const rightCenter = buildSubjectBoxFromDetections(
+		clusters[clusters.length - 1]!,
+	).centerX;
+	const filtered = candidates.filter((candidate) => {
+		const isLeftCluster =
+			Math.abs(candidate.centerX - leftCenter) <=
+			Math.abs(candidate.centerX - rightCenter);
+		return targetIdentity === "left" ? isLeftCluster : !isLeftCluster;
+	});
+	return filtered.length > 0 ? filtered : candidates;
+}
+
+function getClusterCenterXs(clusters: SubjectBox[][]): {
+	left: number;
+	right: number;
+} | null {
+	if (clusters.length < 2) return null;
+	return {
+		left: buildSubjectBoxFromDetections(clusters[0]!).centerX,
+		right: buildSubjectBoxFromDetections(clusters[clusters.length - 1]!).centerX,
+	};
+}
+
+function classifyBoxIdentity({
+	box,
+	clusters,
+}: {
+	box: SubjectBox;
+	clusters: SubjectBox[][];
+}): "left" | "right" | "subject" {
+	const clusterCenters = getClusterCenterXs(clusters);
+	if (!clusterCenters) return "subject";
+	return Math.abs(box.centerX - clusterCenters.left) <=
+		Math.abs(box.centerX - clusterCenters.right)
+		? "left"
+		: "right";
+}
+
+function getInitialSeedBoxForIdentity({
+	observations,
+	clusters,
+	targetIdentity,
+}: {
+	observations: SubjectObservation[];
+	clusters: SubjectBox[][];
+	targetIdentity: "subject" | "left" | "right";
+}): SubjectBox | null {
+	const sortedObservations = [...observations].sort(
+		(left, right) => left.time - right.time,
+	);
+	for (const observation of sortedObservations) {
+		if (observation.boxes.length === 0) continue;
+		if (targetIdentity === "subject") {
+			return observation.boxes.length === 1
+				? { ...observation.boxes[0]! }
+				: buildSubjectBoxFromDetections(observation.boxes);
+		}
+		const matches = observation.boxes.filter(
+			(box) => classifyBoxIdentity({ box, clusters }) === targetIdentity,
+		);
+		if (matches.length > 0) {
+			const clusterCenters = getClusterCenterXs(clusters);
+			if (!clusterCenters) {
+				return { ...matches[0]! };
+			}
+			const targetCenter =
+				targetIdentity === "left" ? clusterCenters.left : clusterCenters.right;
+			return {
+				...[...matches].sort(
+					(left, right) =>
+						Math.abs(left.centerX - targetCenter) -
+						Math.abs(right.centerX - targetCenter),
+				)[0]!,
+			};
+		}
+	}
+	return null;
+}
+
 function classifyObservationPresetName({
 	observation,
 	clusters,
@@ -1085,24 +1550,22 @@ function classifyObservationPresetName({
 	clusters: SubjectBox[][];
 }): AutoSectionKind | null {
 	if (observation.boxes.length === 0) return null;
-	if (observation.boxes.length === 1) {
-		return "Subject";
-	}
 	if (clusters.length < 2) {
 		return "Subject";
+	}
+	if (observation.boxes.length === 1) {
+		return classifyBoxIdentity({
+			box: observation.boxes[0]!,
+			clusters,
+		}) === "left"
+			? "Subject Left"
+			: "Subject Right";
 	}
 	if (observation.boxes.length >= 2) {
 		let hasLeft = false;
 		let hasRight = false;
-		const leftCenter = buildSubjectBoxFromDetections(clusters[0]!).centerX;
-		const rightCenter = buildSubjectBoxFromDetections(
-			clusters[clusters.length - 1]!,
-		).centerX;
 		for (const box of observation.boxes) {
-			if (
-				Math.abs(box.centerX - leftCenter) <=
-				Math.abs(box.centerX - rightCenter)
-			) {
+			if (classifyBoxIdentity({ box, clusters }) === "left") {
 				hasLeft = true;
 			} else {
 				hasRight = true;
@@ -1294,21 +1757,15 @@ export function buildAutoReframePresetsFromDetections({
 		detections,
 		sourceWidth,
 	});
-	const presets: VideoReframePreset[] = [
-		buildVideoReframePreset({
-			name: "Subject",
-			autoSeeded: true,
-			transform: derivePresetTransform({
-				box: centerBox,
-				canvasSize,
-				sourceWidth,
-				sourceHeight,
-				baseScale,
-			}),
-		}),
-	];
+	const initialSubjectBox =
+		getInitialSeedBoxForIdentity({
+			observations,
+			clusters,
+			targetIdentity: "subject",
+		}) ?? centerBox;
+	const presets: VideoReframePreset[] = [];
 	let switches: VideoReframeSwitch[] = [];
-	let defaultPresetId = presets[0]?.id ?? null;
+	let defaultPresetId: string | null = null;
 
 	if (clusters.length >= 2) {
 		const edgeBias = Math.max(sourceWidth * 0.02, centerBox.width * 0.12);
@@ -1316,26 +1773,42 @@ export function buildAutoReframePresetsFromDetections({
 		const rightClusterBox = buildSubjectBoxFromDetections(
 			clusters[clusters.length - 1]!,
 		);
+		const initialLeftBox =
+			getInitialSeedBoxForIdentity({
+				observations,
+				clusters,
+				targetIdentity: "left",
+			}) ?? leftClusterBox;
+		const initialRightBox =
+			getInitialSeedBoxForIdentity({
+				observations,
+				clusters,
+				targetIdentity: "right",
+			}) ?? rightClusterBox;
 		const leftBox: SubjectBox = {
-			...leftClusterBox,
+			...initialLeftBox,
 			centerX: clampSubjectCenterX({
-				centerX: leftClusterBox.centerX - edgeBias,
+				centerX: initialLeftBox.centerX - edgeBias,
 				sourceWidth,
-				boxWidth: leftClusterBox.width,
+				boxWidth: initialLeftBox.width,
 			}),
 		};
 		const rightBox: SubjectBox = {
-			...rightClusterBox,
+			...initialRightBox,
 			centerX: clampSubjectCenterX({
-				centerX: rightClusterBox.centerX + edgeBias,
+				centerX: initialRightBox.centerX + edgeBias,
 				sourceWidth,
-				boxWidth: rightClusterBox.width,
+				boxWidth: initialRightBox.width,
 			}),
 		};
 		presets.push(
 			buildVideoReframePreset({
 				name: "Subject Left",
 				autoSeeded: true,
+				subjectSeed: buildSubjectSeed({
+					box: initialLeftBox,
+					identity: "left",
+				}),
 				transform: derivePresetTransform({
 					box: leftBox,
 					canvasSize,
@@ -1348,6 +1821,10 @@ export function buildAutoReframePresetsFromDetections({
 			buildVideoReframePreset({
 				name: "Subject Right",
 				autoSeeded: true,
+				subjectSeed: buildSubjectSeed({
+					box: initialRightBox,
+					identity: "right",
+				}),
 				transform: derivePresetTransform({
 					box: rightBox,
 					canvasSize,
@@ -1358,46 +1835,26 @@ export function buildAutoReframePresetsFromDetections({
 				}),
 			}),
 		);
-
-		const defaultPreset = presets.find((preset) => preset.name === "Subject");
-		const subjectLeftPreset = presets.find(
-			(preset) => preset.name === "Subject Left",
+		defaultPresetId = presets[0]?.id ?? null;
+	} else {
+		presets.push(
+			buildVideoReframePreset({
+				name: "Subject",
+				autoSeeded: true,
+				subjectSeed: buildSubjectSeed({
+					box: initialSubjectBox,
+					identity: "subject",
+				}),
+				transform: derivePresetTransform({
+					box: initialSubjectBox,
+					canvasSize,
+					sourceWidth,
+					sourceHeight,
+					baseScale,
+				}),
+			}),
 		);
-		if (subjectLeftPreset) {
-			const leftClusterCenterX = leftClusterBox.centerX;
-			const rightClusterCenterX = rightClusterBox.centerX;
-			const multiSubjectObservation = observations.find((observation) => {
-				if (observation.boxes.length < 2) return false;
-				let hasLeft = false;
-				let hasRight = false;
-				for (const box of observation.boxes) {
-					if (
-						Math.abs(box.centerX - leftClusterCenterX) <=
-						Math.abs(box.centerX - rightClusterCenterX)
-					) {
-						hasLeft = true;
-					} else {
-						hasRight = true;
-					}
-				}
-				return hasLeft && hasRight;
-			});
-
-			if (multiSubjectObservation) {
-				if (multiSubjectObservation.time <= 0.05) {
-					defaultPresetId = subjectLeftPreset.id;
-				} else if (defaultPreset) {
-					defaultPresetId = defaultPreset.id;
-					switches = [
-						{
-							id: generateUUID(),
-							time: multiSubjectObservation.time,
-							presetId: subjectLeftPreset.id,
-						},
-					];
-				}
-			}
-		}
+		defaultPresetId = presets[0]?.id ?? null;
 	}
 
 	const dedupedPresets = dedupePresetNames(presets);
@@ -1530,6 +1987,10 @@ export async function analyzeGeneratedClipReframes({
 								centerY: faceBox.originY + faceBox.height / 2,
 								width: Math.max(1, faceBox.width * 2.4),
 								height: Math.max(1, faceBox.height * 3.4),
+								anchorX: faceBox.originX + faceBox.width / 2,
+								anchorY: faceBox.originY + faceBox.height * 0.42,
+								fitWidth: Math.max(1, faceBox.width * 1.35),
+								fitHeight: Math.max(1, faceBox.height * 1.75),
 							};
 							detections.push(nextBox);
 							boxes.push(nextBox);
@@ -1609,6 +2070,9 @@ export async function analyzeGeneratedClipMotionTracking({
 	endTime,
 	canvasSize,
 	baseScale,
+	targetTransform,
+	targetSubjectHint,
+	targetSubjectSeed,
 	animateScale = true,
 	signal,
 }: {
@@ -1617,6 +2081,9 @@ export async function analyzeGeneratedClipMotionTracking({
 	endTime: number;
 	canvasSize: { width: number; height: number };
 	baseScale: number;
+	targetTransform?: VideoReframePresetTransform;
+	targetSubjectHint?: TrackingSubjectHint | null;
+	targetSubjectSeed?: VideoReframeSubjectSeed | null;
 	animateScale?: boolean;
 	signal?: AbortSignal;
 }): Promise<{
@@ -1636,6 +2103,24 @@ export async function analyzeGeneratedClipMotionTracking({
 
 	const sourceWidth = asset.width ?? 0;
 	const sourceHeight = asset.height ?? 0;
+	const targetCenterHint =
+		targetTransform && sourceWidth > 0 && sourceHeight > 0
+			? getSourceCenterForTransform({
+					transform: targetTransform,
+					canvasSize,
+					sourceWidth,
+					sourceHeight,
+			  })
+			: null;
+	const targetViewportBounds =
+		targetTransform && sourceWidth > 0 && sourceHeight > 0
+			? getSourceViewportBoundsForTransform({
+					transform: targetTransform,
+					canvasSize,
+					sourceWidth,
+					sourceHeight,
+			  })
+			: null;
 	if (sourceWidth <= 0 || sourceHeight <= 0) {
 		return {
 			keyframes: [],
@@ -1655,8 +2140,12 @@ export async function analyzeGeneratedClipMotionTracking({
 				startTime,
 				duration,
 			});
-			const observations: SubjectTrackingObservation[] = [];
-			let previousTrackedBox: SubjectBox | null = null;
+			const sampledFrames: Array<{
+				time: number;
+				faceCandidates: SubjectBox[];
+				poseCandidates: SubjectBox[];
+			}> = [];
+			const identityDetections: SubjectBox[] = [];
 			let detectionCount = 0;
 
 			for (const sampledTime of sampleTimes) {
@@ -1673,15 +2162,17 @@ export async function analyzeGeneratedClipMotionTracking({
 				await waitForVideoFrameReady({ video, signal });
 				throwIfAborted(signal);
 				if (!canAnalyzeCurrentVideoFrame({ video })) {
-					observations.push({
+					sampledFrames.push({
 						time: Math.max(0, sampledTime - startTime),
-						box: null,
+						faceCandidates: [],
+						poseCandidates: [],
 					});
 					continue;
 				}
 
 				const frameTimestampMs = Math.round(video.currentTime * 1000);
-				let candidates: SubjectBox[] = [];
+				let faceCandidates: SubjectBox[] = [];
+				let poseCandidates: SubjectBox[] = [];
 				try {
 					const faceResult = withSuppressedVisionConsoleErrors(() =>
 						faceDetector.detectForVideo(
@@ -1692,7 +2183,7 @@ export async function analyzeGeneratedClipMotionTracking({
 							}),
 						),
 					);
-					candidates = (faceResult.detections ?? [])
+					faceCandidates = (faceResult.detections ?? [])
 						.map((detection) => detection.boundingBox)
 						.filter((box): box is NonNullable<typeof box> => Boolean(box))
 						.map((faceBox) => ({
@@ -1700,18 +2191,25 @@ export async function analyzeGeneratedClipMotionTracking({
 							centerY: faceBox.originY + faceBox.height / 2,
 							width: Math.max(1, faceBox.width * 2.4),
 							height: Math.max(1, faceBox.height * 3.4),
+							anchorX: faceBox.originX + faceBox.width / 2,
+							anchorY: faceBox.originY + faceBox.height * 0.42,
+							fitWidth: Math.max(1, faceBox.width * 1.35),
+							fitHeight: Math.max(1, faceBox.height * 1.75),
 						}));
-					if (candidates.length === 0) {
+					if (faceCandidates.length > 0) {
+						identityDetections.push(...faceCandidates);
+					}
+					if (faceCandidates.length === 0) {
 						const poseResult = withSuppressedVisionConsoleErrors(() =>
 							poseLandmarker.detectForVideo(
 								video,
 								getMonotonicVisionTimestampMs({
 									kind: "pose",
-									candidateMs: frameTimestampMs,
+								candidateMs: frameTimestampMs,
 								}),
 							),
 						);
-						candidates = (poseResult.landmarks ?? []).flatMap((pose) => {
+						poseCandidates = (poseResult.landmarks ?? []).flatMap((pose) => {
 							const poseBox = extractPoseBox({
 								landmarks: pose,
 								sourceWidth,
@@ -1729,15 +2227,57 @@ export async function analyzeGeneratedClipMotionTracking({
 					}
 				}
 
-				detectionCount += candidates.length;
+				detectionCount += faceCandidates.length + poseCandidates.length;
+				sampledFrames.push({
+					time: Math.max(0, sampledTime - startTime),
+					faceCandidates,
+					poseCandidates,
+				});
+			}
+
+			const observations: SubjectTrackingObservation[] = [];
+			let previousTrackedBox: SubjectBox | null = null;
+			const identityClusters =
+				identityDetections.length >= 2
+					? buildTwoSubjectClusters({
+							detections: identityDetections,
+							sourceWidth,
+					  })
+					: [];
+			const targetIdentity =
+				targetSubjectSeed?.identity === "left" ||
+				targetSubjectSeed?.identity === "right"
+					? targetSubjectSeed.identity
+					: targetSubjectHint === "left" || targetSubjectHint === "right"
+						? targetSubjectHint
+						: null;
+			for (const frame of sampledFrames) {
+				const clusteredFaceCandidates =
+					targetIdentity && identityClusters.length >= 2
+						? filterCandidatesByIdentityCluster({
+								candidates: frame.faceCandidates,
+								clusters: identityClusters,
+								targetIdentity,
+						  })
+						: frame.faceCandidates;
+				const candidates =
+					clusteredFaceCandidates.length > 0
+						? clusteredFaceCandidates
+						: previousTrackedBox
+							? []
+							: frame.poseCandidates;
 				const trackedBox = choosePrimarySubjectBox({
 					candidates,
 					previousBox: previousTrackedBox,
 					sourceWidth,
 					sourceHeight,
+					targetCenterHint,
+					targetSubjectHint,
+					targetViewportBounds,
+					targetSubjectSeed,
 				});
 				observations.push({
-					time: Math.max(0, sampledTime - startTime),
+					time: frame.time,
 					box: trackedBox ? { ...trackedBox } : null,
 				});
 				previousTrackedBox = trackedBox ?? previousTrackedBox;

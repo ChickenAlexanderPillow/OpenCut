@@ -71,13 +71,60 @@ const baseElement: VideoElement = {
 };
 
 describe("video reframe resolution", () => {
-	test("uses the default preset before the first switch", () => {
+test("uses the default preset before the first switch", () => {
 		expect(
 			getActiveReframePresetId({
 				element: baseElement,
 				localTime: 2,
 			}),
-		).toBe("wide");
+	).toBe("wide");
+});
+
+	test("remaps legacy generic subject sections to subject left when side presets exist", () => {
+		const element: VideoElement = {
+			...baseElement,
+			reframePresets: [
+				baseElement.reframePresets![0]!,
+				baseElement.reframePresets![1]!,
+				{
+					id: "subject-left",
+					name: "Subject Left",
+					transform: {
+						position: { x: -140, y: -20 },
+						scale: 2.4,
+					},
+				},
+				{
+					id: "subject-right",
+					name: "Subject Right",
+					transform: {
+						position: { x: 140, y: -20 },
+						scale: 2.4,
+					},
+				},
+			],
+			defaultReframePresetId: "subject",
+			reframeSwitches: [
+				{
+					id: "switch-1",
+					time: 4,
+					presetId: "subject",
+				},
+			],
+		};
+
+		expect(
+			getActiveReframePresetId({
+				element,
+				localTime: 2,
+			}),
+		).toBe("subject-left");
+		expect(
+			getActiveReframePresetId({
+				element,
+				localTime: 5,
+			}),
+		).toBe("subject-left");
 	});
 
 	test("uses switched preset after the marker and preserves base rotation", () => {
@@ -139,6 +186,51 @@ describe("video reframe resolution", () => {
 		expect(trackedSubjectTransform.position.y).toBe(-40);
 		expect(trackedSubjectTransform.scale).toBe(2.5);
 		expect(trackedSubjectTransform.rotate).toBe(12);
+	});
+
+	test("applies preset manual adjustments on top of tracked framing", () => {
+		const trackedElement: VideoElement = {
+			...baseElement,
+			reframePresets: [
+				{
+					...baseElement.reframePresets![0]!,
+					transformAdjustment: {
+						positionOffset: { x: 24, y: -12 },
+						scaleMultiplier: 1.1,
+					},
+					motionTracking: {
+						enabled: true,
+						mode: "subject-single-v1",
+						source: "baked-keyframes",
+						animateScale: true,
+						keyframes: [
+							{
+								id: "mt-1",
+								time: 0,
+								position: { x: 0, y: 0 },
+								scale: 1.8,
+							},
+							{
+								id: "mt-2",
+								time: 3,
+								position: { x: 80, y: -24 },
+								scale: 2.1,
+							},
+						],
+					},
+				},
+				baseElement.reframePresets![1]!,
+			],
+		};
+
+		const transform = resolveVideoBaseTransformAtTime({
+			element: trackedElement,
+			localTime: 2,
+		});
+		expect(transform.position.x).toBeCloseTo(77.3333333333, 6);
+		expect(transform.position.y).toBeCloseTo(-28, 6);
+		expect(transform.scale).toBeCloseTo(2.2, 6);
+		expect(transform.rotate).toBe(12);
 	});
 
 	test("replaces a switch when inserting at the same timestamp", () => {
@@ -451,7 +543,19 @@ describe("video reframe resolution", () => {
 		]);
 	});
 
-	test("split-screen slot transform overrides stay separate from the bound preset", () => {
+	test("split-screen slot transform overrides are ignored while auto-only mode is active", () => {
+		const expected = resolveVideoSplitScreenSlotTransform({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: baseElement.reframePresets,
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: "subject",
+			},
+		});
 		const resolved = resolveVideoSplitScreenSlotTransform({
 			baseTransform: baseElement.transform,
 			duration: baseElement.duration,
@@ -469,11 +573,7 @@ describe("video reframe resolution", () => {
 			},
 		});
 
-		expect(resolved).toEqual({
-			position: { x: 360, y: -120 },
-			scale: 3.4,
-			rotate: 12,
-		});
+		expect(resolved).toEqual(expected);
 		expect(
 			baseElement.reframePresets?.find((preset) => preset.id === "subject")
 				?.transform,
@@ -483,7 +583,25 @@ describe("video reframe resolution", () => {
 		});
 	});
 
-	test("split-screen binding remembers separate transforms for top and bottom", () => {
+	test("split-screen binding ignores stored per-slot adjustments while auto-only mode is active", () => {
+		const expected = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: baseElement.reframePresets,
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: "subject",
+			},
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+		});
 		const resolved = resolveVideoSplitScreenSlotTransformFromState({
 			baseTransform: baseElement.transform,
 			duration: baseElement.duration,
@@ -513,13 +631,46 @@ describe("video reframe resolution", () => {
 			viewportBalance: "balanced",
 		});
 
-		expect(resolved.position.x).toBeCloseTo(-39, 5);
-		expect(resolved.position.y).toBeCloseTo(13, 5);
-		expect(resolved.scale).toBeCloseTo(1.2669447340980189, 5);
-		expect(resolved.rotate).toBe(12);
+		expect(resolved).toEqual(expected);
 	});
 
-	test("split-screen binding remembers separate transforms for balanced and unbalanced variants", () => {
+	test("split-screen binding ignores balanced and unbalanced manual variants while preserving auto viewport differences", () => {
+		const expectedBalanced = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: baseElement.reframePresets,
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: "subject",
+			},
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+		});
+		const expectedUnbalanced = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: baseElement.reframePresets,
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: "subject",
+			},
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "unbalanced",
+		});
 		const balanced = resolveVideoSplitScreenSlotTransformFromState({
 			baseTransform: baseElement.transform,
 			duration: baseElement.duration,
@@ -578,9 +729,84 @@ describe("video reframe resolution", () => {
 			viewportBalance: "unbalanced",
 		});
 
-		expect(balanced.position.x).not.toBe(unbalanced.position.x);
-		expect(balanced.position.y).not.toBe(unbalanced.position.y);
-		expect(balanced.scale).not.toBe(unbalanced.scale);
+		expect(balanced).toEqual(expectedBalanced);
+		expect(unbalanced).toEqual(expectedUnbalanced);
+	});
+
+	test("split-screen auto framing centers tracked subjects inside slots by default", () => {
+		const resolved = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: [
+				baseElement.reframePresets![0]!,
+				{
+					...baseElement.reframePresets![1]!,
+					motionTracking: {
+						enabled: true,
+						mode: "subject-single-v1",
+						source: "baked-keyframes",
+						animateScale: true,
+						keyframes: [
+							{
+								id: "track-1",
+								time: 0,
+								position: { x: 120, y: -40 },
+								scale: 2.5,
+								subjectCenter: { x: 300, y: 240 },
+								subjectSize: { width: 240, height: 420 },
+							},
+						],
+					},
+				},
+			],
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: "subject",
+			},
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+		});
+
+		const viewport = getVideoSplitScreenViewports({
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+			width: 1080,
+			height: 1920,
+		}).get("bottom");
+		expect(viewport).toBeDefined();
+		if (!viewport) return;
+		const slotCoverScale = Math.max(
+			viewport.width / 1920,
+			viewport.height / 1080,
+		);
+		const viewportAdjustedPosition = {
+			x: resolved.position.x + 1080 / 2 - (viewport.x + viewport.width / 2),
+			y: resolved.position.y + 1920 / 2 - (viewport.y + viewport.height / 2),
+		};
+		const totalScale = slotCoverScale * resolved.scale;
+		const viewportAnchor = {
+			x: viewport.width / 2,
+			y: viewport.height * 0.4,
+		};
+		const sourceCenter = {
+			x: 1920 / 2 - viewportAdjustedPosition.x / totalScale,
+			y:
+				1080 / 2 -
+				(viewportAdjustedPosition.y -
+					(viewportAnchor.y - viewport.height / 2)) /
+					totalScale,
+		};
+
+		expect(sourceCenter.x).toBeCloseTo(300, 5);
+		expect(sourceCenter.y).toBeCloseTo(213.80009144947405, 5);
+		expect(resolved.scale).toBeLessThan(2.5);
 	});
 
 	test("converts split-slot framing into equivalent full-screen framing", () => {

@@ -4,6 +4,7 @@ import type {
 	VideoElement,
 	VideoMotionTracking,
 	VideoReframePreset,
+	VideoReframeTransformAdjustment,
 	VideoReframeSwitch,
 	VideoSplitScreen,
 	VideoSplitScreenSlotTransformAdjustment,
@@ -15,9 +16,12 @@ import type {
 import { generateUUID } from "@/utils/id";
 import {
 	clampMotionTrackingToDuration,
+	resolveMotionTrackedSubjectFrame,
+	resolveMotionTrackedSubjectCenter,
 	resolveMotionTrackedReframeTransform,
 	splitMotionTrackingAtTime,
 } from "./motion-tracking";
+import { ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS } from "./split-slot-config";
 
 const REFRAME_SWITCH_TIME_EPSILON = 1 / 1000;
 const DEFAULT_SPLIT_LAYOUT_PRESET: VideoSplitScreenLayoutPreset = "top-bottom";
@@ -25,6 +29,73 @@ const DEFAULT_SPLIT_VIEWPORT_BALANCE: VideoSplitScreenViewportBalance =
 	"balanced";
 const UNBALANCED_TOP_SPLIT_RATIO = 1 / 3;
 const SPLIT_DIVIDER_THICKNESS = 2;
+
+function clamp(value: number, min: number, max: number): number {
+	return Math.max(min, Math.min(max, value));
+}
+
+function normalizeVideoReframeTransformAdjustment(
+	adjustment: VideoReframeTransformAdjustment | null | undefined,
+): VideoReframeTransformAdjustment | undefined {
+	if (
+		!adjustment ||
+		!Number.isFinite(adjustment.positionOffset.x) ||
+		!Number.isFinite(adjustment.positionOffset.y) ||
+		!Number.isFinite(adjustment.scaleMultiplier) ||
+		adjustment.scaleMultiplier <= 0
+	) {
+		return undefined;
+	}
+	return {
+		positionOffset: {
+			x: adjustment.positionOffset.x,
+			y: adjustment.positionOffset.y,
+		},
+		scaleMultiplier: adjustment.scaleMultiplier,
+	};
+}
+
+export function applyVideoReframeTransformAdjustment({
+	transform,
+	adjustment,
+}: {
+	transform: VideoReframePreset["transform"];
+	adjustment: VideoReframeTransformAdjustment | null | undefined;
+}): VideoReframePreset["transform"] {
+	if (!adjustment) {
+		return {
+			position: {
+				x: transform.position.x,
+				y: transform.position.y,
+			},
+			scale: transform.scale,
+		};
+	}
+	return {
+		position: {
+			x: transform.position.x + adjustment.positionOffset.x,
+			y: transform.position.y + adjustment.positionOffset.y,
+		},
+		scale: transform.scale * adjustment.scaleMultiplier,
+	};
+}
+
+export function deriveVideoReframeTransformAdjustment({
+	baseTransform,
+	finalTransform,
+}: {
+	baseTransform: VideoReframePreset["transform"];
+	finalTransform: Pick<Transform, "position" | "scale">;
+}): VideoReframeTransformAdjustment {
+	return {
+		positionOffset: {
+			x: finalTransform.position.x - baseTransform.position.x,
+			y: finalTransform.position.y - baseTransform.position.y,
+		},
+		scaleMultiplier:
+			finalTransform.scale / Math.max(1e-6, baseTransform.scale),
+	};
+}
 
 const SPLIT_LAYOUT_SLOTS: Record<VideoSplitScreenLayoutPreset, string[]> = {
 	"top-bottom": ["top", "bottom"],
@@ -154,6 +225,7 @@ export function getEffectiveVideoSplitScreenSlotTransformOverride({
 		"transformOverride" | "transformOverridesBySlotId"
 	> & { slotId?: string };
 }): VideoSplitScreenSlotBinding["transformOverride"] {
+	if (!ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS) return null;
 	return (
 		(slot.slotId
 			? (slot.transformOverridesBySlotId?.[slot.slotId] ?? null)
@@ -172,6 +244,7 @@ export function getEffectiveVideoSplitScreenSlotTransformAdjustment({
 	};
 	viewportBalance?: VideoSplitScreenViewportBalance;
 }): VideoSplitScreenSlotTransformAdjustment | null {
+	if (!ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS) return null;
 	if (!slot.slotId) return null;
 	const variantKey = getVideoSplitScreenVariantKey({
 		slotId: slot.slotId,
@@ -246,6 +319,145 @@ function buildTransformForSourceCenter({
 		scale,
 		rotate,
 	};
+}
+
+function buildTransformForSourcePointInViewport({
+	sourcePoint,
+	viewportPoint,
+	viewport,
+	canvasWidth,
+	canvasHeight,
+	scale,
+	baseScale,
+	sourceWidth,
+	sourceHeight,
+	rotate = 0,
+}: {
+	sourcePoint: { x: number; y: number };
+	viewportPoint: { x: number; y: number };
+	viewport: VideoSplitScreenViewport;
+	canvasWidth: number;
+	canvasHeight: number;
+	scale: number;
+	baseScale: number;
+	sourceWidth: number;
+	sourceHeight: number;
+	rotate?: number;
+}): Transform {
+	const totalScale = baseScale * scale;
+	const unclampedLocal = {
+		x:
+			-((sourcePoint.x - sourceWidth / 2) * totalScale) +
+			(viewportPoint.x - viewport.width / 2),
+		y:
+			-((sourcePoint.y - sourceHeight / 2) * totalScale) +
+			(viewportPoint.y - viewport.height / 2),
+	};
+	const halfScaledWidth = (sourceWidth * totalScale) / 2;
+	const halfScaledHeight = (sourceHeight * totalScale) / 2;
+	const minX = viewport.width / 2 - halfScaledWidth;
+	const maxX = halfScaledWidth - viewport.width / 2;
+	const minY = viewport.height / 2 - halfScaledHeight;
+	const maxY = halfScaledHeight - viewport.height / 2;
+	const clampedLocal = {
+		x: clamp(unclampedLocal.x, Math.min(minX, maxX), Math.max(minX, maxX)),
+		y: clamp(unclampedLocal.y, Math.min(minY, maxY), Math.max(minY, maxY)),
+	};
+	const viewportCenterX = viewport.x + viewport.width / 2;
+	const viewportCenterY = viewport.y + viewport.height / 2;
+	return {
+		position: {
+			x: clampedLocal.x - canvasWidth / 2 + viewportCenterX,
+			y: clampedLocal.y - canvasHeight / 2 + viewportCenterY,
+		},
+		scale,
+		rotate,
+	};
+}
+
+function deriveAutoSplitSlotTransformFromTrackedSubject({
+	trackedSubjectCenter,
+	trackedSubjectSize,
+	viewport,
+	canvasWidth,
+	canvasHeight,
+	sourceWidth,
+	sourceHeight,
+	rotate,
+}: {
+	trackedSubjectCenter: { x: number; y: number };
+	trackedSubjectSize?: { width: number; height: number } | null;
+	viewport: VideoSplitScreenViewport;
+	canvasWidth: number;
+	canvasHeight: number;
+	sourceWidth: number;
+	sourceHeight: number;
+	rotate: number;
+}): Transform {
+	const slotCoverScale = getFitBaseScale({
+		rendererWidth: viewport.width,
+		rendererHeight: viewport.height,
+		sourceWidth,
+		sourceHeight,
+		fitMode: "cover",
+	});
+	const desiredViewportAnchor = {
+		x: viewport.width / 2,
+		y: viewport.height * 0.4,
+	};
+	const effectiveSubjectWidth = Math.max(
+		1,
+		(trackedSubjectSize?.width ?? sourceWidth * 0.28) * 1.12,
+	);
+	const effectiveSubjectHeight = Math.max(
+		1,
+		(trackedSubjectSize?.height ?? sourceHeight * 0.42) * 1.08,
+	);
+	const targetWidthShare = 0.4;
+	const targetHeightShare = 0.68;
+	const edgeHideOverscan = 1.08;
+	const scaleForWidth =
+		(viewport.width * targetWidthShare) /
+		Math.max(1, effectiveSubjectWidth * slotCoverScale);
+	const scaleForHeight =
+		(viewport.height * targetHeightShare) /
+		Math.max(1, effectiveSubjectHeight * slotCoverScale);
+	const scale = clamp(
+		Math.max(scaleForWidth, scaleForHeight) * 1.26 * edgeHideOverscan,
+		0.25,
+		8,
+	);
+	const totalScale = slotCoverScale * scale;
+	const estimatedHeadTop =
+		trackedSubjectCenter.y -
+		Math.max(1, trackedSubjectSize?.height ?? effectiveSubjectHeight) * 0.34;
+	const minimumHeadroomInSource = Math.max(
+		Math.max(1, trackedSubjectSize?.height ?? effectiveSubjectHeight) * 0.14,
+		sourceHeight * 0.02,
+	);
+	const minViewportAnchorForHeadroom =
+		(trackedSubjectCenter.y - (estimatedHeadTop - minimumHeadroomInSource)) *
+		totalScale;
+	const guardedViewportAnchor = {
+		x: desiredViewportAnchor.x,
+		y: clamp(
+			Math.max(desiredViewportAnchor.y, minViewportAnchorForHeadroom),
+			viewport.height * 0.36,
+			viewport.height * 0.52,
+		),
+	};
+	return buildTransformForSourcePointInViewport({
+		sourcePoint: trackedSubjectCenter,
+		viewportPoint: guardedViewportAnchor,
+		viewport,
+		canvasWidth,
+		canvasHeight,
+		scale,
+		baseScale: slotCoverScale,
+		sourceWidth,
+		sourceHeight,
+		rotate,
+	});
 }
 
 function getSplitViewportCoverBaseScale({
@@ -714,6 +926,7 @@ export function buildVideoReframePreset({
 	name,
 	transform,
 	autoSeeded = false,
+	subjectSeed,
 }: {
 	name: string;
 	transform: {
@@ -721,6 +934,7 @@ export function buildVideoReframePreset({
 		scale: number;
 	};
 	autoSeeded?: boolean;
+	subjectSeed?: VideoReframePreset["subjectSeed"];
 }): VideoReframePreset {
 	return {
 		id: generateUUID(),
@@ -736,7 +950,50 @@ export function buildVideoReframePreset({
 					: 1,
 		},
 		autoSeeded,
+		subjectSeed:
+			subjectSeed &&
+			Number.isFinite(subjectSeed.center.x) &&
+			Number.isFinite(subjectSeed.center.y)
+				? {
+						center: {
+							x: subjectSeed.center.x,
+							y: subjectSeed.center.y,
+						},
+						size:
+							subjectSeed.size &&
+							Number.isFinite(subjectSeed.size.width) &&
+							Number.isFinite(subjectSeed.size.height) &&
+							subjectSeed.size.width > 0 &&
+							subjectSeed.size.height > 0
+								? {
+										width: subjectSeed.size.width,
+										height: subjectSeed.size.height,
+								  }
+								: undefined,
+						identity: subjectSeed.identity,
+				  }
+				: undefined,
 	};
+}
+
+function resolveLegacySubjectPresetId({
+	presets,
+	presetId,
+}: {
+	presets: VideoReframePreset[];
+	presetId: string | null | undefined;
+}): string | null {
+	if (!presetId) return null;
+	const referencedPreset = presets.find((preset) => preset.id === presetId) ?? null;
+	if (!referencedPreset) return null;
+	if (referencedPreset.name.trim().toLowerCase() !== "subject") {
+		return referencedPreset.id;
+	}
+	return (
+		presets.find(
+			(preset) => preset.name.trim().toLowerCase() === "subject left",
+		)?.id ?? referencedPreset.id
+	);
 }
 
 export function normalizeVideoReframeState({
@@ -793,6 +1050,32 @@ export function normalizeVideoReframeState({
 						? preset.transform.scale
 						: Math.max(1, element.transform.scale),
 			},
+			transformAdjustment: normalizeVideoReframeTransformAdjustment(
+				preset.transformAdjustment,
+			),
+			subjectSeed:
+				preset.subjectSeed &&
+				Number.isFinite(preset.subjectSeed.center?.x) &&
+				Number.isFinite(preset.subjectSeed.center?.y)
+					? {
+							center: {
+								x: preset.subjectSeed.center.x,
+								y: preset.subjectSeed.center.y,
+							},
+							size:
+								preset.subjectSeed.size &&
+								Number.isFinite(preset.subjectSeed.size.width) &&
+								Number.isFinite(preset.subjectSeed.size.height) &&
+								preset.subjectSeed.size.width > 0 &&
+								preset.subjectSeed.size.height > 0
+									? {
+											width: preset.subjectSeed.size.width,
+											height: preset.subjectSeed.size.height,
+									  }
+									: undefined,
+							identity: preset.subjectSeed.identity,
+					  }
+					: undefined,
 			motionTracking: normalizeMotionTracking({
 				motionTracking: preset.motionTracking,
 			}),
@@ -809,13 +1092,25 @@ export function normalizeVideoReframeState({
 		.map((entry) => ({
 			...entry,
 			time: Math.max(0, Math.min(element.duration, entry.time)),
+			presetId:
+				resolveLegacySubjectPresetId({
+					presets,
+					presetId: entry.presetId,
+				}) ?? entry.presetId,
 		}))
 		.sort((left, right) => left.time - right.time);
-	const defaultReframePresetId =
+	const unresolvedDefaultReframePresetId =
 		typeof element.defaultReframePresetId === "string" &&
 		presetIds.has(element.defaultReframePresetId)
 			? element.defaultReframePresetId
 			: (presets[0]?.id ?? null);
+	const defaultReframePresetId =
+		resolveLegacySubjectPresetId({
+			presets,
+			presetId: unresolvedDefaultReframePresetId,
+		}) ??
+		presets[0]?.id ??
+		null;
 
 	return {
 		...element,
@@ -952,13 +1247,14 @@ export function getActiveReframePresetId({
 	element: VideoElement;
 	localTime: number;
 }): string | null {
-	if (!hasReframePresets({ element })) {
+	const normalized = normalizeVideoReframeState({ element });
+	if (!hasReframePresets({ element: normalized })) {
 		return null;
 	}
 
-	const safeTime = Math.max(0, Math.min(element.duration, localTime));
-	let activePresetId = element.defaultReframePresetId ?? null;
-	for (const entry of element.reframeSwitches ?? []) {
+	const safeTime = Math.max(0, Math.min(normalized.duration, localTime));
+	let activePresetId = normalized.defaultReframePresetId ?? null;
+	for (const entry of normalized.reframeSwitches ?? []) {
 		if (entry.time - safeTime > REFRAME_SWITCH_TIME_EPSILON) {
 			break;
 		}
@@ -1290,10 +1586,14 @@ export function resolveVideoReframeTransform({
 		motionTracking: preset.motionTracking,
 		localTime,
 	});
+	const adjustedTransform = applyVideoReframeTransformAdjustment({
+		transform: trackedTransform,
+		adjustment: preset.transformAdjustment,
+	});
 
 	return {
-		position: trackedTransform.position,
-		scale: trackedTransform.scale,
+		position: adjustedTransform.position,
+		scale: adjustedTransform.scale,
 		rotate: normalizedElement.transform.rotate,
 	};
 }
@@ -1330,9 +1630,13 @@ export function resolveVideoReframeTransformFromState({
 		motionTracking: preset.motionTracking,
 		localTime,
 	});
+	const adjustedTransform = applyVideoReframeTransformAdjustment({
+		transform: trackedTransform,
+		adjustment: preset.transformAdjustment,
+	});
 	return {
-		position: trackedTransform.position,
-		scale: trackedTransform.scale,
+		position: adjustedTransform.position,
+		scale: adjustedTransform.scale,
 		rotate: baseTransform.rotate,
 	};
 }
@@ -1540,6 +1844,8 @@ export function deriveVideoSplitScreenSlotAdjustmentFromTransform({
 
 function resolveVideoSplitScreenSlotTransformWithViewport({
 	baseResolvedTransform,
+	trackedSubjectCenter,
+	trackedSubjectSize,
 	slot,
 	layoutPreset,
 	viewportBalance = DEFAULT_SPLIT_VIEWPORT_BALANCE,
@@ -1549,6 +1855,8 @@ function resolveVideoSplitScreenSlotTransformWithViewport({
 	sourceHeight,
 }: {
 	baseResolvedTransform: Transform;
+	trackedSubjectCenter?: { x: number; y: number } | null;
+	trackedSubjectSize?: { width: number; height: number } | null;
 	slot: Pick<
 		VideoSplitScreenSlotBinding,
 		| "transformOverride"
@@ -1620,6 +1928,18 @@ function resolveVideoSplitScreenSlotTransformWithViewport({
 				})
 			: null);
 	if (!appliedAdjustment) {
+		if (trackedSubjectCenter) {
+			return deriveAutoSplitSlotTransformFromTrackedSubject({
+				trackedSubjectCenter,
+				trackedSubjectSize,
+				viewport,
+				canvasWidth,
+				canvasHeight,
+				sourceWidth,
+				sourceHeight,
+				rotate: baseResolvedTransform.rotate,
+			});
+		}
 		return seedTransform;
 	}
 	const seedCenter = getSourceCenterForTransform({
@@ -1685,6 +2005,17 @@ export function resolveVideoSplitScreenSlotTransform({
 		localTime,
 		slot,
 	});
+	const preset = slot.presetId
+		? (reframePresets?.find((candidate) => candidate.id === slot.presetId) ?? null)
+		: null;
+	const trackedSubjectFrame = resolveMotionTrackedSubjectFrame({
+		motionTracking: preset?.motionTracking,
+		localTime,
+	});
+	const trackedSubjectCenter = resolveMotionTrackedSubjectCenter({
+		motionTracking: preset?.motionTracking,
+		localTime,
+	});
 	if (
 		!Number.isFinite(canvasWidth) ||
 		!Number.isFinite(canvasHeight) ||
@@ -1710,6 +2041,8 @@ export function resolveVideoSplitScreenSlotTransform({
 	const resolvedSourceHeight = sourceHeight as number;
 	return resolveVideoSplitScreenSlotTransformWithViewport({
 		baseResolvedTransform: resolvedTransform,
+		trackedSubjectCenter,
+		trackedSubjectSize: trackedSubjectFrame?.size ?? null,
 		slot,
 		layoutPreset,
 		viewportBalance,
@@ -1764,6 +2097,17 @@ export function resolveVideoSplitScreenSlotTransformFromState({
 		localTime,
 		slot,
 	});
+	const preset = slot.presetId
+		? (reframePresets?.find((candidate) => candidate.id === slot.presetId) ?? null)
+		: null;
+	const trackedSubjectFrame = resolveMotionTrackedSubjectFrame({
+		motionTracking: preset?.motionTracking,
+		localTime,
+	});
+	const trackedSubjectCenter = resolveMotionTrackedSubjectCenter({
+		motionTracking: preset?.motionTracking,
+		localTime,
+	});
 	if (
 		!Number.isFinite(canvasWidth) ||
 		!Number.isFinite(canvasHeight) ||
@@ -1789,6 +2133,8 @@ export function resolveVideoSplitScreenSlotTransformFromState({
 	const resolvedSourceHeight = sourceHeight as number;
 	return resolveVideoSplitScreenSlotTransformWithViewport({
 		baseResolvedTransform: resolvedTransform,
+		trackedSubjectCenter,
+		trackedSubjectSize: trackedSubjectFrame?.size ?? null,
 		slot,
 		layoutPreset,
 		viewportBalance,
@@ -1884,19 +2230,19 @@ export function buildDefaultVideoSplitScreenBindings({
 			(preset) => [preset.name.trim().toLowerCase(), preset] as const,
 		),
 	);
-	const preferredPresets = [
+	const subjectLeftPreset =
 		normalizedPresetByName.get("subject left") ??
-			matchPreset(
-				(normalizedName) =>
-					normalizedName.includes("subject") && normalizedName.includes("left"),
-			),
+		matchPreset(
+			(normalizedName) =>
+				normalizedName.includes("subject") && normalizedName.includes("left"),
+		);
+	const subjectRightPreset =
 		normalizedPresetByName.get("subject right") ??
-			matchPreset(
-				(normalizedName) =>
-					normalizedName.includes("subject") &&
-					normalizedName.includes("right"),
-			),
-	];
+		matchPreset(
+			(normalizedName) =>
+				normalizedName.includes("subject") && normalizedName.includes("right"),
+		);
+	const preferredPresets = [subjectLeftPreset, subjectRightPreset];
 	const fallbackPresets = presets.filter(
 		(preset) =>
 			preset.id !== preferredPresets[0]?.id &&

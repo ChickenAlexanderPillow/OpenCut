@@ -1,10 +1,131 @@
 import { describe, expect, test } from "bun:test";
 import {
 	buildAutoReframePresetsFromDetections,
+	choosePrimarySubjectBox,
 	getVideoElementSourceRange,
 } from "../subject-aware";
 
 describe("subject-aware reframe preset generation", () => {
+	test("prefers the requested side when selecting an initial tracked subject", () => {
+		const leftCandidate = {
+			centerX: 520,
+			centerY: 320,
+			width: 170,
+			height: 280,
+			fitWidth: 120,
+			fitHeight: 180,
+		};
+		const rightCandidate = {
+			centerX: 1360,
+			centerY: 320,
+			width: 170,
+			height: 280,
+			fitWidth: 120,
+			fitHeight: 180,
+		};
+
+		const leftSelection = choosePrimarySubjectBox({
+			candidates: [leftCandidate, rightCandidate],
+			previousBox: null,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			targetCenterHint: { x: 960, y: 540 },
+			targetSubjectHint: "left",
+		});
+		const rightSelection = choosePrimarySubjectBox({
+			candidates: [leftCandidate, rightCandidate],
+			previousBox: null,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			targetCenterHint: { x: 960, y: 540 },
+			targetSubjectHint: "right",
+		});
+
+		expect(leftSelection?.centerX).toBe(leftCandidate.centerX);
+		expect(rightSelection?.centerX).toBe(rightCandidate.centerX);
+	});
+
+	test("prefers candidates inside the preset source window for initial tracking", () => {
+		const leftCandidate = {
+			centerX: 560,
+			centerY: 320,
+			width: 170,
+			height: 280,
+			fitWidth: 120,
+			fitHeight: 180,
+		};
+		const rightCandidate = {
+			centerX: 1360,
+			centerY: 320,
+			width: 170,
+			height: 280,
+			fitWidth: 120,
+			fitHeight: 180,
+		};
+
+		const selection = choosePrimarySubjectBox({
+			candidates: [leftCandidate, rightCandidate],
+			previousBox: null,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			targetCenterHint: { x: 960, y: 540 },
+			targetSubjectHint: "right",
+			targetViewportBounds: {
+				left: 1100,
+				right: 1700,
+				top: 120,
+				bottom: 760,
+			},
+		});
+
+		expect(selection?.centerX).toBe(rightCandidate.centerX);
+	});
+
+	test("uses the auto-detected subject seed to keep subject right on the right person", () => {
+		const leftCandidate = {
+			centerX: 760,
+			centerY: 330,
+			width: 210,
+			height: 320,
+			anchorX: 760,
+			anchorY: 250,
+			fitWidth: 140,
+			fitHeight: 210,
+		};
+		const rightCandidate = {
+			centerX: 1160,
+			centerY: 332,
+			width: 210,
+			height: 320,
+			anchorX: 1160,
+			anchorY: 252,
+			fitWidth: 140,
+			fitHeight: 210,
+		};
+
+		const selection = choosePrimarySubjectBox({
+			candidates: [leftCandidate, rightCandidate],
+			previousBox: null,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			targetCenterHint: { x: 1060, y: 540 },
+			targetSubjectHint: "right",
+			targetViewportBounds: {
+				left: 760,
+				right: 1360,
+				top: 80,
+				bottom: 860,
+			},
+			targetSubjectSeed: {
+				center: { x: 1160, y: 252 },
+				size: { width: 140, height: 210 },
+				identity: "right",
+			},
+		});
+
+		expect(selection?.centerX).toBe(rightCandidate.centerX);
+	});
+
 	test("builds a right-biased preset when detections span across the frame", () => {
 		const result = buildAutoReframePresetsFromDetections({
 			detections: [
@@ -19,7 +140,6 @@ describe("subject-aware reframe preset generation", () => {
 			baseScale: 1.8,
 		});
 
-		const subject = result.presets.find((preset) => preset.name === "Subject");
 		const subjectLeft = result.presets.find(
 			(preset) => preset.name === "Subject Left",
 		);
@@ -27,20 +147,13 @@ describe("subject-aware reframe preset generation", () => {
 			(preset) => preset.name === "Subject Right",
 		);
 
-		expect(subject).toBeDefined();
 		expect(subjectLeft).toBeDefined();
 		expect(subjectRight).toBeDefined();
 		expect(result.presets.map((preset) => preset.name)).toEqual([
-			"Subject",
 			"Subject Left",
 			"Subject Right",
 		]);
-		expect(subjectLeft!.transform.position.x).toBeGreaterThan(
-			subject!.transform.position.x,
-		);
-		expect(subjectRight!.transform.position.x).toBeLessThan(
-			subject!.transform.position.x,
-		);
+		expect(subjectLeft!.transform.position.x).toBeGreaterThan(0);
 		expect(subjectRight!.transform.position.x).toBeLessThan(0);
 		expect(subjectLeft!.transform.position.x - subjectRight!.transform.position.x).toBeGreaterThan(800);
 
@@ -54,10 +167,7 @@ describe("subject-aware reframe preset generation", () => {
 		const viewportRight = viewportCenterX + visibleHalfWidth;
 		const subjectRightEdge = rightDetection.centerX + rightDetection.width / 2;
 		expect(subjectRightEdge).toBeLessThan(viewportRight - 10);
-		expect(subjectRight!.transform.position.x).toBeLessThan(
-			subject!.transform.position.x - 400,
-		);
-		expect(result.defaultPresetId).toBe(subject!.id);
+		expect(result.defaultPresetId).toBe(subjectLeft!.id);
 		expect(result.switches).toEqual([]);
 	});
 
@@ -92,7 +202,7 @@ describe("subject-aware reframe preset generation", () => {
 		expect(subjectLeft!.transform.position.x - subjectRight!.transform.position.x).toBeGreaterThan(1300);
 	});
 
-	test("starts centered and switches to subject left once two subjects appear", () => {
+	test("starts on the opening subject side and switches to subject left once two subjects appear", () => {
 		const result = buildAutoReframePresetsFromDetections({
 			detections: [
 				{ centerX: 930, centerY: 300, width: 170, height: 300 },
@@ -121,20 +231,22 @@ describe("subject-aware reframe preset generation", () => {
 			baseScale: 1.8,
 		});
 
-		const subject = result.presets.find((preset) => preset.name === "Subject");
+		const subjectRight = result.presets.find(
+			(preset) => preset.name === "Subject Right",
+		);
 		const subjectLeft = result.presets.find(
 			(preset) => preset.name === "Subject Left",
 		);
 
-		expect(subject).toBeDefined();
+		expect(subjectRight).toBeDefined();
 		expect(subjectLeft).toBeDefined();
-		expect(result.defaultPresetId).toBe(subject!.id);
+		expect(result.defaultPresetId).toBe(subjectRight!.id);
 		expect(result.switches).toHaveLength(1);
 		expect(result.switches[0]?.time).toBe(2.4);
 		expect(result.switches[0]?.presetId).toBe(subjectLeft!.id);
 	});
 
-	test("preserves a short opening subject section before a two-subject section", () => {
+	test("preserves a short opening right-subject section before a two-subject section", () => {
 		const result = buildAutoReframePresetsFromDetections({
 			detections: [
 				{ centerX: 944, centerY: 302, width: 172, height: 302 },
@@ -167,14 +279,16 @@ describe("subject-aware reframe preset generation", () => {
 			baseScale: 1.8,
 		});
 
-		const subject = result.presets.find((preset) => preset.name === "Subject");
+		const subjectRight = result.presets.find(
+			(preset) => preset.name === "Subject Right",
+		);
 		const subjectLeft = result.presets.find(
 			(preset) => preset.name === "Subject Left",
 		);
 
-		expect(subject).toBeDefined();
+		expect(subjectRight).toBeDefined();
 		expect(subjectLeft).toBeDefined();
-		expect(result.defaultPresetId).toBe(subject!.id);
+		expect(result.defaultPresetId).toBe(subjectRight!.id);
 		expect(result.switches).toHaveLength(1);
 		expect(result.switches[0]?.time).toBe(0.12);
 		expect(result.switches[0]?.presetId).toBe(subjectLeft!.id);
@@ -230,19 +344,21 @@ describe("subject-aware reframe preset generation", () => {
 			baseScale: 1.8,
 		});
 
-		const subject = result.presets.find((preset) => preset.name === "Subject");
+		const subjectRight = result.presets.find(
+			(preset) => preset.name === "Subject Right",
+		);
 		const subjectLeft = result.presets.find(
 			(preset) => preset.name === "Subject Left",
 		);
 
-		expect(subject).toBeDefined();
+		expect(subjectRight).toBeDefined();
 		expect(subjectLeft).toBeDefined();
-		expect(result.defaultPresetId).toBe(subject!.id);
+		expect(result.defaultPresetId).toBe(subjectRight!.id);
 		expect(result.switches).toHaveLength(2);
 		expect(result.switches[0]?.time).toBe(1.2);
 		expect(result.switches[0]?.presetId).toBe(subjectLeft!.id);
 		expect(result.switches[1]?.time).toBe(3.1);
-		expect(result.switches[1]?.presetId).toBe(subject!.id);
+		expect(result.switches[1]?.presetId).toBe(subjectRight!.id);
 	});
 
 	test("derives the analyzed source window from clip trim data", () => {

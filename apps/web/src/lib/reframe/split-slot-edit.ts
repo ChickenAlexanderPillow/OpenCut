@@ -8,13 +8,13 @@ import type {
 } from "@/types/timeline";
 import {
 	buildDefaultVideoSplitScreenBindings,
-	deriveVideoSplitScreenSlotAdjustmentFromTransform,
 	getActiveReframePresetIdFromState,
 	getVideoSplitScreenViewports,
 	normalizeVideoReframeState,
 	resolveVideoSplitScreenAtTimeFromState,
 	resolveVideoSplitScreenSlotTransformFromState,
 } from "@/lib/reframe/video-reframe";
+import { ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS } from "@/lib/reframe/split-slot-config";
 
 export interface SplitPreviewStateInput {
 	slots: VideoSplitScreenSlotBinding[] | null;
@@ -332,39 +332,33 @@ export function updateSplitSlotBindingsWithTransform({
 	layoutPreset: VideoSplitScreenLayoutPreset;
 	viewportBalance: VideoSplitScreenViewportBalance;
 }): VideoSplitScreenSlotBinding[] {
+	if (!ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS) return bindings;
 	return bindings.map((binding) => {
 		if (binding.slotId !== slotId) return binding;
-		const baseResolvedTransform = resolveVideoSplitScreenSlotTransformFromState(
-			{
-				baseTransform: element.transform,
-				duration: element.duration,
-				reframePresets: element.reframePresets,
-				reframeSwitches: element.reframeSwitches,
-				defaultReframePresetId: element.defaultReframePresetId,
-				localTime,
-				slot: {
-					slotId: binding.slotId,
-					presetId: binding.presetId ?? null,
+		const variantKey = `${viewportBalance}:${binding.slotId}`;
+		const nextOverridesBySlotId = {
+			...(binding.transformOverridesBySlotId ?? {}),
+			[variantKey]: {
+				position: {
+					x: nextTransform.position.x,
+					y: nextTransform.position.y,
 				},
+				scale: nextTransform.scale,
 			},
-		);
+		};
+		const nextAdjustmentsBySlotId = {
+			...(binding.transformAdjustmentsBySlotId ?? {}),
+		};
+		delete nextAdjustmentsBySlotId[variantKey];
+		delete nextAdjustmentsBySlotId[binding.slotId];
 		return {
 			...binding,
-			transformAdjustmentsBySlotId: {
-				...(binding.transformAdjustmentsBySlotId ?? {}),
-				[`${viewportBalance}:${binding.slotId}`]:
-					deriveVideoSplitScreenSlotAdjustmentFromTransform({
-						baseTransform: baseResolvedTransform,
-						finalTransform: nextTransform,
-						slotId: binding.slotId,
-						layoutPreset,
-						viewportBalance,
-						canvasWidth,
-						canvasHeight,
-						sourceWidth,
-						sourceHeight,
-					}),
-			},
+			transformOverride: nextOverridesBySlotId[variantKey],
+			transformOverridesBySlotId: nextOverridesBySlotId,
+			transformAdjustmentsBySlotId:
+				Object.keys(nextAdjustmentsBySlotId).length > 0
+					? nextAdjustmentsBySlotId
+					: undefined,
 		};
 	});
 }

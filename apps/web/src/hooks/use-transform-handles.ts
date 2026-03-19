@@ -23,7 +23,7 @@ import {
 	type SnapLine,
 } from "@/lib/preview/preview-snap";
 import { isVisualElement } from "@/lib/timeline/element-utils";
-import type { Transform } from "@/types/timeline";
+import type { Transform, VideoReframeTransformAdjustment } from "@/types/timeline";
 import { usePreviewStore } from "@/stores/preview-store";
 import { isGeneratedCaptionElement } from "@/lib/captions/caption-track";
 import {
@@ -39,6 +39,10 @@ import {
 	resolveEditableSplitSlotState,
 	updateSplitSlotBindingsWithTransform,
 } from "@/lib/reframe/split-slot-edit";
+import {
+	ENABLE_MANUAL_REFRAME_PRESET_ADJUSTMENTS,
+	ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS,
+} from "@/lib/reframe/split-slot-config";
 import { useReframeStore } from "@/stores/reframe-store";
 
 type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -50,6 +54,7 @@ interface ScaleState {
 	elementId: string;
 	initialTransform: Transform;
 	reframePresetId: string | null;
+	initialReframeTransformAdjustment?: VideoReframeTransformAdjustment | null;
 	initialDistance: number;
 	initialBoundsCx: number;
 	initialBoundsCy: number;
@@ -214,6 +219,7 @@ export function useTransformHandles({
 		isVisualElement(selectedWithBounds.element) &&
 		!isGeneratedCaptionElement(selectedWithBounds.element);
 	const selectedSplitSlotContext =
+		ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS &&
 		selectedWithBounds?.element.type === "video" &&
 		selectedElements.length === 1
 			? (() => {
@@ -259,6 +265,7 @@ export function useTransformHandles({
 				})()
 			: null;
 	const selectedSplitInteractionContext =
+		ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS &&
 		selectedWithBounds?.element.type === "video" &&
 		selectedElements.length === 1
 			? (() => {
@@ -545,7 +552,7 @@ export function useTransformHandles({
 				0,
 				currentTime - normalizedElement.startTime,
 			);
-			const reframePresetId =
+			const activeReframePresetId =
 				normalizedElement.type === "video"
 					? getSelectedOrActiveReframePresetId({
 							element: normalizedElement,
@@ -553,6 +560,23 @@ export function useTransformHandles({
 							selectedPresetId:
 								selectedPresetIdByElementId[normalizedElement.id] ?? null,
 						})
+					: null;
+			if (
+				activeReframePresetId &&
+				!ENABLE_MANUAL_REFRAME_PRESET_ADJUSTMENTS
+			) {
+				return;
+			}
+			const reframePresetId =
+				ENABLE_MANUAL_REFRAME_PRESET_ADJUSTMENTS &&
+				normalizedElement.type === "video"
+					? activeReframePresetId
+					: null;
+			const activeReframePreset =
+				reframePresetId && normalizedVideoElement
+					? (normalizedVideoElement.reframePresets?.find(
+							(preset) => preset.id === reframePresetId,
+					  ) ?? null)
 					: null;
 			const initialTransform =
 				selectedSplitSlotContext &&
@@ -620,6 +644,8 @@ export function useTransformHandles({
 				elementId,
 				initialTransform,
 				reframePresetId,
+				initialReframeTransformAdjustment:
+					activeReframePreset?.transformAdjustment ?? null,
 				initialDistance,
 				initialBoundsCx: bounds.cx,
 				initialBoundsCy: bounds.cy,
@@ -778,15 +804,28 @@ export function useTransformHandles({
 							scale: snappedScale,
 						},
 					});
-				} else if (reframePresetId) {
+				} else if (
+					reframePresetId &&
+					ENABLE_MANUAL_REFRAME_PRESET_ADJUSTMENTS
+				) {
 					editor.timeline.updateVideoReframePreset({
 						trackId,
 						elementId,
 						presetId: reframePresetId,
 						updates: {
-							transform: {
-								position: initialTransform.position,
-								scale: snappedScale,
+							transformAdjustment: {
+								positionOffset: {
+									x:
+										scaleStateRef.current.initialReframeTransformAdjustment
+											?.positionOffset.x ?? 0,
+									y:
+										scaleStateRef.current.initialReframeTransformAdjustment
+											?.positionOffset.y ?? 0,
+								},
+								scaleMultiplier:
+									(scaleStateRef.current.initialReframeTransformAdjustment
+										?.scaleMultiplier ?? 1) *
+									(snappedScale / Math.max(1e-6, initialTransform.scale)),
 							},
 						},
 						pushHistory: false,

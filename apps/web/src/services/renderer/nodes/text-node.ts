@@ -432,7 +432,12 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		const dividerBottom = divider ? divider.y + divider.height : undefined;
 		const preferredAnchor =
 			captionStyle.splitScreenOverrides?.slotAnchor ?? "auto";
-		const resolvedSlotId = preferredAnchor === "auto" ? "top" : preferredAnchor;
+		const resolvedSlotId =
+			preferredAnchor === "auto"
+				? (captionStyle.anchorToSafeAreaTop ?? false)
+					? "top"
+					: "bottom"
+				: preferredAnchor;
 		const viewport =
 			viewports.get(resolvedSlotId) ??
 			Array.from(viewports.values())[0] ??
@@ -467,40 +472,37 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			time,
 			captionStyle,
 		});
-		const placementCanvasWidth =
-			splitViewport?.width ?? this.params.canvasWidth;
-		const placementCanvasHeight =
-			splitViewport?.height ?? this.params.canvasHeight;
-		const placementOffsetX = splitViewport?.x ?? 0;
-		const placementOffsetY = splitViewport?.y ?? 0;
-		const shouldAnchorBelowDivider =
-			splitViewport?.viewportBalance === "unbalanced" &&
-			splitViewport.slotId === "bottom" &&
+		const anchorsToBottomEdge =
 			(captionStyle.anchorToSafeAreaBottom ?? true) &&
 			!(captionStyle.anchorToSafeAreaTop ?? false);
-		const dividerGap =
-			shouldAnchorBelowDivider && splitViewport
-				? Math.max(
-						0,
-						(splitViewport.dividerBottom ?? splitViewport.y) - splitViewport.y,
-					) +
-					(captionStyle.safeAreaTopOffset ??
-						captionStyle.safeAreaBottomOffset ??
-						0)
-				: 0;
-		const anchoredPositionY = shouldAnchorBelowDivider
-			? dividerGap - visualRect.top * this.params.transform.scale
-			: resolveSafeAreaAnchoredPositionY({
-					canvasWidth: placementCanvasWidth,
-					canvasHeight: placementCanvasHeight,
-					transformPositionY: this.params.transform.position.y,
-					scale: this.params.transform.scale,
-					visualRect,
-					anchorToSafeAreaBottom: captionStyle.anchorToSafeAreaBottom ?? true,
-					safeAreaBottomOffset: captionStyle.safeAreaBottomOffset ?? 0,
-					anchorToSafeAreaTop: captionStyle.anchorToSafeAreaTop ?? false,
-					safeAreaTopOffset: captionStyle.safeAreaTopOffset ?? 0,
-				});
+		const shouldUseCanvasBottomPlacement =
+			Boolean(splitViewport) &&
+			splitViewport?.slotId === "bottom" &&
+			anchorsToBottomEdge &&
+			splitViewport.y + splitViewport.height >= this.params.canvasHeight;
+		const placementCanvasWidth = shouldUseCanvasBottomPlacement
+			? this.params.canvasWidth
+			: (splitViewport?.width ?? this.params.canvasWidth);
+		const placementCanvasHeight = shouldUseCanvasBottomPlacement
+			? this.params.canvasHeight
+			: (splitViewport?.height ?? this.params.canvasHeight);
+		const placementOffsetX = shouldUseCanvasBottomPlacement
+			? 0
+			: (splitViewport?.x ?? 0);
+		const placementOffsetY = shouldUseCanvasBottomPlacement
+			? 0
+			: (splitViewport?.y ?? 0);
+		const anchoredPositionY = resolveSafeAreaAnchoredPositionY({
+			canvasWidth: placementCanvasWidth,
+			canvasHeight: placementCanvasHeight,
+			transformPositionY: this.params.transform.position.y,
+			scale: this.params.transform.scale,
+			visualRect,
+			anchorToSafeAreaBottom: captionStyle.anchorToSafeAreaBottom ?? true,
+			safeAreaBottomOffset: captionStyle.safeAreaBottomOffset ?? 0,
+			anchorToSafeAreaTop: captionStyle.anchorToSafeAreaTop ?? false,
+			safeAreaTopOffset: captionStyle.safeAreaTopOffset ?? 0,
+		});
 		const placement = resolveTextPlacement({
 			canvasWidth: placementCanvasWidth,
 			canvasHeight: placementCanvasHeight,

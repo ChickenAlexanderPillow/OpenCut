@@ -9,6 +9,11 @@ export interface MotionTrackingTransformKeyframe {
 	time: number;
 	position: VideoReframePresetTransform["position"];
 	scale: number;
+	subjectCenter?: VideoReframePresetTransform["position"];
+	subjectSize?: {
+		width: number;
+		height: number;
+	};
 }
 
 function resolveTrackedKeyframeAtTime({
@@ -28,6 +33,56 @@ function resolveTrackedKeyframeAtTime({
 			y: lerp(pair.left.position.y, pair.right.position.y, pair.progress),
 		},
 		scale: lerp(pair.left.scale, pair.right.scale, pair.progress),
+		subjectCenter:
+			pair.left.subjectCenter && pair.right.subjectCenter
+				? {
+						x: lerp(
+							pair.left.subjectCenter.x,
+							pair.right.subjectCenter.x,
+							pair.progress,
+						),
+						y: lerp(
+							pair.left.subjectCenter.y,
+							pair.right.subjectCenter.y,
+							pair.progress,
+						),
+				  }
+				: pair.left.subjectCenter
+					? {
+							x: pair.left.subjectCenter.x,
+							y: pair.left.subjectCenter.y,
+					  }
+					: pair.right.subjectCenter
+						? {
+								x: pair.right.subjectCenter.x,
+								y: pair.right.subjectCenter.y,
+						  }
+						: undefined,
+		subjectSize:
+			pair.left.subjectSize && pair.right.subjectSize
+				? {
+						width: lerp(
+							pair.left.subjectSize.width,
+							pair.right.subjectSize.width,
+							pair.progress,
+						),
+						height: lerp(
+							pair.left.subjectSize.height,
+							pair.right.subjectSize.height,
+							pair.progress,
+						),
+				  }
+				: pair.left.subjectSize
+					? {
+							width: pair.left.subjectSize.width,
+							height: pair.left.subjectSize.height,
+					  }
+					: pair.right.subjectSize
+						? {
+								width: pair.right.subjectSize.width,
+								height: pair.right.subjectSize.height,
+						  }
+						: undefined,
 	};
 }
 
@@ -112,6 +167,68 @@ export function resolveMotionTrackedReframeTransform({
 	return {
 		position: interpolatedPosition,
 		scale: interpolatedScale,
+	};
+}
+
+export function resolveMotionTrackedSubjectCenter({
+	motionTracking,
+	localTime,
+}: {
+	motionTracking: VideoMotionTracking | undefined;
+	localTime: number;
+}): { x: number; y: number } | null {
+	if (!motionTracking?.enabled || (motionTracking.keyframes?.length ?? 0) === 0) {
+		return null;
+	}
+	const keyframes = [...motionTracking.keyframes].sort(
+		(left, right) => left.time - right.time,
+	);
+	const tracked = resolveTrackedKeyframeAtTime({
+		keyframes,
+		localTime,
+	});
+	return tracked?.subjectCenter
+		? {
+				x: tracked.subjectCenter.x,
+				y: tracked.subjectCenter.y,
+		  }
+		: null;
+}
+
+export function resolveMotionTrackedSubjectFrame({
+	motionTracking,
+	localTime,
+}: {
+	motionTracking: VideoMotionTracking | undefined;
+	localTime: number;
+}):
+	| {
+			center: { x: number; y: number };
+			size: { width: number; height: number } | null;
+	  }
+	| null {
+	if (!motionTracking?.enabled || (motionTracking.keyframes?.length ?? 0) === 0) {
+		return null;
+	}
+	const keyframes = [...motionTracking.keyframes].sort(
+		(left, right) => left.time - right.time,
+	);
+	const tracked = resolveTrackedKeyframeAtTime({
+		keyframes,
+		localTime,
+	});
+	if (!tracked?.subjectCenter) return null;
+	return {
+		center: {
+			x: tracked.subjectCenter.x,
+			y: tracked.subjectCenter.y,
+		},
+		size: tracked.subjectSize
+			? {
+					width: tracked.subjectSize.width,
+					height: tracked.subjectSize.height,
+			  }
+			: null,
 	};
 }
 

@@ -73,6 +73,11 @@ export interface VideoReframePresetTransform {
 	scale: number;
 }
 
+export interface VideoReframeTransformAdjustment {
+	positionOffset: Transform["position"];
+	scaleMultiplier: number;
+}
+
 export interface VideoMotionTracking {
 	enabled: boolean;
 	mode: "subject-single-v1";
@@ -91,14 +96,30 @@ export interface VideoMotionTracking {
 		time: number;
 		position: Transform["position"];
 		scale: number;
+		subjectCenter?: Transform["position"];
+		subjectSize?: {
+			width: number;
+			height: number;
+		};
 	}>;
+}
+
+export interface VideoReframeSubjectSeed {
+	center: Transform["position"];
+	size?: {
+		width: number;
+		height: number;
+	};
+	identity?: "subject" | "left" | "right";
 }
 
 export interface VideoReframePreset {
 	id: string;
 	name: string;
 	transform: VideoReframePresetTransform;
+	transformAdjustment?: VideoReframeTransformAdjustment;
 	autoSeeded?: boolean;
+	subjectSeed?: VideoReframeSubjectSeed;
 	motionTracking?: VideoMotionTracking;
 }
 

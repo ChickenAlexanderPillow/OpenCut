@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	getEditableSplitSlotRegions,
 	resolveEditableSplitSlotState,
+	updateSplitSlotBindingsWithTransform,
 } from "@/lib/reframe/split-slot-edit";
 import type { VideoElement } from "@/types/timeline";
 
@@ -136,5 +137,27 @@ describe("split slot edit regions", () => {
 		expect(
 			(regions[0]?.bounds.height ?? 0) + (regions[1]?.bounds.height ?? 0),
 		).toBeLessThanOrEqual(1920);
+	});
+
+	test("ignores manual slot reframes while auto-only mode is active", () => {
+		const element = createVideoElement();
+		const updated = updateSplitSlotBindingsWithTransform({
+			bindings: element.splitScreen?.slots ?? [],
+			slotId: "top",
+			nextTransform: {
+				position: { x: 42, y: -18 },
+				scale: 1.65,
+			},
+			element,
+			localTime: 1.5,
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+		});
+
+		expect(updated).toEqual(element.splitScreen?.slots ?? []);
 	});
 });

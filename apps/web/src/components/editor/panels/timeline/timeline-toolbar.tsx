@@ -216,7 +216,6 @@ function ToolbarLeftSection() {
 }
 
 type QuickReframePresetKind =
-	| "subject"
 	| "subject-left"
 	| "subject-right"
 	| "split-screen";
@@ -233,9 +232,6 @@ function getQuickReframePresetKind({
 	if (normalized === "subject right" || normalized.includes("right")) {
 		return "subject-right";
 	}
-	if (normalized === "subject" || normalized.includes("subject")) {
-		return "subject";
-	}
 	return null;
 }
 
@@ -249,7 +245,6 @@ function getQuickReframePresets({
 	kind: QuickReframePresetKind;
 }> {
 	const kindOrder: QuickReframePresetKind[] = [
-		"subject",
 		"subject-left",
 		"subject-right",
 	];
@@ -998,9 +993,6 @@ function ReframeTrayIcon({ className }: { className?: string }) {
 }
 
 function QuickReframePresetIcon({ kind }: { kind: QuickReframePresetKind }) {
-	if (kind === "subject") {
-		return <PersonCameraGlyph className="h-4 w-4" />;
-	}
 	if (kind === "split-screen") {
 		return <SplitScreenGlyph className="h-4 w-4" />;
 	}
