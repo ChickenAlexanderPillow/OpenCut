@@ -553,17 +553,6 @@ function EditorRuntimeBindings() {
 	}, [editor, hasActiveProjectProcesses]);
 
 	useEffect(() => {
-		const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-			if (!editor.save.getIsDirty() && !hasActiveProjectProcesses) return;
-			event.preventDefault();
-			(event as unknown as { returnValue: string }).returnValue = "";
-		};
-
-		window.addEventListener("beforeunload", handleBeforeUnload);
-		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-	}, [editor, hasActiveProjectProcesses]);
-
-	useEffect(() => {
 		const handleLinkClick = (event: MouseEvent) => {
 			if (!hasActiveProjectProcesses) return;
 			if (event.defaultPrevented) return;

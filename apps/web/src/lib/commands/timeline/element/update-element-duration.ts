@@ -4,6 +4,7 @@ import { EditorCore } from "@/core";
 import { clampAnimationsToDuration } from "@/lib/animation";
 import { reconcileLinkedCaptionIntegrityInTracks } from "@/lib/transcript-editor/sync-captions";
 import { normalizeTimelineElementForInvariants } from "@/lib/timeline/element-timing";
+import { clampMotionTrackingToDuration } from "@/lib/reframe/motion-tracking";
 
 export class UpdateElementDurationCommand extends Command {
 	private savedState: TimelineTrack[] | null = null;
@@ -30,13 +31,28 @@ export class UpdateElementDurationCommand extends Command {
 								element: { ...el, duration: this.duration },
 								minDuration,
 							});
-							return {
-								...normalized,
-								animations: clampAnimationsToDuration({
-									animations: el.animations,
-									duration: normalized.duration,
-								}),
-							};
+							return normalized.type === "video"
+								? {
+										...normalized,
+										reframePresets: normalized.reframePresets?.map((preset) => ({
+											...preset,
+											motionTracking: clampMotionTrackingToDuration({
+												motionTracking: preset.motionTracking,
+												duration: normalized.duration,
+											}),
+										})),
+										animations: clampAnimationsToDuration({
+											animations: el.animations,
+											duration: normalized.duration,
+										}),
+								  }
+								: {
+										...normalized,
+										animations: clampAnimationsToDuration({
+											animations: el.animations,
+											duration: normalized.duration,
+										}),
+								  };
 						})()
 					: el,
 			);

@@ -90,6 +90,56 @@ describe("video reframe resolution", () => {
 		expect(transform.rotate).toBe(12);
 	});
 
+	test("applies baked motion tracking only while the tracked angle is active", () => {
+		const trackedElement: VideoElement = {
+			...baseElement,
+			reframePresets: [
+				{
+					...baseElement.reframePresets![0]!,
+					motionTracking: {
+						enabled: true,
+						mode: "subject-single-v1",
+						source: "baked-keyframes",
+						animateScale: true,
+						keyframes: [
+							{
+								id: "mt-1",
+								time: 0,
+								position: { x: 0, y: 0 },
+								scale: 1.8,
+							},
+							{
+								id: "mt-2",
+								time: 3,
+								position: { x: 80, y: -24 },
+								scale: 2.1,
+							},
+						],
+					},
+				},
+				baseElement.reframePresets![1]!,
+			],
+		};
+
+		const trackedWideTransform = resolveVideoBaseTransformAtTime({
+			element: trackedElement,
+			localTime: 2,
+		});
+		expect(trackedWideTransform.position.x).toBeCloseTo(53.3333333333, 6);
+		expect(trackedWideTransform.position.y).toBeCloseTo(-16, 6);
+		expect(trackedWideTransform.scale).toBeCloseTo(2, 6);
+		expect(trackedWideTransform.rotate).toBe(12);
+
+		const trackedSubjectTransform = resolveVideoBaseTransformAtTime({
+			element: trackedElement,
+			localTime: 5,
+		});
+		expect(trackedSubjectTransform.position.x).toBe(120);
+		expect(trackedSubjectTransform.position.y).toBe(-40);
+		expect(trackedSubjectTransform.scale).toBe(2.5);
+		expect(trackedSubjectTransform.rotate).toBe(12);
+	});
+
 	test("replaces a switch when inserting at the same timestamp", () => {
 		const switches = replaceOrInsertReframeSwitch({
 			switches: baseElement.reframeSwitches,

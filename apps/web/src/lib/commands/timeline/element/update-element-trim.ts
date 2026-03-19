@@ -16,6 +16,7 @@ import {
 import type { AudioElement, VideoElement, TextElement } from "@/types/timeline";
 import { normalizeElementTiming } from "@/lib/timeline/element-timing";
 import { expandElementIdsWithAlignedCompanions } from "@/lib/timeline/companion-media";
+import { clampMotionTrackingToDuration } from "@/lib/reframe/motion-tracking";
 
 function isTranscriptEditableElement(
 	element: unknown,
@@ -254,17 +255,37 @@ export class UpdateElementTrimCommand extends Command {
 					rippleShiftAmount = shiftAmount;
 				}
 
-				const updatedElement = {
-					...targetElement,
-					trimStart: nextTrimStart,
-					trimEnd: normalizedTiming.trimEnd,
-					startTime: nextStartTime,
-					duration: nextDuration,
-					animations: clampAnimationsToDuration({
-						animations: targetElement.animations,
-						duration: nextDuration,
-					}),
-				};
+				const updatedElement =
+					targetElement.type === "video"
+						? {
+								...targetElement,
+								trimStart: nextTrimStart,
+								trimEnd: normalizedTiming.trimEnd,
+								startTime: nextStartTime,
+								duration: nextDuration,
+								reframePresets: targetElement.reframePresets?.map((preset) => ({
+									...preset,
+									motionTracking: clampMotionTrackingToDuration({
+										motionTracking: preset.motionTracking,
+										duration: nextDuration,
+									}),
+								})),
+								animations: clampAnimationsToDuration({
+									animations: targetElement.animations,
+									duration: nextDuration,
+								}),
+						  }
+						: {
+								...targetElement,
+								trimStart: nextTrimStart,
+								trimEnd: normalizedTiming.trimEnd,
+								startTime: nextStartTime,
+								duration: nextDuration,
+								animations: clampAnimationsToDuration({
+									animations: targetElement.animations,
+									duration: nextDuration,
+								}),
+						  };
 				updatedElementIds.add(targetElement.id);
 				if (!isTranscriptEditableElement(targetElement)) {
 					return updatedElement;

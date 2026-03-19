@@ -12,6 +12,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { FolderOpen } from "lucide-react";
+import { InteractiveMediaPreview } from "@/components/editor/panels/assets/interactive-media-preview";
 import { PanelView } from "@/components/editor/panels/assets/views/base-view";
 import { DraggableItem } from "@/components/editor/panels/assets/draggable-item";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,7 @@ import { cn } from "@/utils/ui";
 
 const STORAGE_KEY = "opencut.music.sourceRoot";
 const DEFAULT_MUSIC_ROOT = "C:\\Users\\Design\\Music";
+const MUSIC_CARD_WIDTH = 176;
 
 type LocalMusicFile = LocalMusicSourceFile & {
 	directory: string;
@@ -59,6 +61,15 @@ export function MusicView() {
 
 	const folderPickerRef = useRef<HTMLInputElement | null>(null);
 	const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+	const stopPreview = useCallback(() => {
+		const audio = previewAudioRef.current;
+		if (!audio) return;
+		audio.pause();
+		audio.currentTime = 0;
+		audio.removeAttribute("src");
+		audio.load();
+		setActivePreviewPath(null);
+	}, []);
 
 	const loadFiles = useCallback(
 		async ({ rootOverride }: { rootOverride?: string } = {}) => {
@@ -159,10 +170,10 @@ export function MusicView() {
 
 	useEffect(() => {
 		return () => {
-			previewAudioRef.current?.pause();
+			stopPreview();
 			previewAudioRef.current = null;
 		};
-	}, []);
+	}, [stopPreview]);
 
 	const togglePreview = useCallback(
 		async ({ file }: { file: LocalMusicFile }) => {
@@ -175,12 +186,11 @@ export function MusicView() {
 			const player = previewAudioRef.current;
 			const sourceUrl = `/api/music/local/source?path=${encodeURIComponent(file.relativePath)}&root=${encodeURIComponent(root)}`;
 			if (activePreviewPath === file.relativePath && !player.paused) {
-				player.pause();
-				setActivePreviewPath(null);
+				stopPreview();
 				return;
 			}
 			try {
-				player.pause();
+				stopPreview();
 				player.src = sourceUrl;
 				player.currentTime = 0;
 				await player.play();
@@ -188,10 +198,10 @@ export function MusicView() {
 			} catch (error) {
 				console.error("Failed to preview local music", error);
 				toast.error("Preview failed");
-				setActivePreviewPath(null);
+				stopPreview();
 			}
 		},
-		[activePreviewPath, root],
+		[activePreviewPath, root, stopPreview],
 	);
 
 	const sortedFiles = useMemo(() => {
@@ -357,37 +367,23 @@ export function MusicView() {
 				) : mediaViewMode === "grid" ? (
 					<div
 						className="grid gap-2"
-						style={{ gridTemplateColumns: "repeat(auto-fill, 160px)" }}
+						style={{
+							gridTemplateColumns: `repeat(auto-fill, ${MUSIC_CARD_WIDTH}px)`,
+						}}
 					>
 						{sortedFiles.map((file) => {
-							const isPlaying = activePreviewPath === file.relativePath;
 							return (
 								<DraggableItem
 									key={file.relativePath}
 									name={file.name}
 									preview={
-										<div className="text-muted-foreground flex size-full flex-col items-center justify-center">
-											<HugeiconsIcon
-												icon={MusicNote03Icon}
-												className="size-6"
-											/>
-											<span className="mt-1 text-[10px]">
-												{file.extension.toUpperCase()}
-											</span>
-										</div>
-									}
-									thumbnailTopRightControl={
-										<Button
-											size="icon"
-											variant="secondary"
-											className="size-6"
-											onClick={() => void togglePreview({ file })}
-										>
-											<HugeiconsIcon
-												icon={isPlaying ? PauseIcon : PlayIcon}
-												className="size-3.5"
-											/>
-										</Button>
+										<InteractiveMediaPreview
+											previewId={`${root}:${file.relativePath}`}
+											name={file.name}
+											mediaType="audio"
+											src={`/api/music/local/source?path=${encodeURIComponent(file.relativePath)}&root=${encodeURIComponent(root)}`}
+											audioMetaLabel={file.extension}
+										/>
 									}
 									dragData={{
 										id: `${root}:${file.relativePath}`,

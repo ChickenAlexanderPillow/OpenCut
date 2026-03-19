@@ -73,11 +73,29 @@ export interface VideoReframePresetTransform {
 	scale: number;
 }
 
+export interface VideoMotionTracking {
+	enabled: boolean;
+	mode: "subject-single-v1";
+	source: "baked-keyframes";
+	lastAnalyzedAt?: string;
+	animateScale?: boolean;
+	cacheKey?: string;
+	sampleCount?: number;
+	trackedSampleCount?: number;
+	keyframes: Array<{
+		id: string;
+		time: number;
+		position: Transform["position"];
+		scale: number;
+	}>;
+}
+
 export interface VideoReframePreset {
 	id: string;
 	name: string;
 	transform: VideoReframePresetTransform;
 	autoSeeded?: boolean;
+	motionTracking?: VideoMotionTracking;
 }
 
 export interface VideoReframeSwitch {

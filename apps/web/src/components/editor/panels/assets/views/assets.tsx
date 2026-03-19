@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { InteractiveMediaPreview } from "@/components/editor/panels/assets/interactive-media-preview";
 import { PanelView } from "@/components/editor/panels/assets/views/base-view";
 import { MediaDragOverlay } from "@/components/editor/panels/assets/drag-overlay";
 import { DraggableItem } from "@/components/editor/panels/assets/draggable-item";
@@ -33,25 +34,22 @@ import { invokeAction } from "@/lib/actions";
 import { InsertElementCommand } from "@/lib/commands/timeline";
 import { processMediaAssets } from "@/lib/media/processing";
 import { prepareProjectMediaImport } from "@/lib/media/project-import";
-import {
-	autoLinkTranscriptAndCaptionsForMediaElement,
-} from "@/lib/media/transcript-import";
+import { autoLinkTranscriptAndCaptionsForMediaElement } from "@/lib/media/transcript-import";
 import { getMediaTypeFromFile } from "@/lib/media/media-utils";
 import { buildElementFromMedia } from "@/lib/timeline/element-utils";
 import { useAssetsPanelStore } from "@/stores/assets-panel-store";
 import type { MediaAsset } from "@/types/assets";
 import type { ExternalSourceSystem } from "@/types/external-projects";
-import { cn } from "@/utils/ui";
 import {
 	CloudUploadIcon,
 	GridViewIcon,
 	LeftToRightListDashIcon,
 	SortingOneNineIcon,
-	Image02Icon,
-	MusicNote03Icon,
 	Video01Icon,
 } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
+import { HugeiconsIcon } from "@hugeicons/react";
+
+const ASSET_CARD_WIDTH = 176;
 
 export function MediaView() {
 	const editor = useEditor();
@@ -718,7 +716,7 @@ function GridView({
 		<div
 			className="grid gap-2"
 			style={{
-				gridTemplateColumns: "repeat(auto-fill, 160px)",
+				gridTemplateColumns: `repeat(auto-fill, ${ASSET_CARD_WIDTH}px)`,
 			}}
 		>
 			{items.map((item) => (
@@ -752,6 +750,8 @@ function GridView({
 							onAddToTimeline={({ currentTime }) =>
 								onAddToTimeline({ asset: item, startTime: currentTime })
 							}
+							className="w-full"
+							containerClassName="w-full"
 							isRounded={false}
 							variant="card"
 							isHighlighted={highlightedId === item.id}
@@ -831,6 +831,8 @@ function ListView({
 								onAddToTimeline({ asset: item, startTime: currentTime })
 							}
 							variant="compact"
+							className="rounded-sm hover:bg-accent/40"
+							containerClassName="w-full"
 							isHighlighted={highlightedId === item.id}
 						/>
 					</MediaItemWithContextMenu>
@@ -856,41 +858,6 @@ function MediaDurationBadge({ duration }: { duration?: number }) {
 	);
 }
 
-function MediaDurationLabel({ duration }: { duration?: number }) {
-	if (!duration) return null;
-
-	return (
-		<span className="text-xs opacity-70">{formatDuration({ duration })}</span>
-	);
-}
-
-function MediaTypePlaceholder({
-	icon,
-	label,
-	duration,
-	variant,
-}: {
-	icon: IconSvgElement;
-	label: string;
-	duration?: number;
-	variant: "muted" | "bordered";
-}) {
-	const iconClassName = cn("size-6", variant === "bordered" && "mb-1");
-
-	return (
-		<div
-			className={cn(
-				"text-muted-foreground flex size-full flex-col items-center justify-center rounded",
-				variant === "muted" ? "bg-muted/30" : "border",
-			)}
-		>
-			<HugeiconsIcon icon={icon} className={iconClassName} />
-			<span className="text-xs">{label}</span>
-			<MediaDurationLabel duration={duration} />
-		</div>
-	);
-}
-
 function MediaPreview({
 	item,
 	variant = "grid",
@@ -898,67 +865,55 @@ function MediaPreview({
 	item: MediaAsset;
 	variant?: "grid" | "compact";
 }) {
-	const shouldShowDurationBadge = variant === "grid";
-
 	if (item.type === "image") {
 		return (
-			<div className="relative flex size-full items-center justify-center">
-				<Image
-					src={item.url ?? ""}
-					alt={item.name}
-					fill
-					sizes="100vw"
-					className="object-cover"
-					loading="lazy"
-					unoptimized
-				/>
-			</div>
+			<InteractiveMediaPreview
+				previewId={item.id}
+				name={item.name}
+				mediaType={item.type}
+				src={item.url ?? null}
+			/>
 		);
 	}
 
-	if (item.type === "video") {
-		if (item.thumbnailUrl) {
-			return (
-				<div className="relative size-full">
+	if (variant === "compact") {
+		return item.type === "video" ? (
+			<div className="relative size-full">
+				{item.thumbnailUrl ? (
 					<Image
 						src={item.thumbnailUrl}
 						alt={item.name}
 						fill
-						sizes="100vw"
+						sizes="24px"
 						className="rounded object-cover"
 						loading="lazy"
 						unoptimized
 					/>
-					{shouldShowDurationBadge ? (
-						<MediaDurationBadge duration={item.duration} />
-					) : null}
-				</div>
-			);
-		}
-
-		return (
-			<MediaTypePlaceholder
-				icon={Video01Icon}
-				label="Video"
-				duration={item.duration}
-				variant="muted"
-			/>
-		);
-	}
-
-	if (item.type === "audio") {
-		return (
-			<MediaTypePlaceholder
-				icon={MusicNote03Icon}
-				label="Audio"
-				duration={item.duration}
-				variant="bordered"
-			/>
+				) : (
+					<div className="text-muted-foreground flex size-full items-center justify-center rounded border border-dashed bg-muted/20 text-[10px]">
+						VID
+					</div>
+				)}
+			</div>
+		) : (
+			<div className="text-muted-foreground flex size-full items-center justify-center rounded border border-dashed bg-muted/20 text-[10px]">
+				AUD
+			</div>
 		);
 	}
 
 	return (
-		<MediaTypePlaceholder icon={Image02Icon} label="Unknown" variant="muted" />
+		<div className="relative size-full">
+			<InteractiveMediaPreview
+				previewId={item.id}
+				name={item.name}
+				mediaType={item.type}
+				src={item.previewUrl ?? item.url ?? null}
+				thumbnailSrc={item.thumbnailUrl}
+				duration={item.duration}
+			/>
+			<MediaDurationBadge duration={item.duration} />
+		</div>
 	);
 }
 

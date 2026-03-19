@@ -33,6 +33,8 @@ export interface DraggableItemProps {
 	isHighlighted?: boolean;
 }
 
+const COMPACT_THUMBNAIL_SIZE_CLASS = "size-[1.65rem]";
+
 export function DraggableItem({
 	name,
 	preview,
@@ -79,6 +81,12 @@ export function DraggableItem({
 	}, [isDragging]);
 
 	const handleDragStart = (e: React.DragEvent) => {
+		const target = e.target as HTMLElement | null;
+		if (target?.closest('[data-drag-ignore="true"]')) {
+			e.preventDefault();
+			return;
+		}
+
 		e.dataTransfer.setDragImage(emptyImg, 0, 0);
 
 		setDragData({ dataTransfer: e.dataTransfer, dragData });
@@ -121,16 +129,16 @@ export function DraggableItem({
 							onDragEnd={isDraggable ? handleDragEnd : undefined}
 						>
 							{preview}
-							{thumbnailTopRightControl ? (
-								<div className="absolute top-2 right-2 z-10">
+							{(thumbnailTopRightControl || !isDragging) && (
+								<div className="absolute top-2 right-2 z-10 flex items-center gap-1">
 									{thumbnailTopRightControl}
+									{!isDragging && (
+										<PlusButton
+											className="opacity-0 group-hover:opacity-100"
+											onClick={handleAddToTimeline}
+										/>
+									)}
 								</div>
-							) : null}
-							{!isDragging && (
-								<PlusButton
-									className="opacity-0 group-hover:opacity-100"
-									onClick={handleAddToTimeline}
-								/>
 							)}
 						</AspectRatio>
 						{shouldShowLabel && (
@@ -159,7 +167,7 @@ export function DraggableItem({
 					<button
 						type="button"
 						className={cn(
-							"flex h-8 w-full cursor-default items-center gap-3 px-1",
+							"flex h-9 w-full cursor-default items-center gap-3 px-1",
 							isDraggable && "[&::-webkit-drag-ghost]:opacity-0",
 							className,
 						)}
@@ -167,13 +175,25 @@ export function DraggableItem({
 						onDragStart={isDraggable ? handleDragStart : undefined}
 						onDragEnd={isDraggable ? handleDragEnd : undefined}
 					>
-						<div className="relative size-6 flex-shrink-0 overflow-hidden rounded-[0.35rem]">
+						<div
+							className={cn(
+								"relative flex-shrink-0 overflow-hidden rounded-[0.35rem]",
+								COMPACT_THUMBNAIL_SIZE_CLASS,
+							)}
+						>
 							{preview}
-							{thumbnailTopRightControl ? (
-								<div className="absolute top-0 right-0 z-10">
+							{(thumbnailTopRightControl || !isDragging) && (
+								<div className="absolute top-0 right-0 z-10 flex items-center gap-0.5">
 									{thumbnailTopRightControl}
+									{!isDragging && (
+										<PlusButton
+											className="opacity-0 group-hover:opacity-100"
+											onClick={handleAddToTimeline}
+											compact
+										/>
+									)}
 								</div>
-							) : null}
+							)}
 						</div>
 						<span className="w-full flex-1 truncate text-sm text-left">
 							{name}
@@ -220,16 +240,19 @@ function PlusButton({
 	className,
 	onClick,
 	tooltipText,
+	compact = false,
 }: {
 	className?: string;
 	onClick?: () => void;
 	tooltipText?: string;
+	compact?: boolean;
 }) {
 	const button = (
 		<Button
 			size="icon"
 			className={cn(
-				"bg-background hover:bg-background text-foreground absolute right-2 bottom-2 size-5",
+				"bg-background hover:bg-background text-foreground size-5",
+				compact && "size-4 rounded-sm p-0",
 				className,
 			)}
 			onClick={(e) => {
@@ -239,7 +262,7 @@ function PlusButton({
 			}}
 			title={tooltipText}
 		>
-			<Plus />
+			<Plus className={compact ? "size-3" : "size-3.5"} />
 		</Button>
 	);
 

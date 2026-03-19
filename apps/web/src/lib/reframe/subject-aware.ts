@@ -6,6 +6,7 @@ import type {
 } from "@/types/timeline";
 import { generateUUID } from "@/utils/id";
 import { buildVideoReframePreset } from "./video-reframe";
+import type { MotionTrackingTransformKeyframe } from "./motion-tracking";
 
 const MEDIAPIPE_WASM_BASE =
 	"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm";
@@ -26,37 +27,124 @@ type SubjectObservation = {
 	boxes: SubjectBox[];
 };
 
+type SubjectTrackingObservation = {
+	time: number;
+	box: SubjectBox | null;
+};
+
 type AutoSectionKind = "Subject" | "Subject Left" | "Subject Right";
 
 type VisionRuntime = Awaited<ReturnType<typeof loadVisionRuntime>>;
 
 let runtimePromise: Promise<VisionRuntime> | null = null;
+let suppressedVisionConsoleErrorDepth = 0;
+let restoreVisionConsoleError: (() => void) | null = null;
+
+function createAbortError(): Error {
+	const error = new Error("Analysis aborted");
+	error.name = "AbortError";
+	return error;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+	if (signal?.aborted) {
+		throw createAbortError();
+	}
+}
+
+function shouldSuppressVisionConsoleMessage(args: unknown[]): boolean {
+	return args.some((value) => {
+		const message =
+			value instanceof Error
+				? value.message
+				: typeof value === "string"
+					? value
+					: "";
+		const normalizedMessage = message.trim().toLowerCase();
+		return (
+			normalizedMessage.startsWith("info: created tensorflow lite xnnpack delegate") ||
+			normalizedMessage.includes("xnnpack delegate for cpu")
+		);
+	});
+}
+
+function beginSuppressingVisionConsoleErrors(): void {
+	if (typeof window === "undefined") {
+		return;
+	}
+	if (suppressedVisionConsoleErrorDepth === 0) {
+		const originalConsoleError = console.error.bind(console);
+		console.error = (...args: unknown[]) => {
+			if (shouldSuppressVisionConsoleMessage(args)) {
+				return;
+			}
+			originalConsoleError(...args);
+		};
+		restoreVisionConsoleError = () => {
+			console.error = originalConsoleError;
+		};
+	}
+	suppressedVisionConsoleErrorDepth += 1;
+}
+
+function endSuppressingVisionConsoleErrors(): void {
+	if (typeof window === "undefined" || suppressedVisionConsoleErrorDepth === 0) {
+		return;
+	}
+	suppressedVisionConsoleErrorDepth -= 1;
+	if (suppressedVisionConsoleErrorDepth === 0) {
+		restoreVisionConsoleError?.();
+		restoreVisionConsoleError = null;
+	}
+}
+
+function withSuppressedVisionConsoleErrors<T>(action: () => T): T {
+	beginSuppressingVisionConsoleErrors();
+	try {
+		return action();
+	} finally {
+		endSuppressingVisionConsoleErrors();
+	}
+}
+
+async function withSuppressedVisionConsoleErrorsAsync<T>(
+	action: () => Promise<T>,
+): Promise<T> {
+	beginSuppressingVisionConsoleErrors();
+	try {
+		return await action();
+	} finally {
+		endSuppressingVisionConsoleErrors();
+	}
+}
 
 async function loadVisionRuntime() {
-	const { FaceDetector, FilesetResolver, PoseLandmarker } = await import(
-		"@mediapipe/tasks-vision"
-	);
-	const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_BASE);
-	const [faceDetector, poseLandmarker] = await Promise.all([
-		FaceDetector.createFromOptions(vision, {
-			baseOptions: {
-				modelAssetPath: FACE_MODEL_PATH,
-			},
-			runningMode: "VIDEO",
-			minDetectionConfidence: 0.45,
-		}),
-		PoseLandmarker.createFromOptions(vision, {
-			baseOptions: {
-				modelAssetPath: POSE_MODEL_PATH,
-			},
-			runningMode: "VIDEO",
-			numPoses: 2,
-			minPoseDetectionConfidence: 0.35,
-			minPosePresenceConfidence: 0.3,
-			minTrackingConfidence: 0.3,
-		}),
-	]);
-	return { faceDetector, poseLandmarker };
+	return withSuppressedVisionConsoleErrorsAsync(async () => {
+		const { FaceDetector, FilesetResolver, PoseLandmarker } = await import(
+			"@mediapipe/tasks-vision"
+		);
+		const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_BASE);
+		const [faceDetector, poseLandmarker] = await Promise.all([
+			FaceDetector.createFromOptions(vision, {
+				baseOptions: {
+					modelAssetPath: FACE_MODEL_PATH,
+				},
+				runningMode: "VIDEO",
+				minDetectionConfidence: 0.45,
+			}),
+			PoseLandmarker.createFromOptions(vision, {
+				baseOptions: {
+					modelAssetPath: POSE_MODEL_PATH,
+				},
+				runningMode: "VIDEO",
+				numPoses: 2,
+				minPoseDetectionConfidence: 0.35,
+				minPosePresenceConfidence: 0.3,
+				minTrackingConfidence: 0.3,
+			}),
+		]);
+		return { faceDetector, poseLandmarker };
+	});
 }
 
 async function getVisionRuntime(): Promise<VisionRuntime> {
@@ -68,9 +156,12 @@ async function getVisionRuntime(): Promise<VisionRuntime> {
 
 async function loadVideo({
 	asset,
+	signal,
 }: {
 	asset: MediaAsset;
+	signal?: AbortSignal;
 }): Promise<{ video: HTMLVideoElement; cleanup: () => void }> {
+	throwIfAborted(signal);
 	const video = document.createElement("video");
 	video.muted = true;
 	video.playsInline = true;
@@ -86,12 +177,19 @@ async function loadVideo({
 			cleanupListeners();
 			reject(new Error(`Failed to load video for reframing: ${asset.name}`));
 		};
+		const onAbort = () => {
+			cleanupListeners();
+			reject(createAbortError());
+		};
 		const cleanupListeners = () => {
 			video.removeEventListener("loadedmetadata", onLoaded);
 			video.removeEventListener("error", onError);
+			signal?.removeEventListener("abort", onAbort);
 		};
 		video.addEventListener("loadedmetadata", onLoaded);
 		video.addEventListener("error", onError);
+		signal?.addEventListener("abort", onAbort, { once: true });
+		throwIfAborted(signal);
 	});
 	return {
 		video,
@@ -109,11 +207,22 @@ async function loadVideo({
 async function seekVideo({
 	video,
 	time,
+	signal,
 }: {
 	video: HTMLVideoElement;
 	time: number;
+	signal?: AbortSignal;
 }) {
+	throwIfAborted(signal);
+	const targetTime = Math.max(0, time);
+	if (Math.abs(video.currentTime - targetTime) <= 1 / 240 && !video.seeking) {
+		return;
+	}
 	await new Promise<void>((resolve, reject) => {
+		const timeout = window.setTimeout(() => {
+			cleanup();
+			reject(new Error("Timed out seeking video for subject-aware analysis"));
+		}, 1500);
 		const onSeeked = () => {
 			cleanup();
 			resolve();
@@ -122,21 +231,32 @@ async function seekVideo({
 			cleanup();
 			reject(new Error("Failed to seek video for subject-aware reframing"));
 		};
+		const onAbort = () => {
+			cleanup();
+			reject(createAbortError());
+		};
 		const cleanup = () => {
+			window.clearTimeout(timeout);
 			video.removeEventListener("seeked", onSeeked);
 			video.removeEventListener("error", onError);
+			signal?.removeEventListener("abort", onAbort);
 		};
 		video.addEventListener("seeked", onSeeked);
 		video.addEventListener("error", onError);
-		video.currentTime = Math.max(0, time);
+		signal?.addEventListener("abort", onAbort, { once: true });
+		throwIfAborted(signal);
+		video.currentTime = targetTime;
 	});
 }
 
 async function waitForVideoFrameReady({
 	video,
+	signal,
 }: {
 	video: HTMLVideoElement;
+	signal?: AbortSignal;
 }) {
+	throwIfAborted(signal);
 	if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
 		await new Promise<void>((resolve, reject) => {
 			const timeout = setTimeout(() => {
@@ -154,30 +274,47 @@ async function waitForVideoFrameReady({
 				cleanup();
 				reject(new Error("Video failed while waiting for frame data"));
 			};
+			const onAbort = () => {
+				cleanup();
+				reject(createAbortError());
+			};
 			const cleanup = () => {
 				clearTimeout(timeout);
 				video.removeEventListener("loadeddata", onReady);
 				video.removeEventListener("canplay", onReady);
 				video.removeEventListener("timeupdate", onReady);
 				video.removeEventListener("error", onError);
+				signal?.removeEventListener("abort", onAbort);
 			};
 			video.addEventListener("loadeddata", onReady);
 			video.addEventListener("canplay", onReady);
 			video.addEventListener("timeupdate", onReady);
 			video.addEventListener("error", onError);
+			signal?.addEventListener("abort", onAbort, { once: true });
+			throwIfAborted(signal);
 			onReady();
 		});
 	}
 
 	if ("requestVideoFrameCallback" in video) {
-		await new Promise<void>((resolve) => {
+		await new Promise<void>((resolve, reject) => {
 			let settled = false;
 			const finish = () => {
 				if (settled) return;
 				settled = true;
+				signal?.removeEventListener("abort", onAbort);
 				resolve();
 			};
+			const onAbort = () => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timeout);
+				signal?.removeEventListener("abort", onAbort);
+				reject(createAbortError());
+			};
 			const timeout = setTimeout(finish, 250);
+			signal?.addEventListener("abort", onAbort, { once: true });
+			throwIfAborted(signal);
 			(
 				video as HTMLVideoElement & {
 					requestVideoFrameCallback?: (callback: () => void) => number;
@@ -190,8 +327,32 @@ async function waitForVideoFrameReady({
 		return;
 	}
 
-	await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-	await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+	await new Promise<void>((resolve, reject) => {
+		const frame = requestAnimationFrame(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		});
+		const onAbort = () => {
+			cancelAnimationFrame(frame);
+			signal?.removeEventListener("abort", onAbort);
+			reject(createAbortError());
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+		throwIfAborted(signal);
+	});
+	await new Promise<void>((resolve, reject) => {
+		const frame = requestAnimationFrame(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		});
+		const onAbort = () => {
+			cancelAnimationFrame(frame);
+			signal?.removeEventListener("abort", onAbort);
+			reject(createAbortError());
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+		throwIfAborted(signal);
+	});
 }
 
 function canAnalyzeCurrentVideoFrame({
@@ -205,6 +366,20 @@ function canAnalyzeCurrentVideoFrame({
 		video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
 		video.videoWidth > 0 &&
 		video.videoHeight > 0
+	);
+}
+
+function isIgnorableVisionRuntimeMessage(error: unknown): boolean {
+	const message =
+		error instanceof Error
+			? error.message
+			: typeof error === "string"
+				? error
+				: "";
+	const normalizedMessage = message.trim().toLowerCase();
+	return (
+		normalizedMessage.startsWith("info:") ||
+		normalizedMessage.includes("xnnpack delegate for cpu")
 	);
 }
 
@@ -256,6 +431,109 @@ function buildObservationSampleTimes({
 			if (time < startTime || time > endTime) return false;
 			return index === 0 || Math.abs(time - (values[index - 1] ?? 0)) > 1 / 120;
 		});
+}
+
+function buildMotionTrackingSampleTimes({
+	startTime,
+	duration,
+}: {
+	startTime: number;
+	duration: number;
+}): number[] {
+	const endTime = startTime + duration;
+	const targetSamplesPerSecond = duration > 18 ? 5 : 6;
+	const maxSamples = duration > 18 ? 84 : 96;
+	const minSamples = 10;
+	const sampleCount = clamp(
+		Math.round(duration * targetSamplesPerSecond) + 1,
+		minSamples,
+		maxSamples,
+	);
+	return Array.from({ length: sampleCount }, (_, index) =>
+		startTime + (duration * index) / Math.max(1, sampleCount - 1),
+	).filter((time, index, values) => {
+		if (time < startTime || time > endTime) return false;
+		return index === 0 || Math.abs(time - (values[index - 1] ?? 0)) > 1 / 240;
+	});
+}
+
+function smoothObservationSegment({
+	observations,
+}: {
+	observations: SubjectTrackingObservation[];
+}): SubjectTrackingObservation[] {
+	if (observations.length <= 1) return observations.map((observation) => ({
+		time: observation.time,
+		box: observation.box ? { ...observation.box } : null,
+	}));
+
+	const forward: SubjectTrackingObservation[] = [];
+	let previousForward: SubjectBox | null = null;
+	for (const observation of observations) {
+		const currentBox = observation.box;
+		if (!currentBox) {
+			forward.push({ time: observation.time, box: null });
+			previousForward = null;
+			continue;
+		}
+		if (!previousForward) {
+			forward.push({ time: observation.time, box: { ...currentBox } });
+			previousForward = { ...currentBox };
+			continue;
+		}
+		const nextBox: SubjectBox = {
+			centerX: previousForward.centerX + (currentBox.centerX - previousForward.centerX) * 0.24,
+			centerY: previousForward.centerY + (currentBox.centerY - previousForward.centerY) * 0.24,
+			width: previousForward.width + (currentBox.width - previousForward.width) * 0.12,
+			height: previousForward.height + (currentBox.height - previousForward.height) * 0.12,
+		};
+		forward.push({ time: observation.time, box: nextBox });
+		previousForward = nextBox;
+	}
+
+	const backward = [...forward].reverse();
+	const smoothedReverse: SubjectTrackingObservation[] = [];
+	let previousBackward: SubjectBox | null = null;
+	for (const observation of backward) {
+		const currentBox = observation.box;
+		if (!currentBox) {
+			smoothedReverse.push({ time: observation.time, box: null });
+			previousBackward = null;
+			continue;
+		}
+		if (!previousBackward) {
+			smoothedReverse.push({ time: observation.time, box: { ...currentBox } });
+			previousBackward = { ...currentBox };
+			continue;
+		}
+		const nextBox: SubjectBox = {
+			centerX: previousBackward.centerX + (currentBox.centerX - previousBackward.centerX) * 0.24,
+			centerY: previousBackward.centerY + (currentBox.centerY - previousBackward.centerY) * 0.24,
+			width: previousBackward.width + (currentBox.width - previousBackward.width) * 0.12,
+			height: previousBackward.height + (currentBox.height - previousBackward.height) * 0.12,
+		};
+		smoothedReverse.push({ time: observation.time, box: nextBox });
+		previousBackward = nextBox;
+	}
+
+	return smoothedReverse.reverse().map((observation, index) => {
+		const pairedForward = forward[index];
+		if (!observation.box || !pairedForward?.box) {
+			return {
+				time: observation.time,
+				box: observation.box ? { ...observation.box } : null,
+			};
+		}
+		return {
+			time: observation.time,
+			box: {
+				centerX: (observation.box.centerX + pairedForward.box.centerX) / 2,
+				centerY: (observation.box.centerY + pairedForward.box.centerY) / 2,
+				width: (observation.box.width + pairedForward.box.width) / 2,
+				height: (observation.box.height + pairedForward.box.height) / 2,
+			},
+		};
+	});
 }
 
 function buildFallbackSubjectPreset({ baseScale }: { baseScale: number }) {
@@ -424,6 +702,222 @@ function dedupePresetNames(
 		seen.add(preset.name);
 		return true;
 	});
+}
+
+function getBoxArea(box: SubjectBox): number {
+	return Math.max(1, box.width) * Math.max(1, box.height);
+}
+
+function getBoxDistance(left: SubjectBox, right: SubjectBox): number {
+	return Math.hypot(left.centerX - right.centerX, left.centerY - right.centerY);
+}
+
+function getBoxIoU(left: SubjectBox, right: SubjectBox): number {
+	const leftLeft = left.centerX - left.width / 2;
+	const leftRight = left.centerX + left.width / 2;
+	const leftTop = left.centerY - left.height / 2;
+	const leftBottom = left.centerY + left.height / 2;
+	const rightLeft = right.centerX - right.width / 2;
+	const rightRight = right.centerX + right.width / 2;
+	const rightTop = right.centerY - right.height / 2;
+	const rightBottom = right.centerY + right.height / 2;
+	const intersectionWidth = Math.max(
+		0,
+		Math.min(leftRight, rightRight) - Math.max(leftLeft, rightLeft),
+	);
+	const intersectionHeight = Math.max(
+		0,
+		Math.min(leftBottom, rightBottom) - Math.max(leftTop, rightTop),
+	);
+	const intersectionArea = intersectionWidth * intersectionHeight;
+	const unionArea = getBoxArea(left) + getBoxArea(right) - intersectionArea;
+	return unionArea > 0 ? intersectionArea / unionArea : 0;
+}
+
+function choosePrimarySubjectBox({
+	candidates,
+	previousBox,
+	sourceWidth,
+	sourceHeight,
+}: {
+	candidates: SubjectBox[];
+	previousBox: SubjectBox | null;
+	sourceWidth: number;
+	sourceHeight: number;
+}): SubjectBox | null {
+	if (candidates.length === 0) return null;
+	if (!previousBox) {
+		const frameCenterX = sourceWidth / 2;
+		const frameCenterY = sourceHeight / 2;
+		return [...candidates].sort((left, right) => {
+			const leftCenterPenalty =
+				Math.hypot(left.centerX - frameCenterX, left.centerY - frameCenterY) /
+				Math.max(1, Math.hypot(frameCenterX, frameCenterY));
+			const rightCenterPenalty =
+				Math.hypot(right.centerX - frameCenterX, right.centerY - frameCenterY) /
+				Math.max(1, Math.hypot(frameCenterX, frameCenterY));
+			const leftScore = getBoxArea(left) - leftCenterPenalty * getBoxArea(left) * 0.2;
+			const rightScore =
+				getBoxArea(right) - rightCenterPenalty * getBoxArea(right) * 0.2;
+			return rightScore - leftScore;
+		})[0]!;
+	}
+
+	const frameDiagonal = Math.max(1, Math.hypot(sourceWidth, sourceHeight));
+	return [...candidates].sort((left, right) => {
+		const leftScore =
+			getBoxIoU(left, previousBox) * 4 +
+			(1 - getBoxDistance(left, previousBox) / frameDiagonal) * 2 +
+			(1 -
+				Math.abs(getBoxArea(left) - getBoxArea(previousBox)) /
+					Math.max(getBoxArea(left), getBoxArea(previousBox), 1));
+		const rightScore =
+			getBoxIoU(right, previousBox) * 4 +
+			(1 - getBoxDistance(right, previousBox) / frameDiagonal) * 2 +
+			(1 -
+				Math.abs(getBoxArea(right) - getBoxArea(previousBox)) /
+					Math.max(getBoxArea(right), getBoxArea(previousBox), 1));
+		return rightScore - leftScore;
+	})[0]!;
+}
+
+function smoothTrackedObservations({
+	observations,
+}: {
+	observations: SubjectTrackingObservation[];
+}): SubjectTrackingObservation[] {
+	if (observations.length === 0) return [];
+	const maxHoldSeconds = 0.35;
+	const heldObservations: SubjectTrackingObservation[] = [];
+	let previousTracked: SubjectTrackingObservation | null = null;
+	for (const observation of observations) {
+		if (observation.box) {
+			heldObservations.push(observation);
+			previousTracked = observation;
+			continue;
+		}
+		if (
+			previousTracked &&
+			observation.time - previousTracked.time <= maxHoldSeconds
+		) {
+			heldObservations.push({
+				time: observation.time,
+				box: { ...previousTracked.box! },
+			});
+			continue;
+		}
+		heldObservations.push(observation);
+		previousTracked = null;
+	}
+
+	const smoothed: SubjectTrackingObservation[] = [];
+	let segment: SubjectTrackingObservation[] = [];
+	for (const observation of heldObservations) {
+		if (!observation.box) {
+			if (segment.length > 0) {
+				smoothed.push(...smoothObservationSegment({ observations: segment }));
+				segment = [];
+			}
+			smoothed.push(observation);
+			continue;
+		}
+		segment.push(observation);
+	}
+	if (segment.length > 0) {
+		smoothed.push(...smoothObservationSegment({ observations: segment }));
+	}
+	return smoothed;
+}
+
+function coalesceMotionTrackingKeyframes({
+	trackedTransforms,
+	animateScale,
+}: {
+	trackedTransforms: Array<
+		SubjectTrackingObservation & {
+			transform: ReturnType<typeof derivePresetTransform>;
+		}
+	>;
+	animateScale: boolean;
+}): MotionTrackingTransformKeyframe[] {
+	if (trackedTransforms.length === 0) return [];
+	const keyframes: MotionTrackingTransformKeyframe[] = [];
+	let previousTracked: MotionTrackingTransformKeyframe | null = null;
+	const forcedSpacingSeconds = 0.9;
+
+	for (const [observationIndex, observation] of trackedTransforms.entries()) {
+		const isFirst = observationIndex === 0;
+		const isLast = observationIndex === trackedTransforms.length - 1;
+		const nextScale = animateScale
+			? observation.transform.scale
+			: (previousTracked?.scale ?? trackedTransforms[0]!.transform.scale);
+		const shouldInsert =
+			!previousTracked ||
+			isFirst ||
+			isLast ||
+			Math.abs(observation.transform.position.x - previousTracked.position.x) >= 6 ||
+			Math.abs(observation.transform.position.y - previousTracked.position.y) >= 6 ||
+			(animateScale && Math.abs(nextScale - previousTracked.scale) >= 0.02) ||
+			observation.time - previousTracked.time >= forcedSpacingSeconds;
+		if (!shouldInsert) continue;
+		keyframes.push({
+			id: generateUUID(),
+			time: Math.max(0, observation.time + observationIndex * 1e-6),
+			position: {
+				x: observation.transform.position.x,
+				y: observation.transform.position.y,
+			},
+			scale: nextScale,
+		});
+		previousTracked = keyframes[keyframes.length - 1] ?? null;
+	}
+
+	return keyframes;
+}
+
+export function buildMotionTrackingKeyframesFromObservations({
+	observations,
+	canvasSize,
+	sourceWidth,
+	sourceHeight,
+	baseScale,
+	animateScale,
+}: {
+	observations: SubjectTrackingObservation[];
+	canvasSize: { width: number; height: number };
+	sourceWidth: number;
+	sourceHeight: number;
+	baseScale: number;
+	animateScale: boolean;
+}): {
+	keyframes: MotionTrackingTransformKeyframe[];
+	sampleCount: number;
+	trackedSampleCount: number;
+} {
+	const smoothedObservations = smoothTrackedObservations({ observations });
+	const trackedTransforms = smoothedObservations.flatMap((observation) => {
+		if (!observation.box) return [];
+		return [
+			{
+				...observation,
+				transform: derivePresetTransform({
+					box: observation.box,
+					canvasSize,
+					sourceWidth,
+					sourceHeight,
+					baseScale,
+				}),
+			},
+		];
+	});
+	return {
+		keyframes: coalesceMotionTrackingKeyframes({
+			trackedTransforms,
+			animateScale,
+		}),
+		sampleCount: observations.length,
+		trackedSampleCount: trackedTransforms.length,
+	};
 }
 
 function buildSubjectBoxFromDetections(detections: SubjectBox[]): SubjectBox {
@@ -917,12 +1411,14 @@ export async function analyzeGeneratedClipReframes({
 	endTime,
 	canvasSize,
 	baseScale,
+	signal,
 }: {
 	asset: MediaAsset;
 	startTime: number;
 	endTime: number;
 	canvasSize: { width: number; height: number };
 	baseScale: number;
+	signal?: AbortSignal;
 }): Promise<{
 	presets: VideoReframePreset[];
 	switches: VideoReframeSwitch[];
@@ -957,8 +1453,9 @@ export async function analyzeGeneratedClipReframes({
 	const subjectPreset = buildFallbackSubjectPreset({ baseScale });
 
 	try {
+		throwIfAborted(signal);
 		const [{ faceDetector, poseLandmarker }, { video, cleanup }] =
-			await Promise.all([getVisionRuntime(), loadVideo({ asset })]);
+			await Promise.all([getVisionRuntime(), loadVideo({ asset, signal })]);
 		try {
 			const duration = Math.max(0.2, endTime - startTime);
 			const detections: SubjectBox[] = [];
@@ -969,17 +1466,22 @@ export async function analyzeGeneratedClipReframes({
 			});
 
 			for (const t of sampleTimes) {
+				throwIfAborted(signal);
 				await seekVideo({
 					video,
 					time: clamp(t, startTime, Math.max(startTime, endTime - 0.04)),
+					signal,
 				});
-				await waitForVideoFrameReady({ video });
+				await waitForVideoFrameReady({ video, signal });
+				throwIfAborted(signal);
 				if (!canAnalyzeCurrentVideoFrame({ video })) {
 					continue;
 				}
 				const timestampMs = Math.round(video.currentTime * 1000);
 				try {
-					const faceResult = faceDetector.detectForVideo(video, timestampMs);
+					const faceResult = withSuppressedVisionConsoleErrors(() =>
+						faceDetector.detectForVideo(video, timestampMs),
+					);
 					const faceDetections = (faceResult.detections ?? [])
 						.map((detection) => detection.boundingBox)
 						.filter((box): box is NonNullable<typeof box> => Boolean(box));
@@ -999,7 +1501,9 @@ export async function analyzeGeneratedClipReframes({
 						continue;
 					}
 
-					const poseResult = poseLandmarker.detectForVideo(video, timestampMs);
+					const poseResult = withSuppressedVisionConsoleErrors(() =>
+						poseLandmarker.detectForVideo(video, timestampMs),
+					);
 					const boxes: SubjectBox[] = [];
 					for (const pose of poseResult.landmarks ?? []) {
 						const poseBox = extractPoseBox({
@@ -1016,10 +1520,12 @@ export async function analyzeGeneratedClipReframes({
 						observations.push({ time: Math.max(0, t - startTime), boxes });
 					}
 				} catch (sampleError) {
-					console.warn(
-						"Subject-aware reframing skipped a sampled frame after detector failure.",
-						sampleError,
-					);
+					if (!isIgnorableVisionRuntimeMessage(sampleError)) {
+						console.warn(
+							"Subject-aware reframing skipped a sampled frame after detector failure.",
+							sampleError,
+						);
+					}
 				}
 			}
 
@@ -1035,16 +1541,185 @@ export async function analyzeGeneratedClipReframes({
 			cleanup();
 		}
 	} catch (error) {
-		console.warn(
-			"Subject-aware reframing failed; using centered subject fallback.",
-			error,
-		);
+		if (error instanceof Error && error.name === "AbortError") {
+			throw error;
+		}
+		if (!isIgnorableVisionRuntimeMessage(error)) {
+			console.warn(
+				"Subject-aware reframing failed; using centered subject fallback.",
+				error,
+			);
+		}
 		return {
 			presets: [subjectPreset],
 			switches: [],
 			defaultPresetId: subjectPreset.id,
 			detectionCount: 0,
 			subjectClusterCount: 0,
+		};
+	}
+}
+
+export async function analyzeGeneratedClipMotionTracking({
+	asset,
+	startTime,
+	endTime,
+	canvasSize,
+	baseScale,
+	animateScale = true,
+	signal,
+}: {
+	asset: MediaAsset;
+	startTime: number;
+	endTime: number;
+	canvasSize: { width: number; height: number };
+	baseScale: number;
+	animateScale?: boolean;
+	signal?: AbortSignal;
+}): Promise<{
+	keyframes: MotionTrackingTransformKeyframe[];
+	sampleCount: number;
+	trackedSampleCount: number;
+	detectionCount: number;
+}> {
+	if (typeof document === "undefined" || asset.type !== "video") {
+		return {
+			keyframes: [],
+			sampleCount: 0,
+			trackedSampleCount: 0,
+			detectionCount: 0,
+		};
+	}
+
+	const sourceWidth = asset.width ?? 0;
+	const sourceHeight = asset.height ?? 0;
+	if (sourceWidth <= 0 || sourceHeight <= 0) {
+		return {
+			keyframes: [],
+			sampleCount: 0,
+			trackedSampleCount: 0,
+			detectionCount: 0,
+		};
+	}
+
+	try {
+		throwIfAborted(signal);
+		const [{ faceDetector, poseLandmarker }, { video, cleanup }] =
+			await Promise.all([getVisionRuntime(), loadVideo({ asset, signal })]);
+		try {
+			const duration = Math.max(0.2, endTime - startTime);
+			const sampleTimes = buildMotionTrackingSampleTimes({
+				startTime,
+				duration,
+			});
+			const observations: SubjectTrackingObservation[] = [];
+			let previousTrackedBox: SubjectBox | null = null;
+			let detectionCount = 0;
+
+			for (const sampledTime of sampleTimes) {
+				throwIfAborted(signal);
+				await seekVideo({
+					video,
+					time: clamp(
+						sampledTime,
+						startTime,
+						Math.max(startTime, endTime - 0.04),
+					),
+					signal,
+				});
+				await waitForVideoFrameReady({ video, signal });
+				throwIfAborted(signal);
+				if (!canAnalyzeCurrentVideoFrame({ video })) {
+					observations.push({
+						time: Math.max(0, sampledTime - startTime),
+						box: null,
+					});
+					continue;
+				}
+
+				const timestampMs = Math.round(video.currentTime * 1000);
+				let candidates: SubjectBox[] = [];
+				try {
+					const faceResult = withSuppressedVisionConsoleErrors(() =>
+						faceDetector.detectForVideo(video, timestampMs),
+					);
+					candidates = (faceResult.detections ?? [])
+						.map((detection) => detection.boundingBox)
+						.filter((box): box is NonNullable<typeof box> => Boolean(box))
+						.map((faceBox) => ({
+							centerX: faceBox.originX + faceBox.width / 2,
+							centerY: faceBox.originY + faceBox.height / 2,
+							width: Math.max(1, faceBox.width * 2.4),
+							height: Math.max(1, faceBox.height * 3.4),
+						}));
+					if (candidates.length === 0) {
+						const poseResult = withSuppressedVisionConsoleErrors(() =>
+							poseLandmarker.detectForVideo(video, timestampMs),
+						);
+						candidates = (poseResult.landmarks ?? []).flatMap((pose) => {
+							const poseBox = extractPoseBox({
+								landmarks: pose,
+								sourceWidth,
+								sourceHeight,
+							});
+							return poseBox ? [poseBox] : [];
+						});
+					}
+				} catch (sampleError) {
+					if (!isIgnorableVisionRuntimeMessage(sampleError)) {
+						console.warn(
+							"Subject motion tracking skipped a sampled frame after detector failure.",
+							sampleError,
+						);
+					}
+				}
+
+				detectionCount += candidates.length;
+				const trackedBox = choosePrimarySubjectBox({
+					candidates,
+					previousBox: previousTrackedBox,
+					sourceWidth,
+					sourceHeight,
+				});
+				observations.push({
+					time: Math.max(0, sampledTime - startTime),
+					box: trackedBox ? { ...trackedBox } : null,
+				});
+				previousTrackedBox = trackedBox ?? previousTrackedBox;
+			}
+
+			const result = buildMotionTrackingKeyframesFromObservations({
+				observations,
+				canvasSize,
+				sourceWidth,
+				sourceHeight,
+				baseScale,
+				animateScale,
+			});
+			return {
+				keyframes: result.keyframes,
+				sampleCount: result.sampleCount,
+				trackedSampleCount: result.trackedSampleCount,
+				detectionCount,
+			};
+		} finally {
+			cleanup();
+		}
+	} catch (error) {
+		if (error instanceof Error && error.name === "AbortError") {
+			throw error;
+		}
+		if (!isIgnorableVisionRuntimeMessage(error)) {
+			console.warn(
+				"Subject motion tracking failed; leaving clip transform unchanged.",
+				error,
+			);
+		}
+		return {
+			keyframes: [],
+			sampleCount: 0,
+			trackedSampleCount: 0,
+			detectionCount: 0,
 		};
 	}
 }

@@ -2,6 +2,7 @@ import type {
 	Transform,
 	TimelineTrack,
 	VideoElement,
+	VideoMotionTracking,
 	VideoReframePreset,
 	VideoReframeSwitch,
 	VideoSplitScreen,
@@ -12,6 +13,11 @@ import type {
 	VideoSplitScreenSlotBinding,
 } from "@/types/timeline";
 import { generateUUID } from "@/utils/id";
+import {
+	clampMotionTrackingToDuration,
+	resolveMotionTrackedReframeTransform,
+	splitMotionTrackingAtTime,
+} from "./motion-tracking";
 
 const REFRAME_SWITCH_TIME_EPSILON = 1 / 1000;
 const DEFAULT_SPLIT_LAYOUT_PRESET: VideoSplitScreenLayoutPreset = "top-bottom";
@@ -738,6 +744,36 @@ export function normalizeVideoReframeState({
 }: {
 	element: VideoElement;
 }): VideoElement {
+	const normalizeMotionTracking = ({
+		motionTracking,
+	}: {
+		motionTracking: VideoMotionTracking | undefined;
+	}): VideoMotionTracking | undefined =>
+		motionTracking
+			? {
+					...motionTracking,
+					keyframes: (motionTracking.keyframes ?? [])
+						.filter(
+							(keyframe) =>
+								Boolean(keyframe) &&
+								Number.isFinite(keyframe.time) &&
+								Number.isFinite(keyframe.position?.x) &&
+								Number.isFinite(keyframe.position?.y) &&
+								Number.isFinite(keyframe.scale) &&
+								keyframe.scale > 0,
+						)
+						.map((keyframe) => ({
+							...keyframe,
+							time: Math.max(0, Math.min(element.duration, keyframe.time)),
+							position: {
+								x: keyframe.position.x,
+								y: keyframe.position.y,
+							},
+							scale: keyframe.scale,
+						}))
+						.sort((left, right) => left.time - right.time),
+			  }
+			: undefined;
 	const presets = (element.reframePresets ?? [])
 		.filter((preset): preset is NonNullable<typeof preset> => Boolean(preset))
 		.map((preset) => ({
@@ -757,6 +793,9 @@ export function normalizeVideoReframeState({
 						? preset.transform.scale
 						: Math.max(1, element.transform.scale),
 			},
+			motionTracking: normalizeMotionTracking({
+				motionTracking: preset.motionTracking,
+			}),
 		}))
 		.sort((left, right) => left.name.localeCompare(right.name));
 	const presetIds = new Set(presets.map((preset) => preset.id));
@@ -1246,9 +1285,15 @@ export function resolveVideoReframeTransform({
 		return normalizedElement.transform;
 	}
 
+	const trackedTransform = resolveMotionTrackedReframeTransform({
+		baseTransform: preset.transform,
+		motionTracking: preset.motionTracking,
+		localTime,
+	});
+
 	return {
-		position: preset.transform.position,
-		scale: preset.transform.scale,
+		position: trackedTransform.position,
+		scale: trackedTransform.scale,
 		rotate: normalizedElement.transform.rotate,
 	};
 }
@@ -1280,9 +1325,14 @@ export function resolveVideoReframeTransformFromState({
 	if (!preset) {
 		return baseTransform;
 	}
+	const trackedTransform = resolveMotionTrackedReframeTransform({
+		baseTransform: preset.transform,
+		motionTracking: preset.motionTracking,
+		localTime,
+	});
 	return {
-		position: preset.transform.position,
-		scale: preset.transform.scale,
+		position: trackedTransform.position,
+		scale: trackedTransform.scale,
 		rotate: baseTransform.rotate,
 	};
 }

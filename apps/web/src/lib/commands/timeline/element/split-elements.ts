@@ -18,6 +18,7 @@ import {
 } from "@/lib/transcript-editor/state";
 import type { AudioElement, VideoElement, TextElement } from "@/types/timeline";
 import { splitVideoAngleSectionsAtTime } from "@/lib/reframe/video-reframe";
+import { splitMotionTrackingAtTime } from "@/lib/reframe/motion-tracking";
 
 function isTranscriptEditableElement(
 	element: unknown,
@@ -314,6 +315,41 @@ function splitLinkedCaptionsForMedia({
 	});
 }
 
+function splitVideoReframePresetMotionTracking({
+	element,
+	splitTime,
+}: {
+	element: VideoElement;
+	splitTime: number;
+}): {
+	leftReframePresets: VideoElement["reframePresets"];
+	rightReframePresets: VideoElement["reframePresets"];
+} {
+	if ((element.reframePresets?.length ?? 0) === 0) {
+		return {
+			leftReframePresets: element.reframePresets,
+			rightReframePresets: element.reframePresets,
+		};
+	}
+	return {
+		leftReframePresets: element.reframePresets?.map((preset) => ({
+			...preset,
+			motionTracking: splitMotionTrackingAtTime({
+				motionTracking: preset.motionTracking,
+				splitTime,
+			}).left,
+		})),
+		rightReframePresets: element.reframePresets?.map((preset) => ({
+			...preset,
+			motionTracking: splitMotionTrackingAtTime({
+				motionTracking: preset.motionTracking,
+				splitTime,
+				rightBoundaryStrategy: "hold-next-keyframe",
+			}).right,
+		})),
+	};
+}
+
 export class SplitElementsCommand extends Command {
 	private savedState: TimelineTrack[] | null = null;
 	private rightSideElements: { trackId: string; elementId: string }[] = [];
@@ -400,6 +436,13 @@ export class SplitElementsCommand extends Command {
 								splitTime: relativeTime,
 						  })
 						: null;
+				const splitPresetMotionTracking =
+					element.type === "video"
+						? splitVideoReframePresetMotionTracking({
+								element,
+								splitTime: relativeTime,
+						  })
+						: null;
 				const { leftAnimations, rightAnimations } = splitAnimationsAtTime({
 					animations: element.animations,
 					splitTime: relativeTime,
@@ -441,6 +484,8 @@ export class SplitElementsCommand extends Command {
 										name: `${element.name} (left)`,
 										...linkedVideoReframeUpdates,
 										...(splitVideoReframeState?.left ?? {}),
+										reframePresets:
+											splitPresetMotionTracking?.leftReframePresets,
 										animations: leftAnimations,
 									} as VideoElement | AudioElement,
 									draft: leftTranscriptEdit.draft,
@@ -454,6 +499,7 @@ export class SplitElementsCommand extends Command {
 							name: `${element.name} (left)`,
 							...linkedVideoReframeUpdates,
 							...(splitVideoReframeState?.left ?? {}),
+							reframePresets: splitPresetMotionTracking?.leftReframePresets,
 							animations: leftAnimations,
 						},
 					];
@@ -505,6 +551,8 @@ export class SplitElementsCommand extends Command {
 										name: `${element.name} (right)`,
 										...linkedVideoReframeUpdates,
 										...(splitVideoReframeState?.right ?? {}),
+										reframePresets:
+											splitPresetMotionTracking?.rightReframePresets,
 										animations: rightAnimations,
 									} as VideoElement | AudioElement,
 									draft: rightTranscriptEdit.draft,
@@ -520,6 +568,7 @@ export class SplitElementsCommand extends Command {
 							name: `${element.name} (right)`,
 							...linkedVideoReframeUpdates,
 							...(splitVideoReframeState?.right ?? {}),
+							reframePresets: splitPresetMotionTracking?.rightReframePresets,
 							animations: rightAnimations,
 						},
 					];
@@ -568,6 +617,8 @@ export class SplitElementsCommand extends Command {
 									name: `${element.name} (left)`,
 									...linkedVideoReframeUpdates,
 									...(splitVideoReframeState?.left ?? {}),
+									reframePresets:
+										splitPresetMotionTracking?.leftReframePresets,
 									animations: leftAnimations,
 								} as VideoElement | AudioElement,
 								draft: splitTranscript.left.draft,
@@ -581,6 +632,7 @@ export class SplitElementsCommand extends Command {
 						name: `${element.name} (left)`,
 						...linkedVideoReframeUpdates,
 						...(splitVideoReframeState?.left ?? {}),
+						reframePresets: splitPresetMotionTracking?.leftReframePresets,
 						animations: leftAnimations,
 					},
 					splitTranscript?.right
@@ -594,6 +646,8 @@ export class SplitElementsCommand extends Command {
 									name: `${element.name} (right)`,
 									...linkedVideoReframeUpdates,
 									...(splitVideoReframeState?.right ?? {}),
+									reframePresets:
+										splitPresetMotionTracking?.rightReframePresets,
 									animations: rightAnimations,
 								} as VideoElement | AudioElement,
 								draft: splitTranscript.right.draft,
@@ -609,6 +663,7 @@ export class SplitElementsCommand extends Command {
 						name: `${element.name} (right)`,
 						...linkedVideoReframeUpdates,
 						...(splitVideoReframeState?.right ?? {}),
+						reframePresets: splitPresetMotionTracking?.rightReframePresets,
 						animations: rightAnimations,
 					},
 				];

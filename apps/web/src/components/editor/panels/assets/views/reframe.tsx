@@ -3,6 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PanelView } from "./base-view";
 import { Button } from "@/components/ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuCheckboxItem,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/utils/ui";
 import { useEditor } from "@/hooks/use-editor";
@@ -13,6 +20,7 @@ import { resolveElementTransformAtTime } from "@/lib/animation";
 import { snapTimeToFrame } from "@/lib/time";
 import {
 	analyzeGeneratedClipReframes,
+	analyzeGeneratedClipMotionTracking,
 	getVideoElementSourceRange,
 } from "@/lib/reframe/subject-aware";
 import {
@@ -33,14 +41,15 @@ import {
 } from "@/lib/reframe/video-reframe";
 import {
 	CircleDot,
+	Ellipsis,
 	GripHorizontal,
 	Plus,
 	RefreshCw,
 	ScanFace,
-	Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
+	VideoMotionTracking,
 	VideoReframePreset,
 	VideoReframeSwitch,
 	VideoSplitScreen,
@@ -179,6 +188,12 @@ export function ReframeView() {
 	const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
 	const [editingName, setEditingName] = useState("");
 	const [isAnalyzing, setIsAnalyzing] = useState(false);
+	const [analyzingTrackingPresetId, setAnalyzingTrackingPresetId] = useState<
+		string | null
+	>(null);
+	const [trackingStatusByPresetId, setTrackingStatusByPresetId] = useState<
+		Record<string, { tone: "default" | "success" | "warning"; message: string }>
+	>({});
 	const [selectedSplitSectionId, setSelectedSplitSectionId] = useState<
 		string | null
 	>(null);
@@ -197,6 +212,7 @@ export function ReframeView() {
 		width: number;
 		height: number;
 	} | null>(null);
+	const analysisAbortControllerRef = useRef<AbortController | null>(null);
 
 	const selectedMediaAsset = useMemo(() => {
 		if (!normalizedVideo) return null;
@@ -206,6 +222,24 @@ export function ReframeView() {
 				.find((asset) => asset.id === normalizedVideo.element.mediaId) ?? null
 		);
 	}, [editor.media, normalizedVideo]);
+	const buildMotionTrackingCacheKey = ({
+		preset,
+	}: {
+		preset: VideoReframePreset;
+	}) => {
+		if (!selectedMediaAsset || !normalizedVideo) return null;
+		const sourceRange = getVideoElementSourceRange({
+			element: normalizedVideo.element,
+			asset: selectedMediaAsset,
+		});
+		return [
+			selectedMediaAsset.id,
+			sourceRange.startTime.toFixed(3),
+			sourceRange.endTime.toFixed(3),
+			preset.transform.scale.toFixed(4),
+			preset.motionTracking?.animateScale ?? true ? "scale:1" : "scale:0",
+		].join("|");
+	};
 	const handleAnalyzeReframes = async () => {
 		if (!normalizedVideo) return;
 		if (!selectedMediaAsset || selectedMediaAsset.type !== "video") {
@@ -214,6 +248,9 @@ export function ReframeView() {
 		}
 
 		setIsAnalyzing(true);
+		analysisAbortControllerRef.current?.abort();
+		const controller = new AbortController();
+		analysisAbortControllerRef.current = controller;
 		try {
 			const projectCanvas = editor.project.getActive().settings.canvasSize;
 			const sourceRange = getVideoElementSourceRange({
@@ -226,6 +263,7 @@ export function ReframeView() {
 				endTime: sourceRange.endTime,
 				canvasSize: projectCanvas,
 				baseScale: normalizedVideo.element.transform.scale,
+				signal: controller.signal,
 			});
 
 			const manualPresets = (
@@ -299,11 +337,176 @@ export function ReframeView() {
 				);
 			}
 		} catch (error) {
+			if (error instanceof Error && error.name === "AbortError") {
+				return;
+			}
 			console.error("Failed to analyze reframe presets", error);
 			toast.error("Failed to analyze subject-aware reframes");
 		} finally {
+			if (analysisAbortControllerRef.current === controller) {
+				analysisAbortControllerRef.current = null;
+			}
 			setIsAnalyzing(false);
 		}
+	};
+
+	const handleAnalyzeMotionTracking = async ({
+		preset,
+	}: {
+		preset: VideoReframePreset;
+	}) => {
+		if (analyzingTrackingPresetId === preset.id) return;
+		if (!normalizedVideo) return;
+		if (!selectedMediaAsset || selectedMediaAsset.type !== "video") {
+			toast.error("Selected clip does not have a valid video source");
+			return;
+		}
+
+		setAnalyzingTrackingPresetId(preset.id);
+		analysisAbortControllerRef.current?.abort();
+		const controller = new AbortController();
+		analysisAbortControllerRef.current = controller;
+		let didTimeout = false;
+		const timeoutId = window.setTimeout(() => {
+			didTimeout = true;
+			controller.abort();
+		}, 45000);
+		try {
+			const projectCanvas = editor.project.getActive().settings.canvasSize;
+			const sourceRange = getVideoElementSourceRange({
+				element: normalizedVideo.element,
+				asset: selectedMediaAsset,
+			});
+			const cacheKey = buildMotionTrackingCacheKey({ preset });
+			const result = await analyzeGeneratedClipMotionTracking({
+				asset: selectedMediaAsset,
+				startTime: sourceRange.startTime,
+				endTime: sourceRange.endTime,
+				canvasSize: projectCanvas,
+				baseScale: preset.transform.scale,
+				animateScale: preset.motionTracking?.animateScale ?? true,
+				signal: controller.signal,
+			});
+			const nextMotionTracking: VideoMotionTracking | undefined =
+				result.keyframes.length > 0
+					? {
+							enabled: true,
+							mode: "subject-single-v1",
+							source: "baked-keyframes",
+							lastAnalyzedAt: new Date().toISOString(),
+							animateScale: preset.motionTracking?.animateScale ?? true,
+							cacheKey: cacheKey ?? undefined,
+							sampleCount: result.sampleCount,
+							trackedSampleCount: result.trackedSampleCount,
+							keyframes: result.keyframes,
+					  }
+					: undefined;
+			editor.timeline.updateVideoReframePreset({
+				trackId: normalizedVideo.trackId,
+				elementId: normalizedVideo.element.id,
+				presetId: preset.id,
+				updates: {
+					motionTracking: nextMotionTracking,
+				},
+			});
+			if (nextMotionTracking) {
+				setTrackingStatusByPresetId((current) => ({
+					...current,
+					[preset.id]: {
+						tone: "success",
+						message: `Tracked ${result.trackedSampleCount}/${result.sampleCount} samples.`,
+					},
+				}));
+				toast.success(`Updated motion tracking for ${preset.name}`);
+			} else {
+				setTrackingStatusByPresetId((current) => ({
+					...current,
+					[preset.id]: {
+						tone: "warning",
+						message: "No stable subject track was found for this angle.",
+					},
+				}));
+				toast.warning("No stable subject track was found");
+			}
+		} catch (error) {
+			const isIgnorableVisionInfo =
+				(error instanceof Error
+					? error.message
+					: typeof error === "string"
+						? error
+						: ""
+				)
+					.trim()
+					.toLowerCase()
+					.includes("xnnpack delegate for cpu");
+			if (error instanceof Error && error.name === "AbortError") {
+				if (didTimeout) {
+					console.error("Failed to analyze motion tracking", error);
+					toast.error("Motion tracking analysis timed out");
+				}
+				return;
+			}
+			if (!isIgnorableVisionInfo) {
+				console.error("Failed to analyze motion tracking", error);
+				toast.error("Failed to analyze motion tracking");
+			}
+		} finally {
+			window.clearTimeout(timeoutId);
+			if (analysisAbortControllerRef.current === controller) {
+				analysisAbortControllerRef.current = null;
+			}
+			setAnalyzingTrackingPresetId(null);
+		}
+	};
+	const toggleMotionTrackingForPreset = async ({
+		preset,
+	}: {
+		preset: VideoReframePreset;
+	}) => {
+		if (!normalizedVideo) return;
+		if (preset.motionTracking?.enabled) {
+			editor.timeline.updateVideoReframePreset({
+				trackId: normalizedVideo.trackId,
+				elementId: normalizedVideo.element.id,
+				presetId: preset.id,
+				updates: {
+					motionTracking: preset.motionTracking
+						? {
+								...preset.motionTracking,
+								enabled: false,
+						  }
+						: undefined,
+				},
+			});
+			return;
+		}
+		const cacheKey = buildMotionTrackingCacheKey({ preset });
+		if (
+			cacheKey &&
+			preset.motionTracking?.cacheKey === cacheKey &&
+			(preset.motionTracking.keyframes?.length ?? 0) > 0
+		) {
+			editor.timeline.updateVideoReframePreset({
+				trackId: normalizedVideo.trackId,
+				elementId: normalizedVideo.element.id,
+				presetId: preset.id,
+				updates: {
+					motionTracking: {
+						...preset.motionTracking,
+						enabled: true,
+					},
+				},
+			});
+			setTrackingStatusByPresetId((current) => ({
+				...current,
+				[preset.id]: {
+					tone: "default",
+					message: `Using cached tracking (${preset.motionTracking?.trackedSampleCount ?? preset.motionTracking?.keyframes.length ?? 0} samples).`,
+				},
+			}));
+			return;
+		}
+		await handleAnalyzeMotionTracking({ preset });
 	};
 
 	const splitScreen = normalizedVideo?.element.splitScreen ?? null;
@@ -415,6 +618,14 @@ export function ReframeView() {
 		effectiveSplitViewportBalance === "balanced"
 			? "Balanced 1:1"
 			: "Unbalanced 1:2";
+
+	useEffect(
+		() => () => {
+			analysisAbortControllerRef.current?.abort();
+			analysisAbortControllerRef.current = null;
+		},
+		[],
+	);
 
 	useEffect(() => {
 		if (!normalizedVideo) return;
@@ -1080,6 +1291,117 @@ export function ReframeView() {
 													</span>
 												)}
 											</div>
+											<div className="flex items-center gap-1">
+												<Button
+													type="button"
+													size="icon"
+													variant={
+														preset.motionTracking?.enabled ? "secondary" : "ghost"
+													}
+													className={cn(
+														"h-7 w-7",
+														analyzingTrackingPresetId === preset.id &&
+															"pointer-events-none",
+														!preset.motionTracking?.enabled &&
+															(preset.motionTracking?.keyframes?.length ?? 0) > 0 &&
+															"text-muted-foreground",
+													)}
+													title={
+														preset.motionTracking?.enabled
+															? "Disable motion tracking"
+															: (preset.motionTracking?.keyframes?.length ?? 0) > 0
+																? "Enable cached motion tracking"
+																: "Analyze and enable motion tracking"
+													}
+													onClick={(event) => {
+														event.stopPropagation();
+														void toggleMotionTrackingForPreset({ preset });
+													}}
+												>
+													<ScanFace
+														className={cn(
+															"size-4",
+															analyzingTrackingPresetId === preset.id && "animate-spin",
+														)}
+													/>
+												</Button>
+												<DropdownMenu>
+													<DropdownMenuTrigger asChild>
+														<Button
+															size="icon"
+															variant="ghost"
+															className="h-7 w-7"
+															onClick={(event) => event.stopPropagation()}
+															aria-label={`Tracking options for ${preset.name}`}
+														>
+															<Ellipsis className="size-4" />
+														</Button>
+													</DropdownMenuTrigger>
+													<DropdownMenuContent
+														align="end"
+														onClick={(event) => event.stopPropagation()}
+													>
+														<DropdownMenuItem
+															disabled={analyzingTrackingPresetId === preset.id}
+															onClick={() => {
+																void handleAnalyzeMotionTracking({ preset });
+															}}
+														>
+															<RefreshCw className="mr-2 size-4" />
+															Re-analyze
+														</DropdownMenuItem>
+														<DropdownMenuCheckboxItem
+															checked={preset.motionTracking?.animateScale ?? true}
+															onCheckedChange={(checked) => {
+																editor.timeline.updateVideoReframePreset({
+																	trackId: normalizedVideo.trackId,
+																	elementId: normalizedVideo.element.id,
+																	presetId: preset.id,
+																	updates: {
+																		motionTracking: preset.motionTracking
+																			? {
+																					...preset.motionTracking,
+																					animateScale: Boolean(checked),
+																					cacheKey: undefined,
+																			  }
+																			: {
+																					enabled: false,
+																					mode: "subject-single-v1",
+																					source: "baked-keyframes",
+																					animateScale: Boolean(checked),
+																					keyframes: [],
+																			  },
+																	},
+																});
+															}}
+														>
+															Animate scale
+														</DropdownMenuCheckboxItem>
+														<DropdownMenuItem
+															disabled={(preset.motionTracking?.keyframes?.length ?? 0) === 0}
+															onClick={() => {
+																editor.timeline.updateVideoReframePreset({
+																	trackId: normalizedVideo.trackId,
+																	elementId: normalizedVideo.element.id,
+																	presetId: preset.id,
+																	updates: {
+																		motionTracking: undefined,
+																	},
+																});
+																setTrackingStatusByPresetId((current) => ({
+																	...current,
+																	[preset.id]: {
+																		tone: "default",
+																		message: "Tracking cleared.",
+																	},
+																}));
+															}}
+														>
+															Clear tracking
+														</DropdownMenuItem>
+													</DropdownMenuContent>
+												</DropdownMenu>
+											</div>
 										</div>
 										<div className="mt-2 grid grid-cols-3 gap-2">
 											<ReframeScrubber
@@ -1128,6 +1450,25 @@ export function ReframeView() {
 													})
 												}
 											/>
+										</div>
+										<div
+											className={cn(
+												"mt-2 text-xs",
+												trackingStatusByPresetId[preset.id]?.tone === "warning" &&
+													"text-amber-600",
+												trackingStatusByPresetId[preset.id]?.tone === "success" &&
+													"text-emerald-600",
+												(!trackingStatusByPresetId[preset.id] ||
+													trackingStatusByPresetId[preset.id]?.tone === "default") &&
+													"text-muted-foreground",
+											)}
+										>
+											{trackingStatusByPresetId[preset.id]?.message ??
+												((preset.motionTracking?.keyframes?.length ?? 0) > 0
+													? preset.motionTracking?.enabled
+														? `Tracking on · ${preset.motionTracking.trackedSampleCount ?? preset.motionTracking.keyframes.length} samples cached`
+														: `Tracking cached · click the scan icon to enable`
+													: "No motion tracking")}
 										</div>
 									</div>
 								);
