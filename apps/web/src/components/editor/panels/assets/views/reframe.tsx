@@ -47,6 +47,7 @@ import {
 	ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS,
 } from "@/lib/reframe/split-slot-config";
 import {
+	ArrowUpDown,
 	CircleDot,
 	Ellipsis,
 	GripHorizontal,
@@ -1067,8 +1068,9 @@ export function ReframeView() {
 		presetId: string | null;
 	}) => {
 		if (!normalizedVideo) return;
-		const applyBinding = (bindings: VideoSplitScreenSlotBinding[]) =>
-			bindings.map((binding) =>
+		const availablePresetIds = visibleReframePresets.map((preset) => preset.id);
+		const nextBindings = (splitScreen?.slots ?? buildInitialSplitScreen().slots).map(
+			(binding) =>
 				binding.slotId === slotId
 					? {
 							...binding,
@@ -1080,10 +1082,42 @@ export function ReframeView() {
 						}
 					: binding,
 			);
+		const conflictingBindingIndex = nextBindings.findIndex(
+			(binding) => binding.slotId !== slotId && binding.presetId === presetId,
+		);
+		if (conflictingBindingIndex >= 0) {
+			const selectedPresetName =
+				visibleReframePresets.find((preset) => preset.id === presetId)?.name ?? "";
+			const preferredAlternatePresetId =
+				selectedPresetName === "Subject Left"
+					? visibleReframePresets.find(
+							(preset) => preset.name === "Subject Right",
+					  )?.id
+					: selectedPresetName === "Subject Right"
+						? visibleReframePresets.find(
+								(preset) => preset.name === "Subject Left",
+						  )?.id
+						: undefined;
+			const alternatePresetId =
+				(preferredAlternatePresetId &&
+				preferredAlternatePresetId !== presetId &&
+				availablePresetIds.includes(preferredAlternatePresetId)
+					? preferredAlternatePresetId
+					: availablePresetIds.find((candidateId) => candidateId !== presetId)) ??
+				null;
+			if (alternatePresetId) {
+				nextBindings[conflictingBindingIndex] = {
+					...nextBindings[conflictingBindingIndex]!,
+					mode: "fixed-preset",
+					presetId: alternatePresetId,
+					transformOverride: null,
+					transformOverridesBySlotId: undefined,
+					transformAdjustmentsBySlotId: undefined,
+				};
+			}
+		}
 		updateBaseSplitBindings({
-			slots: applyBinding(
-				splitScreen?.slots ?? buildInitialSplitScreen().slots,
-			),
+			slots: nextBindings,
 		});
 	};
 
@@ -1884,20 +1918,6 @@ export function ReframeView() {
 								</div>
 							</div>
 							<div className="mt-3 space-y-2">
-								<div className="flex items-center justify-between gap-2">
-									<Button
-										size="sm"
-										variant="secondary"
-										onClick={(event) => {
-											event.stopPropagation();
-											swapSplitBindings();
-										}}
-										disabled={editableSplitBindings.length < 2}
-										title="Swap top and bottom"
-									>
-										<RefreshCw className="size-4" />
-									</Button>
-								</div>
 								<div className="grid grid-cols-2 gap-2">
 									<Button
 										type="button"
@@ -1941,7 +1961,7 @@ export function ReframeView() {
 									</div>
 								)}
 								<div className="grid gap-2">
-									{editableSplitBindings.map((binding) => (
+									{editableSplitBindings.map((binding, index) => (
 										<div
 											key={binding.slotId}
 											className="grid grid-cols-[90px_minmax(0,1fr)] items-center gap-2"
@@ -1955,6 +1975,11 @@ export function ReframeView() {
 														(preset) => {
 															const isActive =
 																(binding.presetId ?? null) === preset.id;
+															const isUsedByOtherSlot = editableSplitBindings.some(
+																(otherBinding) =>
+																	otherBinding.slotId !== binding.slotId &&
+																	(otherBinding.presetId ?? null) === preset.id,
+															);
 															return (
 																<button
 																	key={`${binding.slotId}:${preset.id}`}
@@ -1963,9 +1988,13 @@ export function ReframeView() {
 																		"bg-background hover:bg-muted/70 inline-flex h-8 min-w-8 items-center justify-center rounded-md border px-2 transition-colors",
 																		isActive &&
 																			"border-primary bg-primary/8 text-primary",
+																		isUsedByOtherSlot &&
+																			!isActive &&
+																			"cursor-not-allowed opacity-40",
 																	)}
 																	title={preset.name}
 																	aria-pressed={isActive}
+																	disabled={isUsedByOtherSlot && !isActive}
 																	onClick={(event) => {
 																		event.stopPropagation();
 																		updateSplitBindings({
@@ -2043,6 +2072,24 @@ export function ReframeView() {
 													</div>
 												);
 											})()}
+											{editableSplitBindings.length === 2 && index === 0 ? (
+												<div className="col-span-2 flex justify-center py-1">
+													<Button
+														size="icon"
+														variant="secondary"
+														onClick={(event) => {
+															event.stopPropagation();
+															swapSplitBindings();
+														}}
+														disabled={editableSplitBindings.length < 2}
+														title="Flip top and bottom"
+														aria-label="Flip top and bottom"
+														className="h-8 w-8"
+													>
+														<ArrowUpDown className="size-4" />
+													</Button>
+												</div>
+											) : null}
 										</div>
 									))}
 								</div>

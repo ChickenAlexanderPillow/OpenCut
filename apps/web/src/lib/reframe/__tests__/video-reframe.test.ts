@@ -543,19 +543,7 @@ test("uses the default preset before the first switch", () => {
 		]);
 	});
 
-	test("split-screen slot transform overrides are ignored while auto-only mode is active", () => {
-		const expected = resolveVideoSplitScreenSlotTransform({
-			baseTransform: baseElement.transform,
-			duration: baseElement.duration,
-			reframePresets: baseElement.reframePresets,
-			reframeSwitches: baseElement.reframeSwitches,
-			defaultReframePresetId: baseElement.defaultReframePresetId,
-			localTime: 5,
-			slot: {
-				slotId: "bottom",
-				presetId: "subject",
-			},
-		});
+	test("split-screen slot transform overrides are honored when manual slot adjustments are enabled", () => {
 		const resolved = resolveVideoSplitScreenSlotTransform({
 			baseTransform: baseElement.transform,
 			duration: baseElement.duration,
@@ -573,7 +561,11 @@ test("uses the default preset before the first switch", () => {
 			},
 		});
 
-		expect(resolved).toEqual(expected);
+		expect(resolved).toEqual({
+			position: { x: 360, y: -120 },
+			scale: 3.4,
+			rotate: 12,
+		});
 		expect(
 			baseElement.reframePresets?.find((preset) => preset.id === "subject")
 				?.transform,
@@ -583,25 +575,7 @@ test("uses the default preset before the first switch", () => {
 		});
 	});
 
-	test("split-screen binding ignores stored per-slot adjustments while auto-only mode is active", () => {
-		const expected = resolveVideoSplitScreenSlotTransformFromState({
-			baseTransform: baseElement.transform,
-			duration: baseElement.duration,
-			reframePresets: baseElement.reframePresets,
-			reframeSwitches: baseElement.reframeSwitches,
-			defaultReframePresetId: baseElement.defaultReframePresetId,
-			localTime: 5,
-			slot: {
-				slotId: "bottom",
-				presetId: "subject",
-			},
-			canvasWidth: 1080,
-			canvasHeight: 1920,
-			sourceWidth: 1920,
-			sourceHeight: 1080,
-			layoutPreset: "top-bottom",
-			viewportBalance: "balanced",
-		});
+	test("split-screen binding applies stored per-slot adjustments when manual slot adjustments are enabled", () => {
 		const resolved = resolveVideoSplitScreenSlotTransformFromState({
 			baseTransform: baseElement.transform,
 			duration: baseElement.duration,
@@ -631,46 +605,13 @@ test("uses the default preset before the first switch", () => {
 			viewportBalance: "balanced",
 		});
 
-		expect(resolved).toEqual(expected);
+		expect(resolved.position.x).toBeCloseTo(-39, 6);
+		expect(resolved.position.y).toBeCloseTo(13, 6);
+		expect(resolved.scale).toBeCloseTo(1.2669447341, 6);
+		expect(resolved.rotate).toBe(12);
 	});
 
-	test("split-screen binding ignores balanced and unbalanced manual variants while preserving auto viewport differences", () => {
-		const expectedBalanced = resolveVideoSplitScreenSlotTransformFromState({
-			baseTransform: baseElement.transform,
-			duration: baseElement.duration,
-			reframePresets: baseElement.reframePresets,
-			reframeSwitches: baseElement.reframeSwitches,
-			defaultReframePresetId: baseElement.defaultReframePresetId,
-			localTime: 5,
-			slot: {
-				slotId: "bottom",
-				presetId: "subject",
-			},
-			canvasWidth: 1080,
-			canvasHeight: 1920,
-			sourceWidth: 1920,
-			sourceHeight: 1080,
-			layoutPreset: "top-bottom",
-			viewportBalance: "balanced",
-		});
-		const expectedUnbalanced = resolveVideoSplitScreenSlotTransformFromState({
-			baseTransform: baseElement.transform,
-			duration: baseElement.duration,
-			reframePresets: baseElement.reframePresets,
-			reframeSwitches: baseElement.reframeSwitches,
-			defaultReframePresetId: baseElement.defaultReframePresetId,
-			localTime: 5,
-			slot: {
-				slotId: "bottom",
-				presetId: "subject",
-			},
-			canvasWidth: 1080,
-			canvasHeight: 1920,
-			sourceWidth: 1920,
-			sourceHeight: 1080,
-			layoutPreset: "top-bottom",
-			viewportBalance: "unbalanced",
-		});
+	test("split-screen binding applies balanced and unbalanced manual variants independently", () => {
 		const balanced = resolveVideoSplitScreenSlotTransformFromState({
 			baseTransform: baseElement.transform,
 			duration: baseElement.duration,
@@ -729,8 +670,12 @@ test("uses the default preset before the first switch", () => {
 			viewportBalance: "unbalanced",
 		});
 
-		expect(balanced).toEqual(expectedBalanced);
-		expect(unbalanced).toEqual(expectedUnbalanced);
+		expect(balanced.position.x).toBeCloseTo(35.625, 6);
+		expect(balanced.position.y).toBeCloseTo(-40, 6);
+		expect(balanced.scale).toBeCloseTo(1.5836809176, 6);
+		expect(unbalanced.position.x).toBeCloseTo(102, 6);
+		expect(unbalanced.position.y).toBeCloseTo(61.625, 6);
+		expect(unbalanced.scale).toBeCloseTo(1.0093334636, 6);
 	});
 
 	test("split-screen auto framing centers tracked subjects inside slots by default", () => {

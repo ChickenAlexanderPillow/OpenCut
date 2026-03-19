@@ -389,8 +389,9 @@ describe("TextNode caption gap rendering", () => {
 		const node = new TextNode({
 			...createCaptionNode().params,
 			captionStyle: {
-				anchorToSafeAreaBottom: true,
-				safeAreaBottomOffset: 0,
+				anchorToSafeAreaBottom: false,
+				anchorToSafeAreaTop: true,
+				safeAreaTopOffset: 0,
 				splitScreenOverrides: {
 					slotAnchor: "top",
 				},
