@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { Separator } from "@/components/ui/separator";
 import { type Tab, useAssetsPanelStore } from "@/stores/assets-panel-store";
-import { TabBar } from "./tabbar";
+import { AssetsTabRail, TabBar } from "./tabbar";
 import { Clips } from "./views/clips";
 import { TransitionsView } from "./views/transitions";
 import { MediaView } from "./views/assets";
@@ -30,6 +30,35 @@ const ASSET_PANEL_TABS: Tab[] = [
 ];
 
 export function AssetsPanel() {
+	return (
+		<div
+			className="panel bg-background flex h-full rounded-sm border overflow-hidden"
+			data-editor-selection-root="assets"
+		>
+			<TabBar />
+			<Separator orientation="vertical" />
+			<AssetsPanelContent />
+		</div>
+	);
+}
+
+export function AssetsPanelSidebar({
+	onTabSelect,
+}: {
+	onTabSelect?: (tab: Tab) => void;
+}) {
+	return (
+		<div
+			className="panel bg-background flex h-full rounded-sm border overflow-hidden"
+			data-editor-selection-root="assets"
+		>
+			<AssetsTabRail onTabSelect={onTabSelect} />
+			<Separator orientation="vertical" />
+		</div>
+	);
+}
+
+export function AssetsPanelContent() {
 	const { activeTab, setActiveTab } = useAssetsPanelStore();
 	const resolvedActiveTab = ASSET_PANEL_TABS.includes(activeTab) ? activeTab : "media";
 
@@ -53,25 +82,18 @@ export function AssetsPanel() {
 	};
 
 	return (
-		<div
-			className="panel bg-background flex h-full rounded-sm border overflow-hidden"
-			data-editor-selection-root="assets"
-		>
-			<TabBar />
-			<Separator orientation="vertical" />
-			<div className="flex-1 overflow-hidden relative">
-				{ASSET_PANEL_TABS.map((tab) => (
-					<div
-						key={tab}
-						className={cn(
-							"absolute inset-0",
-							resolvedActiveTab === tab ? "block" : "hidden",
-						)}
-					>
-						{viewMap[tab]}
-					</div>
-				))}
-			</div>
+		<div className="flex-1 overflow-hidden relative bg-background">
+			{ASSET_PANEL_TABS.map((tab) => (
+				<div
+					key={tab}
+					className={cn(
+						"absolute inset-0",
+						resolvedActiveTab === tab ? "block" : "hidden",
+					)}
+				>
+					{viewMap[tab]}
+				</div>
+			))}
 		</div>
 	);
 }

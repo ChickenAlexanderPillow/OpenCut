@@ -2,12 +2,11 @@ import { useEffect } from "react";
 import { toast } from "sonner";
 import { useEditor } from "@/hooks/use-editor";
 import { processMediaAssets } from "@/lib/media/processing";
+import { prepareProjectMediaImport } from "@/lib/media/project-import";
 import {
 	autoLinkTranscriptAndCaptionsForMediaElement,
-	prepareImportedAssetWithTranscript,
 } from "@/lib/media/transcript-import";
 import { buildElementFromMedia } from "@/lib/timeline/element-utils";
-import { AddMediaAssetCommand } from "@/lib/commands/media";
 import { InsertElementCommand } from "@/lib/commands/timeline";
 import { BatchCommand } from "@/lib/commands";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
@@ -64,19 +63,10 @@ export function usePasteMedia() {
 				const startTime = editor.playback.getCurrentTime();
 
 				for (const asset of processedAssets) {
-					const addMediaCmd = new AddMediaAssetCommand(
-						activeProject.metadata.id,
+					const { addMediaCmd, assetId } = await prepareProjectMediaImport({
+						editor,
 						asset,
-					);
-					const prepared = await prepareImportedAssetWithTranscript({
-						project: editor.project.getActive(),
-						asset,
-						assetId: addMediaCmd.getAssetId(),
 					});
-					editor.project.setActiveProject({ project: prepared.project });
-					editor.save.markDirty();
-					addMediaCmd.setAsset({ asset: prepared.asset });
-					const assetId = addMediaCmd.getAssetId();
 					const duration =
 						asset.duration ?? TIMELINE_CONSTANTS.DEFAULT_ELEMENT_DURATION;
 					const trackType = asset.type === "audio" ? "audio" : "video";
@@ -87,10 +77,6 @@ export function usePasteMedia() {
 						name: asset.name,
 						duration,
 						startTime,
-						buffer:
-							asset.type === "audio"
-								? new AudioBuffer({ length: 1, sampleRate: 44100 })
-								: undefined,
 					});
 
 					const insertCmd = new InsertElementCommand({

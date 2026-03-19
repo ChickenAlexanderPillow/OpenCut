@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { PANEL_CONFIG } from "@/constants/editor-constants";
+import {
+	PANEL_CONFIG,
+	type EditorLayoutPreset,
+} from "@/constants/editor-constants";
 
 export interface PanelSizes {
 	tools: number;
@@ -13,39 +16,95 @@ export interface PanelSizes {
 export type PanelId = keyof PanelSizes;
 
 interface PanelState {
+	layoutPreset: EditorLayoutPreset;
 	panels: PanelSizes;
+	panelsByPreset: Record<EditorLayoutPreset, PanelSizes>;
+	setLayoutPreset: (preset: EditorLayoutPreset) => void;
 	setPanel: (panel: PanelId, size: number) => void;
 	setPanels: (sizes: Partial<PanelSizes>) => void;
 	resetPanels: () => void;
 }
 
+function clonePanels(panels: PanelSizes): PanelSizes {
+	return { ...panels };
+}
+
+function buildDefaultPanelsByPreset(): Record<EditorLayoutPreset, PanelSizes> {
+	return {
+		default: clonePanels(PANEL_CONFIG.panels.default),
+		"right-preview": clonePanels(PANEL_CONFIG.panels["right-preview"]),
+	};
+}
+
+function migrateRightPreviewDefaults(panels: PanelSizes): PanelSizes {
+	if (panels.preview !== 36) return panels;
+
+	return {
+		...panels,
+		preview: PANEL_CONFIG.panels["right-preview"].preview,
+	};
+}
+
 export const usePanelStore = create<PanelState>()(
 	persist(
 		(set) => ({
-			...PANEL_CONFIG,
+			layoutPreset: PANEL_CONFIG.layoutPreset,
+			panels: clonePanels(PANEL_CONFIG.panels[PANEL_CONFIG.layoutPreset]),
+			panelsByPreset: buildDefaultPanelsByPreset(),
+			setLayoutPreset: (layoutPreset) =>
+				set((state) => ({
+					layoutPreset,
+					panels: clonePanels(state.panelsByPreset[layoutPreset]),
+				})),
 			setPanel: (panel, size) =>
 				set((state) => ({
-					panels: {
+					panels: clonePanels({
 						...state.panels,
 						[panel]: size,
+					}),
+					panelsByPreset: {
+						...state.panelsByPreset,
+						[state.layoutPreset]: {
+							...state.panelsByPreset[state.layoutPreset],
+							[panel]: size,
+						},
 					},
 				})),
 			setPanels: (sizes) =>
 				set((state) => ({
-					panels: {
+					panels: clonePanels({
 						...state.panels,
 						...sizes,
+					}),
+					panelsByPreset: {
+						...state.panelsByPreset,
+						[state.layoutPreset]: {
+							...state.panelsByPreset[state.layoutPreset],
+							...sizes,
+						},
 					},
 				})),
-			resetPanels: () => set({ ...PANEL_CONFIG }),
+			resetPanels: () =>
+				set((state) => {
+					const panelsByPreset = buildDefaultPanelsByPreset();
+					return {
+						layoutPreset: state.layoutPreset,
+						panels: clonePanels(panelsByPreset[state.layoutPreset]),
+						panelsByPreset,
+					};
+				}),
 		}),
 		{
 			name: "panel-sizes",
-			version: 2,
+			version: 5,
 			migrate: (persistedState) => {
 				const state = persistedState as
 					| {
+							layoutPreset?: EditorLayoutPreset;
 							panels?: Partial<PanelSizes> | null;
+							panelsByPreset?: Partial<
+								Record<EditorLayoutPreset, Partial<PanelSizes>>
+							> | null;
 							toolsPanel?: number;
 							previewPanel?: number;
 							propertiesPanel?: number;
@@ -58,35 +117,78 @@ export const usePanelStore = create<PanelState>()(
 					| undefined
 					| null;
 
-				if (!state) return { panels: { ...PANEL_CONFIG.panels } };
+				const layoutPreset = state?.layoutPreset ?? PANEL_CONFIG.layoutPreset;
+				const panelsByPreset = buildDefaultPanelsByPreset();
+
+				if (!state) {
+					return {
+						layoutPreset,
+						panels: clonePanels(panelsByPreset[layoutPreset]),
+						panelsByPreset,
+					};
+				}
+
+				if (state.panelsByPreset && typeof state.panelsByPreset === "object") {
+					const mergedPanelsByPreset: Record<EditorLayoutPreset, PanelSizes> = {
+						default: {
+							...panelsByPreset.default,
+							...(state.panelsByPreset.default ?? {}),
+						},
+						"right-preview": migrateRightPreviewDefaults({
+							...panelsByPreset["right-preview"],
+							...(state.panelsByPreset["right-preview"] ?? {}),
+						}),
+					};
+
+					return {
+						layoutPreset,
+						panels: clonePanels(mergedPanelsByPreset[layoutPreset]),
+						panelsByPreset: mergedPanelsByPreset,
+					};
+				}
 
 				if (state.panels && typeof state.panels === "object") {
+					const legacyPanels = {
+						...panelsByPreset.default,
+						...state.panels,
+					};
 					return {
-						panels: {
-							...PANEL_CONFIG.panels,
-							...state.panels,
+						layoutPreset,
+						panels: clonePanels(legacyPanels),
+						panelsByPreset: {
+							...panelsByPreset,
+							default: legacyPanels,
 						},
 					};
 				}
 
+				const legacyPanels = {
+					tools:
+						state.tools ?? state.toolsPanel ?? panelsByPreset.default.tools,
+					preview:
+						state.preview ??
+						state.previewPanel ??
+						panelsByPreset.default.preview,
+					properties:
+						state.properties ??
+						state.propertiesPanel ??
+						panelsByPreset.default.properties,
+					mainContent: state.mainContent ?? panelsByPreset.default.mainContent,
+					timeline: state.timeline ?? panelsByPreset.default.timeline,
+				};
+
 				return {
-					panels: {
-						tools: state.tools ?? state.toolsPanel ?? PANEL_CONFIG.panels.tools,
-						preview:
-							state.preview ??
-							state.previewPanel ??
-							PANEL_CONFIG.panels.preview,
-						properties:
-							state.properties ??
-							state.propertiesPanel ??
-							PANEL_CONFIG.panels.properties,
-						mainContent: state.mainContent ?? PANEL_CONFIG.panels.mainContent,
-						timeline: state.timeline ?? PANEL_CONFIG.panels.timeline,
+					layoutPreset,
+					panels: clonePanels(legacyPanels),
+					panelsByPreset: {
+						...panelsByPreset,
+						default: legacyPanels,
 					},
 				};
 			},
 			partialize: (state) => ({
-				panels: state.panels,
+				layoutPreset: state.layoutPreset,
+				panelsByPreset: state.panelsByPreset,
 			}),
 		},
 	),

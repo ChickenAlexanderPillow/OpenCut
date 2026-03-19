@@ -29,6 +29,7 @@ import { SafeAreaOverlay } from "./safe-area-overlay";
 import { SquareDashed } from "lucide-react";
 import {
 	getPreviewCanvasSize,
+	PORTRAIT_PREVIEW_SIZE,
 	remapCaptionTransformsForPreviewVariant,
 } from "@/lib/preview/preview-format";
 import {
@@ -249,9 +250,12 @@ export function PreviewPanel() {
 	const projectWidth = activeProject.settings.canvasSize.width;
 	const projectHeight = activeProject.settings.canvasSize.height;
 	const isProjectSquare = projectWidth === projectHeight;
+	const isProjectPortrait =
+		projectWidth === PORTRAIT_PREVIEW_SIZE.width &&
+		projectHeight === PORTRAIT_PREVIEW_SIZE.height;
 
 	const triggerFormatSwitch = useCallback(
-		({ variant }: { variant: "project" | "square" }) => {
+		({ variant }: { variant: "project" | "square" | "portrait" }) => {
 			flushSync(() => {
 				setFreezeFrameToken((value) => value + 1);
 			});
@@ -285,6 +289,18 @@ export function PreviewPanel() {
 							onClick={() => triggerFormatSwitch({ variant: "square" })}
 						>
 							Square
+						</Button>
+					)}
+					{!isProjectPortrait && (
+						<Button
+							variant={
+								previewFormatVariant === "portrait" ? "secondary" : "ghost"
+							}
+							size="sm"
+							className={cn("h-7 px-2 text-xs")}
+							onClick={() => triggerFormatSwitch({ variant: "portrait" })}
+						>
+							9:16
 						</Button>
 					)}
 				</div>
@@ -563,7 +579,7 @@ function RenderTreeController() {
 						}
 				: activeProject.settings.background;
 		const captionMappedTracks =
-			previewFormatVariant === "square"
+			previewFormatVariant !== "project"
 				? remapCaptionTransformsForPreviewVariant({
 						tracks,
 						sourceCanvas: { width: projectWidth, height: projectHeight },

@@ -1,7 +1,9 @@
 import type { TimelineTrack } from "@/types/timeline";
 import { isGeneratedCaptionElement } from "@/lib/captions/caption-track";
 
-export type PreviewFormatVariant = "project" | "square";
+export const PORTRAIT_PREVIEW_SIZE = { width: 1080, height: 1920 } as const;
+
+export type PreviewFormatVariant = "project" | "square" | "portrait";
 
 export function getPreviewCanvasSize({
 	projectWidth,
@@ -15,6 +17,9 @@ export function getPreviewCanvasSize({
 	if (previewFormatVariant === "square") {
 		const side = Math.max(1, Math.min(projectWidth, projectHeight));
 		return { width: side, height: side };
+	}
+	if (previewFormatVariant === "portrait") {
+		return { ...PORTRAIT_PREVIEW_SIZE };
 	}
 	return { width: projectWidth, height: projectHeight };
 }

@@ -1,9 +1,9 @@
 import { useState, useCallback, type RefObject } from "react";
 import { useEditor } from "@/hooks/use-editor";
 import { processMediaAssets } from "@/lib/media/processing";
+import { prepareProjectMediaImport } from "@/lib/media/project-import";
 import {
 	autoLinkTranscriptAndCaptionsForMediaElement,
-	prepareImportedAssetWithTranscript,
 } from "@/lib/media/transcript-import";
 import { toast } from "sonner";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
@@ -15,13 +15,13 @@ import {
 } from "@/lib/timeline/element-utils";
 import { getVideoCoverScaleMultiplier } from "@/lib/timeline/video-cover-fit";
 import type { Command } from "@/lib/commands/base-command";
-import { AddMediaAssetCommand } from "@/lib/commands/media";
 import { AddTrackCommand, InsertElementCommand } from "@/lib/commands/timeline";
 import { BatchCommand } from "@/lib/commands";
 import { computeDropTarget } from "@/lib/timeline/drop-utils";
 import { getDragData, hasDragData } from "@/lib/drag-data";
 import { invokeAction } from "@/lib/actions";
 import { importLocalMusicToTimeline } from "@/lib/music/import-local-music";
+import { useAssetsPanelStore } from "@/stores/assets-panel-store";
 import type { TrackType, DropTarget, ElementType } from "@/types/timeline";
 import type {
 	LocalMusicDragData,
@@ -429,8 +429,6 @@ export function useTimelineDragDrop({
 			if (!activeProject) return;
 
 			const processedAssets = await processMediaAssets({ files });
-			const projectId = activeProject.metadata.id;
-
 			for (const asset of processedAssets) {
 				const duration =
 					asset.duration ?? TIMELINE_CONSTANTS.DEFAULT_ELEMENT_DURATION;
@@ -448,16 +446,10 @@ export function useTimelineDragDrop({
 				});
 
 				const trackType: TrackType = asset.type === "audio" ? "audio" : "video";
-				const addMediaCmd = new AddMediaAssetCommand(projectId, asset);
-				const prepared = await prepareImportedAssetWithTranscript({
-					project: editor.project.getActive(),
+				const { addMediaCmd, assetId } = await prepareProjectMediaImport({
+					editor,
 					asset,
-					assetId: addMediaCmd.getAssetId(),
 				});
-				editor.project.setActiveProject({ project: prepared.project });
-				editor.save.markDirty();
-				addMediaCmd.setAsset({ asset: prepared.asset });
-				const assetId = addMediaCmd.getAssetId();
 
 				const commands: Command[] = [addMediaCmd];
 
@@ -481,10 +473,6 @@ export function useTimelineDragDrop({
 					name: asset.name,
 					duration,
 					startTime: dropTarget.xPosition,
-					buffer:
-						asset.type === "audio"
-							? new AudioBuffer({ length: 1, sampleRate: 44100 })
-							: undefined,
 					transformScale:
 						asset.type === "video"
 							? getVideoCoverScaleMultiplier({
@@ -503,6 +491,7 @@ export function useTimelineDragDrop({
 
 				const batchCmd = new BatchCommand(commands);
 				editor.command.execute({ command: batchCmd });
+				useAssetsPanelStore.getState().requestRevealMedia(assetId);
 				if (asset.type === "video" || asset.type === "audio") {
 					void autoLinkTranscriptAndCaptionsForMediaElement({
 						editor,

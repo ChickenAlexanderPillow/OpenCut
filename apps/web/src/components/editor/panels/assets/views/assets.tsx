@@ -30,12 +30,11 @@ import { useEditor } from "@/hooks/use-editor";
 import { useFileUpload } from "@/hooks/use-file-upload";
 import { useRevealItem } from "@/hooks/use-reveal-item";
 import { invokeAction } from "@/lib/actions";
-import { AddMediaAssetCommand } from "@/lib/commands/media";
 import { InsertElementCommand } from "@/lib/commands/timeline";
 import { processMediaAssets } from "@/lib/media/processing";
+import { prepareProjectMediaImport } from "@/lib/media/project-import";
 import {
 	autoLinkTranscriptAndCaptionsForMediaElement,
-	prepareImportedAssetWithTranscript,
 } from "@/lib/media/transcript-import";
 import { getMediaTypeFromFile } from "@/lib/media/media-utils";
 import { buildElementFromMedia } from "@/lib/timeline/element-utils";
@@ -87,14 +86,14 @@ export function MediaView() {
 			toast.error("No active project");
 			return;
 		}
-		const videoImageFiles = Array.from(files).filter((file) => {
+		const supportedMediaFiles = Array.from(files).filter((file) => {
 			const mediaType = getMediaTypeFromFile({ file });
-			return mediaType === "image" || mediaType === "video";
-		});
-		if (videoImageFiles.length === 0) {
-			toast.error(
-				"Assets tab supports image/video only. Use Music tab for audio.",
+			return (
+				mediaType === "image" || mediaType === "video" || mediaType === "audio"
 			);
+		});
+		if (supportedMediaFiles.length === 0) {
+			toast.error("No supported media files selected");
 			return;
 		}
 
@@ -104,7 +103,7 @@ export function MediaView() {
 		setProcessingStepProgress(0);
 		try {
 			const processedAssets = await processMediaAssets({
-				files: videoImageFiles,
+				files: supportedMediaFiles,
 				onProgress: ({
 					progress,
 					step,
@@ -122,14 +121,9 @@ export function MediaView() {
 				},
 			});
 			for (const asset of processedAssets) {
-				const addMediaCmd = new AddMediaAssetCommand(
-					activeProject.metadata.id,
+				const { addMediaCmd } = await prepareProjectMediaImport({
+					editor,
 					asset,
-				);
-				const prepared = await prepareImportedAssetWithTranscript({
-					project: editor.project.getActive(),
-					asset,
-					assetId: addMediaCmd.getAssetId(),
 					onProgress: ({ progress, step, stepProgress }) => {
 						setProgress(Math.max(progress, 75));
 						if (step) setProcessingStep(step);
@@ -138,10 +132,7 @@ export function MediaView() {
 						}
 					},
 				});
-				editor.project.setActiveProject({ project: prepared.project });
-				addMediaCmd.setAsset({ asset: prepared.asset });
 				editor.command.execute({ command: addMediaCmd });
-				editor.save.markDirty();
 			}
 		} catch (error) {
 			console.error("Error processing files:", error);
@@ -156,7 +147,7 @@ export function MediaView() {
 
 	const { isDragOver, dragProps, openFilePicker, fileInputProps } =
 		useFileUpload({
-			accept: "image/*,video/*",
+			accept: "image/*,video/*,audio/*",
 			multiple: true,
 			onFilesSelected: (files) => processFiles({ files }),
 		});
@@ -227,9 +218,7 @@ export function MediaView() {
 	};
 
 	const filteredMediaItems = useMemo(() => {
-		const filtered = mediaFiles.filter(
-			(item) => !item.ephemeral && item.type !== "audio",
-		);
+		const filtered = mediaFiles.filter((item) => !item.ephemeral);
 
 		filtered.sort((a, b) => {
 			let valueA: string | number;

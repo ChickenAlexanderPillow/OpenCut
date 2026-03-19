@@ -13,7 +13,7 @@ interface PreviewOverlaysState {
 }
 
 export type PreviewPlaybackQuality = "performance" | "balanced" | "full";
-export type PreviewFormatVariant = "project" | "square";
+export type PreviewFormatVariant = "project" | "square" | "portrait";
 
 interface SquareFormatSettings {
 	blurIntensity: number;

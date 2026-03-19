@@ -217,7 +217,7 @@ export function TimelineRuler({
 		event,
 		type,
 	}: {
-		event: React.MouseEvent;
+		event: React.PointerEvent;
 		type: "in" | "out";
 	}) => {
 		if (event.button !== 0) return;
@@ -226,7 +226,7 @@ export function TimelineRuler({
 		dragTypeRef.current = type;
 	};
 
-	const handleRangeMouseDown = (event: React.MouseEvent) => {
+	const handleRangeMouseDown = (event: React.PointerEvent) => {
 		if (!hasValidRange || inPoint === null || outPoint === null) return;
 		if (event.button !== 0) return;
 		const mouseTime = getTimeFromClientX({ clientX: event.clientX });
@@ -415,7 +415,7 @@ export function TimelineRuler({
 							left: `${startPx}px`,
 							width: `${Math.max(0, endPx - startPx)}px`,
 						}}
-						onMouseDown={handleRangeMouseDown}
+						onPointerDown={handleRangeMouseDown}
 						onContextMenu={handleRangeContextMenu}
 					>
 						<span className="pointer-events-none absolute inset-0 flex items-center justify-center">
@@ -436,7 +436,7 @@ export function TimelineRuler({
 							"hover:bg-emerald-500/15",
 						)}
 						style={{ left: `${startPx}px` }}
-						onMouseDown={(event) =>
+						onPointerDown={(event) =>
 							handleMarkerMouseDown({ event, type: "in" })
 						}
 					>
@@ -452,7 +452,7 @@ export function TimelineRuler({
 							"hover:bg-rose-500/15",
 						)}
 						style={{ left: `${endPx}px` }}
-						onMouseDown={(event) =>
+						onPointerDown={(event) =>
 							handleMarkerMouseDown({ event, type: "out" })
 						}
 					>

@@ -31,7 +31,7 @@ import { cn } from "@/utils/ui";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 import { useProjectExitStore } from "@/stores/project-exit-store";
-import { Loader2, XCircle } from "lucide-react";
+import { Loader2, PanelRight, PanelsTopLeft, XCircle } from "lucide-react";
 import {
 	Dialog,
 	DialogBody,
@@ -41,6 +41,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { usePanelStore } from "@/stores/panel-store";
 
 const EDITOR_SUBSCRIBE_PROJECT = ["project"] as const;
 
@@ -53,10 +54,41 @@ export function EditorHeader() {
 			</div>
 			<nav className="flex items-center gap-2">
 				<TranscriptionStatusIndicator />
+				<WorkspacePresetSelect />
 				<ExportButton />
 				<ThemeToggle />
 			</nav>
 		</header>
+	);
+}
+
+function WorkspacePresetSelect() {
+	const { layoutPreset, setLayoutPreset } = usePanelStore();
+	const layoutButtons: Array<{
+		id: "default" | "right-preview";
+		label: string;
+		icon: typeof PanelsTopLeft;
+	}> = [
+		{ id: "default", label: "Default layout", icon: PanelsTopLeft },
+		{ id: "right-preview", label: "Right preview layout", icon: PanelRight },
+	];
+
+	return (
+		<div className="flex items-center gap-1 rounded-md border px-1 py-1">
+			{layoutButtons.map(({ id, label, icon: Icon }) => (
+				<Button
+					key={id}
+					variant={layoutPreset === id ? "secondary" : "ghost"}
+					size="sm"
+					className="h-6 w-6 p-0"
+					aria-label={label}
+					title={label}
+					onClick={() => setLayoutPreset(id)}
+				>
+					<Icon className="size-3.5" />
+				</Button>
+			))}
+		</div>
 	);
 }
 

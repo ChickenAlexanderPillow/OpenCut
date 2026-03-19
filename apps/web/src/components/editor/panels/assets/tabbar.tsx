@@ -26,6 +26,22 @@ const TAB_BAR_SECONDARY_KEYS: Tab[] = [
 ];
 
 export function TabBar() {
+	return <TabBarInternal />;
+}
+
+export function AssetsTabRail({
+	onTabSelect,
+}: {
+	onTabSelect?: (tab: Tab) => void;
+}) {
+	return <TabBarInternal onTabSelect={onTabSelect} />;
+}
+
+function TabBarInternal({
+	onTabSelect,
+}: {
+	onTabSelect?: (tab: Tab) => void;
+}) {
 	const { activeTab, setActiveTab } = useAssetsPanelStore();
 	const [showTopFade, setShowTopFade] = useState(false);
 	const [showBottomFade, setShowBottomFade] = useState(false);
@@ -67,20 +83,29 @@ export function TabBar() {
 						key={tabKey}
 						tabKey={tabKey}
 						activeTab={activeTab}
-						onSelect={setActiveTab}
+						onSelect={(tab) => {
+							setActiveTab(tab);
+							onTabSelect?.(tab);
+						}}
 					/>
 				))}
 				<TabButton
 					tabKey="reframe"
 					activeTab={activeTab}
-					onSelect={setActiveTab}
+					onSelect={(tab) => {
+						setActiveTab(tab);
+						onTabSelect?.(tab);
+					}}
 				/>
 				{TAB_BAR_SECONDARY_KEYS.map((tabKey) => (
 					<TabButton
 						key={tabKey}
 						tabKey={tabKey}
 						activeTab={activeTab}
-						onSelect={setActiveTab}
+						onSelect={(tab) => {
+							setActiveTab(tab);
+							onTabSelect?.(tab);
+						}}
 					/>
 				))}
 			</div>
