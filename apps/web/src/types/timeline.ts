@@ -80,6 +80,10 @@ export interface VideoMotionTracking {
 	lastAnalyzedAt?: string;
 	animateScale?: boolean;
 	cacheKey?: string;
+	sourceAssetId?: string;
+	sourceStartTime?: number;
+	sourceEndTime?: number;
+	presetSignature?: string;
 	sampleCount?: number;
 	trackedSampleCount?: number;
 	keyframes: Array<{

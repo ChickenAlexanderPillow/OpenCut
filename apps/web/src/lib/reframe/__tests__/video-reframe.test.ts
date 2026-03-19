@@ -4,6 +4,7 @@ import {
 	applySplitScreenToVideoAngleSection,
 	applySelectedReframePresetPreviewToTracks,
 	buildDefaultVideoSplitScreenBindings,
+	deriveVideoReframeTransformFromSplitSlotTransform,
 	deriveVideoAngleSections,
 	deriveVideoSplitScreenSectionRanges,
 	getVideoSplitScreenDividers,
@@ -580,6 +581,91 @@ describe("video reframe resolution", () => {
 		expect(balanced.position.x).not.toBe(unbalanced.position.x);
 		expect(balanced.position.y).not.toBe(unbalanced.position.y);
 		expect(balanced.scale).not.toBe(unbalanced.scale);
+	});
+
+	test("converts split-slot framing into equivalent full-screen framing", () => {
+		const slotTransform = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: baseElement.reframePresets,
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: "subject",
+				transformAdjustmentsBySlotId: {
+					bottom: {
+						sourceCenterOffset: { x: 120, y: -40 },
+						scaleMultiplier: 0.8,
+					},
+				},
+			},
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+		});
+
+		const fullScreenTransform = deriveVideoReframeTransformFromSplitSlotTransform({
+			slotTransform,
+			slotId: "bottom",
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+		});
+
+		const roundTrippedSlotTransform = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: [
+				{
+					id: "wide",
+					name: "Wide",
+					transform: {
+						position: { x: 0, y: 0 },
+						scale: 1.8,
+					},
+				},
+				{
+					id: "subject",
+					name: "Subject",
+					transform: {
+						position: fullScreenTransform.position,
+						scale: fullScreenTransform.scale,
+					},
+				},
+			],
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: "subject",
+			},
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+		});
+
+		expect(fullScreenTransform.rotate).toBe(12);
+		expect(roundTrippedSlotTransform.position.x).toBeCloseTo(
+			slotTransform.position.x,
+			5,
+		);
+		expect(roundTrippedSlotTransform.position.y).toBeCloseTo(
+			slotTransform.position.y,
+			5,
+		);
+		expect(roundTrippedSlotTransform.scale).toBeCloseTo(slotTransform.scale, 5);
 	});
 
 	test("split-screen section can disable split mode for a timed segment", () => {

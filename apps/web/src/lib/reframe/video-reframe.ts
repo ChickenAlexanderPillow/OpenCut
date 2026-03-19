@@ -1799,6 +1799,65 @@ export function resolveVideoSplitScreenSlotTransformFromState({
 	});
 }
 
+export function deriveVideoReframeTransformFromSplitSlotTransform({
+	slotTransform,
+	slotId,
+	layoutPreset = DEFAULT_SPLIT_LAYOUT_PRESET,
+	viewportBalance = DEFAULT_SPLIT_VIEWPORT_BALANCE,
+	canvasWidth,
+	canvasHeight,
+	sourceWidth,
+	sourceHeight,
+}: {
+	slotTransform: Transform;
+	slotId: string;
+	layoutPreset?: VideoSplitScreenLayoutPreset;
+	viewportBalance?: VideoSplitScreenViewportBalance;
+	canvasWidth: number;
+	canvasHeight: number;
+	sourceWidth: number;
+	sourceHeight: number;
+}): Transform {
+	const viewport = getVideoSplitScreenViewports({
+		layoutPreset,
+		viewportBalance,
+		width: canvasWidth,
+		height: canvasHeight,
+	}).get(slotId);
+	if (!viewport) {
+		return slotTransform;
+	}
+	const slotCoverScale = getFitBaseScale({
+		rendererWidth: viewport.width,
+		rendererHeight: viewport.height,
+		sourceWidth,
+		sourceHeight,
+		fitMode: "cover",
+	});
+	const fullContainScale = getFitBaseScale({
+		rendererWidth: canvasWidth,
+		rendererHeight: canvasHeight,
+		sourceWidth,
+		sourceHeight,
+		fitMode: "contain",
+	});
+	const sourceCenter = getSourceCenterForTransform({
+		transform: slotTransform,
+		baseScale: slotCoverScale,
+		sourceWidth,
+		sourceHeight,
+	});
+	return buildTransformForSourceCenter({
+		sourceCenter,
+		scale:
+			(slotCoverScale * slotTransform.scale) / Math.max(1e-6, fullContainScale),
+		baseScale: fullContainScale,
+		sourceWidth,
+		sourceHeight,
+		rotate: slotTransform.rotate,
+	});
+}
+
 export function getVideoSplitScreenLayoutSlotIds({
 	layoutPreset,
 }: {

@@ -41,11 +41,14 @@ import {
 	applyPresetToVideoAngleSection,
 	applySplitScreenToVideoAngleSection,
 	buildDefaultVideoSplitScreenBindings,
+	deriveVideoReframeTransformFromSplitSlotTransform,
 	getEffectiveVideoSplitScreenSlotTransformOverride,
 	getVideoAngleSectionAtTime,
 	getVideoAngleSectionByStartTime,
 	normalizeVideoReframeState,
 	remapSplitSlotTransformBetweenViewports,
+	resolveVideoSplitScreenAtTime,
+	resolveVideoSplitScreenSlotTransformFromState,
 	splitVideoReframeSectionAtTime,
 } from "@/lib/reframe/video-reframe";
 import { useEffect, useMemo, useState } from "react";
@@ -441,6 +444,129 @@ function QuickReframeToolbarControl() {
 		clearSelectedSplitPreviewSlots({ elementId });
 	};
 
+	const buildPresetApplyUpdates = ({
+		target,
+		presetId,
+	}: {
+		target: NonNullable<ReturnType<typeof getLatestTargetSection>>;
+		presetId: string;
+	}) => {
+		const nextReframeState = applyPresetToVideoAngleSection({
+			element: target.selectedVideo.element,
+			sectionStartTime: target.section.startTime,
+			presetId,
+		});
+		const defaultUpdates = [
+			{
+				trackId: target.selectedVideo.trackId,
+				elementId: target.selectedVideo.element.id,
+				updates: nextReframeState,
+			},
+		];
+		if (
+			!target.section.isSplit ||
+			selectedMediaAsset?.type !== "video" ||
+			!Number.isFinite(selectedMediaAsset.width) ||
+			!Number.isFinite(selectedMediaAsset.height)
+		) {
+			return defaultUpdates;
+		}
+		const sourceWidth = selectedMediaAsset.width as number;
+		const sourceHeight = selectedMediaAsset.height as number;
+
+		const canvasSize = editor.project.getActive().settings.canvasSize;
+		const localTime = Math.min(
+			target.section.endTime,
+			Math.max(target.section.startTime, getSnappedLocalPlayheadTime()),
+		);
+		const activeSplitScreen = resolveVideoSplitScreenAtTime({
+			element: target.selectedVideo.element,
+			localTime,
+		});
+		const matchingSlot = activeSplitScreen?.slots.find(
+			(slot) => slot.presetId === presetId,
+		);
+		if (!activeSplitScreen || !matchingSlot?.slotId) {
+			return defaultUpdates;
+		}
+
+		const resolvedSlotTransform = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: target.selectedVideo.element.transform,
+			duration: target.selectedVideo.element.duration,
+			reframePresets: target.selectedVideo.element.reframePresets,
+			reframeSwitches: target.selectedVideo.element.reframeSwitches,
+			defaultReframePresetId: target.selectedVideo.element.defaultReframePresetId,
+			localTime,
+			slot: matchingSlot,
+			layoutPreset: activeSplitScreen.layoutPreset,
+			viewportBalance: activeSplitScreen.viewportBalance,
+			canvasWidth: canvasSize.width,
+			canvasHeight: canvasSize.height,
+			sourceWidth,
+			sourceHeight,
+		});
+		const fullScreenTransform = deriveVideoReframeTransformFromSplitSlotTransform({
+			slotTransform: resolvedSlotTransform,
+			slotId: matchingSlot.slotId,
+			layoutPreset: activeSplitScreen.layoutPreset,
+			viewportBalance: activeSplitScreen.viewportBalance,
+			canvasWidth: canvasSize.width,
+			canvasHeight: canvasSize.height,
+			sourceWidth,
+			sourceHeight,
+		});
+		const nextReframePresets = target.selectedVideo.element.reframePresets?.map(
+			(preset) =>
+				preset.id === presetId
+					? {
+							...preset,
+							transform: {
+								position: fullScreenTransform.position,
+								scale: fullScreenTransform.scale,
+							},
+					  }
+					: preset,
+		);
+		if (!nextReframePresets) {
+			return defaultUpdates;
+		}
+
+		const linkedSourceId = target.selectedVideo.element.linkedReframeSourceId;
+		const linkedUpdates = linkedSourceId
+			? editor.timeline.getTracks().flatMap((track) =>
+					track.type !== "video"
+						? []
+						: track.elements.flatMap((element) =>
+								element.type === "video" &&
+								element.id !== target.selectedVideo.element.id &&
+								element.linkedReframeSourceId === linkedSourceId
+									? [
+											{
+												trackId: track.id,
+												elementId: element.id,
+												updates: {
+													reframePresets: nextReframePresets,
+												},
+											},
+									  ]
+									: [],
+						  ),
+			  )
+			: [];
+
+		return [
+			{
+				trackId: target.selectedVideo.trackId,
+				elementId: target.selectedVideo.element.id,
+				updates: {
+					...nextReframeState,
+					reframePresets: nextReframePresets,
+				},
+			},
+			...linkedUpdates,
+		];
+	};
+
 	const applySplitScreenToTargetSection = () => {
 		applySplitScreenToTargetSectionWithViewportBalance({
 			viewportBalance:
@@ -650,19 +776,11 @@ function QuickReframeToolbarControl() {
 			clearPreviewOverrides({
 				elementId: targetSection.selectedVideo.element.id,
 			});
-			const nextReframeState = applyPresetToVideoAngleSection({
-				element: targetSection.selectedVideo.element,
-				sectionStartTime: targetSection.section.startTime,
-				presetId: preset.id,
-			});
 			editor.timeline.updateElements({
-				updates: [
-					{
-						trackId: targetSection.selectedVideo.trackId,
-						elementId: targetSection.selectedVideo.element.id,
-						updates: nextReframeState,
-					},
-				],
+				updates: buildPresetApplyUpdates({
+					target: targetSection,
+					presetId: preset.id,
+				}),
 			});
 			setSelectedSectionStartTime({
 				elementId: targetSection.selectedVideo.element.id,
@@ -811,20 +929,11 @@ function QuickReframeToolbarControl() {
 													clearPreviewOverrides({
 														elementId: target.selectedVideo.element.id,
 													});
-													const nextReframeState =
-														applyPresetToVideoAngleSection({
-															element: target.selectedVideo.element,
-															sectionStartTime: target.section.startTime,
-															presetId: preset.id,
-														});
 													editor.timeline.updateElements({
-														updates: [
-															{
-																trackId: target.selectedVideo.trackId,
-																elementId: target.selectedVideo.element.id,
-																updates: nextReframeState,
-															},
-														],
+														updates: buildPresetApplyUpdates({
+															target,
+															presetId: preset.id,
+														}),
 													});
 													setSelectedSectionStartTime({
 														elementId: selectedVideo.element.id,

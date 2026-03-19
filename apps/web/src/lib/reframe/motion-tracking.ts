@@ -134,6 +134,40 @@ export function clampMotionTrackingToDuration({
 		: undefined;
 }
 
+export function offsetMotionTrackingKeyframes({
+	keyframes,
+	timeOffset,
+}: {
+	keyframes: MotionTrackingTransformKeyframe[];
+	timeOffset: number;
+}): MotionTrackingTransformKeyframe[] {
+	return keyframes.map((keyframe) => ({
+		...keyframe,
+		time: Math.max(0, keyframe.time + timeOffset),
+	}));
+}
+
+export function mergeMotionTrackingKeyframes({
+	baseKeyframes,
+	appendedKeyframes,
+}: {
+	baseKeyframes: MotionTrackingTransformKeyframe[];
+	appendedKeyframes: MotionTrackingTransformKeyframe[];
+}): MotionTrackingTransformKeyframe[] {
+	const merged = [...baseKeyframes];
+	for (const keyframe of appendedKeyframes) {
+		if (
+			merged.some(
+				(existing) => Math.abs(existing.time - keyframe.time) <= 1e-6,
+			)
+		) {
+			continue;
+		}
+		merged.push(keyframe);
+	}
+	return merged.sort((left, right) => left.time - right.time);
+}
+
 export function splitMotionTrackingAtTime({
 	motionTracking,
 	splitTime,

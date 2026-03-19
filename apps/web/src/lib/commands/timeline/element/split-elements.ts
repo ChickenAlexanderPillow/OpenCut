@@ -344,7 +344,6 @@ function splitVideoReframePresetMotionTracking({
 			motionTracking: splitMotionTrackingAtTime({
 				motionTracking: preset.motionTracking,
 				splitTime,
-				rightBoundaryStrategy: "hold-next-keyframe",
 			}).right,
 		})),
 	};

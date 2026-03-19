@@ -39,6 +39,8 @@ type VisionRuntime = Awaited<ReturnType<typeof loadVisionRuntime>>;
 let runtimePromise: Promise<VisionRuntime> | null = null;
 let suppressedVisionConsoleErrorDepth = 0;
 let restoreVisionConsoleError: (() => void) | null = null;
+let lastFaceDetectorTimestampMs = 0;
+let lastPoseLandmarkerTimestampMs = 0;
 
 function createAbortError(): Error {
 	const error = new Error("Analysis aborted");
@@ -63,9 +65,31 @@ function shouldSuppressVisionConsoleMessage(args: unknown[]): boolean {
 		const normalizedMessage = message.trim().toLowerCase();
 		return (
 			normalizedMessage.startsWith("info: created tensorflow lite xnnpack delegate") ||
-			normalizedMessage.includes("xnnpack delegate for cpu")
+			normalizedMessage.includes("xnnpack delegate for cpu") ||
+			normalizedMessage.includes("packet timestamp mismatch")
 		);
 	});
+}
+
+function getMonotonicVisionTimestampMs({
+	kind,
+	candidateMs,
+}: {
+	kind: "face" | "pose";
+	candidateMs: number;
+}): number {
+	if (kind === "face") {
+		lastFaceDetectorTimestampMs = Math.max(
+			lastFaceDetectorTimestampMs + 1,
+			Math.round(candidateMs),
+		);
+		return lastFaceDetectorTimestampMs;
+	}
+	lastPoseLandmarkerTimestampMs = Math.max(
+		lastPoseLandmarkerTimestampMs + 1,
+		Math.round(candidateMs),
+	);
+	return lastPoseLandmarkerTimestampMs;
 }
 
 function beginSuppressingVisionConsoleErrors(): void {
@@ -911,10 +935,17 @@ export function buildMotionTrackingKeyframesFromObservations({
 		];
 	});
 	return {
-		keyframes: coalesceMotionTrackingKeyframes({
-			trackedTransforms,
-			animateScale,
-		}),
+		keyframes: trackedTransforms.map((observation, observationIndex) => ({
+			id: generateUUID(),
+			time: Math.max(0, observation.time + observationIndex * 1e-6),
+			position: {
+				x: observation.transform.position.x,
+				y: observation.transform.position.y,
+			},
+			scale: animateScale
+				? observation.transform.scale
+				: (trackedTransforms[0]?.transform.scale ?? baseScale),
+		})),
 		sampleCount: observations.length,
 		trackedSampleCount: trackedTransforms.length,
 	};
@@ -1477,10 +1508,16 @@ export async function analyzeGeneratedClipReframes({
 				if (!canAnalyzeCurrentVideoFrame({ video })) {
 					continue;
 				}
-				const timestampMs = Math.round(video.currentTime * 1000);
+				const frameTimestampMs = Math.round(video.currentTime * 1000);
 				try {
 					const faceResult = withSuppressedVisionConsoleErrors(() =>
-						faceDetector.detectForVideo(video, timestampMs),
+						faceDetector.detectForVideo(
+							video,
+							getMonotonicVisionTimestampMs({
+								kind: "face",
+								candidateMs: frameTimestampMs,
+							}),
+						),
 					);
 					const faceDetections = (faceResult.detections ?? [])
 						.map((detection) => detection.boundingBox)
@@ -1502,7 +1539,13 @@ export async function analyzeGeneratedClipReframes({
 					}
 
 					const poseResult = withSuppressedVisionConsoleErrors(() =>
-						poseLandmarker.detectForVideo(video, timestampMs),
+						poseLandmarker.detectForVideo(
+							video,
+							getMonotonicVisionTimestampMs({
+								kind: "pose",
+								candidateMs: frameTimestampMs,
+							}),
+						),
 					);
 					const boxes: SubjectBox[] = [];
 					for (const pose of poseResult.landmarks ?? []) {
@@ -1637,11 +1680,17 @@ export async function analyzeGeneratedClipMotionTracking({
 					continue;
 				}
 
-				const timestampMs = Math.round(video.currentTime * 1000);
+				const frameTimestampMs = Math.round(video.currentTime * 1000);
 				let candidates: SubjectBox[] = [];
 				try {
 					const faceResult = withSuppressedVisionConsoleErrors(() =>
-						faceDetector.detectForVideo(video, timestampMs),
+						faceDetector.detectForVideo(
+							video,
+							getMonotonicVisionTimestampMs({
+								kind: "face",
+								candidateMs: frameTimestampMs,
+							}),
+						),
 					);
 					candidates = (faceResult.detections ?? [])
 						.map((detection) => detection.boundingBox)
@@ -1654,7 +1703,13 @@ export async function analyzeGeneratedClipMotionTracking({
 						}));
 					if (candidates.length === 0) {
 						const poseResult = withSuppressedVisionConsoleErrors(() =>
-							poseLandmarker.detectForVideo(video, timestampMs),
+							poseLandmarker.detectForVideo(
+								video,
+								getMonotonicVisionTimestampMs({
+									kind: "pose",
+									candidateMs: frameTimestampMs,
+								}),
+							),
 						);
 						candidates = (poseResult.landmarks ?? []).flatMap((pose) => {
 							const poseBox = extractPoseBox({

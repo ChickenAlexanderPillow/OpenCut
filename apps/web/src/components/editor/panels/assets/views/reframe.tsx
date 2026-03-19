@@ -40,6 +40,10 @@ import {
 	resolveVideoSplitScreenSlotTransformFromState,
 } from "@/lib/reframe/video-reframe";
 import {
+	mergeMotionTrackingKeyframes,
+	offsetMotionTrackingKeyframes,
+} from "@/lib/reframe/motion-tracking";
+import {
 	CircleDot,
 	Ellipsis,
 	GripHorizontal,
@@ -236,9 +240,97 @@ export function ReframeView() {
 			selectedMediaAsset.id,
 			sourceRange.startTime.toFixed(3),
 			sourceRange.endTime.toFixed(3),
+			preset.name.trim().toLowerCase(),
+			preset.transform.position.x.toFixed(3),
+			preset.transform.position.y.toFixed(3),
 			preset.transform.scale.toFixed(4),
 			preset.motionTracking?.animateScale ?? true ? "scale:1" : "scale:0",
 		].join("|");
+	};
+	const buildMotionTrackingPresetSignature = ({
+		preset,
+	}: {
+		preset: VideoReframePreset;
+	}) =>
+		[
+			preset.name.trim().toLowerCase(),
+			preset.transform.position.x.toFixed(3),
+			preset.transform.position.y.toFixed(3),
+			preset.transform.scale.toFixed(4),
+			preset.motionTracking?.animateScale ?? true ? "scale:1" : "scale:0",
+		].join("|");
+	const getDesiredMotionTrackingScope = ({
+		preset,
+	}: {
+		preset: VideoReframePreset;
+	}) => {
+		if (!selectedMediaAsset || !normalizedVideo) return null;
+		const sourceRange = getVideoElementSourceRange({
+			element: normalizedVideo.element,
+			asset: selectedMediaAsset,
+		});
+		return {
+			assetId: selectedMediaAsset.id,
+			startTime: sourceRange.startTime,
+			endTime: sourceRange.endTime,
+			presetSignature: buildMotionTrackingPresetSignature({ preset }),
+		};
+	};
+	const findSharedMotionTrackingCache = ({
+		cacheKey,
+		preset,
+		requireCoverage = false,
+	}: {
+		cacheKey: string | null;
+		preset: VideoReframePreset;
+		requireCoverage?: boolean;
+	}): VideoMotionTracking | undefined => {
+		const desiredScope = getDesiredMotionTrackingScope({ preset });
+		for (const track of editor.timeline.getTracks()) {
+			if (track.type !== "video") continue;
+			for (const element of track.elements) {
+				if (element.type !== "video") continue;
+				for (const candidate of element.reframePresets ?? []) {
+					const motionTracking = candidate.motionTracking;
+					if (!motionTracking || (motionTracking.keyframes?.length ?? 0) === 0) {
+						continue;
+					}
+					const exactCacheMatch = cacheKey && motionTracking.cacheKey === cacheKey;
+					const scopedMatch =
+						desiredScope &&
+						motionTracking.sourceAssetId === desiredScope.assetId &&
+						motionTracking.presetSignature === desiredScope.presetSignature &&
+						Math.abs(
+							(motionTracking.sourceStartTime ?? Number.NaN) -
+								desiredScope.startTime,
+						) <= 1e-3 &&
+						(requireCoverage
+							? (motionTracking.sourceEndTime ?? -1) >=
+								desiredScope.endTime - 1e-3
+							: true);
+					if (exactCacheMatch || scopedMatch) {
+						return candidate.motionTracking;
+					}
+				}
+			}
+		}
+		return undefined;
+	};
+	const formatMotionTrackingSummary = ({
+		motionTracking,
+	}: {
+		motionTracking: VideoMotionTracking | undefined;
+	}) => {
+		if (!motionTracking || (motionTracking.keyframes?.length ?? 0) === 0) {
+			return "No motion tracking";
+		}
+		const bakedKeyframeCount = motionTracking.keyframes.length;
+		const trackedSampleCount =
+			motionTracking.trackedSampleCount ?? motionTracking.sampleCount ?? null;
+		if (trackedSampleCount && trackedSampleCount > bakedKeyframeCount) {
+			return `${bakedKeyframeCount} baked keyframes from ${trackedSampleCount} tracked samples`;
+		}
+		return `${bakedKeyframeCount} baked keyframes`;
 	};
 	const handleAnalyzeReframes = async () => {
 		if (!normalizedVideo) return;
@@ -378,17 +470,101 @@ export function ReframeView() {
 				asset: selectedMediaAsset,
 			});
 			const cacheKey = buildMotionTrackingCacheKey({ preset });
+			const desiredScope = getDesiredMotionTrackingScope({ preset });
+			const sharedCoveredMotionTracking = findSharedMotionTrackingCache({
+				cacheKey,
+				preset,
+				requireCoverage: true,
+			});
+			if (sharedCoveredMotionTracking) {
+				editor.timeline.updateVideoReframePreset({
+					trackId: normalizedVideo.trackId,
+					elementId: normalizedVideo.element.id,
+					presetId: preset.id,
+					updates: {
+						motionTracking: {
+							...sharedCoveredMotionTracking,
+							enabled: true,
+							cacheKey: cacheKey ?? sharedCoveredMotionTracking.cacheKey,
+							animateScale: preset.motionTracking?.animateScale ?? true,
+						},
+					},
+				});
+				setTrackingStatusByPresetId((current) => ({
+					...current,
+					[preset.id]: {
+						tone: "default",
+						message: `Using shared cached tracking (${formatMotionTrackingSummary({
+							motionTracking: sharedCoveredMotionTracking,
+						})}).`,
+					},
+				}));
+				return;
+			}
+			const existingMotionTracking = preset.motionTracking;
+			const canExtendExistingTail =
+				desiredScope &&
+				existingMotionTracking &&
+				(existingMotionTracking.keyframes?.length ?? 0) > 0 &&
+				existingMotionTracking.sourceAssetId === desiredScope.assetId &&
+				existingMotionTracking.presetSignature === desiredScope.presetSignature &&
+				Math.abs(
+					(existingMotionTracking.sourceStartTime ?? Number.NaN) -
+						desiredScope.startTime,
+				) <= 1e-3 &&
+				(existingMotionTracking.sourceEndTime ?? 0) < desiredScope.endTime - 1e-3;
+			const analysisStartTime = canExtendExistingTail
+				? Math.max(
+						desiredScope.startTime,
+						existingMotionTracking!.sourceEndTime ?? desiredScope.startTime,
+					)
+				: sourceRange.startTime;
+			const analysisBaseTracking =
+				canExtendExistingTail ? existingMotionTracking : undefined;
+			if (
+				analysisBaseTracking &&
+				desiredScope &&
+				analysisStartTime >= desiredScope.endTime - 1e-3
+			) {
+				editor.timeline.updateVideoReframePreset({
+					trackId: normalizedVideo.trackId,
+					elementId: normalizedVideo.element.id,
+					presetId: preset.id,
+					updates: {
+						motionTracking: {
+							...analysisBaseTracking,
+							enabled: true,
+							cacheKey: cacheKey ?? analysisBaseTracking.cacheKey,
+						},
+					},
+				});
+				return;
+			}
 			const result = await analyzeGeneratedClipMotionTracking({
 				asset: selectedMediaAsset,
-				startTime: sourceRange.startTime,
+				startTime: analysisStartTime,
 				endTime: sourceRange.endTime,
 				canvasSize: projectCanvas,
 				baseScale: preset.transform.scale,
 				animateScale: preset.motionTracking?.animateScale ?? true,
 				signal: controller.signal,
 			});
+			const mergedKeyframes =
+				analysisBaseTracking && desiredScope
+					? mergeMotionTrackingKeyframes({
+							baseKeyframes: analysisBaseTracking.keyframes,
+							appendedKeyframes: offsetMotionTrackingKeyframes({
+								keyframes: result.keyframes,
+								timeOffset: analysisStartTime - desiredScope.startTime,
+							}).filter(
+								(keyframe) =>
+									keyframe.time >
+									(analysisBaseTracking.keyframes.at(-1)?.time ?? -1) + 1e-6,
+							),
+					  })
+					: result.keyframes;
 			const nextMotionTracking: VideoMotionTracking | undefined =
-				result.keyframes.length > 0
+				mergedKeyframes.length > 0 && desiredScope
 					? {
 							enabled: true,
 							mode: "subject-single-v1",
@@ -396,9 +572,17 @@ export function ReframeView() {
 							lastAnalyzedAt: new Date().toISOString(),
 							animateScale: preset.motionTracking?.animateScale ?? true,
 							cacheKey: cacheKey ?? undefined,
-							sampleCount: result.sampleCount,
-							trackedSampleCount: result.trackedSampleCount,
-							keyframes: result.keyframes,
+							sourceAssetId: desiredScope.assetId,
+							sourceStartTime: desiredScope.startTime,
+							sourceEndTime: desiredScope.endTime,
+							presetSignature: desiredScope.presetSignature,
+							sampleCount:
+								(result.sampleCount ?? 0) +
+								(analysisBaseTracking?.sampleCount ?? 0),
+							trackedSampleCount:
+								(result.trackedSampleCount ?? 0) +
+								(analysisBaseTracking?.trackedSampleCount ?? 0),
+							keyframes: mergedKeyframes,
 					  }
 					: undefined;
 			editor.timeline.updateVideoReframePreset({
@@ -464,6 +648,8 @@ export function ReframeView() {
 		preset: VideoReframePreset;
 	}) => {
 		if (!normalizedVideo) return;
+		const desiredScope = getDesiredMotionTrackingScope({ preset });
+		const existingMotionTracking = preset.motionTracking;
 		if (preset.motionTracking?.enabled) {
 			editor.timeline.updateVideoReframePreset({
 				trackId: normalizedVideo.trackId,
@@ -481,10 +667,46 @@ export function ReframeView() {
 			return;
 		}
 		const cacheKey = buildMotionTrackingCacheKey({ preset });
+		const sharedCachedMotionTracking = findSharedMotionTrackingCache({
+			cacheKey,
+			preset,
+			requireCoverage: true,
+		});
+		if (sharedCachedMotionTracking) {
+			editor.timeline.updateVideoReframePreset({
+				trackId: normalizedVideo.trackId,
+				elementId: normalizedVideo.element.id,
+				presetId: preset.id,
+				updates: {
+					motionTracking: {
+						...sharedCachedMotionTracking,
+						enabled: true,
+						cacheKey: cacheKey ?? sharedCachedMotionTracking.cacheKey,
+						animateScale: preset.motionTracking?.animateScale ?? true,
+					},
+				},
+			});
+			setTrackingStatusByPresetId((current) => ({
+				...current,
+				[preset.id]: {
+					tone: "default",
+					message: `Using shared cached tracking (${formatMotionTrackingSummary({
+						motionTracking: sharedCachedMotionTracking,
+					})}).`,
+				},
+			}));
+			return;
+		}
 		if (
-			cacheKey &&
-			preset.motionTracking?.cacheKey === cacheKey &&
-			(preset.motionTracking.keyframes?.length ?? 0) > 0
+			existingMotionTracking &&
+			existingMotionTracking.sourceAssetId === selectedMediaAsset?.id &&
+			Math.abs(
+				(existingMotionTracking.sourceStartTime ?? Number.NaN) -
+					(desiredScope?.startTime ?? Number.NaN),
+			) <= 1e-3 &&
+			(existingMotionTracking.sourceEndTime ?? 0) >=
+				(desiredScope?.endTime ?? Number.POSITIVE_INFINITY) - 1e-3 &&
+			(existingMotionTracking.keyframes?.length ?? 0) > 0
 		) {
 			editor.timeline.updateVideoReframePreset({
 				trackId: normalizedVideo.trackId,
@@ -492,7 +714,7 @@ export function ReframeView() {
 				presetId: preset.id,
 				updates: {
 					motionTracking: {
-						...preset.motionTracking,
+						...existingMotionTracking,
 						enabled: true,
 					},
 				},
@@ -501,7 +723,9 @@ export function ReframeView() {
 				...current,
 				[preset.id]: {
 					tone: "default",
-					message: `Using cached tracking (${preset.motionTracking?.trackedSampleCount ?? preset.motionTracking?.keyframes.length ?? 0} samples).`,
+					message: `Using cached tracking (${formatMotionTrackingSummary({
+						motionTracking: existingMotionTracking,
+					})}).`,
 				},
 			}));
 			return;
@@ -1466,8 +1690,12 @@ export function ReframeView() {
 											{trackingStatusByPresetId[preset.id]?.message ??
 												((preset.motionTracking?.keyframes?.length ?? 0) > 0
 													? preset.motionTracking?.enabled
-														? `Tracking on · ${preset.motionTracking.trackedSampleCount ?? preset.motionTracking.keyframes.length} samples cached`
-														: `Tracking cached · click the scan icon to enable`
+														? `Tracking on · ${formatMotionTrackingSummary({
+																motionTracking: preset.motionTracking,
+															})} cached`
+														: `Tracking cached · ${formatMotionTrackingSummary({
+																motionTracking: preset.motionTracking,
+															})}`
 													: "No motion tracking")}
 										</div>
 									</div>
