@@ -24,7 +24,6 @@ import {
 	getVideoElementSourceRange,
 } from "@/lib/reframe/subject-aware";
 import {
-	deriveVideoReframeTransformAdjustment,
 	buildDefaultVideoSplitScreenBindings,
 	deriveVideoSplitScreenSlotAdjustmentFromTransform,
 	deriveVideoAngleSections,

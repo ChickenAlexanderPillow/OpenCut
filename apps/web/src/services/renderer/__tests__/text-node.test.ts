@@ -244,6 +244,46 @@ describe("TextNode caption gap rendering", () => {
 		expect((translations[0]?.[1] ?? 0) > 600).toBe(true);
 	});
 
+	test("ignores top slot preference for unbalanced bottom-anchored captions", async () => {
+		const node = new TextNode({
+			...createCaptionNode().params,
+			captionStyle: {
+				anchorToSafeAreaBottom: true,
+				safeAreaBottomOffset: 0,
+				splitScreenOverrides: {
+					slotAnchor: "top",
+				},
+			},
+			captionSourceVideo: {
+				startTime: 10,
+				duration: 2,
+				trimStart: 0,
+				defaultReframePresetId: "subject-left",
+				splitScreen: {
+					enabled: true,
+					layoutPreset: "top-bottom",
+					viewportBalance: "unbalanced",
+					slots: [
+						{ slotId: "top", mode: "fixed-preset", presetId: "subject-left" },
+						{
+							slotId: "bottom",
+							mode: "fixed-preset",
+							presetId: "subject-right",
+						},
+					],
+					sections: [],
+				},
+			},
+		});
+		const { operations, renderer, translations } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.39 });
+
+		expect(operations).toContain("fillText");
+		expect(translations.length).toBeGreaterThan(0);
+		expect((translations[0]?.[1] ?? 0) > 600).toBe(true);
+	});
+
 	test("anchors unbalanced split captions to the bottom slot bottom edge", async () => {
 		const node = new TextNode({
 			...createCaptionNode().params,

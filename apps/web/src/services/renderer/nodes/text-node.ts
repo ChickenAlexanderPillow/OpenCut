@@ -432,12 +432,17 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		const dividerBottom = divider ? divider.y + divider.height : undefined;
 		const preferredAnchor =
 			captionStyle.splitScreenOverrides?.slotAnchor ?? "auto";
+		const anchorsToTop = captionStyle.anchorToSafeAreaTop ?? false;
+		const anchorsToBottom =
+			(captionStyle.anchorToSafeAreaBottom ?? true) && !anchorsToTop;
 		const resolvedSlotId =
-			preferredAnchor === "auto"
-				? (captionStyle.anchorToSafeAreaTop ?? false)
-					? "top"
-					: "bottom"
-				: preferredAnchor;
+			activeSplitScreen.viewportBalance === "unbalanced" && anchorsToBottom
+				? "bottom"
+				: preferredAnchor === "auto"
+					? anchorsToTop
+						? "top"
+						: "bottom"
+					: preferredAnchor;
 		const viewport =
 			viewports.get(resolvedSlotId) ??
 			Array.from(viewports.values())[0] ??
