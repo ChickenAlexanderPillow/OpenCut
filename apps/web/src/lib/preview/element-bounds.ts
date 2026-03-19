@@ -1,4 +1,10 @@
-import type { TimelineTrack, TimelineElement } from "@/types/timeline";
+import type {
+	AudioElement,
+	TextElement,
+	TimelineTrack,
+	TimelineElement,
+	VideoElement,
+} from "@/types/timeline";
 import type { MediaAsset } from "@/types/assets";
 import { isMainTrack } from "@/lib/timeline";
 import {
@@ -15,6 +21,11 @@ import {
 import { resolveElementTransformAtTime } from "@/lib/animation";
 import { resolveSafeAreaAnchoredPositionY } from "@/constants/safe-area-constants";
 import { toTimelineCaptionWordTimings } from "@/lib/captions/timing";
+import {
+	getVideoSplitScreenDividers,
+	getVideoSplitScreenViewports,
+	resolveVideoSplitScreenAtTime,
+} from "@/lib/reframe/video-reframe";
 
 export interface ElementBounds {
 	cx: number;
@@ -70,6 +81,46 @@ if (sharedMeasureCanvas) {
 	sharedMeasureCanvas.height = 4096;
 }
 
+type CaptionDividerPlacement = "above-divider" | "on-divider" | "below-divider";
+type CaptionSourceVideoBoundsContext = {
+	startTime: number;
+	duration: number;
+	trimStart: number;
+	reframePresets?: VideoElement["reframePresets"];
+	reframeSwitches?: VideoElement["reframeSwitches"];
+	defaultReframePresetId?: string | null;
+	splitScreen?: VideoElement["splitScreen"];
+};
+
+const DEFAULT_DIVIDER_PLACEMENT: CaptionDividerPlacement = "on-divider";
+const DIVIDER_PLACEMENT_GAP = 20;
+
+function resolveDividerPlacement(
+	value: string | undefined,
+): CaptionDividerPlacement {
+	if (
+		value === "above-divider" ||
+		value === "on-divider" ||
+		value === "below-divider"
+	) {
+		return value;
+	}
+	return DEFAULT_DIVIDER_PLACEMENT;
+}
+
+function getExplicitDividerPlacement(
+	value: string | undefined,
+): CaptionDividerPlacement | null {
+	if (
+		value === "above-divider" ||
+		value === "on-divider" ||
+		value === "below-divider"
+	) {
+		return value;
+	}
+	return null;
+}
+
 function getBackgroundFontSizeRatio({
 	fontSize,
 	canvasHeight,
@@ -99,6 +150,161 @@ function evictOldestEntry<T>(cache: Map<string, T>): void {
 function getSharedMeasureContext(): CanvasRenderingContext2D | null {
 	if (!sharedMeasureCanvas) return null;
 	return sharedMeasureCanvas.getContext("2d");
+}
+
+function isEditableMediaElement(
+	element: TimelineElement,
+): element is VideoElement | AudioElement {
+	return element.type === "video" || element.type === "audio";
+}
+
+function resolveCaptionPlacementVideoCompanion({
+	sourceMedia,
+	candidates,
+}: {
+	sourceMedia: VideoElement | AudioElement;
+	candidates: Array<VideoElement | AudioElement>;
+}): VideoElement | null {
+	if (sourceMedia.type === "video") return sourceMedia;
+	let best: VideoElement | null = null;
+	let bestScore = Number.NEGATIVE_INFINITY;
+	for (const candidate of candidates) {
+		if (candidate.id === sourceMedia.id || candidate.type !== "video") continue;
+		const startDistance = Math.abs(candidate.startTime - sourceMedia.startTime);
+		const trimDistance = Math.abs(candidate.trimStart - sourceMedia.trimStart);
+		const endDistance = Math.abs(
+			candidate.trimStart +
+				candidate.duration -
+				(sourceMedia.trimStart + sourceMedia.duration),
+		);
+		const overlap = Math.max(
+			0,
+			Math.min(
+				candidate.startTime + candidate.duration,
+				sourceMedia.startTime + sourceMedia.duration,
+			) - Math.max(candidate.startTime, sourceMedia.startTime),
+		);
+		const score =
+			overlap - startDistance * 4 - trimDistance * 3 - endDistance * 3;
+		if (score > bestScore) {
+			bestScore = score;
+			best = candidate;
+		}
+	}
+	return best;
+}
+
+function resolveCaptionSourceMediaHeuristically({
+	element,
+	candidates,
+}: {
+	element: TextElement;
+	candidates: Array<VideoElement | AudioElement>;
+}): VideoElement | AudioElement | null {
+	if ((element.captionWordTimings?.length ?? 0) === 0) return null;
+	if (element.captionStyle?.linkedToCaptionGroup === false) return null;
+	if (candidates.length === 0) return null;
+
+	const elementEnd = element.startTime + element.duration;
+	let best: VideoElement | AudioElement | null = null;
+	let bestScore = Number.NEGATIVE_INFINITY;
+	for (const candidate of candidates) {
+		const candidateEnd = candidate.startTime + candidate.duration;
+		const overlap = Math.max(
+			0,
+			Math.min(elementEnd, candidateEnd) -
+				Math.max(element.startTime, candidate.startTime),
+		);
+		const overlapScore = overlap;
+		const startDistance = Math.abs(element.startTime - candidate.startTime);
+		const durationDistance = Math.abs(element.duration - candidate.duration);
+		const score = overlapScore - startDistance * 0.25 - durationDistance * 0.1;
+		if (score > bestScore) {
+			bestScore = score;
+			best = candidate;
+		}
+	}
+	return best;
+}
+
+function resolveCaptionSplitViewport({
+	captionStyle,
+	captionSourceVideo,
+	canvasWidth,
+	canvasHeight,
+	currentTime,
+}: {
+	captionStyle: NonNullable<TextElement["captionStyle"]>;
+	captionSourceVideo?: CaptionSourceVideoBoundsContext;
+	canvasWidth: number;
+	canvasHeight: number;
+	currentTime: number;
+}) {
+	if (captionStyle.splitScreenOverrides?.anchorToSplitViewport === false) {
+		return null;
+	}
+	if (!captionSourceVideo?.splitScreen) return null;
+	const localTime = Math.max(
+		0,
+		Math.min(captionSourceVideo.duration, currentTime - captionSourceVideo.startTime),
+	);
+	const activeSplitScreen = resolveVideoSplitScreenAtTime({
+		element: {
+			id: "__caption_source__",
+			type: "video",
+			mediaId: "__caption_source__",
+			name: "__caption_source__",
+			startTime: 0,
+			duration: captionSourceVideo.duration,
+			trimStart: captionSourceVideo.trimStart,
+			trimEnd: 0,
+			transform: DEFAULT_TEXT_ELEMENT.transform,
+			opacity: 1,
+			reframePresets: captionSourceVideo.reframePresets,
+			reframeSwitches: captionSourceVideo.reframeSwitches,
+			defaultReframePresetId: captionSourceVideo.defaultReframePresetId,
+			splitScreen: captionSourceVideo.splitScreen,
+		},
+		localTime,
+	});
+	if (!activeSplitScreen) return null;
+	const viewports = getVideoSplitScreenViewports({
+		layoutPreset: activeSplitScreen.layoutPreset,
+		viewportBalance: activeSplitScreen.viewportBalance,
+		width: canvasWidth,
+		height: canvasHeight,
+	});
+	const divider = getVideoSplitScreenDividers({
+		layoutPreset: activeSplitScreen.layoutPreset,
+		viewportBalance: activeSplitScreen.viewportBalance,
+		width: canvasWidth,
+		height: canvasHeight,
+	})[0];
+	const preferredAnchor =
+		captionStyle.splitScreenOverrides?.slotAnchor ?? "auto";
+	const anchorsToTop = captionStyle.anchorToSafeAreaTop ?? false;
+	const anchorsToBottom =
+		(captionStyle.anchorToSafeAreaBottom ?? true) && !anchorsToTop;
+	const resolvedSlotId =
+		activeSplitScreen.viewportBalance === "unbalanced" && anchorsToBottom
+			? "bottom"
+			: preferredAnchor === "auto"
+				? anchorsToTop
+					? "top"
+					: "bottom"
+				: preferredAnchor;
+	const viewport =
+		viewports.get(resolvedSlotId) ?? Array.from(viewports.values())[0] ?? null;
+	return viewport
+		? {
+				slotId: resolvedSlotId,
+				viewportBalance: activeSplitScreen.viewportBalance ?? "balanced",
+				dividerTopY: divider?.y,
+				dividerBottomY: divider ? divider.y + divider.height : undefined,
+				dividerCenterY: divider ? divider.y + divider.height / 2 : undefined,
+				...viewport,
+			}
+		: null;
 }
 
 function buildCaptionTimingsSignature({
@@ -263,12 +469,14 @@ export function getElementBounds({
 	canvasSize,
 	backgroundReferenceCanvasSize,
 	mediaAsset,
+	captionSourceVideo,
 	currentTime = element.startTime,
 }: {
 	element: TimelineElement;
 	canvasSize: { width: number; height: number };
 	backgroundReferenceCanvasSize?: { width: number; height: number };
 	mediaAsset?: MediaAsset | null;
+	captionSourceVideo?: CaptionSourceVideoBoundsContext;
 	currentTime?: number;
 }): ElementBounds | null {
 	if (element.type === "audio") return null;
@@ -304,6 +512,29 @@ export function getElementBounds({
 	}
 
 	if (element.type === "text") {
+		const effectiveCaptionStyle = {
+			...(element.captionStyle ?? {}),
+			...((element.captionStyle?.splitScreenOverrides?.enabled ?? true) &&
+			resolveCaptionSplitViewport({
+				captionStyle: (element.captionStyle ?? {}) as NonNullable<
+					TextElement["captionStyle"]
+				>,
+				captionSourceVideo,
+				canvasWidth,
+				canvasHeight,
+				currentTime,
+			})
+				? (element.captionStyle?.splitScreenOverrides ?? {})
+				: {}),
+			splitScreenOverrides: element.captionStyle?.splitScreenOverrides,
+		} as NonNullable<TextElement["captionStyle"]>;
+		const splitViewport = resolveCaptionSplitViewport({
+			captionStyle: effectiveCaptionStyle,
+			captionSourceVideo,
+			canvasWidth,
+			canvasHeight,
+			currentTime,
+		});
 		const scaledFontSize =
 			element.fontSize * (canvasHeight / FONT_SIZE_SCALE_REFERENCE);
 		const letterSpacing = element.letterSpacing ?? 0;
@@ -329,14 +560,14 @@ export function getElementBounds({
 
 			const captionTimingData = getCachedCaptionTimingData({ element });
 			const captionWords = captionTimingData.words;
-			const wordsOnScreenRaw = element.captionStyle?.wordsOnScreen;
+			const wordsOnScreenRaw = effectiveCaptionStyle.wordsOnScreen;
 			const wordsOnScreen =
 				typeof wordsOnScreenRaw === "number"
 					? clampWordCount(wordsOnScreenRaw)
 					: null;
-			const neverShrinkFont = element.captionStyle?.neverShrinkFont === true;
-			const fitInCanvas = element.captionStyle?.fitInCanvas;
-			const maxLinesOnScreenRaw = element.captionStyle?.maxLinesOnScreen;
+			const neverShrinkFont = effectiveCaptionStyle.neverShrinkFont === true;
+			const fitInCanvas = effectiveCaptionStyle.fitInCanvas;
+			const maxLinesOnScreenRaw = effectiveCaptionStyle.maxLinesOnScreen;
 			const maxLinesOnScreen =
 				typeof maxLinesOnScreenRaw === "number"
 					? clampLineCount(maxLinesOnScreenRaw)
@@ -350,7 +581,7 @@ export function getElementBounds({
 			const cappedWordsOnScreen = wordsOnScreen ?? captionWords.length;
 			const activeWordForWindow =
 				latestStartedWordIndex >= 0 ? latestStartedWordIndex : 0;
-			const backgroundMode = element.captionStyle?.backgroundFitMode ?? "block";
+			const backgroundMode = effectiveCaptionStyle.backgroundFitMode ?? "block";
 			const pagePlanSignature = [
 				captionTimingData.signature,
 				canvasWidth,
@@ -369,10 +600,20 @@ export function getElementBounds({
 				wordsOnScreen ?? "all",
 				maxLinesOnScreen,
 				backgroundMode,
-				element.captionStyle?.anchorToSafeAreaBottom ?? true,
-				element.captionStyle?.safeAreaBottomOffset ?? 0,
-				element.captionStyle?.anchorToSafeAreaTop ?? false,
-				element.captionStyle?.safeAreaTopOffset ?? 0,
+				effectiveCaptionStyle.anchorToSafeAreaBottom ?? true,
+				effectiveCaptionStyle.safeAreaBottomOffset ?? 0,
+				effectiveCaptionStyle.anchorToSafeAreaTop ?? false,
+				effectiveCaptionStyle.safeAreaTopOffset ?? 0,
+				effectiveCaptionStyle.splitScreenOverrides?.slotAnchor ?? "auto",
+				effectiveCaptionStyle.splitScreenOverrides?.anchorToSplitViewport ?? true,
+				effectiveCaptionStyle.splitScreenOverrides?.dividerPlacement ??
+					DEFAULT_DIVIDER_PLACEMENT,
+				splitViewport?.slotId ?? "none",
+				splitViewport?.viewportBalance ?? "none",
+				splitViewport?.dividerTopY ?? "none",
+				splitViewport?.dividerBottomY ?? "none",
+				splitViewport?.dividerCenterY ?? "none",
+				currentTime.toFixed(3),
 				fitInCanvas ? 1 : 0,
 				neverShrinkFont ? 1 : 0,
 			].join("|");
@@ -427,20 +668,21 @@ export function getElementBounds({
 						canvasWidth,
 						canvasHeight,
 						positionX: canvasWidth / 2 + resolvedTransform.position.x,
-						positionY: resolveSafeAreaAnchoredPositionY({
-							canvasWidth,
-							canvasHeight,
-							transformPositionY: resolvedTransform.position.y,
-							scale: resolvedTransform.scale,
-							visualRect: candidateVisualRect,
-							anchorToSafeAreaBottom:
-								element.captionStyle?.anchorToSafeAreaBottom ?? true,
-							safeAreaBottomOffset:
-								element.captionStyle?.safeAreaBottomOffset ?? 0,
-							anchorToSafeAreaTop:
-								element.captionStyle?.anchorToSafeAreaTop ?? false,
-							safeAreaTopOffset: element.captionStyle?.safeAreaTopOffset ?? 0,
-						}),
+							positionY: resolveSafeAreaAnchoredPositionY({
+								canvasWidth,
+								canvasHeight,
+								transformPositionY: resolvedTransform.position.y,
+								scale: resolvedTransform.scale,
+								visualRect: candidateVisualRect,
+								anchorToSafeAreaBottom:
+									effectiveCaptionStyle.anchorToSafeAreaBottom ?? true,
+								safeAreaBottomOffset:
+									effectiveCaptionStyle.safeAreaBottomOffset ?? 0,
+								anchorToSafeAreaTop:
+									effectiveCaptionStyle.anchorToSafeAreaTop ?? false,
+								safeAreaTopOffset:
+									effectiveCaptionStyle.safeAreaTopOffset ?? 0,
+							}),
 						scale: resolvedTransform.scale,
 						visualRect: candidateVisualRect,
 						fitInCanvas,
@@ -574,23 +816,81 @@ export function getElementBounds({
 			});
 			measuredWidth = visualRect.width;
 			measuredHeight = visualRect.height;
+			const explicitDividerPlacement = getExplicitDividerPlacement(
+				effectiveCaptionStyle.splitScreenOverrides?.dividerPlacement,
+			);
+			const shouldUseExplicitDividerPlacement =
+				Boolean(splitViewport) &&
+				explicitDividerPlacement !== null &&
+				splitViewport?.dividerCenterY !== undefined;
+			const anchorsToBottomEdge =
+				(effectiveCaptionStyle.anchorToSafeAreaBottom ?? true) &&
+				!(effectiveCaptionStyle.anchorToSafeAreaTop ?? false);
+			const shouldUseCanvasBottomPlacement =
+				!shouldUseExplicitDividerPlacement &&
+				Boolean(splitViewport) &&
+				splitViewport?.slotId === "bottom" &&
+				anchorsToBottomEdge &&
+				splitViewport?.viewportBalance !== "unbalanced" &&
+				splitViewport.y + splitViewport.height >= canvasHeight;
+			const placementCanvasWidth = shouldUseCanvasBottomPlacement
+				? canvasWidth
+				: shouldUseExplicitDividerPlacement
+					? canvasWidth
+					: (splitViewport?.width ?? canvasWidth);
+			const placementCanvasHeight = shouldUseCanvasBottomPlacement
+				? canvasHeight
+				: shouldUseExplicitDividerPlacement
+					? canvasHeight
+					: (splitViewport?.height ?? canvasHeight);
+			const placementOffsetX = shouldUseCanvasBottomPlacement
+				? 0
+				: shouldUseExplicitDividerPlacement
+					? 0
+					: (splitViewport?.x ?? 0);
+			const placementOffsetY = shouldUseCanvasBottomPlacement
+				? 0
+				: shouldUseExplicitDividerPlacement
+					? 0
+					: (splitViewport?.y ?? 0);
+			const anchoredPositionY = resolveSafeAreaAnchoredPositionY({
+				canvasWidth: placementCanvasWidth,
+				canvasHeight: placementCanvasHeight,
+				transformPositionY: resolvedTransform.position.y,
+				scale: resolvedTransform.scale,
+				visualRect,
+				anchorToSafeAreaBottom:
+					effectiveCaptionStyle.anchorToSafeAreaBottom ?? true,
+				safeAreaBottomOffset: effectiveCaptionStyle.safeAreaBottomOffset ?? 0,
+				anchorToSafeAreaTop:
+					effectiveCaptionStyle.anchorToSafeAreaTop ?? false,
+				safeAreaTopOffset: effectiveCaptionStyle.safeAreaTopOffset ?? 0,
+			});
+			const resolvedPositionY = shouldUseExplicitDividerPlacement
+				? (() => {
+						const dividerPlacement = resolveDividerPlacement(
+							explicitDividerPlacement,
+						);
+						const dividerTopY = splitViewport?.dividerTopY ?? splitViewport?.y ?? 0;
+						const dividerBottomY =
+							splitViewport?.dividerBottomY ?? splitViewport?.y ?? 0;
+						const dividerCenterY =
+							splitViewport?.dividerCenterY ?? splitViewport?.y ?? 0;
+						const halfHeight = (visualRect.height * resolvedTransform.scale) / 2;
+						const targetCenterY =
+							dividerPlacement === "above-divider"
+								? dividerTopY - DIVIDER_PLACEMENT_GAP - halfHeight
+								: dividerPlacement === "below-divider"
+									? dividerBottomY + DIVIDER_PLACEMENT_GAP + halfHeight
+									: dividerCenterY;
+						return targetCenterY - placementOffsetY;
+					})()
+				: anchoredPositionY;
 			const placement = resolveTextPlacement({
-				canvasWidth,
-				canvasHeight,
-				positionX: canvasWidth / 2 + resolvedTransform.position.x,
-				positionY: resolveSafeAreaAnchoredPositionY({
-					canvasWidth,
-					canvasHeight,
-					transformPositionY: resolvedTransform.position.y,
-					scale: resolvedTransform.scale,
-					visualRect,
-					anchorToSafeAreaBottom:
-						element.captionStyle?.anchorToSafeAreaBottom ?? true,
-					safeAreaBottomOffset: element.captionStyle?.safeAreaBottomOffset ?? 0,
-					anchorToSafeAreaTop:
-						element.captionStyle?.anchorToSafeAreaTop ?? false,
-					safeAreaTopOffset: element.captionStyle?.safeAreaTopOffset ?? 0,
-				}),
+				canvasWidth: placementCanvasWidth,
+				canvasHeight: placementCanvasHeight,
+				positionX: placementCanvasWidth / 2 + resolvedTransform.position.x,
+				positionY: resolvedPositionY,
 				scale: resolvedTransform.scale,
 				visualRect,
 				fitInCanvas,
@@ -605,8 +905,8 @@ export function getElementBounds({
 			const rotatedCenterX = scaledCenterX * cos - scaledCenterY * sin;
 			const rotatedCenterY = scaledCenterX * sin + scaledCenterY * cos;
 			const computedBounds = {
-				cx: placement.x + rotatedCenterX,
-				cy: placement.y + rotatedCenterY,
+				cx: placement.x + placementOffsetX + rotatedCenterX,
+				cy: placement.y + placementOffsetY + rotatedCenterY,
 				width: measuredWidth * placement.effectiveScale,
 				height: measuredHeight * placement.effectiveScale,
 				rotation: resolvedTransform.rotate,
@@ -647,6 +947,10 @@ export function getVisibleElementsWithBounds({
 	mediaAssets: MediaAsset[];
 }): ElementWithBounds[] {
 	const mediaMap = new Map(mediaAssets.map((m) => [m.id, m]));
+	const mediaElements = tracks.flatMap((track) =>
+		track.elements.filter(isEditableMediaElement),
+	);
+	const mediaElementById = new Map(mediaElements.map((element) => [element.id, element]));
 	const visibleTracks = tracks.filter(
 		(track) => !("hidden" in track && track.hidden),
 	);
@@ -676,11 +980,44 @@ export function getVisibleElementsWithBounds({
 				element.type === "video" || element.type === "image"
 					? mediaMap.get(element.mediaId)
 					: undefined;
+			const sourceMediaId =
+				element.type === "text"
+					? (element.captionSourceRef?.mediaElementId ?? null)
+					: null;
+			const sourceMediaFromRef = sourceMediaId
+				? mediaElementById.get(sourceMediaId) ?? null
+				: null;
+			const sourceMedia =
+				sourceMediaFromRef ??
+				(element.type === "text"
+					? resolveCaptionSourceMediaHeuristically({
+							element,
+							candidates: mediaElements,
+						})
+					: null);
+			const captionSourceVideo =
+				sourceMedia && isEditableMediaElement(sourceMedia)
+					? resolveCaptionPlacementVideoCompanion({
+							sourceMedia,
+							candidates: mediaElements,
+						})
+					: null;
 			const bounds = getElementBounds({
 				element,
 				canvasSize,
 				backgroundReferenceCanvasSize,
 				mediaAsset,
+				captionSourceVideo: captionSourceVideo
+					? {
+							startTime: captionSourceVideo.startTime,
+							duration: captionSourceVideo.duration,
+							trimStart: captionSourceVideo.trimStart,
+							reframePresets: captionSourceVideo.reframePresets,
+							reframeSwitches: captionSourceVideo.reframeSwitches,
+							defaultReframePresetId: captionSourceVideo.defaultReframePresetId,
+							splitScreen: captionSourceVideo.splitScreen,
+						}
+					: undefined,
 				currentTime,
 			});
 			if (bounds) {

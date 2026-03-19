@@ -27,6 +27,7 @@ export const BLUE_HIGHLIGHT_CAPTION_STYLE: NonNullable<TextElement["captionStyle
 		splitScreenOverrides: {
 			enabled: true,
 			anchorToSplitViewport: true,
+			dividerPlacement: "on-divider",
 			fontSize: 4,
 			backgroundPaddingY: DEFAULT_TEXT_BACKGROUND.paddingY - 5,
 			wordsOnScreen: 3,
@@ -60,7 +61,7 @@ export const BLUE_HIGHLIGHT_CAPTION_TEXT_PROPS: Pick<
 	color: DEFAULT_TEXT_ELEMENT.color,
 	background: {
 		...DEFAULT_TEXT_ELEMENT.background,
-		color: "#000000b9",
+		color: "#000000e5",
 	},
 	textAlign: DEFAULT_TEXT_ELEMENT.textAlign,
 	fontWeight: "bold",

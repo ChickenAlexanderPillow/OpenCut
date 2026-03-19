@@ -166,6 +166,19 @@ function clampSplitScreenSlotAnchor(
 	return "auto";
 }
 
+function clampDividerPlacementPreset(
+	value: string | undefined,
+): "above-divider" | "on-divider" | "below-divider" {
+	if (
+		value === "above-divider" ||
+		value === "on-divider" ||
+		value === "below-divider"
+	) {
+		return value;
+	}
+	return "on-divider";
+}
+
 function getPresetFromWords(words: number): CaptionWordPreset | "custom" {
 	if (words === CAPTION_WORD_PRESETS.compact) return "compact";
 	if (words === CAPTION_WORD_PRESETS.balanced) return "balanced";
@@ -243,6 +256,9 @@ function captureCaptionPresetSnapshot({
 						slotAnchor: clampSplitScreenSlotAnchor(
 							element.captionStyle.splitScreenOverrides.slotAnchor,
 						),
+						dividerPlacement: clampDividerPlacementPreset(
+							element.captionStyle.splitScreenOverrides.dividerPlacement,
+						),
 						fontSize:
 							element.captionStyle.splitScreenOverrides.fontSize ??
 							element.fontSize,
@@ -293,9 +309,15 @@ export function TextProperties({
 	element: TextElement;
 	trackId: string;
 }) {
+	const isCaptionElement =
+		(element.captionWordTimings?.length ?? 0) > 0 ||
+		element.captionSourceRef !== undefined;
+
 	return (
 		<div className="flex h-full flex-col">
-			<ContentSection element={element} trackId={trackId} />
+			{!isCaptionElement ? (
+				<ContentSection element={element} trackId={trackId} />
+			) : null}
 			<TransformSection element={element} trackId={trackId} />
 			<BlendingSection element={element} trackId={trackId} />
 			<CanvasFittingSection element={element} trackId={trackId} />
@@ -835,45 +857,12 @@ function CaptionSection({
 						},
 					},
 				],
-			}),
+		}),
 		onCommit: () => editor.timeline.commitPreview(),
 	});
-	const splitSafeAreaOffset = usePropertyDraft({
-		displayValue: String(
-			clampSafeAreaBottomOffset(
-				(element.captionStyle?.splitScreenOverrides?.anchorToSafeAreaTop ?? false)
-					? (element.captionStyle?.splitScreenOverrides?.safeAreaTopOffset ?? 0)
-					: (element.captionStyle?.splitScreenOverrides?.safeAreaBottomOffset ?? 0),
-			),
-		),
-		parse: (input) => {
-			const parsed = parseFloat(input);
-			if (Number.isNaN(parsed)) return null;
-			return clampSafeAreaBottomOffset(parsed);
-		},
-		onPreview: (value) =>
-			editor.timeline.previewElements({
-				updates: [
-					{
-						trackId,
-						elementId: element.id,
-						updates: {
-							captionStyle: {
-								...(element.captionStyle ?? {}),
-								splitScreenOverrides: {
-									...(element.captionStyle?.splitScreenOverrides ?? {}),
-									...((element.captionStyle?.splitScreenOverrides
-										?.anchorToSafeAreaTop ?? false)
-										? { safeAreaTopOffset: value }
-										: { safeAreaBottomOffset: value }),
-								},
-							},
-						},
-					},
-				],
-			}),
-		onCommit: () => editor.timeline.commitPreview(),
-	});
+	const currentDividerPlacementPreset = clampDividerPlacementPreset(
+		element.captionStyle?.splitScreenOverrides?.dividerPlacement,
+	);
 	const safeAreaBottomOffset = usePropertyDraft({
 		displayValue: String(
 			clampSafeAreaBottomOffset(element.captionStyle?.safeAreaBottomOffset ?? 0),
@@ -1217,7 +1206,7 @@ function CaptionSection({
 						<div className="grid gap-2">
 							<div className="flex items-center justify-between rounded-sm border px-2 py-2">
 								<span className="text-muted-foreground text-xs">
-									Anchor to split viewport
+									Use split-screen positioning
 								</span>
 								<Checkbox
 									checked={
@@ -1231,28 +1220,26 @@ function CaptionSection({
 									}
 								/>
 							</div>
-							<SectionField label="Viewport anchor">
+							<SectionField label="Position">
 								<Select
-									value={
-										clampSplitScreenSlotAnchor(
-											element.captionStyle?.splitScreenOverrides?.slotAnchor,
-										)
-									}
+									value={currentDividerPlacementPreset}
 									onValueChange={(value) =>
 										updateSplitScreenCaptionOverrides({
-											slotAnchor: clampSplitScreenSlotAnchor(value),
+											dividerPlacement: clampDividerPlacementPreset(value),
 										})
 									}
 								>
 									<SelectTrigger>
-										<SelectValue placeholder="Select split anchor" />
+										<SelectValue placeholder="Select divider position" />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value="auto">Auto</SelectItem>
-										<SelectItem value="top">Top</SelectItem>
-										<SelectItem value="bottom">Bottom</SelectItem>
-										<SelectItem value="left">Left</SelectItem>
-										<SelectItem value="right">Right</SelectItem>
+										<SelectItem value="above-divider">
+											Above divider
+										</SelectItem>
+										<SelectItem value="on-divider">On divider</SelectItem>
+										<SelectItem value="below-divider">
+											Below divider
+										</SelectItem>
 									</SelectContent>
 								</Select>
 							</SectionField>
@@ -1331,58 +1318,6 @@ function CaptionSection({
 										)
 									}
 									icon="L"
-								/>
-							</SectionField>
-							<div className="flex items-center justify-between rounded-sm border px-2 py-2">
-								<span className="text-muted-foreground text-xs">
-									Anchor split captions to safe area top
-								</span>
-								<Checkbox
-									checked={
-										element.captionStyle?.splitScreenOverrides
-											?.anchorToSafeAreaTop ?? false
-									}
-									onCheckedChange={(checked) =>
-										updateSplitScreenCaptionOverrides({
-											anchorToSafeAreaTop: Boolean(checked),
-											anchorToSafeAreaBottom: Boolean(checked)
-												? false
-												: (element.captionStyle?.splitScreenOverrides
-														?.anchorToSafeAreaBottom ??
-													true),
-										})
-									}
-								/>
-							</div>
-							<SectionField label="Split Y offset">
-								<NumberField
-									icon="Y"
-									value={splitSafeAreaOffset.displayValue}
-									min={-500}
-									max={500}
-									onFocus={splitSafeAreaOffset.onFocus}
-									onChange={splitSafeAreaOffset.onChange}
-									onBlur={splitSafeAreaOffset.onBlur}
-									onScrub={splitSafeAreaOffset.scrubTo}
-									onScrubEnd={splitSafeAreaOffset.commitScrub}
-									onReset={() =>
-										updateSplitScreenCaptionOverrides({
-											...((element.captionStyle?.splitScreenOverrides
-												?.anchorToSafeAreaTop ?? false)
-												? { safeAreaTopOffset: 0 }
-												: { safeAreaBottomOffset: 0 }),
-										})
-									}
-									isDefault={
-										clampSafeAreaBottomOffset(
-											(element.captionStyle?.splitScreenOverrides
-												?.anchorToSafeAreaTop ?? false)
-												? (element.captionStyle?.splitScreenOverrides
-														?.safeAreaTopOffset ?? 0)
-												: (element.captionStyle?.splitScreenOverrides
-														?.safeAreaBottomOffset ?? 0),
-										) === 0
-									}
 								/>
 							</SectionField>
 						</div>
@@ -1820,20 +1755,6 @@ function ContentSection({
 	trackId: string;
 }) {
 	const editor = useEditor();
-	const isTranscriptDrivenCaption =
-		(element.captionWordTimings?.length ?? 0) > 0 ||
-		element.captionSourceRef !== undefined;
-
-	const transcriptDerivedContent = useMemo(() => {
-		const timings = element.captionWordTimings ?? [];
-		if (timings.length === 0) {
-			return element.content ?? "";
-		}
-		return timings
-			.map((timing) => timing.word)
-			.filter((word) => word.trim().length > 0)
-			.join(" ");
-	}, [element.captionWordTimings, element.content]);
 
 	const content = usePropertyDraft({
 		displayValue: element.content,
@@ -1851,28 +1772,14 @@ function ContentSection({
 		<Section collapsible sectionKey="text:content" hasBorderTop={false}>
 			<SectionHeader title="Content" />
 			<SectionContent>
-				{isTranscriptDrivenCaption ? (
-					<div className="text-muted-foreground space-y-2 text-xs">
-						<p>
-							Content is transcript-driven for this caption. Edit words in the
-							Transcript panel.
-						</p>
-						<Textarea
-							value={transcriptDerivedContent}
-							className="min-h-60"
-							readOnly
-						/>
-					</div>
-				) : (
-					<Textarea
-						placeholder="Name"
-						value={content.displayValue}
-						className="min-h-60"
-						onFocus={content.onFocus}
-						onChange={content.onChange}
-						onBlur={content.onBlur}
-					/>
-				)}
+				<Textarea
+					placeholder="Name"
+					value={content.displayValue}
+					className="min-h-60"
+					onFocus={content.onFocus}
+					onChange={content.onChange}
+					onBlur={content.onBlur}
+				/>
 			</SectionContent>
 		</Section>
 	);

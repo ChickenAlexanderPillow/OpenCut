@@ -206,13 +206,15 @@ describe("TextNode caption gap rendering", () => {
 		expect((translations[0]?.[1] ?? 0) > 360).toBe(true);
 	});
 
-	test("defaults auto split anchor to the bottom slot near the divider for bottom-anchored captions", async () => {
+	test("defaults auto split anchor to the divider center for bottom-anchored captions", async () => {
 		const node = new TextNode({
 			...createCaptionNode().params,
 			captionStyle: {
 				anchorToSafeAreaBottom: true,
 				safeAreaBottomOffset: 0,
-				splitScreenOverrides: {},
+				splitScreenOverrides: {
+					dividerPlacement: "on-divider",
+				},
 			},
 			captionSourceVideo: {
 				startTime: 10,
@@ -241,8 +243,8 @@ describe("TextNode caption gap rendering", () => {
 
 		expect(operations).toContain("fillText");
 		expect(translations.length).toBeGreaterThan(0);
-		expect((translations[0]?.[1] ?? 0) > 240).toBe(true);
-		expect((translations[0]?.[1] ?? 0) < 400).toBe(true);
+		expect((translations[0]?.[1] ?? 0) > 235).toBe(true);
+		expect((translations[0]?.[1] ?? 0) < 245).toBe(true);
 	});
 
 	test("ignores top slot preference for unbalanced bottom-anchored captions and keeps them in the bottom slot", async () => {
@@ -252,6 +254,7 @@ describe("TextNode caption gap rendering", () => {
 				anchorToSafeAreaBottom: true,
 				safeAreaBottomOffset: 0,
 				splitScreenOverrides: {
+					dividerPlacement: "on-divider",
 					slotAnchor: "top",
 				},
 			},
@@ -282,17 +285,18 @@ describe("TextNode caption gap rendering", () => {
 
 		expect(operations).toContain("fillText");
 		expect(translations.length).toBeGreaterThan(0);
-		expect((translations[0]?.[1] ?? 0) > 240).toBe(true);
-		expect((translations[0]?.[1] ?? 0) < 400).toBe(true);
+		expect((translations[0]?.[1] ?? 0) > 235).toBe(true);
+		expect((translations[0]?.[1] ?? 0) < 245).toBe(true);
 	});
 
-	test("anchors unbalanced split captions near the divider at the top of the bottom slot", async () => {
+	test("anchors unbalanced split captions to the divider center", async () => {
 		const node = new TextNode({
 			...createCaptionNode().params,
 			captionStyle: {
 				anchorToSafeAreaBottom: true,
 				safeAreaBottomOffset: 0,
 				splitScreenOverrides: {
+					dividerPlacement: "on-divider",
 					slotAnchor: "bottom",
 				},
 			},
@@ -341,8 +345,8 @@ describe("TextNode caption gap rendering", () => {
 
 		expect(operations).toContain("fillText");
 		expect(translations.length).toBeGreaterThan(0);
-		expect((translations[0]?.[1] ?? 0) > 240).toBe(true);
-		expect((translations[0]?.[1] ?? 0) < 400).toBe(true);
+		expect((translations[0]?.[1] ?? 0) > 235).toBe(true);
+		expect((translations[0]?.[1] ?? 0) < 245).toBe(true);
 	});
 
 	test("applies split-screen font and background padding overrides", async () => {
@@ -358,7 +362,8 @@ describe("TextNode caption gap rendering", () => {
 				splitScreenOverrides: {
 					slotAnchor: "bottom",
 					fontSize: 4,
-					backgroundPaddingY: DEFAULT_TEXT_ELEMENT.background.paddingY - 5,
+					backgroundPaddingY:
+						(DEFAULT_TEXT_ELEMENT.background.paddingY ?? 0) - 5,
 				},
 			},
 			captionSourceVideo: {

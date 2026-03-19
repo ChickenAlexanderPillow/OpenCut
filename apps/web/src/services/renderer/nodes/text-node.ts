@@ -267,17 +267,47 @@ export type TextNodeParams = TextElement & {
 };
 
 type CaptionStyleValue = NonNullable<TextElement["captionStyle"]>;
+type DividerPlacement = "above-divider" | "on-divider" | "below-divider";
 type CaptionSplitViewport = {
 	slotId: string;
 	viewportBalance: "balanced" | "unbalanced";
-	dividerBottom?: number;
+	dividerTopY?: number;
+	dividerBottomY?: number;
+	dividerCenterY?: number;
 	x: number;
 	y: number;
 	width: number;
 	height: number;
 };
 
-const UNBALANCED_BOTTOM_SLOT_DIVIDER_GAP = 20;
+const DEFAULT_DIVIDER_PLACEMENT: DividerPlacement = "on-divider";
+const DIVIDER_PLACEMENT_GAP = 20;
+
+function resolveDividerPlacement(
+	value: string | undefined,
+): DividerPlacement {
+	if (
+		value === "above-divider" ||
+		value === "on-divider" ||
+		value === "below-divider"
+	) {
+		return value;
+	}
+	return DEFAULT_DIVIDER_PLACEMENT;
+}
+
+function getExplicitDividerPlacement(
+	value: string | undefined,
+): DividerPlacement | null {
+	if (
+		value === "above-divider" ||
+		value === "on-divider" ||
+		value === "below-divider"
+	) {
+		return value;
+	}
+	return null;
+}
 
 export class TextNode extends BaseNode<TextNodeParams> {
 	private cachedCaptionTimingsRef: Array<{
@@ -431,7 +461,11 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			width: this.params.canvasWidth,
 			height: this.params.canvasHeight,
 		})[0];
-		const dividerBottom = divider ? divider.y + divider.height : undefined;
+		const dividerTopY = divider?.y;
+		const dividerBottomY = divider ? divider.y + divider.height : undefined;
+		const dividerCenterY = divider
+			? divider.y + divider.height / 2
+			: undefined;
 		const preferredAnchor =
 			captionStyle.splitScreenOverrides?.slotAnchor ?? "auto";
 		const anchorsToTop = captionStyle.anchorToSafeAreaTop ?? false;
@@ -453,7 +487,9 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			? {
 					slotId: resolvedSlotId,
 					viewportBalance: activeSplitScreen.viewportBalance ?? "balanced",
-					dividerBottom,
+					dividerTopY,
+					dividerBottomY,
+					dividerCenterY,
 					...viewport,
 				}
 			: null;
@@ -479,10 +515,18 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			time,
 			captionStyle,
 		});
+		const explicitDividerPlacement = getExplicitDividerPlacement(
+			captionStyle.splitScreenOverrides?.dividerPlacement,
+		);
+		const shouldUseExplicitDividerPlacement =
+			Boolean(splitViewport) &&
+			explicitDividerPlacement !== null &&
+			splitViewport?.dividerCenterY !== undefined;
 		const anchorsToBottomEdge =
 			(captionStyle.anchorToSafeAreaBottom ?? true) &&
 			!(captionStyle.anchorToSafeAreaTop ?? false);
 		const shouldUseCanvasBottomPlacement =
+			!shouldUseExplicitDividerPlacement &&
 			Boolean(splitViewport) &&
 			splitViewport?.slotId === "bottom" &&
 			anchorsToBottomEdge &&
@@ -490,22 +534,24 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			splitViewport.y + splitViewport.height >= this.params.canvasHeight;
 		const placementCanvasWidth = shouldUseCanvasBottomPlacement
 			? this.params.canvasWidth
-			: (splitViewport?.width ?? this.params.canvasWidth);
+			: shouldUseExplicitDividerPlacement
+				? this.params.canvasWidth
+				: (splitViewport?.width ?? this.params.canvasWidth);
 		const placementCanvasHeight = shouldUseCanvasBottomPlacement
 			? this.params.canvasHeight
-			: (splitViewport?.height ?? this.params.canvasHeight);
+			: shouldUseExplicitDividerPlacement
+				? this.params.canvasHeight
+				: (splitViewport?.height ?? this.params.canvasHeight);
 		const placementOffsetX = shouldUseCanvasBottomPlacement
 			? 0
-			: (splitViewport?.x ?? 0);
+			: shouldUseExplicitDividerPlacement
+				? 0
+				: (splitViewport?.x ?? 0);
 		const placementOffsetY = shouldUseCanvasBottomPlacement
 			? 0
-			: (splitViewport?.y ?? 0);
-		const shouldAnchorUnbalancedBottomSlotToDivider =
-			Boolean(splitViewport) &&
-			splitViewport?.slotId === "bottom" &&
-			splitViewport?.viewportBalance === "unbalanced" &&
-			anchorsToBottomEdge &&
-			!shouldUseCanvasBottomPlacement;
+			: shouldUseExplicitDividerPlacement
+				? 0
+				: (splitViewport?.y ?? 0);
 		const anchoredPositionY = resolveSafeAreaAnchoredPositionY({
 			canvasWidth: placementCanvasWidth,
 			canvasHeight: placementCanvasHeight,
@@ -517,9 +563,24 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			anchorToSafeAreaTop: captionStyle.anchorToSafeAreaTop ?? false,
 			safeAreaTopOffset: captionStyle.safeAreaTopOffset ?? 0,
 		});
-		const resolvedPositionY = shouldAnchorUnbalancedBottomSlotToDivider
-			? -visualRect.top * this.params.transform.scale +
-				UNBALANCED_BOTTOM_SLOT_DIVIDER_GAP
+		const resolvedPositionY = shouldUseExplicitDividerPlacement
+			? (() => {
+					const dividerPlacement = resolveDividerPlacement(explicitDividerPlacement);
+					const dividerTopY = splitViewport?.dividerTopY ?? splitViewport?.y ?? 0;
+					const dividerBottomY =
+						splitViewport?.dividerBottomY ?? splitViewport?.y ?? 0;
+					const dividerCenterY =
+						splitViewport?.dividerCenterY ?? splitViewport?.y ?? 0;
+					const halfHeight =
+						(visualRect.height * this.params.transform.scale) / 2;
+					const targetCenterY =
+						dividerPlacement === "above-divider"
+							? dividerTopY - DIVIDER_PLACEMENT_GAP - halfHeight
+							: dividerPlacement === "below-divider"
+								? dividerBottomY + DIVIDER_PLACEMENT_GAP + halfHeight
+								: dividerCenterY;
+					return targetCenterY - placementOffsetY;
+				})()
 			: anchoredPositionY;
 		const placement = resolveTextPlacement({
 			canvasWidth: placementCanvasWidth,

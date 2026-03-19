@@ -356,6 +356,7 @@ export interface TextElement extends BaseTimelineElement {
 			enabled?: boolean;
 			anchorToSplitViewport?: boolean;
 			slotAnchor?: "auto" | "top" | "bottom" | "left" | "right";
+			dividerPlacement?: "above-divider" | "on-divider" | "below-divider";
 			fontSize?: number;
 			backgroundPaddingY?: number;
 			fitInCanvas?: boolean;
