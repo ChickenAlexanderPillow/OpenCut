@@ -369,11 +369,11 @@ def _run_ffmpeg_command(command: list[str]) -> None:
 async def _prewarm_transcription_models() -> None:
 	if not _prewarm_enabled():
 		return
-	model = os.getenv("LOCAL_TRANSCRIBE_MODEL", "medium").strip() or "medium"
+	model = os.getenv("LOCAL_TRANSCRIBE_MODEL", "large-v3").strip() or "large-v3"
 	device = os.getenv("LOCAL_TRANSCRIBE_DEVICE", "cuda").strip() or "cuda"
 	compute_type = (
-		os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "int8_float16").strip()
-		or "int8_float16"
+		os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "float16").strip()
+		or "float16"
 	)
 	try:
 		info = await asyncio.to_thread(
@@ -463,8 +463,8 @@ def healthz() -> HealthResponse:
 		),
 		require_cuda=require_cuda,
 		gpu_ready=gpu_ready,
-		default_model=os.getenv("LOCAL_TRANSCRIBE_MODEL", "medium"),
-		default_compute_type=os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "int8_float16"),
+		default_model=os.getenv("LOCAL_TRANSCRIBE_MODEL", "large-v3"),
+		default_compute_type=os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "float16"),
 		default_vad_filter=_parse_bool(
 			os.getenv("LOCAL_TRANSCRIBE_VAD_FILTER"),
 			False,
@@ -499,10 +499,10 @@ async def transcribe_word_timestamps(
 	)
 
 	config = TranscribeConfig(
-		model=(model or os.getenv("LOCAL_TRANSCRIBE_MODEL", "medium")).strip(),
+		model=(model or os.getenv("LOCAL_TRANSCRIBE_MODEL", "large-v3")).strip(),
 		device=(device or os.getenv("LOCAL_TRANSCRIBE_DEVICE", "cuda")).strip(),
 		compute_type=(
-			compute_type or os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "int8_float16")
+			compute_type or os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "float16")
 		).strip(),
 		vad_filter=_parse_bool(
 			vad_filter,

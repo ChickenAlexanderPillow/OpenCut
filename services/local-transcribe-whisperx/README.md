@@ -22,9 +22,9 @@ This service provides local word-level transcription and optional speaker diariz
 Multipart form:
 
 - `file`: audio file
-- `model` (optional): default `medium`
+- `model` (optional): default `large-v3`
 - `device` (optional): default `cuda`
-- `compute_type` (optional): default `int8_float16`
+- `compute_type` (optional): default `float16`
 - `vad_filter` (optional): default `false` (set `true` to trim low-energy speech/noise)
 - `language` (optional): requested language (ignored when `LOCAL_TRANSCRIBE_FORCE_PRIMARY_LANGUAGE=true`)
 - `diarize` (optional): default `true`
@@ -42,8 +42,8 @@ Optional auth:
   "words": [{ "word": "Hello", "start": 0.12, "end": 0.28, "speakerId": "SPEAKER_00" }],
   "segments": [{ "text": "Hello there", "start": 0.12, "end": 0.55, "speakerId": "SPEAKER_00" }],
   "language": "en",
-  "model": "medium",
-  "compute_type": "int8_float16",
+  "model": "large-v3",
+  "compute_type": "float16",
   "engine": "whisperx"
 }
 ```
@@ -64,9 +64,9 @@ pip install -r requirements.txt
 3. Run server:
 
 ```powershell
-$env:LOCAL_TRANSCRIBE_MODEL="medium"
+$env:LOCAL_TRANSCRIBE_MODEL="large-v3"
 $env:LOCAL_TRANSCRIBE_DEVICE="cuda"
-$env:LOCAL_TRANSCRIBE_COMPUTE_TYPE="int8_float16"
+$env:LOCAL_TRANSCRIBE_COMPUTE_TYPE="float16"
 $env:LOCAL_TRANSCRIBE_VAD_FILTER="false"
 $env:LOCAL_TRANSCRIBE_PRIMARY_LANGUAGE="en"
 $env:LOCAL_TRANSCRIBE_FORCE_PRIMARY_LANGUAGE="true"
@@ -84,7 +84,7 @@ curl http://127.0.0.1:8765/healthz
 
 ## Notes
 
-- On GPU OOM, service falls back to `medium` + `int8_float16`.
+- The service does not downgrade to a smaller Whisper model on failure.
 - Keep ffmpeg available on PATH for best audio compatibility.
 - Keeping `LOCAL_TRANSCRIBE_VAD_FILTER=false` generally preserves short filler words like `uh`/`um` better.
 - For tighter memory control in long sessions:

@@ -16,9 +16,9 @@ from whisperx.diarize import DiarizationPipeline, assign_word_speakers
 
 @dataclass
 class TranscribeConfig:
-	model: str = "medium"
+	model: str = "large-v3"
 	device: str = "cuda"
-	compute_type: str = "int8_float16"
+	compute_type: str = "float16"
 	vad_filter: bool = False
 	language: str | None = None
 	diarize: bool = False
@@ -207,35 +207,10 @@ class LocalWhisperXEngine:
 			used_model = config.model
 			used_compute = config.compute_type
 		except RuntimeError:
-			# OOM/compute fallback. Clear allocator cache once before retry.
 			self._release_runtime_memory(clear_cuda_cache=used_device.startswith("cuda"))
-			fallback_model = "medium" if config.model != "medium" else config.model
-			fallback_compute = "int8_float16" if used_device.startswith("cuda") else "int8"
-			asr_result = self._run_asr(
-				audio=audio,
-				model=fallback_model,
-				device=used_device,
-				compute_type=fallback_compute,
-				vad_filter=config.vad_filter,
-				language=config.language,
-			)
-			used_model = fallback_model
-			used_compute = fallback_compute
+			raise
 		except Exception:
-			# CUDA/cuDNN missing/unavailable fallback
-			used_device = "cpu"
-			fallback_model = "medium" if config.model != "medium" else config.model
-			fallback_compute = "int8"
-			asr_result = self._run_asr(
-				audio=audio,
-				model=fallback_model,
-				device=used_device,
-				compute_type=fallback_compute,
-				vad_filter=config.vad_filter,
-				language=config.language,
-			)
-			used_model = fallback_model
-			used_compute = fallback_compute
+			raise
 		timings_ms["asr"] = (time.perf_counter() - asr_started_at) * 1000.0
 
 		language = asr_result["language"] or "en"

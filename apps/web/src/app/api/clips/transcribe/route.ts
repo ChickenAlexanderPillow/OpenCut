@@ -3,12 +3,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import {
 	buildLocalWhisperXFormData,
-	buildOpenAITranscriptionFormData,
 	resolveRequestedClipTranscriptionLanguage,
 } from "./request-utils";
-
-const OPENAI_TRANSCRIPTIONS_URL =
-	"https://api.openai.com/v1/audio/transcriptions";
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 const MAX_WORDS = 20000;
 const CLIP_TRANSCRIPTION_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -265,9 +261,9 @@ async function callLocalWhisperX({
 		file,
 		requestedModel,
 		language,
-		defaultModel: webEnv.LOCAL_TRANSCRIBE_MODEL || "medium",
+		defaultModel: webEnv.LOCAL_TRANSCRIBE_MODEL || "large-v3",
 		device: webEnv.LOCAL_TRANSCRIBE_DEVICE || "cuda",
-		computeType: webEnv.LOCAL_TRANSCRIBE_COMPUTE_TYPE || "int8_float16",
+		computeType: webEnv.LOCAL_TRANSCRIBE_COMPUTE_TYPE || "float16",
 		vadFilter:
 			(process.env.LOCAL_TRANSCRIBE_VAD_FILTER ?? "false").trim() || "false",
 		diarize: webEnv.LOCAL_TRANSCRIBE_DIARIZATION_ENABLED,
@@ -367,71 +363,6 @@ async function callLocalWhisperX({
 	}
 }
 
-async function callOpenAITranscriptions({
-	apiKey,
-	file,
-	model,
-	language,
-}: {
-	apiKey: string;
-	file: File;
-	model: string;
-	language?: string | null;
-}): Promise<Response> {
-	const openAIForm = buildOpenAITranscriptionFormData({
-		file,
-		model,
-		language,
-	});
-
-	return await fetch(OPENAI_TRANSCRIPTIONS_URL, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${apiKey}`,
-		},
-		body: openAIForm,
-	});
-}
-
-function normalizeOpenAIWordPayload({
-	payload,
-}: {
-	payload: unknown;
-}): Array<{ word: string; start: number; end: number; speakerId?: string }> {
-	if (!payload || typeof payload !== "object") return [];
-	const parsed = payload as {
-		words?: Array<{ word?: string; start?: number; end?: number }>;
-		segments?: Array<{
-			words?: Array<{ word?: string; start?: number; end?: number }>;
-		}>;
-	};
-	const rawWords = [
-		...(parsed.words ?? []),
-		...(parsed.segments ?? []).flatMap((segment) => segment.words ?? []),
-	];
-	return rawWords
-		.filter(
-			(word) =>
-				typeof word.word === "string" &&
-				typeof word.start === "number" &&
-				typeof word.end === "number",
-		)
-		.map((word) => ({
-			word: (word.word ?? "").trim(),
-			start: word.start ?? 0,
-			end: word.end ?? 0,
-			speakerId: undefined,
-		}))
-		.filter(
-			(word) =>
-				word.word.length > 0 &&
-				Number.isFinite(word.start) &&
-				Number.isFinite(word.end) &&
-				word.end > word.start,
-		)
-		.sort((a, b) => a.start - b.start);
-}
-
 export async function POST(request: NextRequest) {
 	try {
 		const { limited } = await runRateLimitIfAvailable({ request });
@@ -445,9 +376,9 @@ export async function POST(request: NextRequest) {
 		const cacheKey =
 			typeof cacheKeyValue === "string" ? cacheKeyValue.toString().trim() : "";
 		const model =
-			(form.get("model") ?? webEnv.LOCAL_TRANSCRIBE_MODEL ?? "medium")
+			(form.get("model") ?? webEnv.LOCAL_TRANSCRIBE_MODEL ?? "large-v3")
 				.toString()
-				.trim() || "medium";
+				.trim() || "large-v3";
 		const language = resolveRequestedClipTranscriptionLanguage({
 			language: form.get("language"),
 		});
@@ -464,117 +395,72 @@ export async function POST(request: NextRequest) {
 		const runTranscription =
 			async (): Promise<ClipTranscriptionSuccessPayload> => {
 				const startedAt = Date.now();
-				if (webEnv.LOCAL_TRANSCRIBE_ENABLED) {
-					try {
-						const result = await callLocalWhisperX({
-							file,
-							requestedModel: model,
-							language,
-						});
-						console.info("Clip transcription metrics", {
-							engine: result.engine,
+				if (!webEnv.LOCAL_TRANSCRIBE_ENABLED) {
+					throw new Error(
+						"HTTP_503:Local transcription is required because OpenAI fallback is disabled",
+					);
+				}
+
+				try {
+					const result = await callLocalWhisperX({
+						file,
+						requestedModel: model,
+						language,
+					});
+					console.info("Clip transcription metrics", {
+						engine: result.engine,
+						model: result.model,
+						device: result.device ?? null,
+						computeType: result.computeType ?? null,
+						durationMs: Date.now() - startedAt,
+						audioDurationSeconds: result.audioDurationSeconds ?? null,
+						wordCount: result.wordCount ?? result.segments.length,
+						diarization: result.diarization ?? null,
+						diarizationError: result.diarizationError ?? null,
+						speakerCount: result.speakerCount ?? null,
+						timingsMs: result.timingsMs ?? null,
+					});
+					if (
+						(webEnv.LOCAL_TRANSCRIBE_DEVICE || "cuda")
+							.toLowerCase()
+							.startsWith("cuda") &&
+						result.device &&
+						!result.device.toLowerCase().startsWith("cuda")
+					) {
+						console.warn("Local transcription fell back to non-CUDA device", {
+							requestedDevice: webEnv.LOCAL_TRANSCRIBE_DEVICE || "cuda",
+							actualDevice: result.device,
 							model: result.model,
-							device: result.device ?? null,
-							computeType: result.computeType ?? null,
-							durationMs: Date.now() - startedAt,
-							audioDurationSeconds: result.audioDurationSeconds ?? null,
-							wordCount: result.wordCount ?? result.segments.length,
-							diarization: result.diarization ?? null,
-							diarizationError: result.diarizationError ?? null,
-							speakerCount: result.speakerCount ?? null,
-							timingsMs: result.timingsMs ?? null,
 						});
-						if (
-							(webEnv.LOCAL_TRANSCRIBE_DEVICE || "cuda")
-								.toLowerCase()
-								.startsWith("cuda") &&
-							result.device &&
-							!result.device.toLowerCase().startsWith("cuda")
-						) {
-							console.warn("Local transcription fell back to non-CUDA device", {
-								requestedDevice: webEnv.LOCAL_TRANSCRIBE_DEVICE || "cuda",
-								actualDevice: result.device,
-								model: result.model,
-							});
-						}
-						return {
-							segments: result.segments,
-							words: result.words,
-							granularity: "word",
-							engine: result.engine,
-							model: result.model,
-							device: result.device,
-							computeType: result.computeType,
-							timingsMs: result.timingsMs,
-							audioDurationSeconds: result.audioDurationSeconds,
-							wordCount: result.wordCount ?? result.segments.length,
-							diarization: result.diarization,
-							diarizationError: result.diarizationError,
-							speakerCount: result.speakerCount,
-						};
-					} catch (error) {
-						const message =
-							error instanceof Error
-								? error.message
-								: "Local transcription service unavailable";
-						const isWordTimingValidationError =
-							error instanceof LocalTranscriptionValidationError;
-						const isServiceUnavailable =
-							error instanceof LocalTranscriptionUnavailableError;
-						if (!webEnv.LOCAL_TRANSCRIBE_FALLBACK_OPENAI) {
-							const status = isWordTimingValidationError
-								? 422
-								: isServiceUnavailable
-									? 503
-									: 500;
-							throw new Error(`HTTP_${status}:${message}`);
-						}
 					}
+					return {
+						segments: result.segments,
+						words: result.words,
+						granularity: "word",
+						engine: result.engine,
+						model: result.model,
+						device: result.device,
+						computeType: result.computeType,
+						timingsMs: result.timingsMs,
+						audioDurationSeconds: result.audioDurationSeconds,
+						wordCount: result.wordCount ?? result.segments.length,
+						diarization: result.diarization,
+						diarizationError: result.diarizationError,
+						speakerCount: result.speakerCount,
+					};
+				} catch (error) {
+					const message =
+						error instanceof Error
+							? error.message
+							: "Local transcription service unavailable";
+					const status =
+						error instanceof LocalTranscriptionValidationError
+							? 422
+							: error instanceof LocalTranscriptionUnavailableError
+								? 503
+								: 500;
+					throw new Error(`HTTP_${status}:${message}`);
 				}
-
-				const openAiApiKey = webEnv.OPENAI_API_KEY;
-				if (!openAiApiKey) {
-					throw new Error(
-						"HTTP_503:Local transcription unavailable and OPENAI_API_KEY is not configured for fallback",
-					);
-				}
-
-				const openAiResponse = await callOpenAITranscriptions({
-					apiKey: openAiApiKey,
-					file,
-					model: "whisper-1",
-					language,
-				});
-				if (!openAiResponse.ok) {
-					const body = await openAiResponse.text();
-					throw new Error(
-						`HTTP_500:OpenAI transcription failed (${openAiResponse.status}): ${body}`,
-					);
-				}
-
-				const words = normalizeOpenAIWordPayload({
-					payload: await openAiResponse.json(),
-				});
-				const segments = normalizeLocalWords({ words });
-				if (segments.length === 0) {
-					throw new Error(
-						"HTTP_422:Transcription did not return word-level timestamps. Clip import requires per-word timing.",
-					);
-				}
-				console.info("Clip transcription metrics", {
-					engine: "openai-fallback",
-					model: "whisper-1",
-					durationMs: Date.now() - startedAt,
-					wordCount: segments.length,
-				});
-
-				return {
-					segments,
-					words,
-					granularity: "word",
-					engine: "openai-fallback",
-					model: "whisper-1",
-				};
 			};
 
 		if (cacheKey) {

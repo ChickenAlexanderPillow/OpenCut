@@ -1025,7 +1025,6 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 		const effectiveDrawList = this.expandDrawListWithMotionBlur({ drawList });
 		let externalVideoFrames = 0;
 		let copiedTextureUploads = 0;
-		const videoFramesToClose: VideoFrame[] = [];
 		this.ensureBufferPool({ device, drawCount: effectiveDrawList.length });
 
 		for (const [index, draw] of effectiveDrawList.entries()) {
@@ -1082,7 +1081,6 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 					source: videoFrame,
 				});
 				externalVideoFrames += 1;
-				videoFramesToClose.push(videoFrame);
 				bindGroup = device.createBindGroup({
 					layout: selectedExternalPipeline.getBindGroupLayout(0),
 					entries: [
@@ -1146,10 +1144,6 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 
 		pass.end();
 		device.queue.submit([encoder.finish()]);
-		if (videoFramesToClose.length > 0) {
-			this.pendingVideoFramesToClose.push(...videoFramesToClose);
-			this.schedulePendingVideoFrameClose({ device });
-		}
 
 		if (overlayCanvas) {
 			await this.renderNodesCpu({

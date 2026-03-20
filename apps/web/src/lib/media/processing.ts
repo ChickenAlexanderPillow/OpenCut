@@ -74,35 +74,45 @@ export async function generateThumbnail({
 		source: new BlobSource(videoFile),
 		formats: ALL_FORMATS,
 	});
-
-	const videoTrack = await input.getPrimaryVideoTrack();
-	if (!videoTrack) {
-		throw new Error("No video track found in the file");
-	}
-
-	const canDecode = await videoTrack.canDecode();
-	if (!canDecode) {
-		throw new Error("Video codec not supported for decoding");
-	}
-
-	const sink = new VideoSampleSink(videoTrack);
-
-	const frame = await sink.getSample(timeInSeconds);
-
-	if (!frame) {
-		throw new Error("Could not get frame at specified time");
-	}
-
 	try {
-		return renderToThumbnailDataUrl({
-			width: videoTrack.displayWidth,
-			height: videoTrack.displayHeight,
-			draw: ({ context, width, height }) => {
-				frame.draw(context, 0, 0, width, height);
-			},
-		});
+		const videoTrack = await input.getPrimaryVideoTrack();
+		if (!videoTrack) {
+			throw new Error("No video track found in the file");
+		}
+
+		const canDecode = await videoTrack.canDecode();
+		if (!canDecode) {
+			throw new Error("Video codec not supported for decoding");
+		}
+
+		const sink = new VideoSampleSink(videoTrack);
+		try {
+			const frame = await sink.getSample(timeInSeconds);
+
+			if (!frame) {
+				throw new Error("Could not get frame at specified time");
+			}
+
+			try {
+				return renderToThumbnailDataUrl({
+					width: videoTrack.displayWidth,
+					height: videoTrack.displayHeight,
+					draw: ({ context, width, height }) => {
+						frame.draw(context, 0, 0, width, height);
+					},
+				});
+			} finally {
+				frame.close();
+			}
+		} finally {
+			try {
+				(sink as unknown as { dispose?: () => void }).dispose?.();
+			} catch {}
+		}
 	} finally {
-		frame.close();
+		try {
+			input.dispose();
+		} catch {}
 	}
 }
 
@@ -212,8 +222,45 @@ export async function processMediaAssets({
 		let importVideoBitrate: number | undefined;
 		let importAudioBitrate: number | undefined;
 		let importTargetFps: number | undefined;
+		let sourceVideoInfo:
+			| {
+					width?: number;
+					height?: number;
+					fps?: number;
+			  }
+			| undefined;
 
 		if (fileType === "video" || fileType === "audio") {
+			if (fileType === "video") {
+				try {
+					const probedVideoInfo = await getVideoInfo({ videoFile: sourceFile });
+					sourceVideoInfo = {
+						width: probedVideoInfo.width,
+						height: probedVideoInfo.height,
+						fps: Number.isFinite(probedVideoInfo.fps)
+							? probedVideoInfo.fps
+							: undefined,
+					};
+				} catch (error) {
+					console.warn(
+						"Pre-transcode video probing via mediabunny failed; falling back to HTML metadata.",
+						error,
+					);
+					try {
+						const htmlMetadata = await getVideoMetadata({ file: sourceFile });
+						sourceVideoInfo = {
+							width: htmlMetadata.width,
+							height: htmlMetadata.height,
+							fps: htmlMetadata.fps,
+						};
+					} catch (fallbackError) {
+						console.warn(
+							"Pre-transcode video metadata fallback failed; continuing with default import profile.",
+							fallbackError,
+						);
+					}
+				}
+			}
 			reportOverallProgress({
 				fileIndex,
 				fileProgress: 10,
@@ -224,6 +271,7 @@ export async function processMediaAssets({
 				const transcoded = await transcodingService.transcodeImportMedia({
 					file: sourceFile,
 					mediaType: fileType,
+					sourceInfo: sourceVideoInfo,
 					onProgress: ({ progress }) => {
 						const mappedProgress = 10 + Math.round(progress * 0.7);
 						reportOverallProgress({

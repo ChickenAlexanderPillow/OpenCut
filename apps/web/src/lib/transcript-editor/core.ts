@@ -2,6 +2,7 @@ import {
 	DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS,
 	PAUSE_REMOVAL_CUT_END_PADDING_SECONDS,
 	PAUSE_REMOVAL_CUT_START_PADDING_SECONDS,
+	TRANSCRIPT_MANUAL_CUT_RESUME_GUARD_SECONDS,
 } from "@/lib/transcript-editor/constants";
 import type {
 	TranscriptCutTimeDomain,
@@ -487,10 +488,11 @@ export function applyCutRangesToWords({
 
 	return normalizedWords.map((word) => {
 		const removedByCuts = mergedCuts.some(
-			(cut) =>
-				cut.reason !== "pause" &&
-				cut.start <= word.startTime + 0.0001 &&
-				cut.end >= word.endTime - 0.0001,
+			(cut) => {
+				if (cut.reason === "pause") return false;
+				const midpoint = word.startTime + (word.endTime - word.startTime) / 2;
+				return cut.start <= midpoint + 0.0001 && cut.end >= midpoint - 0.0001;
+			},
 		);
 		return {
 			...word,
@@ -515,7 +517,13 @@ export function buildTranscriptCutsFromWords({
 			continue;
 		}
 
-		const rangeStart = word.startTime;
+		const previousKeptWord =
+			index > 0 && !normalized[index - 1]?.removed
+				? normalized[index - 1]
+				: undefined;
+		const rangeStart = previousKeptWord
+			? Math.min(word.startTime, previousKeptWord.endTime)
+			: word.startTime;
 		let rangeEnd = word.endTime;
 		let cursor = index + 1;
 
@@ -525,6 +533,18 @@ export function buildTranscriptCutsFromWords({
 		while (cursor < normalized.length && normalized[cursor]?.removed) {
 			rangeEnd = Math.max(rangeEnd, normalized[cursor].endTime);
 			cursor += 1;
+		}
+
+		const nextKeptWord =
+			cursor < normalized.length && !normalized[cursor]?.removed
+				? normalized[cursor]
+				: undefined;
+		if (nextKeptWord) {
+			rangeEnd = Math.max(
+				rangeStart + 0.01,
+				nextKeptWord.startTime -
+					TRANSCRIPT_MANUAL_CUT_RESUME_GUARD_SECONDS,
+			);
 		}
 
 		rawCuts.push({

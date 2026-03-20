@@ -26,6 +26,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Skeleton } from "@/components/ui/skeleton";
 import { TIMELINE_CONSTANTS } from "@/constants/timeline-constants";
 import { useEditor } from "@/hooks/use-editor";
 import { useFileUpload } from "@/hooks/use-file-upload";
@@ -51,6 +52,14 @@ import { HugeiconsIcon } from "@hugeicons/react";
 
 const ASSET_CARD_WIDTH = 176;
 
+type PendingImport = {
+	id: string;
+	name: string;
+	type: MediaAsset["type"];
+	progress: number;
+	step: string;
+};
+
 export function MediaView() {
 	const editor = useEditor();
 	const mediaFiles = editor.media.getAssets();
@@ -73,6 +82,7 @@ export function MediaView() {
 	const [processingStepProgress, setProcessingStepProgress] = useState<
 		number | undefined
 	>(undefined);
+	const [pendingImports, setPendingImports] = useState<PendingImport[]>([]);
 	const [sortBy, setSortBy] = useState<"name" | "type" | "duration" | "size">(
 		"name",
 	);
@@ -95,46 +105,98 @@ export function MediaView() {
 			return;
 		}
 
+		const pending = supportedMediaFiles.map((file, index) => ({
+			id: `${file.name}:${file.size}:${file.lastModified}:${index}`,
+			name: file.name,
+			type: getMediaTypeFromFile({ file }) as MediaAsset["type"],
+			progress: 0,
+			step: "Queued for import",
+		}));
+		const pendingIds = new Set(pending.map((entry) => entry.id));
+		setPendingImports((current) => [...pending, ...current]);
 		setIsProcessing(true);
 		setProgress(0);
 		setProcessingStep("Starting import");
 		setProcessingStepProgress(0);
 		try {
-			const processedAssets = await processMediaAssets({
-				files: supportedMediaFiles,
-				onProgress: ({
-					progress,
-					step,
-					stepProgress,
-				}: {
-					progress: number;
-					step?: string;
-					stepProgress?: number;
-				}) => {
-					setProgress(progress);
-					if (step) setProcessingStep(step);
-					if (typeof stepProgress === "number") {
-						setProcessingStepProgress(stepProgress);
-					}
-				},
-			});
-			for (const asset of processedAssets) {
-				const { addMediaCmd } = await prepareProjectMediaImport({
-					editor,
-					asset,
-					onProgress: ({ progress, step, stepProgress }) => {
-						setProgress(Math.max(progress, 75));
+			for (const [index, file] of supportedMediaFiles.entries()) {
+				const pendingId = pending[index]?.id;
+				const processedAssets = await processMediaAssets({
+					files: [file],
+					onProgress: ({
+						progress,
+						step,
+						stepProgress,
+					}: {
+						progress: number;
+						step?: string;
+						stepProgress?: number;
+					}) => {
+						const overallProgress = Math.round(
+							((index + progress / 100) / supportedMediaFiles.length) * 100,
+						);
+						setProgress(overallProgress);
 						if (step) setProcessingStep(step);
 						if (typeof stepProgress === "number") {
 							setProcessingStepProgress(stepProgress);
 						}
+						if (pendingId) {
+							setPendingImports((current) =>
+								current.map((entry) =>
+									entry.id === pendingId
+										? {
+												...entry,
+												progress,
+												step: step ?? entry.step,
+											}
+										: entry,
+								),
+							);
+						}
 					},
 				});
-				editor.command.execute({ command: addMediaCmd });
+				for (const asset of processedAssets) {
+					const { addMediaCmd } = await prepareProjectMediaImport({
+						editor,
+						asset,
+						onProgress: ({ progress, step, stepProgress }) => {
+							const overallProgress = Math.round(
+								((index + progress / 100) / supportedMediaFiles.length) * 100,
+							);
+							setProgress(overallProgress);
+							if (step) setProcessingStep(step);
+							if (typeof stepProgress === "number") {
+								setProcessingStepProgress(stepProgress);
+							}
+							if (pendingId) {
+								setPendingImports((current) =>
+									current.map((entry) =>
+										entry.id === pendingId
+											? {
+													...entry,
+													progress: Math.max(entry.progress, progress),
+													step: step ?? entry.step,
+												}
+											: entry,
+									),
+								);
+							}
+						},
+					});
+					editor.command.execute({ command: addMediaCmd });
+				}
+				if (pendingId) {
+					setPendingImports((current) =>
+						current.filter((entry) => entry.id !== pendingId),
+					);
+				}
 			}
 		} catch (error) {
 			console.error("Error processing files:", error);
 			toast.error("Failed to process files");
+			setPendingImports((current) =>
+				current.filter((entry) => !pendingIds.has(entry.id)),
+			);
 		} finally {
 			setIsProcessing(false);
 			setProgress(0);
@@ -555,6 +617,7 @@ export function MediaView() {
 					/>
 				) : mediaViewMode === "grid" ? (
 					<GridView
+						pendingImports={pendingImports}
 						items={filteredMediaItems}
 						renderPreview={renderPreview}
 						onRemove={handleRemove}
@@ -571,6 +634,7 @@ export function MediaView() {
 					/>
 				) : (
 					<ListView
+						pendingImports={pendingImports}
 						items={filteredMediaItems}
 						renderPreview={renderCompactPreview}
 						onRemove={handleRemove}
@@ -679,6 +743,7 @@ function MediaItemWithContextMenu({
 }
 
 function GridView({
+	pendingImports,
 	items,
 	renderPreview,
 	onRemove,
@@ -691,6 +756,7 @@ function GridView({
 	onUnlinkThumbnailProject,
 	linkedExternalProjectIdsByMedia,
 }: {
+	pendingImports: PendingImport[];
 	items: MediaAsset[];
 	renderPreview: (item: MediaAsset) => React.ReactNode;
 	onRemove: ({ event, id }: { event: React.MouseEvent; id: string }) => void;
@@ -719,6 +785,9 @@ function GridView({
 				gridTemplateColumns: `repeat(auto-fill, ${ASSET_CARD_WIDTH}px)`,
 			}}
 		>
+			{pendingImports.map((item) => (
+				<PendingGridItem key={item.id} item={item} />
+			))}
 			{items.map((item) => (
 				<div key={item.id} ref={(el) => registerElement(item.id, el)}>
 					<MediaItemWithContextMenu
@@ -764,6 +833,7 @@ function GridView({
 }
 
 function ListView({
+	pendingImports,
 	items,
 	renderPreview,
 	onRemove,
@@ -776,6 +846,7 @@ function ListView({
 	onUnlinkThumbnailProject,
 	linkedExternalProjectIdsByMedia,
 }: {
+	pendingImports: PendingImport[];
 	items: MediaAsset[];
 	renderPreview: (item: MediaAsset) => React.ReactNode;
 	onRemove: ({ event, id }: { event: React.MouseEvent; id: string }) => void;
@@ -799,6 +870,9 @@ function ListView({
 }) {
 	return (
 		<div className="space-y-1">
+			{pendingImports.map((item) => (
+				<PendingListItem key={item.id} item={item} />
+			))}
 			{items.map((item) => (
 				<div key={item.id} ref={(el) => registerElement(item.id, el)}>
 					<MediaItemWithContextMenu
@@ -838,6 +912,57 @@ function ListView({
 					</MediaItemWithContextMenu>
 				</div>
 			))}
+		</div>
+	);
+}
+
+function PendingGridItem({ item }: { item: PendingImport }) {
+	return (
+		<div className="w-full">
+			<div className="relative flex h-auto w-full flex-col gap-1 p-1 opacity-85">
+				<div className="bg-accent relative aspect-video overflow-hidden rounded-sm">
+					<Skeleton className="size-full rounded-sm" />
+					<div className="absolute inset-x-3 bottom-3 space-y-2">
+						<Skeleton className="h-3 w-1/2 bg-white/20" />
+						<div className="h-1.5 overflow-hidden rounded-full bg-black/20">
+							<div
+								className="bg-primary h-full rounded-full transition-[width] duration-200"
+								style={{ width: `${Math.max(8, item.progress)}%` }}
+							/>
+						</div>
+					</div>
+				</div>
+				<div className="space-y-1 px-0.5">
+					<span className="text-muted-foreground block truncate text-[0.7rem]">
+						{item.name}
+					</span>
+					<span className="text-muted-foreground/80 block truncate text-[0.65rem]">
+						{item.type.toUpperCase()} • {item.step}
+					</span>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function PendingListItem({ item }: { item: PendingImport }) {
+	return (
+		<div className="flex h-9 w-full items-center gap-3 rounded-sm px-1 opacity-85">
+			<div className="relative size-[1.65rem] flex-shrink-0 overflow-hidden rounded-[0.35rem]">
+				<Skeleton className="size-full rounded-[0.35rem]" />
+			</div>
+			<div className="min-w-0 flex-1">
+				<div className="text-sm truncate">{item.name}</div>
+				<div className="text-muted-foreground truncate text-[10px]">
+					{item.type.toUpperCase()} • {item.step}
+				</div>
+			</div>
+			<div className="w-14 overflow-hidden rounded-full bg-muted/70">
+				<div
+					className="bg-primary h-1.5 rounded-full transition-[width] duration-200"
+					style={{ width: `${Math.max(8, item.progress)}%` }}
+				/>
+			</div>
 		</div>
 	);
 }

@@ -161,4 +161,52 @@ describe("VideoNode split-screen placement", () => {
 		expect(dividerDraw?.y).toBe(639);
 		expect(dividerDraw?.height).toBe(2);
 	});
+
+	test("holds the previous canvas frame when a later decode lookup misses", async () => {
+		const firstCanvas = { width: 1920, height: 1080 } as HTMLCanvasElement;
+		let frameCallCount = 0;
+		const node = new VideoNode({
+			duration: 4,
+			timeOffset: 0,
+			trimStart: 0,
+			trimEnd: 0,
+			transform: {
+				position: { x: 0, y: 0 },
+				scale: 1,
+				rotate: 0,
+			},
+			opacity: 1,
+			url: "blob:test",
+			file: new File(["test"], "clip.mp4", { type: "video/mp4" }),
+			mediaId: "media-1",
+			videoCache: {
+				getGPUFrameAt: async () => null,
+				getFrameAt: async () => {
+					frameCallCount += 1;
+					if (frameCallCount === 1) {
+						return {
+							canvas: firstCanvas,
+							timestamp: 0,
+							duration: 1 / 30,
+						};
+					}
+					return null;
+				},
+			} as never,
+		});
+
+		const firstDraws = await node.getWebGPUDrawData({
+			time: 0,
+			rendererWidth: 1920,
+			rendererHeight: 1080,
+		});
+		const secondDraws = await node.getWebGPUDrawData({
+			time: 1 / 30,
+			rendererWidth: 1920,
+			rendererHeight: 1080,
+		});
+
+		expect(firstDraws?.[0]?.source).toBe(firstCanvas);
+		expect(secondDraws?.[0]?.source).toBe(firstCanvas);
+	});
 });

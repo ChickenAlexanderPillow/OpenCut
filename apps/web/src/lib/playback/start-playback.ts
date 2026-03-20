@@ -106,9 +106,6 @@ export async function prewarmPlaybackVideoFrames({
 						file: mediaAsset.file,
 						time,
 						proxyScale,
-					}).then((frame) => {
-						frame?.frame.close();
-						return frame;
 					}),
 				]),
 			);

@@ -15,6 +15,7 @@ import {
 	DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS,
 	PAUSE_REMOVAL_CUT_END_PADDING_SECONDS,
 	PAUSE_REMOVAL_CUT_START_PADDING_SECONDS,
+	TRANSCRIPT_MANUAL_CUT_RESUME_GUARD_SECONDS,
 } from "@/lib/transcript-editor/constants";
 
 describe("transcript editor core", () => {
@@ -28,7 +29,10 @@ describe("transcript editor core", () => {
 		const cuts = buildTranscriptCutsFromWords({ words });
 		expect(cuts).toHaveLength(1);
 		expect(cuts[0]?.start).toBeCloseTo(0.4, 3);
-		expect(cuts[0]?.end).toBeCloseTo(0.7, 3);
+		expect(cuts[0]?.end).toBeCloseTo(
+			0.7 - TRANSCRIPT_MANUAL_CUT_RESUME_GUARD_SECONDS,
+			3,
+		);
 
 		const payload = buildCaptionPayloadFromTranscriptWords({ words });
 		expect(payload).not.toBeNull();
@@ -115,7 +119,10 @@ describe("transcript editor core", () => {
 		const cuts = buildTranscriptCutsFromWords({ words });
 		expect(cuts).toHaveLength(1);
 		expect(cuts[0]?.start).toBeCloseTo(0.0, 3);
-		expect(cuts[0]?.end).toBeCloseTo(0.7, 3);
+		expect(cuts[0]?.end).toBeCloseTo(
+			0.7 - TRANSCRIPT_MANUAL_CUT_RESUME_GUARD_SECONDS,
+			3,
+		);
 	});
 
 	test("removes internal gaps for consecutive removed phrase words", () => {
@@ -128,7 +135,10 @@ describe("transcript editor core", () => {
 		const cuts = buildTranscriptCutsFromWords({ words });
 		expect(cuts).toHaveLength(1);
 		expect(cuts[0]?.start).toBeCloseTo(0.0, 3);
-		expect(cuts[0]?.end).toBeCloseTo(1.1, 3);
+		expect(cuts[0]?.end).toBeCloseTo(
+			1.1 - TRANSCRIPT_MANUAL_CUT_RESUME_GUARD_SECONDS,
+			3,
+		);
 	});
 
 	test("absorbs pre-gap before a muted word to avoid frozen captions", () => {
@@ -140,7 +150,41 @@ describe("transcript editor core", () => {
 		const cuts = buildTranscriptCutsFromWords({ words });
 		expect(cuts).toHaveLength(1);
 		expect(cuts[0]?.start).toBeCloseTo(0.2, 3);
-		expect(cuts[0]?.end).toBeCloseTo(0.9, 3);
+		expect(cuts[0]?.end).toBeCloseTo(
+			0.9 - TRANSCRIPT_MANUAL_CUT_RESUME_GUARD_SECONDS,
+			3,
+		);
+	});
+
+	test("keeps a resume guard before the following word when mute timing overruns", () => {
+		const words = [
+			{ id: "w1", text: "hello", startTime: 0.0, endTime: 0.2, removed: false },
+			{ id: "w2", text: "muted", startTime: 0.5, endTime: 0.92, removed: true },
+			{ id: "w3", text: "world", startTime: 0.9, endTime: 1.2, removed: false },
+		];
+		const cuts = buildTranscriptCutsFromWords({ words });
+		expect(cuts).toHaveLength(1);
+		expect(cuts[0]?.start).toBeCloseTo(0.2, 3);
+		expect(cuts[0]?.end).toBeCloseTo(
+			0.9 - TRANSCRIPT_MANUAL_CUT_RESUME_GUARD_SECONDS,
+			3,
+		);
+	});
+
+	test("keeps the onset of the next word after muting a short phrase", () => {
+		const words = [
+			{ id: "w1", text: "kind", startTime: 0.1, endTime: 0.28, removed: true },
+			{ id: "w2", text: "of", startTime: 0.28, endTime: 0.45, removed: true },
+			{ id: "w3", text: "stand", startTime: 0.52, endTime: 0.9, removed: false },
+			{ id: "w4", text: "out", startTime: 0.92, endTime: 1.15, removed: false },
+		];
+		const cuts = buildTranscriptCutsFromWords({ words });
+		expect(cuts).toHaveLength(1);
+		expect(cuts[0]?.start).toBeCloseTo(0.1, 3);
+		expect(cuts[0]?.end).toBeCloseTo(
+			0.52 - TRANSCRIPT_MANUAL_CUT_RESUME_GUARD_SECONDS,
+			3,
+		);
 	});
 
 	test("builds pause cuts with threshold and speech-safe boundary padding", () => {

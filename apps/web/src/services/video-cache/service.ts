@@ -30,8 +30,8 @@ interface VideoSinkData {
 	currentFrame: WrappedCanvas | null;
 	nextFrame: WrappedCanvas | null;
 	sampleIterator: AsyncGenerator<VideoSample, void, unknown> | null;
-	currentSample: VideoSample | null;
-	nextSample: VideoSample | null;
+	currentSampleFrame: VideoFrameGPU | null;
+	nextSampleFrame: VideoFrameGPU | null;
 	previewProxyScale: number;
 	lastTime: number;
 	lastSampleTime: number;
@@ -136,29 +136,29 @@ export class VideoCache {
 		sinkData.lastAccessAt = Date.now();
 
 		if (
-			sinkData.nextSample &&
-			sinkData.nextSample.timestamp <= time &&
-			time < sinkData.nextSample.timestamp + sinkData.nextSample.duration
+			sinkData.nextSampleFrame &&
+			sinkData.nextSampleFrame.timestamp <= time &&
+			time < sinkData.nextSampleFrame.timestamp + sinkData.nextSampleFrame.duration
 		) {
-			this.closeSample({ sample: sinkData.currentSample });
-			sinkData.currentSample = sinkData.nextSample;
-			sinkData.nextSample = null;
+			this.closeGPUFrame({ frame: sinkData.currentSampleFrame });
+			sinkData.currentSampleFrame = sinkData.nextSampleFrame;
+			sinkData.nextSampleFrame = null;
 			this.startSamplePrefetch({ sinkData });
 		}
 
 		if (
-			sinkData.currentSample &&
-			this.isSampleValid({ sample: sinkData.currentSample, time })
+			sinkData.currentSampleFrame &&
+			this.isGPUFrameValid({ frame: sinkData.currentSampleFrame, time })
 		) {
-			if (!sinkData.nextSample && !sinkData.prefetchingSample) {
+			if (!sinkData.nextSampleFrame && !sinkData.prefetchingSample) {
 				this.startSamplePrefetch({ sinkData });
 			}
-			return this.toGPUFrame({ sample: sinkData.currentSample });
+			return sinkData.currentSampleFrame;
 		}
 
 		if (
 			sinkData.sampleIterator &&
-			sinkData.currentSample &&
+			sinkData.currentSampleFrame &&
 			time >= sinkData.lastSampleTime &&
 			time < sinkData.lastSampleTime + 2.0
 		) {
@@ -167,18 +167,18 @@ export class VideoCache {
 				targetTime: time,
 			});
 			if (sample) {
-				if (!sinkData.nextSample && !sinkData.prefetchingSample) {
+				if (!sinkData.nextSampleFrame && !sinkData.prefetchingSample) {
 					this.startSamplePrefetch({ sinkData });
 				}
-				return this.toGPUFrame({ sample });
+				return sample;
 			}
 		}
 
 		const sample = await this.seekSampleToTime({ sinkData, time });
-		if (sample && !sinkData.nextSample && !sinkData.prefetchingSample) {
+		if (sample && !sinkData.nextSampleFrame && !sinkData.prefetchingSample) {
 			this.startSamplePrefetch({ sinkData });
 		}
-		return sample ? this.toGPUFrame({ sample }) : null;
+		return sample;
 	}
 
 	private normalizeProxyScale({ proxyScale }: { proxyScale?: number }): number {
@@ -230,38 +230,47 @@ export class VideoCache {
 		return time >= frame.timestamp && time < frame.timestamp + frame.duration;
 	}
 
-	private isSampleValid({
-		sample,
+	private isGPUFrameValid({
+		frame,
 		time,
 	}: {
-		sample: VideoSample;
+		frame: VideoFrameGPU;
 		time: number;
 	}): boolean {
-		return (
-			time >= sample.timestamp && time < sample.timestamp + sample.duration
-		);
+		return time >= frame.timestamp && time < frame.timestamp + frame.duration;
 	}
 
-	private toGPUFrame({
+	private createGPUFrame({
 		sample,
 	}: {
 		sample: VideoSample;
 	}): VideoFrameGPU | null {
-		if (typeof VideoFrame === "undefined") return null;
-		const frame = sample.toVideoFrame();
-		return {
-			frame,
-			timestamp: sample.timestamp,
-			duration: sample.duration,
-			width: sample.displayWidth,
-			height: sample.displayHeight,
-		};
+		try {
+			if (typeof VideoFrame === "undefined") return null;
+			const frame = sample.toVideoFrame();
+			return {
+				frame,
+				timestamp: sample.timestamp,
+				duration: sample.duration,
+				width: sample.displayWidth,
+				height: sample.displayHeight,
+			};
+		} finally {
+			this.closeSample({ sample });
+		}
 	}
 
 	private closeSample({ sample }: { sample: VideoSample | null }): void {
 		if (!sample) return;
 		try {
 			sample.close();
+		} catch {}
+	}
+
+	private closeGPUFrame({ frame }: { frame: VideoFrameGPU | null }): void {
+		if (!frame) return;
+		try {
+			frame.frame.close();
 		} catch {}
 	}
 
@@ -291,29 +300,29 @@ export class VideoCache {
 			void sampleIterator.return();
 		}
 
-		this.closeSample({ sample: sinkData.currentSample });
-		this.closeSample({ sample: sinkData.nextSample });
-		sinkData.currentSample = null;
-		sinkData.nextSample = null;
+		this.closeGPUFrame({ frame: sinkData.currentSampleFrame });
+		this.closeGPUFrame({ frame: sinkData.nextSampleFrame });
+		sinkData.currentSampleFrame = null;
+		sinkData.nextSampleFrame = null;
 		sinkData.prefetchingSample = false;
 		sinkData.prefetchSamplePromise = null;
 		sinkData.lastSampleTime = -1;
 	}
 
-	private closeSampleIfInvalid({
+	private closeGPUFrameIfInvalid({
 		sinkData,
 		sampleGeneration,
-		sample,
+		frame,
 	}: {
 		sinkData: VideoSinkData;
 		sampleGeneration: number;
-		sample: VideoSample | null;
+		frame: VideoFrameGPU | null;
 	}): boolean {
-		if (!sample) return true;
+		if (!frame) return true;
 		if (this.isSampleStateCurrent({ sinkData, sampleGeneration })) {
 			return false;
 		}
-		this.closeSample({ sample });
+		this.closeGPUFrame({ frame });
 		return true;
 	}
 	private async iterateToTime({
@@ -418,7 +427,7 @@ export class VideoCache {
 	}: {
 		sinkData: VideoSinkData;
 		targetTime: number;
-	}): Promise<VideoSample | null> {
+	}): Promise<VideoFrameGPU | null> {
 		if (!sinkData.sampleIterator) return null;
 
 		try {
@@ -438,40 +447,41 @@ export class VideoCache {
 				}
 
 				if (
-					sinkData.nextSample &&
-					sinkData.nextSample.timestamp <= targetTime + 0.05
+					sinkData.nextSampleFrame &&
+					sinkData.nextSampleFrame.timestamp <= targetTime + 0.05
 				) {
-					this.closeSample({ sample: sinkData.currentSample });
-					sinkData.currentSample = sinkData.nextSample;
-					sinkData.nextSample = null;
+					this.closeGPUFrame({ frame: sinkData.currentSampleFrame });
+					sinkData.currentSampleFrame = sinkData.nextSampleFrame;
+					sinkData.nextSampleFrame = null;
 				} else {
 					const sampleIterator = sinkData.sampleIterator;
 					if (!sampleIterator) break;
 					const { value: sample, done } = await sampleIterator.next();
 					if (done || !sample) break;
+					const frame = this.createGPUFrame({ sample });
 					if (
-						this.closeSampleIfInvalid({
+						this.closeGPUFrameIfInvalid({
 							sinkData,
 							sampleGeneration,
-							sample,
+							frame,
 						})
 					) {
 						return null;
 					}
-					this.closeSample({ sample: sinkData.currentSample });
-					sinkData.currentSample = sample;
+					this.closeGPUFrame({ frame: sinkData.currentSampleFrame });
+					sinkData.currentSampleFrame = frame;
 				}
 
-				const sample = sinkData.currentSample;
-				if (!sample) break;
+				const frame = sinkData.currentSampleFrame;
+				if (!frame) break;
 
-				sinkData.lastSampleTime = sample.timestamp;
+				sinkData.lastSampleTime = frame.timestamp;
 
-				if (this.isSampleValid({ sample, time: targetTime })) {
-					return sample;
+				if (this.isGPUFrameValid({ frame, time: targetTime })) {
+					return frame;
 				}
 
-				if (sample.timestamp > targetTime + 1.0) break;
+				if (frame.timestamp > targetTime + 1.0) break;
 			}
 		} catch (error) {
 			console.warn("Sample iterator failed, will restart:", error);
@@ -487,7 +497,7 @@ export class VideoCache {
 	}: {
 		sinkData: VideoSinkData;
 		time: number;
-	}): Promise<VideoSample | null> {
+	}): Promise<VideoFrameGPU | null> {
 		try {
 			if (sinkData.prefetchingSample && sinkData.prefetchSamplePromise) {
 				await sinkData.prefetchSamplePromise;
@@ -509,35 +519,37 @@ export class VideoCache {
 
 			const { value: sample } = await sampleIterator.next();
 			if (sample) {
+				const frame = this.createGPUFrame({ sample });
 				if (
-					this.closeSampleIfInvalid({
+					this.closeGPUFrameIfInvalid({
 						sinkData,
 						sampleGeneration,
-						sample,
+						frame,
 					})
 				) {
 					return null;
 				}
-				this.closeSample({ sample: sinkData.currentSample });
-				sinkData.currentSample = sample;
+				this.closeGPUFrame({ frame: sinkData.currentSampleFrame });
+				sinkData.currentSampleFrame = frame;
 				try {
 					const { value: next } = await sampleIterator.next();
 					if (next) {
+						const nextFrame = this.createGPUFrame({ sample: next });
 						if (
-							this.closeSampleIfInvalid({
+							this.closeGPUFrameIfInvalid({
 								sinkData,
 								sampleGeneration,
-								sample: next,
+								frame: nextFrame,
 							})
 						) {
 							return null;
 						}
-						sinkData.nextSample = next;
+						sinkData.nextSampleFrame = nextFrame;
 					}
 				} catch (e) {
 					console.warn("Failed to pre-fetch next sample on seek:", e);
 				}
-				return sample;
+				return frame;
 			}
 		} catch (error) {
 			console.warn("Failed to seek video sample:", error);
@@ -590,7 +602,7 @@ export class VideoCache {
 		if (
 			sinkData.prefetchingSample ||
 			!sinkData.sampleIterator ||
-			sinkData.nextSample
+			sinkData.nextSampleFrame
 		) {
 			return;
 		}
@@ -619,17 +631,18 @@ export class VideoCache {
 				sinkData.prefetchSamplePromise = null;
 				return;
 			}
+			const frame = this.createGPUFrame({ sample });
 			if (
-				this.closeSampleIfInvalid({
+				this.closeGPUFrameIfInvalid({
 					sinkData,
 					sampleGeneration,
-					sample,
+					frame,
 				})
 			) {
 				return;
 			}
-			this.closeSample({ sample: sinkData.nextSample });
-			sinkData.nextSample = sample;
+			this.closeGPUFrame({ frame: sinkData.nextSampleFrame });
+			sinkData.nextSampleFrame = frame;
 		} catch (error) {
 			console.warn("Sample prefetch failed:", error);
 			this.invalidateSampleState({ sinkData });
@@ -782,8 +795,8 @@ export class VideoCache {
 				currentFrame: null,
 				nextFrame: null,
 				sampleIterator: null,
-				currentSample: null,
-				nextSample: null,
+				currentSampleFrame: null,
+				nextSampleFrame: null,
 				previewProxyScale,
 				lastTime: -1,
 				lastSampleTime: -1,

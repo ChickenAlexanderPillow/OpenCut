@@ -18,6 +18,13 @@ export interface VideoNodeParams extends VisualNodeParams {
 }
 
 export class VideoNode extends VisualNode<VideoNodeParams> {
+	private static readonly FRAME_LOOKBACK_OFFSETS_SECONDS = [
+		0,
+		1 / 120,
+		1 / 60,
+		1 / 30,
+		0.1,
+	] as const;
 	private lastRenderedFrameTime = Number.NaN;
 	private lastFrame: Awaited<ReturnType<typeof videoCache.getFrameAt>> = null;
 	private frameCache: VideoCache;
@@ -25,6 +32,26 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 	constructor(params: VideoNodeParams) {
 		super(params);
 		this.frameCache = params.videoCache ?? videoCache;
+	}
+
+	private async resolveCanvasFrame({
+		videoTime,
+	}: {
+		videoTime: number;
+	}): Promise<Awaited<ReturnType<typeof videoCache.getFrameAt>>> {
+		for (const offset of VideoNode.FRAME_LOOKBACK_OFFSETS_SECONDS) {
+			const candidateTime = Math.max(0, videoTime - offset);
+			const resolvedFrame = await this.frameCache.getFrameAt({
+				mediaId: this.params.mediaId,
+				file: this.params.file,
+				time: candidateTime,
+				proxyScale: this.params.previewProxyScale,
+			});
+			if (resolvedFrame) {
+				return resolvedFrame;
+			}
+		}
+		return null;
 	}
 
 	async render({ renderer, time }: { renderer: CanvasRenderer; time: number }) {
@@ -43,14 +70,12 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 
 		let frame = this.lastFrame;
 		if (videoTime !== this.lastRenderedFrameTime || !frame) {
-			frame = await this.frameCache.getFrameAt({
-				mediaId: this.params.mediaId,
-				file: this.params.file,
-				time: videoTime,
-				proxyScale: this.params.previewProxyScale,
-			});
-			this.lastRenderedFrameTime = videoTime;
-			this.lastFrame = frame;
+			const resolvedFrame = await this.resolveCanvasFrame({ videoTime });
+			if (resolvedFrame) {
+				frame = resolvedFrame;
+				this.lastRenderedFrameTime = videoTime;
+				this.lastFrame = resolvedFrame;
+			}
 		}
 
 		if (frame) {
@@ -90,14 +115,12 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 		if (!gpuFrame) {
 			let frame = this.lastFrame;
 			if (videoTime !== this.lastRenderedFrameTime || !frame) {
-				frame = await this.frameCache.getFrameAt({
-					mediaId: this.params.mediaId,
-					file: this.params.file,
-					time: videoTime,
-					proxyScale: this.params.previewProxyScale,
-				});
-				this.lastRenderedFrameTime = videoTime;
-				this.lastFrame = frame;
+				const resolvedFrame = await this.resolveCanvasFrame({ videoTime });
+				if (resolvedFrame) {
+					frame = resolvedFrame;
+					this.lastRenderedFrameTime = videoTime;
+					this.lastFrame = resolvedFrame;
+				}
 			}
 			if (!frame) return null;
 

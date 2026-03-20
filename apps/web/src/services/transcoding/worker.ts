@@ -152,6 +152,7 @@ async function transcode({
 			const profile = resolveImportVideoProfile({ sourceInfo });
 			const maxrate = Math.round(profile.videoBitrate * 1.3);
 			const bufsize = Math.round(profile.videoBitrate * 2);
+			const gopSize = Math.max(1, profile.targetFps);
 			const codecCandidates = ["libx264", "h264", "mpeg4"] as const;
 			let encoded = false;
 			let lastError: unknown = null;
@@ -166,6 +167,8 @@ async function transcode({
 						"0:a:0?",
 						"-vf",
 						buildVideoFilter(),
+						"-fps_mode",
+						"cfr",
 						"-r",
 						String(profile.targetFps),
 						"-c:v",
@@ -178,6 +181,12 @@ async function transcode({
 									"high",
 									"-level:v",
 									"4.1",
+									"-g",
+									String(gopSize),
+									"-keyint_min",
+									String(gopSize),
+									"-sc_threshold",
+									"0",
 								] as const)
 							: []),
 						"-pix_fmt",

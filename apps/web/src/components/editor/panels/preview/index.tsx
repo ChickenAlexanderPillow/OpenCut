@@ -19,6 +19,7 @@ import { PreviewContextMenu } from "./context-menu";
 import { PreviewToolbar } from "./toolbar";
 import { videoCache } from "@/services/video-cache/service";
 import { WebGPUPreviewRenderer } from "@/services/renderer/webgpu-preview-renderer";
+import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/ui";
 import type { TBackground } from "@/types/project";
@@ -689,8 +690,11 @@ function PreviewCanvas({
 	const containerSize = useContainerSize({ containerRef: outerContainerRef });
 	const editor = useEditor({ subscribeTo: EDITOR_SUBSCRIBE_PREVIEW_CANVAS });
 	const activeProject = editor.project.getActive();
-	const { overlays, previewFormatVariant, previewRendererMode } =
-		usePreviewStore();
+	const {
+		overlays,
+		previewFormatVariant,
+		previewRendererMode,
+	} = usePreviewStore();
 	const projectFps = Math.max(1, activeProject.settings.fps);
 	const renderFrameRateCap = projectFps;
 	const previewBackgroundColor =
@@ -703,6 +707,15 @@ function PreviewCanvas({
 	const webgpuRenderer = useMemo(
 		() =>
 			new WebGPUPreviewRenderer({
+				width: nativeWidth,
+				height: nativeHeight,
+				fps: Math.max(1, activeProject.settings.fps),
+			}),
+		[nativeWidth, nativeHeight, activeProject.settings.fps],
+	);
+	const cpuRenderer = useMemo(
+		() =>
+			new CanvasRenderer({
 				width: nativeWidth,
 				height: nativeHeight,
 				fps: Math.max(1, activeProject.settings.fps),
@@ -793,8 +806,23 @@ function PreviewCanvas({
 					targetCanvas: webgpuCanvas,
 					overlayCanvas: overlayCanvasRef.current ?? undefined,
 				})
-				.then((result) => {
+				.then(async (result) => {
 					if (!result.usedWebGPU) {
+						await cpuRenderer.renderToCanvas({
+							node: scene,
+							time,
+							targetCanvas: webgpuCanvas,
+						});
+						const overlayCanvas = overlayCanvasRef.current;
+						if (overlayCanvas) {
+							const overlayCtx = overlayCanvas.getContext("2d");
+							overlayCtx?.clearRect(
+								0,
+								0,
+								overlayCanvas.width,
+								overlayCanvas.height,
+							);
+						}
 						setWebgpuDividerRects([]);
 						lastFrameRef.current = -1;
 						lastSceneRef.current = null;
@@ -840,6 +868,7 @@ function PreviewCanvas({
 
 		runRender({ scene: renderTree, time: renderTime, frameNumber: frame });
 	}, [
+		cpuRenderer,
 		renderTree,
 		editor.playback,
 		renderFrameRateCap,

@@ -17,8 +17,18 @@ type VideoCacheTestState = {
 	sinks: Map<
 		string,
 		{
-			currentSample: FakeVideoSample | null;
-			nextSample: FakeVideoSample | null;
+			currentSampleFrame:
+				| {
+						timestamp: number;
+						frame: { close: ReturnType<typeof mock> };
+				  }
+				| null;
+			nextSampleFrame:
+				| {
+						timestamp: number;
+						frame: { close: ReturnType<typeof mock> };
+				  }
+				| null;
 		}
 	>;
 };
@@ -235,7 +245,7 @@ describe("VideoCache sample lifecycle", () => {
 		if (!sinkData) {
 			throw new Error("Expected sink data for media-1");
 		}
-		expect(sinkData.currentSample?.timestamp).toBe(10);
-		expect(sinkData.nextSample).toBeNull();
+		expect(sinkData.currentSampleFrame?.timestamp).toBe(10);
+		expect(sinkData.nextSampleFrame).toBeNull();
 	});
 });
