@@ -10,6 +10,7 @@ import {
 	getMetricAscent,
 	getMetricDescent,
 	getLineFitBackgroundRects,
+	getMiddleBaselineCompensation,
 	getTextBackgroundRect,
 	getTextVisualRectForBackgroundMode,
 	measureTextBlock,
@@ -573,12 +574,27 @@ export class TextNode extends BaseNode<TextNodeParams> {
 						splitViewport?.dividerCenterY ?? splitViewport?.y ?? 0;
 					const halfHeight =
 						(visualRect.height * this.params.transform.scale) / 2;
+					const baselineCompensation =
+						(this.params.textBaseline ?? "middle") === "middle"
+							? getMiddleBaselineCompensation({
+									fallbackFontSize: scaleFontSize({
+										fontSize: this.params.fontSize,
+										canvasHeight: this.params.canvasHeight,
+									}),
+								}) * this.params.transform.scale
+							: 0;
 					const targetCenterY =
 						dividerPlacement === "above-divider"
-							? dividerTopY - DIVIDER_PLACEMENT_GAP - halfHeight
+							? dividerTopY -
+								DIVIDER_PLACEMENT_GAP -
+								halfHeight -
+								baselineCompensation
 							: dividerPlacement === "below-divider"
-								? dividerBottomY + DIVIDER_PLACEMENT_GAP + halfHeight
-								: dividerCenterY;
+								? dividerBottomY +
+									DIVIDER_PLACEMENT_GAP +
+									halfHeight -
+									baselineCompensation
+								: dividerCenterY - baselineCompensation;
 					return targetCenterY - placementOffsetY;
 				})()
 			: anchoredPositionY;
@@ -765,6 +781,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 					lineMetrics: candidateMetrics,
 					lineHeightPx,
 					fallbackFontSize: scaledFontSize,
+					useUniformMetrics: hasWordTimings,
 				});
 				const candidateVisualRect = getTextVisualRectForBackgroundMode({
 					textAlign: this.params.textAlign,
@@ -895,6 +912,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			lineMetrics,
 			lineHeightPx,
 			fallbackFontSize: scaledFontSize,
+			useUniformMetrics: hasWordTimings,
 		});
 		const visualRect = getTextVisualRectForBackgroundMode({
 			textAlign: this.params.textAlign,

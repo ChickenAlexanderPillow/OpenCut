@@ -243,8 +243,8 @@ describe("TextNode caption gap rendering", () => {
 
 		expect(operations).toContain("fillText");
 		expect(translations.length).toBeGreaterThan(0);
-		expect((translations[0]?.[1] ?? 0) > 235).toBe(true);
-		expect((translations[0]?.[1] ?? 0) < 245).toBe(true);
+		expect((translations[0]?.[1] ?? 0) > 223).toBe(true);
+		expect((translations[0]?.[1] ?? 0) < 233).toBe(true);
 	});
 
 	test("ignores top slot preference for unbalanced bottom-anchored captions and keeps them in the bottom slot", async () => {
@@ -285,11 +285,11 @@ describe("TextNode caption gap rendering", () => {
 
 		expect(operations).toContain("fillText");
 		expect(translations.length).toBeGreaterThan(0);
-		expect((translations[0]?.[1] ?? 0) > 235).toBe(true);
-		expect((translations[0]?.[1] ?? 0) < 245).toBe(true);
+		expect((translations[0]?.[1] ?? 0) > 223).toBe(true);
+		expect((translations[0]?.[1] ?? 0) < 233).toBe(true);
 	});
 
-	test("anchors unbalanced split captions to the divider center", async () => {
+test("anchors unbalanced split captions to the divider center", async () => {
 		const node = new TextNode({
 			...createCaptionNode().params,
 			captionStyle: {
@@ -345,8 +345,59 @@ describe("TextNode caption gap rendering", () => {
 
 		expect(operations).toContain("fillText");
 		expect(translations.length).toBeGreaterThan(0);
-		expect((translations[0]?.[1] ?? 0) > 235).toBe(true);
-		expect((translations[0]?.[1] ?? 0) < 245).toBe(true);
+		expect((translations[0]?.[1] ?? 0) > 223).toBe(true);
+		expect((translations[0]?.[1] ?? 0) < 233).toBe(true);
+	});
+
+	test("keeps divider-centered captions vertically stable as caption words change", async () => {
+		const node = new TextNode({
+			...createCaptionNode().params,
+			captionWordTimings: [
+				{ word: "HI", startTime: 10.0, endTime: 10.4 },
+				{ word: "gy", startTime: 10.4, endTime: 10.8 },
+			],
+			captionStyle: {
+				anchorToSafeAreaBottom: true,
+				safeAreaBottomOffset: 0,
+				wordsOnScreen: 1,
+				splitScreenOverrides: {
+					dividerPlacement: "on-divider",
+				},
+			},
+			captionSourceVideo: {
+				startTime: 10,
+				duration: 2,
+				trimStart: 0,
+				defaultReframePresetId: "subject-left",
+				splitScreen: {
+					enabled: true,
+					layoutPreset: "top-bottom",
+					viewportBalance: "unbalanced",
+					slots: [
+						{ slotId: "top", mode: "fixed-preset", presetId: "subject-left" },
+						{
+							slotId: "bottom",
+							mode: "fixed-preset",
+							presetId: "subject-right",
+						},
+					],
+					sections: [],
+				},
+			},
+		});
+		const { renderer, translations } = createFakeRenderer();
+		renderer.context.measureText = ((text: string) =>
+			({
+				width: text.length * 10,
+				actualBoundingBoxAscent: text.includes("g") ? 8 : 10,
+				actualBoundingBoxDescent: text.includes("g") ? 6 : 2,
+			}) as TextMetrics) satisfies typeof renderer.context.measureText;
+
+		await node.render({ renderer, time: 10.2 });
+		await node.render({ renderer, time: 10.6 });
+
+		expect(translations).toHaveLength(2);
+		expect(translations[0]?.[1]).toBe(translations[1]?.[1]);
 	});
 
 	test("applies split-screen font and background padding overrides", async () => {

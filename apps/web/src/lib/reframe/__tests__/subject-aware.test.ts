@@ -81,6 +81,51 @@ describe("subject-aware reframe preset generation", () => {
 		expect(selection?.centerX).toBe(rightCandidate.centerX);
 	});
 
+	test("centers wide subject tracking on the combined visible subjects", () => {
+		const selection = choosePrimarySubjectBox({
+			candidates: [
+				{
+					centerX: 560,
+					centerY: 320,
+					width: 180,
+					height: 280,
+					anchorX: 560,
+					anchorY: 250,
+					fitWidth: 120,
+					fitHeight: 180,
+				},
+				{
+					centerX: 1360,
+					centerY: 340,
+					width: 200,
+					height: 300,
+					anchorX: 1360,
+					anchorY: 265,
+					fitWidth: 132,
+					fitHeight: 196,
+				},
+			],
+			previousBox: null,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			targetCenterHint: { x: 960, y: 540 },
+			targetSubjectHint: "center",
+			targetViewportBounds: {
+				left: 420,
+				right: 1500,
+				top: 120,
+				bottom: 860,
+			},
+		});
+
+		expect(selection?.centerX).toBe(960);
+		expect(selection?.centerY).toBe(330);
+		expect(selection?.anchorX).toBe(960);
+		expect(selection?.anchorY).toBe(257.5);
+		expect(selection?.fitWidth).toBe(126);
+		expect(selection?.fitHeight).toBe(188);
+	});
+
 	test("uses the auto-detected subject seed to keep subject right on the right person", () => {
 		const leftCandidate = {
 			centerX: 760,
@@ -169,6 +214,37 @@ describe("subject-aware reframe preset generation", () => {
 		expect(subjectRightEdge).toBeLessThan(viewportRight - 10);
 		expect(result.defaultPresetId).toBe(subjectLeft!.id);
 		expect(result.switches).toEqual([]);
+	});
+
+	test("anchors single-subject framing horizontally to the face center", () => {
+		const result = buildAutoReframePresetsFromDetections({
+			detections: [
+				{
+					centerX: 1040,
+					centerY: 320,
+					width: 260,
+					height: 420,
+					anchorX: 960,
+					anchorY: 250,
+					fitWidth: 180,
+					fitHeight: 260,
+				},
+			],
+			canvasSize: { width: 1080, height: 1920 },
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			baseScale: 1.8,
+		});
+
+		const subject = result.presets.find((preset) => preset.name === "Subject");
+		expect(subject).toBeDefined();
+
+		const containScale = Math.min(1080 / 1920, 1920 / 1080);
+		const viewportCenterX =
+			1920 / 2 - subject!.transform.position.x / (containScale * subject!.transform.scale);
+
+		expect(Math.abs(viewportCenterX - 960)).toBeLessThan(8);
+		expect(Math.abs(viewportCenterX - 1040)).toBeGreaterThan(40);
 	});
 
 	test("keeps two subjects identifiable even when one side has fewer observations", () => {

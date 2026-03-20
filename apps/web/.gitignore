@@ -4,6 +4,7 @@
 # Env vars
 .env*
 !.env.example
+*.env.local
 
 .next/
 

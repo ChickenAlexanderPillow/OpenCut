@@ -112,6 +112,7 @@ class HealthResponse(BaseModel):
 	default_vad_filter: bool
 	primary_language: str
 	force_primary_language: bool
+	diarization_enabled: bool
 
 
 def _is_cuda_requested(device: str) -> bool:
@@ -383,6 +384,21 @@ async def _prewarm_transcription_models() -> None:
 			language=TRANSCRIBE_PRIMARY_LANGUAGE,
 		)
 		print("Local transcribe prewarm complete", info, flush=True)
+		runtime = engine.get_runtime_device_info()
+		print(
+			"Local transcribe diarization",
+			{
+				"enabled": bool(runtime.get("diarization_enabled")),
+				"requested": _parse_bool(
+					os.getenv("LOCAL_TRANSCRIBE_DIARIZATION"),
+					True,
+				),
+				"has_hf_token": bool(
+					(os.getenv("LOCAL_TRANSCRIBE_HF_TOKEN") or "").strip()
+				),
+			},
+			flush=True,
+		)
 	except Exception as error:
 		print(f"Local transcribe prewarm skipped: {error}", flush=True)
 
@@ -455,6 +471,7 @@ def healthz() -> HealthResponse:
 		),
 		primary_language=TRANSCRIBE_PRIMARY_LANGUAGE,
 		force_primary_language=_force_primary_language(),
+		diarization_enabled=bool(runtime.get("diarization_enabled")),
 	)
 
 
@@ -466,6 +483,9 @@ async def transcribe_word_timestamps(
 	compute_type: Optional[str] = Form(default=None),
 	vad_filter: Optional[str] = Form(default=None),
 	language: Optional[str] = Form(default=None),
+	diarize: Optional[str] = Form(default=None),
+	min_speakers: Optional[str] = Form(default=None),
+	max_speakers: Optional[str] = Form(default=None),
 	authorization: Optional[str] = Header(default=None),
 ) -> JSONResponse:
 	_require_auth(authorization)
@@ -489,6 +509,12 @@ async def transcribe_word_timestamps(
 			_parse_bool(os.getenv("LOCAL_TRANSCRIBE_VAD_FILTER"), False),
 		),
 		language=effective_language,
+		diarize=_parse_bool(
+			diarize,
+			_parse_bool(os.getenv("LOCAL_TRANSCRIBE_DIARIZATION"), True),
+		),
+		min_speakers=_parse_optional_int(min_speakers),
+		max_speakers=_parse_optional_int(max_speakers),
 	)
 
 	require_cuda = _require_cuda_enabled()

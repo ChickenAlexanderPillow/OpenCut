@@ -36,27 +36,44 @@ export function getMetricDescent({
 	return metrics.actualBoundingBoxDescent ?? fallbackFontSize * 0.2;
 }
 
+export function getMiddleBaselineCompensation({
+	fallbackFontSize,
+}: {
+	fallbackFontSize: number;
+}): number {
+	const ascent = fallbackFontSize * 0.8;
+	const descent = fallbackFontSize * 0.2;
+	return (ascent - descent) / 2;
+}
+
 export function measureTextBlock({
 	lineMetrics,
 	lineHeightPx,
 	fallbackFontSize,
+	useUniformMetrics = false,
 }: {
 	lineMetrics: TextMetrics[];
 	lineHeightPx: number;
 	fallbackFontSize: number;
+	useUniformMetrics?: boolean;
 }): TextBlockMeasurement {
 	let top = Number.POSITIVE_INFINITY;
 	let bottom = Number.NEGATIVE_INFINITY;
 	let maxWidth = 0;
+	const uniformAscent = fallbackFontSize * 0.8;
+	const uniformDescent = fallbackFontSize * 0.2;
 
 	for (let index = 0; index < lineMetrics.length; index++) {
 		const metrics = lineMetrics[index];
 		const lineY = index * lineHeightPx;
-		top = Math.min(top, lineY - getMetricAscent({ metrics, fallbackFontSize }));
-		bottom = Math.max(
-			bottom,
-			lineY + getMetricDescent({ metrics, fallbackFontSize }),
-		);
+		const ascent = useUniformMetrics
+			? uniformAscent
+			: getMetricAscent({ metrics, fallbackFontSize });
+		const descent = useUniformMetrics
+			? uniformDescent
+			: getMetricDescent({ metrics, fallbackFontSize });
+		top = Math.min(top, lineY - ascent);
+		bottom = Math.max(bottom, lineY + descent);
 		maxWidth = Math.max(maxWidth, metrics.width);
 	}
 

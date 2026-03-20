@@ -16,7 +16,18 @@ const CLIP_TRANSCRIPTION_CACHE_MAX_ENTRIES = 500;
 let rateLimitUnavailableLogged = false;
 
 type ClipTranscriptionSuccessPayload = {
-	segments: Array<{ text: string; start: number; end: number }>;
+	segments: Array<{
+		text: string;
+		start: number;
+		end: number;
+		speakerId?: string;
+	}>;
+	words?: Array<{
+		word: string;
+		start: number;
+		end: number;
+		speakerId?: string;
+	}>;
 	granularity: "word";
 	engine: string;
 	model: string;
@@ -25,6 +36,9 @@ type ClipTranscriptionSuccessPayload = {
 	timingsMs?: Record<string, number>;
 	audioDurationSeconds?: number;
 	wordCount?: number;
+	diarization?: boolean;
+	diarizationError?: string;
+	speakerCount?: number;
 };
 
 const clipTranscriptionResultCache = new Map<
@@ -49,14 +63,28 @@ const localResponseSchema = z.object({
 		.optional(),
 	audio_duration_seconds: z.number().finite().nonnegative().optional(),
 	word_count: z.number().int().nonnegative().optional(),
+	diarization: z.boolean().optional(),
+	diarization_error: z.string().optional(),
+	speaker_count: z.number().int().nonnegative().optional(),
 	device: z.string().optional(),
 	compute_type: z.string().optional(),
+	segments: z
+		.array(
+			z.object({
+				text: z.string(),
+				start: z.number().finite().nonnegative(),
+				end: z.number().finite().nonnegative(),
+				speakerId: z.string().min(1).optional(),
+			}),
+		)
+		.optional(),
 	words: z
 		.array(
 			z.object({
 				word: z.string().min(1),
 				start: z.number().finite().nonnegative(),
 				end: z.number().finite().nonnegative(),
+				speakerId: z.string().min(1).optional(),
 			}),
 		)
 		.min(1)
@@ -144,9 +172,19 @@ async function runRateLimitIfAvailable({
 function normalizeLocalWords({
 	words,
 }: {
-	words: Array<{ word: string; start: number; end: number }>;
-}): Array<{ text: string; start: number; end: number }> {
-	const normalized: Array<{ text: string; start: number; end: number }> = [];
+	words: Array<{
+		word: string;
+		start: number;
+		end: number;
+		speakerId?: string;
+	}>;
+}): Array<{ text: string; start: number; end: number; speakerId?: string }> {
+	const normalized: Array<{
+		text: string;
+		start: number;
+		end: number;
+		speakerId?: string;
+	}> = [];
 	for (let i = 0; i < words.length; i++) {
 		const previous = normalized[normalized.length - 1];
 		const text = words[i].word.trim();
@@ -158,6 +196,7 @@ function normalizeLocalWords({
 			text,
 			start,
 			end,
+			speakerId: words[i].speakerId,
 		});
 	}
 	return normalized;
@@ -166,7 +205,12 @@ function normalizeLocalWords({
 function hasMonotonicWords({
 	words,
 }: {
-	words: Array<{ word: string; start: number; end: number }>;
+	words: Array<{
+		word: string;
+		start: number;
+		end: number;
+		speakerId?: string;
+	}>;
 }): boolean {
 	let previousStart = -1;
 	let previousEnd = -1;
@@ -190,7 +234,18 @@ async function callLocalWhisperX({
 	requestedModel: string;
 	language?: string | null;
 }): Promise<{
-	segments: Array<{ text: string; start: number; end: number }>;
+	segments: Array<{
+		text: string;
+		start: number;
+		end: number;
+		speakerId?: string;
+	}>;
+	words: Array<{
+		word: string;
+		start: number;
+		end: number;
+		speakerId?: string;
+	}>;
 	model: string;
 	engine: "local-whisperx";
 	device?: string;
@@ -198,6 +253,9 @@ async function callLocalWhisperX({
 	timingsMs?: Record<string, number>;
 	audioDurationSeconds?: number;
 	wordCount?: number;
+	diarization?: boolean;
+	diarizationError?: string;
+	speakerCount?: number;
 }> {
 	if (!webEnv.LOCAL_TRANSCRIBE_URL) {
 		throw new Error("LOCAL_TRANSCRIBE_URL is not configured");
@@ -212,6 +270,7 @@ async function callLocalWhisperX({
 		computeType: webEnv.LOCAL_TRANSCRIBE_COMPUTE_TYPE || "int8_float16",
 		vadFilter:
 			(process.env.LOCAL_TRANSCRIBE_VAD_FILTER ?? "false").trim() || "false",
+		diarize: webEnv.LOCAL_TRANSCRIBE_DIARIZATION_ENABLED,
 	});
 
 	const controller = new AbortController();
@@ -267,7 +326,22 @@ async function callLocalWhisperX({
 				"Local whisperX returned non-monotonic word timings",
 			);
 		}
-		const segments = normalizeLocalWords({ words: payload.words });
+		const words = payload.words.map((word) => ({
+			word: word.word.trim(),
+			start: word.start,
+			end: word.end,
+			speakerId: word.speakerId?.trim() || undefined,
+		}));
+		const diarizedSegments = payload.segments ?? [];
+		const segments =
+			diarizedSegments.length > 0
+				? diarizedSegments.map((segment) => ({
+						text: segment.text.trim(),
+						start: segment.start,
+						end: segment.end,
+						speakerId: segment.speakerId?.trim() || undefined,
+					}))
+				: normalizeLocalWords({ words });
 		if (segments.length === 0) {
 			throw new LocalTranscriptionValidationError(
 				"Local whisperX returned empty word timings",
@@ -276,6 +350,7 @@ async function callLocalWhisperX({
 
 		return {
 			segments,
+			words,
 			model: payload.model,
 			engine: "local-whisperx",
 			device: payload.device,
@@ -283,6 +358,9 @@ async function callLocalWhisperX({
 			timingsMs: payload.timings_ms,
 			audioDurationSeconds: payload.audio_duration_seconds,
 			wordCount: payload.word_count,
+			diarization: payload.diarization,
+			diarizationError: payload.diarization_error?.trim() || undefined,
+			speakerCount: payload.speaker_count,
 		};
 	} finally {
 		clearTimeout(timeoutId);
@@ -319,7 +397,7 @@ function normalizeOpenAIWordPayload({
 	payload,
 }: {
 	payload: unknown;
-}): Array<{ text: string; start: number; end: number }> {
+}): Array<{ word: string; start: number; end: number; speakerId?: string }> {
 	if (!payload || typeof payload !== "object") return [];
 	const parsed = payload as {
 		words?: Array<{ word?: string; start?: number; end?: number }>;
@@ -331,20 +409,27 @@ function normalizeOpenAIWordPayload({
 		...(parsed.words ?? []),
 		...(parsed.segments ?? []).flatMap((segment) => segment.words ?? []),
 	];
-	return normalizeLocalWords({
-		words: rawWords
-			.filter(
-				(word) =>
-					typeof word.word === "string" &&
-					typeof word.start === "number" &&
-					typeof word.end === "number",
-			)
-			.map((word) => ({
-				word: word.word ?? "",
-				start: word.start ?? 0,
-				end: word.end ?? 0,
-			})),
-	});
+	return rawWords
+		.filter(
+			(word) =>
+				typeof word.word === "string" &&
+				typeof word.start === "number" &&
+				typeof word.end === "number",
+		)
+		.map((word) => ({
+			word: (word.word ?? "").trim(),
+			start: word.start ?? 0,
+			end: word.end ?? 0,
+			speakerId: undefined,
+		}))
+		.filter(
+			(word) =>
+				word.word.length > 0 &&
+				Number.isFinite(word.start) &&
+				Number.isFinite(word.end) &&
+				word.end > word.start,
+		)
+		.sort((a, b) => a.start - b.start);
 }
 
 export async function POST(request: NextRequest) {
@@ -394,6 +479,9 @@ export async function POST(request: NextRequest) {
 							durationMs: Date.now() - startedAt,
 							audioDurationSeconds: result.audioDurationSeconds ?? null,
 							wordCount: result.wordCount ?? result.segments.length,
+							diarization: result.diarization ?? null,
+							diarizationError: result.diarizationError ?? null,
+							speakerCount: result.speakerCount ?? null,
 							timingsMs: result.timingsMs ?? null,
 						});
 						if (
@@ -411,6 +499,7 @@ export async function POST(request: NextRequest) {
 						}
 						return {
 							segments: result.segments,
+							words: result.words,
 							granularity: "word",
 							engine: result.engine,
 							model: result.model,
@@ -419,6 +508,9 @@ export async function POST(request: NextRequest) {
 							timingsMs: result.timingsMs,
 							audioDurationSeconds: result.audioDurationSeconds,
 							wordCount: result.wordCount ?? result.segments.length,
+							diarization: result.diarization,
+							diarizationError: result.diarizationError,
+							speakerCount: result.speakerCount,
 						};
 					} catch (error) {
 						const message =
@@ -460,9 +552,10 @@ export async function POST(request: NextRequest) {
 					);
 				}
 
-				const segments = normalizeOpenAIWordPayload({
+				const words = normalizeOpenAIWordPayload({
 					payload: await openAiResponse.json(),
 				});
+				const segments = normalizeLocalWords({ words });
 				if (segments.length === 0) {
 					throw new Error(
 						"HTTP_422:Transcription did not return word-level timestamps. Clip import requires per-word timing.",
@@ -477,6 +570,7 @@ export async function POST(request: NextRequest) {
 
 				return {
 					segments,
+					words,
 					granularity: "word",
 					engine: "openai-fallback",
 					model: "whisper-1",

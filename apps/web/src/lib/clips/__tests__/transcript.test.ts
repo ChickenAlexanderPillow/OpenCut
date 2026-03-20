@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildClipTranscriptCacheEntryForAsset,
 	clipTranscriptSegmentsForWindow,
+	clipTranscriptWordsForWindow,
 	getOrCreateClipTranscriptForAsset,
 	PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
 } from "@/lib/clips/transcript";
@@ -83,19 +84,49 @@ describe("clipTranscriptSegmentsForWindow", () => {
 		expect(clipped).toEqual([{ text: "inside", start: 10, end: 11 }]);
 	});
 
+	test("rebases raw word timestamps to clip start", () => {
+		const clipped = clipTranscriptWordsForWindow({
+			words: [
+				{ word: "uh", start: 9.8, end: 10.1 },
+				{ word: "hello", start: 10.2, end: 10.6 },
+				{ word: "world", start: 17.5, end: 18.4 },
+			],
+			startTime: 10,
+			endTime: 18,
+		});
+
+		expect(clipped).toHaveLength(3);
+		expect(clipped[0]?.word).toBe("uh");
+		expect(clipped[0]?.start).toBeCloseTo(0, 6);
+		expect(clipped[0]?.end).toBeCloseTo(0.1, 6);
+		expect(clipped[1]?.word).toBe("hello");
+		expect(clipped[1]?.start).toBeCloseTo(0.2, 6);
+		expect(clipped[1]?.end).toBeCloseTo(0.6, 6);
+		expect(clipped[2]?.word).toBe("world");
+		expect(clipped[2]?.start).toBeCloseTo(7.5, 6);
+		expect(clipped[2]?.end).toBeCloseTo(8, 6);
+	});
+
 	test("does not prefer an unsuitable media-linked transcript over a valid cached transcript", async () => {
 		const asset = buildTestAsset();
 		const cached = buildClipTranscriptCacheEntryForAsset({
 			asset,
 			modelId: "whisper-large-v3",
 			language: "auto",
-			text:
-				"This cached transcript covers the full source and includes multiple sections across the timeline.",
+			text: "This cached transcript covers the full source and includes multiple sections across the timeline.",
 			segments: [
 				{ text: "Full transcript intro section.", start: 0, end: 20 },
 				{ text: "Middle section with more content.", start: 70, end: 92 },
-				{ text: "Late section with a clean standalone ending.", start: 140, end: 165 },
-				{ text: "Closing context that still belongs in the source.", start: 165, end: 178 },
+				{
+					text: "Late section with a clean standalone ending.",
+					start: 140,
+					end: 165,
+				},
+				{
+					text: "Closing context that still belongs in the source.",
+					start: 165,
+					end: 178,
+				},
 				{ text: "Final sentence.", start: 178, end: 180 },
 			],
 		});

@@ -836,6 +836,7 @@ export function validateAndHealCaptionDriftInTracks({
 				updatedAt: transcriptDraft.updatedAt,
 				words: transcriptDraft.words,
 				cuts: transcriptApplied.removedRanges,
+				gapEdits: transcriptDraft.gapEdits,
 				mediaStartTime: sourceMedia.startTime,
 				mediaDuration: sourceMedia.duration,
 			});
@@ -878,6 +879,7 @@ export function validateAndHealCaptionDriftInTracks({
 			updatedAt: transcriptDraft.updatedAt,
 			words: transcriptDraft.words,
 			cuts: transcriptApplied.removedRanges,
+			gapEdits: transcriptDraft.gapEdits,
 			mediaStartTime: sourceMedia.startTime,
 			mediaDuration: sourceMedia.duration,
 		});

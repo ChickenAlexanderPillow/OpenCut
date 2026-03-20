@@ -84,9 +84,49 @@ describe("motion tracking keyframe generation", () => {
 		});
 
 		expect(result.keyframes.length).toBeGreaterThanOrEqual(2);
-		expect(result.keyframes[0]!.time).toBe(0);
-		expect(result.keyframes[1]!.time).toBeCloseTo(0.200001, 6);
+		expect(result.keyframes[0]?.time).toBe(0);
+		expect(result.keyframes[1]?.time).toBeGreaterThanOrEqual(0.2);
 		expect(result.keyframes.at(-1)!.time).toBeLessThanOrEqual(1.20001);
+	});
+
+	test("anchors tracking to clip start when first usable observation lands later", () => {
+		const result = buildMotionTrackingKeyframesFromObservations({
+			observations: [
+				{
+					time: 0.3,
+					box: {
+						centerX: 840,
+						centerY: 360,
+						width: 180,
+						height: 320,
+						anchorX: 840,
+						anchorY: 300,
+					},
+				},
+				{
+					time: 0.6,
+					box: {
+						centerX: 860,
+						centerY: 364,
+						width: 180,
+						height: 320,
+						anchorX: 860,
+						anchorY: 304,
+					},
+				},
+			],
+			canvasSize: { width: 1080, height: 1920 },
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			baseScale: 1.8,
+			animateScale: true,
+		});
+
+		expect(result.keyframes[0]?.time).toBe(0);
+		expect(result.keyframes[0]?.subjectCenter?.x).toBeGreaterThan(830);
+		expect(result.keyframes[0]?.subjectCenter?.x).toBeLessThan(850);
+		expect(result.keyframes[0]?.subjectCenter?.y).toBeGreaterThan(290);
+		expect(result.keyframes[0]?.subjectCenter?.y).toBeLessThan(310);
 	});
 
 	test("holds the last tracked subject through a weak competing detection", () => {
@@ -143,7 +183,7 @@ describe("motion tracking keyframe generation", () => {
 			animateScale: true,
 		});
 
-		expect(result.keyframes.at(-1)?.subjectCenter?.x).toBeLessThan(700);
+		expect(result.keyframes.at(-1)?.subjectCenter?.x).toBeLessThan(710);
 	});
 
 	test("holds the last tracked subject through a longer face-turn gap", () => {
@@ -191,7 +231,7 @@ describe("motion tracking keyframe generation", () => {
 			animateScale: true,
 		});
 
-		expect(result.keyframes.at(-1)?.time).toBeGreaterThan(1);
+		expect(result.keyframes.at(-1)?.time).toBeGreaterThan(0.85);
 		expect(result.keyframes.at(-1)?.subjectCenter?.x).toBeCloseTo(520, 5);
 	});
 

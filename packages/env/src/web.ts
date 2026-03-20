@@ -50,6 +50,10 @@ const webEnvSchema = z.object({
 	LOCAL_TRANSCRIBE_MODEL: z.string().optional(),
 	LOCAL_TRANSCRIBE_COMPUTE_TYPE: z.string().optional(),
 	LOCAL_TRANSCRIBE_DEVICE: z.string().optional(),
+	LOCAL_TRANSCRIBE_DIARIZATION_ENABLED: z
+		.string()
+		.optional()
+		.transform((value) => (value ?? "true").toLowerCase() === "true"),
 	LOCAL_TRANSCRIBE_FALLBACK_OPENAI: z
 		.string()
 		.optional()

@@ -6,6 +6,20 @@ export interface TranscriptionSegment {
 	text: string;
 	start: number;
 	end: number;
+	speakerId?: string;
+}
+
+export interface TranscriptionWord {
+	word: string;
+	start: number;
+	end: number;
+	speakerId?: string;
+}
+
+export interface TranscriptionSpeakerTurn {
+	speakerId: string;
+	start: number;
+	end: number;
 }
 
 export interface TranscriptEditWord {
@@ -13,6 +27,7 @@ export interface TranscriptEditWord {
 	text: string;
 	startTime: number;
 	endTime: number;
+	speakerId?: string;
 	removed?: boolean;
 	hidden?: boolean;
 	segmentId?: string;
@@ -33,6 +48,11 @@ export interface TranscriptSegmentUi {
 	label?: string;
 }
 
+export interface TranscriptGapEdit {
+	text?: string;
+	removed?: boolean;
+}
+
 export interface TranscriptProjectionSource {
 	words: TranscriptEditWord[];
 	cuts: TranscriptEditCutRange[];
@@ -48,6 +68,8 @@ export interface TranscriptDraftState {
 	cutTimeDomain?: TranscriptCutTimeDomain;
 	projectionSource?: TranscriptProjectionSource;
 	segmentsUi?: TranscriptSegmentUi[];
+	speakerLabels?: Record<string, string>;
+	gapEdits?: Record<string, TranscriptGapEdit>;
 	updatedAt: string;
 }
 
@@ -95,6 +117,8 @@ export type TranscriptCompileState =
 export interface TranscriptionResult {
 	text: string;
 	segments: TranscriptionSegment[];
+	words?: TranscriptionWord[];
+	speakerTurns?: TranscriptionSpeakerTurn[];
 	language: string;
 }
 

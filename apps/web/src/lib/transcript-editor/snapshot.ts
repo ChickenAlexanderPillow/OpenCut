@@ -2,6 +2,7 @@ import {
 	applyCutRangesToWords,
 	buildCaptionPayloadFromTranscriptWords,
 	buildTranscriptCutsFromWords,
+	buildTranscriptGapCuts,
 	mapCompressedTimeToSourceTime,
 	mapSourceTimeToCompressedTime,
 	mergeCutRanges,
@@ -11,6 +12,7 @@ import type { TextElement } from "@/types/timeline";
 import type {
 	TranscriptCutTimeDomain,
 	TranscriptEditCutRange,
+	TranscriptGapEdit,
 	TranscriptEditWord,
 } from "@/types/transcription";
 
@@ -87,9 +89,11 @@ function realignShiftedTimelineWordTimings<
 export function resolveEffectiveTranscriptCuts({
 	words,
 	cuts,
+	gapEdits,
 }: {
 	words: TranscriptEditWord[];
 	cuts: TranscriptEditCutRange[];
+	gapEdits?: Record<string, TranscriptGapEdit>;
 }): TranscriptEditCutRange[] {
 	const derivedWordCuts = buildTranscriptCutsFromWords({ words });
 	const hasExplicitRemovedWords = words.some((word) => Boolean(word.removed));
@@ -98,7 +102,12 @@ export function resolveEffectiveTranscriptCuts({
 		: cuts.filter((cut) => cut.reason !== "pause");
 	const pauseCuts = cuts.filter((cut) => cut.reason === "pause");
 	return mergeCutRanges({
-		cuts: [...derivedWordCuts, ...legacyNonPauseCuts, ...pauseCuts],
+		cuts: [
+			...derivedWordCuts,
+			...legacyNonPauseCuts,
+			...pauseCuts,
+			...buildTranscriptGapCuts({ words, gapEdits }),
+		],
 	});
 }
 
@@ -108,12 +117,14 @@ export function getEffectiveTranscriptCutsFromTranscriptEdit({
 	transcriptEdit?: {
 		words: TranscriptEditWord[];
 		cuts: TranscriptEditCutRange[];
+		gapEdits?: Record<string, TranscriptGapEdit>;
 	} | null;
 }): TranscriptEditCutRange[] {
 	if (!transcriptEdit || transcriptEdit.words.length === 0) return [];
 	return resolveEffectiveTranscriptCuts({
 		words: transcriptEdit.words,
 		cuts: transcriptEdit.cuts,
+		gapEdits: transcriptEdit.gapEdits,
 	});
 }
 
@@ -210,6 +221,7 @@ function getRevisionKey({
 	updatedAt,
 	words,
 	effectiveCuts,
+	gapEdits,
 }: {
 	mediaElementId: string;
 	transcriptVersion: number;
@@ -218,6 +230,7 @@ function getRevisionKey({
 	updatedAt: string;
 	words: TranscriptEditWord[];
 	effectiveCuts: TranscriptEditCutRange[];
+	gapEdits?: Record<string, TranscriptGapEdit>;
 }): string {
 	let hash = 0x811c9dc5;
 	const updateHash = (value: string): void => {
@@ -246,6 +259,15 @@ function getRevisionKey({
 		updateHash(cut.start.toFixed(4));
 		updateHash(cut.end.toFixed(4));
 		updateHash(cut.reason);
+	}
+	const gapEntries = Object.entries(gapEdits ?? {}).sort(([a], [b]) =>
+		a.localeCompare(b),
+	);
+	updateHash(String(gapEntries.length));
+	for (const [gapId, gapEdit] of gapEntries) {
+		updateHash(gapId);
+		updateHash(gapEdit.text ?? "");
+		updateHash(gapEdit.removed ? "1" : "0");
 	}
 	return `${mediaElementId}:${(hash >>> 0).toString(16)}`;
 }
@@ -305,6 +327,7 @@ export function buildTranscriptTimelineSnapshot({
 	updatedAt,
 	words,
 	cuts,
+	gapEdits,
 	mediaStartTime,
 	mediaDuration,
 }: {
@@ -313,6 +336,7 @@ export function buildTranscriptTimelineSnapshot({
 	updatedAt: string;
 	words: TranscriptEditWord[];
 	cuts: TranscriptEditCutRange[];
+	gapEdits?: Record<string, TranscriptGapEdit>;
 	mediaStartTime: number;
 	mediaDuration: number;
 }): TranscriptTimelineSnapshot {
@@ -320,6 +344,7 @@ export function buildTranscriptTimelineSnapshot({
 	const effectiveCuts = resolveEffectiveTranscriptCuts({
 		words: normalizedWords,
 		cuts,
+		gapEdits,
 	});
 	const revisionKey = getRevisionKey({
 		mediaElementId,
@@ -329,6 +354,7 @@ export function buildTranscriptTimelineSnapshot({
 		updatedAt,
 		words: normalizedWords,
 		effectiveCuts,
+		gapEdits,
 	});
 	const cached = snapshotCache.get(revisionKey);
 	if (cached) {
@@ -344,6 +370,7 @@ export function buildTranscriptTimelineSnapshot({
 	const compressedPayload = buildCaptionPayloadFromTranscriptWords({
 		words: normalizedWords,
 		cuts: effectiveCuts,
+		gapEdits,
 	});
 	const isTimelineAligned = isTranscriptAlreadyTimelineAligned({
 		words: normalizedWords,

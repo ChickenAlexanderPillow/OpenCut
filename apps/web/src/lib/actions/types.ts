@@ -44,8 +44,43 @@ export type TActionArgsMap = {
 	"transcript-split-segment-ui":
 		| { trackId: string; elementId: string; wordId: string }
 		| undefined;
+	"transcript-update-speaker-label":
+		| {
+				trackId: string;
+				elementId: string;
+				speakerId: string;
+				label: string;
+		  }
+		| undefined;
+	"transcript-update-gap-text":
+		| {
+				trackId: string;
+				elementId: string;
+				leftWordId: string;
+				rightWordId: string;
+				text: string;
+		  }
+		| undefined;
+	"transcript-toggle-gap-removed":
+		| {
+				trackId: string;
+				elementId: string;
+				leftWordId: string;
+				rightWordId: string;
+				removed: boolean;
+		  }
+		| undefined;
 	"rebuild-captions-for-clip":
 		| { trackId: string; elementId: string }
+		| undefined;
+	"refresh-derived-media-after-clip-expansion":
+		| {
+				trackId: string;
+				elementId: string;
+				previousTrimStart: number;
+				previousDuration: number;
+				previousTranscriptUpdatedAt?: string;
+		  }
 		| undefined;
 	"apply-transition-in":
 		| {
@@ -78,6 +113,9 @@ export type TActionArgsMap = {
 	"caption-run-drift-check": undefined;
 	"select-all-captions": { trackId?: string } | undefined;
 	"clear-viral-clips-session": undefined;
+	"generate-speaker-turn-reframes":
+		| { trackId: string; elementId: string }
+		| undefined;
 	"ripple-delete-gap":
 		| {
 				trackId: string;

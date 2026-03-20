@@ -1,5 +1,5 @@
 import type { TScene } from "./timeline";
-import type { TranscriptionSegment } from "./transcription";
+import type { TranscriptionSegment, TranscriptionWord } from "./transcription";
 import type {
 	ClipGenerationProjectCacheEntry,
 	ClipTranscriptCacheEntry,
@@ -106,6 +106,7 @@ export interface TMediaTranscriptLinkEntry {
 	language: string;
 	text: string;
 	segments: TranscriptionSegment[];
+	words?: TranscriptionWord[];
 	updatedAt: string;
 }
 
@@ -120,6 +121,7 @@ export interface TClipWordTranscriptionCacheEntry {
 	startTime: number;
 	endTime: number;
 	segments: TranscriptionSegment[];
+	words?: TranscriptionWord[];
 	updatedAt: string;
 }
 
@@ -130,6 +132,7 @@ export interface TTranscriptionCacheEntry {
 	modelId: string;
 	text: string;
 	segments: TranscriptionSegment[];
+	words?: TranscriptionWord[];
 	updatedAt: string;
 }
 

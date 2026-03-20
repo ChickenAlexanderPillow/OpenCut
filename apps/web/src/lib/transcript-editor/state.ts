@@ -1,4 +1,5 @@
 import {
+	buildTranscriptGapCuts,
 	buildCompressedCutBoundaryTimes,
 	buildTranscriptCutsFromWords,
 	computeKeepDuration,
@@ -35,6 +36,8 @@ function getLegacyTranscriptDraft(
 		cutTimeDomain: legacy.cutTimeDomain,
 		projectionSource: legacy.projectionSource,
 		segmentsUi: legacy.segmentsUi,
+		speakerLabels: legacy.speakerLabels,
+		gapEdits: legacy.gapEdits,
 		updatedAt: legacy.updatedAt,
 	};
 }
@@ -157,8 +160,18 @@ export function compileTranscriptDraft({
 }): TranscriptAppliedState {
 	const normalizedWords = normalizeTranscriptWords({ words: draft.words });
 	const normalizedCuts =
-		draft.cuts.length > 0
-			? mergeCutRanges({ cuts: draft.cuts })
+		draft.cuts.length > 0 || draft.gapEdits
+			? mergeCutRanges({
+					cuts: [
+						...(draft.cuts.length > 0
+							? draft.cuts
+							: buildTranscriptCutsFromWords({ words: normalizedWords })),
+						...buildTranscriptGapCuts({
+							words: normalizedWords,
+							gapEdits: draft.gapEdits,
+						}),
+					],
+				})
 			: buildTranscriptCutsFromWords({ words: normalizedWords });
 	const snapshot: TranscriptTimelineSnapshot = buildTranscriptTimelineSnapshot({
 		mediaElementId,
@@ -166,6 +179,7 @@ export function compileTranscriptDraft({
 		updatedAt: draft.updatedAt,
 		words: normalizedWords,
 		cuts: normalizedCuts,
+		gapEdits: draft.gapEdits,
 		mediaStartTime,
 		mediaDuration,
 	});
@@ -224,6 +238,8 @@ export function withTranscriptState<
 					cutTimeDomain: draft.cutTimeDomain,
 					projectionSource: draft.projectionSource,
 					segmentsUi: draft.segmentsUi,
+					speakerLabels: draft.speakerLabels,
+					gapEdits: draft.gapEdits,
 					updatedAt: draft.updatedAt,
 			  } satisfies TranscriptEditState)
 			: undefined,

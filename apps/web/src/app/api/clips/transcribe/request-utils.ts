@@ -43,6 +43,7 @@ export function buildLocalWhisperXFormData({
 	device,
 	computeType,
 	vadFilter,
+	diarize,
 }: {
 	file: File;
 	requestedModel: string;
@@ -51,6 +52,7 @@ export function buildLocalWhisperXFormData({
 	device: string;
 	computeType: string;
 	vadFilter: string;
+	diarize?: boolean;
 }): FormData {
 	const form = new FormData();
 	form.append("file", file, file.name || "clip.wav");
@@ -58,6 +60,9 @@ export function buildLocalWhisperXFormData({
 	form.append("device", device);
 	form.append("compute_type", computeType);
 	form.append("vad_filter", vadFilter);
+	if (diarize) {
+		form.append("diarize", "true");
+	}
 	if (language) {
 		form.append("language", language);
 	}

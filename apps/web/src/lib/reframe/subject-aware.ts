@@ -101,7 +101,9 @@ function shouldSuppressVisionConsoleMessage(args: unknown[]): boolean {
 					: "";
 		const normalizedMessage = message.trim().toLowerCase();
 		return (
-			normalizedMessage.startsWith("info: created tensorflow lite xnnpack delegate") ||
+			normalizedMessage.startsWith(
+				"info: created tensorflow lite xnnpack delegate",
+			) ||
 			normalizedMessage.includes("xnnpack delegate for cpu") ||
 			normalizedMessage.includes("packet timestamp mismatch")
 		);
@@ -149,7 +151,10 @@ function beginSuppressingVisionConsoleErrors(): void {
 }
 
 function endSuppressingVisionConsoleErrors(): void {
-	if (typeof window === "undefined" || suppressedVisionConsoleErrorDepth === 0) {
+	if (
+		typeof window === "undefined" ||
+		suppressedVisionConsoleErrorDepth === 0
+	) {
 		return;
 	}
 	suppressedVisionConsoleErrorDepth -= 1;
@@ -416,11 +421,7 @@ async function waitForVideoFrameReady({
 	});
 }
 
-function canAnalyzeCurrentVideoFrame({
-	video,
-}: {
-	video: HTMLVideoElement;
-}) {
+function canAnalyzeCurrentVideoFrame({ video }: { video: HTMLVideoElement }) {
 	return (
 		Number.isFinite(video.currentTime) &&
 		!video.seeking &&
@@ -537,8 +538,9 @@ function buildObservationSampleTimes({
 			return index === 0 || Math.abs(time - (values[index - 1] ?? 0)) > 1 / 300;
 		});
 	const sampleCount = clamp(Math.round(duration * 4), 12, 36);
-	const uniformTimes = Array.from({ length: sampleCount }, (_, index) =>
-		startTime + (duration * index) / Math.max(1, sampleCount - 1),
+	const uniformTimes = Array.from(
+		{ length: sampleCount },
+		(_, index) => startTime + (duration * index) / Math.max(1, sampleCount - 1),
 	);
 	return [...earlyOffsets, ...uniformTimes]
 		.sort((left, right) => left - right)
@@ -564,8 +566,9 @@ function buildMotionTrackingSampleTimes({
 		minSamples,
 		maxSamples,
 	);
-	return Array.from({ length: sampleCount }, (_, index) =>
-		startTime + (duration * index) / Math.max(1, sampleCount - 1),
+	return Array.from(
+		{ length: sampleCount },
+		(_, index) => startTime + (duration * index) / Math.max(1, sampleCount - 1),
 	).filter((time, index, values) => {
 		if (time < startTime || time > endTime) return false;
 		return index === 0 || Math.abs(time - (values[index - 1] ?? 0)) > 1 / 240;
@@ -587,13 +590,18 @@ function smoothObservationSegment({
 	observations: SubjectTrackingObservation[];
 	trackingStrength?: number;
 }): SubjectTrackingObservation[] {
-	if (observations.length <= 1) return observations.map((observation) => ({
-		time: observation.time,
-		box: observation.box ? { ...observation.box } : null,
-	}));
+	if (observations.length <= 1)
+		return observations.map((observation) => ({
+			time: observation.time,
+			box: observation.box ? { ...observation.box } : null,
+		}));
 
 	const normalizedStrength = normalizeMotionTrackingStrength(trackingStrength);
-	const positionBlend = lerpMotionTrackingSetting(0.14, 0.5, normalizedStrength);
+	const positionBlend = lerpMotionTrackingSetting(
+		0.14,
+		0.5,
+		normalizedStrength,
+	);
 	const sizeBlend = lerpMotionTrackingSetting(0.08, 0.26, normalizedStrength);
 	const fitBlend = lerpMotionTrackingSetting(0.12, 0.34, normalizedStrength);
 
@@ -839,7 +847,7 @@ function derivePresetTransform({
 		verticalMarginInSource +
 		visibleHalfHeightInSource;
 	const desiredViewportCenterX = clamp(
-		box.centerX,
+		box.anchorX ?? box.centerX,
 		visibleHalfWidthInSource,
 		Math.max(visibleHalfWidthInSource, sourceWidth - visibleHalfWidthInSource),
 	);
@@ -912,7 +920,8 @@ function dedupePresetNames(
 
 function getBoxArea(box: SubjectBox): number {
 	return (
-		Math.max(1, box.fitWidth ?? box.width) * Math.max(1, box.fitHeight ?? box.height)
+		Math.max(1, box.fitWidth ?? box.width) *
+		Math.max(1, box.fitHeight ?? box.height)
 	);
 }
 
@@ -988,49 +997,63 @@ export function choosePrimarySubjectBox({
 	targetSubjectSeed?: VideoReframeSubjectSeed | null;
 }): SubjectBox | null {
 	if (candidates.length === 0) return null;
+	if (targetSubjectHint === "center" && candidates.length > 1) {
+		const viewportMatchedCandidates = targetViewportBounds
+			? candidates.filter(
+					(candidate) =>
+						getBoxOverlapWithViewport(candidate, targetViewportBounds) >= 0.12,
+				)
+			: [];
+		return buildSubjectBoxFromDetections(
+			viewportMatchedCandidates.length > 0
+				? viewportMatchedCandidates
+				: candidates,
+		);
+	}
 	if (!previousBox) {
 		const frameCenterX = targetCenterHint?.x ?? sourceWidth / 2;
 		const frameCenterY = targetCenterHint?.y ?? sourceHeight / 2;
 		const sideWeight =
 			targetSubjectHint === "left" || targetSubjectHint === "right" ? 0.45 : 0;
-		const viewportMatchedCandidates =
-			targetViewportBounds
-				? candidates.filter(
-						(candidate) =>
-							getBoxOverlapWithViewport(candidate, targetViewportBounds) >= 0.18,
-				  )
-				: [];
+		const viewportMatchedCandidates = targetViewportBounds
+			? candidates.filter(
+					(candidate) =>
+						getBoxOverlapWithViewport(candidate, targetViewportBounds) >= 0.18,
+				)
+			: [];
 		const initialCandidates =
 			viewportMatchedCandidates.length > 0
 				? viewportMatchedCandidates
 				: candidates;
 		const scoredInitialCandidates = initialCandidates.map((candidate) => {
 			const centerPenalty =
-				Math.hypot(candidate.centerX - frameCenterX, candidate.centerY - frameCenterY) /
-				Math.max(1, Math.hypot(frameCenterX, frameCenterY));
+				Math.hypot(
+					candidate.centerX - frameCenterX,
+					candidate.centerY - frameCenterY,
+				) / Math.max(1, Math.hypot(frameCenterX, frameCenterY));
 			const viewportOverlap = targetViewportBounds
 				? getBoxOverlapWithViewport(candidate, targetViewportBounds)
 				: 0;
 			const seedDistancePenalty = targetSubjectSeed
 				? Math.hypot(
-						(candidate.anchorX ?? candidate.centerX) - targetSubjectSeed.center.x,
-						(candidate.anchorY ?? candidate.centerY) - targetSubjectSeed.center.y,
-				  ) /
-				  Math.max(1, Math.hypot(sourceWidth, sourceHeight))
+						(candidate.anchorX ?? candidate.centerX) -
+							targetSubjectSeed.center.x,
+						(candidate.anchorY ?? candidate.centerY) -
+							targetSubjectSeed.center.y,
+					) / Math.max(1, Math.hypot(sourceWidth, sourceHeight))
 				: 0;
-			const seedAreaScore =
-				targetSubjectSeed?.size
-					? 1 -
-					  Math.abs(
-							getBoxArea(candidate) -
-								targetSubjectSeed.size.width * targetSubjectSeed.size.height,
-					  ) /
-							Math.max(
-								getBoxArea(candidate),
-								targetSubjectSeed.size.width * targetSubjectSeed.size.height,
-								1,
-							)
-					: 0;
+			const seedAreaScore = targetSubjectSeed?.size
+				? 1 -
+					Math.abs(
+						getBoxArea(candidate) -
+							targetSubjectSeed.size.width * targetSubjectSeed.size.height,
+					) /
+						Math.max(
+							getBoxArea(candidate),
+							targetSubjectSeed.size.width * targetSubjectSeed.size.height,
+							1,
+						)
+				: 0;
 			const sidePreference =
 				targetSubjectHint === "left"
 					? 1 - candidate.centerX / Math.max(1, sourceWidth)
@@ -1058,22 +1081,28 @@ export function choosePrimarySubjectBox({
 			(entry) => entry.score >= bestInitialScore * 0.9,
 		);
 		if (targetSubjectHint === "left") {
-			return [...viableInitialCandidates]
-				.sort((left, right) => {
-					if (Math.abs(left.candidate.centerX - right.candidate.centerX) > 1e-3) {
+			return (
+				[...viableInitialCandidates].sort((left, right) => {
+					if (
+						Math.abs(left.candidate.centerX - right.candidate.centerX) > 1e-3
+					) {
 						return left.candidate.centerX - right.candidate.centerX;
 					}
 					return right.score - left.score;
-				})[0]?.candidate ?? null;
+				})[0]?.candidate ?? null
+			);
 		}
 		if (targetSubjectHint === "right") {
-			return [...viableInitialCandidates]
-				.sort((left, right) => {
-					if (Math.abs(left.candidate.centerX - right.candidate.centerX) > 1e-3) {
+			return (
+				[...viableInitialCandidates].sort((left, right) => {
+					if (
+						Math.abs(left.candidate.centerX - right.candidate.centerX) > 1e-3
+					) {
 						return right.candidate.centerX - left.candidate.centerX;
 					}
 					return right.score - left.score;
-				})[0]?.candidate ?? null;
+				})[0]?.candidate ?? null
+			);
 		}
 		return [...scoredInitialCandidates].sort((left, right) => {
 			const leftCenterPenalty =
@@ -1087,12 +1116,10 @@ export function choosePrimarySubjectBox({
 					right.candidate.centerY - frameCenterY,
 				) / Math.max(1, Math.hypot(frameCenterX, frameCenterY));
 			const leftScore =
-				getBoxArea(left.candidate) *
-					(1 + left.viewportOverlap * 0.9) -
+				getBoxArea(left.candidate) * (1 + left.viewportOverlap * 0.9) -
 				leftCenterPenalty * getBoxArea(left.candidate) * 0.2;
 			const rightScore =
-				getBoxArea(right.candidate) *
-					(1 + right.viewportOverlap * 0.9) -
+				getBoxArea(right.candidate) * (1 + right.viewportOverlap * 0.9) -
 				rightCenterPenalty * getBoxArea(right.candidate) * 0.2;
 			return rightScore - leftScore;
 		})[0]!.candidate;
@@ -1152,7 +1179,11 @@ function smoothTrackedObservations({
 }): SubjectTrackingObservation[] {
 	if (observations.length === 0) return [];
 	const normalizedStrength = normalizeMotionTrackingStrength(trackingStrength);
-	const maxHoldSeconds = lerpMotionTrackingSetting(1.4, 0.45, normalizedStrength);
+	const maxHoldSeconds = lerpMotionTrackingSetting(
+		1.4,
+		0.45,
+		normalizedStrength,
+	);
 	const heldObservations: SubjectTrackingObservation[] = [];
 	let previousTracked: SubjectTrackingObservation | null = null;
 	for (const observation of observations) {
@@ -1231,7 +1262,11 @@ function coalesceMotionTrackingKeyframes({
 		3,
 		normalizedStrength,
 	);
-	const scaleThreshold = lerpMotionTrackingSetting(0.05, 0.012, normalizedStrength);
+	const scaleThreshold = lerpMotionTrackingSetting(
+		0.05,
+		0.012,
+		normalizedStrength,
+	);
 
 	for (const [observationIndex, observation] of trackedTransforms.entries()) {
 		const isFirst = observationIndex === 0;
@@ -1247,7 +1282,8 @@ function coalesceMotionTrackingKeyframes({
 				positionThresholdPx ||
 			Math.abs(observation.transform.position.y - previousTracked.position.y) >=
 				positionThresholdPx ||
-			(animateScale && Math.abs(nextScale - previousTracked.scale) >= scaleThreshold) ||
+			(animateScale &&
+				Math.abs(nextScale - previousTracked.scale) >= scaleThreshold) ||
 			observation.time - previousTracked.time >= forcedSpacingSeconds;
 		if (!shouldInsert) continue;
 		keyframes.push({
@@ -1291,7 +1327,11 @@ function smoothTrackedTransformScales({
 		}));
 	}
 	const normalizedStrength = normalizeMotionTrackingStrength(trackingStrength);
-	const maxScaleStep = lerpMotionTrackingSetting(0.018, 0.07, normalizedStrength);
+	const maxScaleStep = lerpMotionTrackingSetting(
+		0.018,
+		0.07,
+		normalizedStrength,
+	);
 	const smoothing = lerpMotionTrackingSetting(0.08, 0.4, normalizedStrength);
 	let previousScale = trackedTransforms[0]!.transform.scale;
 	return trackedTransforms.map((entry, index) => {
@@ -1368,16 +1408,33 @@ export function buildMotionTrackingKeyframesFromObservations({
 		animateScale,
 		trackingStrength: normalizedStrength,
 	});
+	const coalescedKeyframes = coalesceMotionTrackingKeyframes({
+		trackedTransforms: smoothedTrackedTransforms,
+		animateScale,
+		trackingStrength: normalizedStrength,
+	});
+	const anchoredKeyframes =
+		coalescedKeyframes.length > 0 && coalescedKeyframes[0]!.time > 1e-6
+			? [
+					{
+						...coalescedKeyframes[0]!,
+						id: `${coalescedKeyframes[0]!.id}:start`,
+						time: 0,
+					},
+					...coalescedKeyframes,
+				]
+			: coalescedKeyframes;
 	return {
-		keyframes: coalesceMotionTrackingKeyframes({
-			trackedTransforms: smoothedTrackedTransforms,
-			animateScale,
-			trackingStrength: normalizedStrength,
-		}).map((keyframe) => {
+		keyframes: anchoredKeyframes.map((keyframe) => {
 			const observation =
 				smoothedTrackedTransforms.find(
-					(entry) => Math.abs(entry.time - keyframe.time) <= 1e-3,
-				) ?? null;
+					(entry) =>
+						Math.abs(
+							entry.time - (keyframe.time <= 1e-6 ? 0 : keyframe.time),
+						) <= 1e-3,
+				) ??
+				smoothedTrackedTransforms[0] ??
+				null;
 			return {
 				...keyframe,
 				scale: animateScale
@@ -1387,13 +1444,13 @@ export function buildMotionTrackingKeyframesFromObservations({
 					? {
 							x: observation.box.anchorX ?? observation.box.centerX,
 							y: observation.box.anchorY ?? observation.box.centerY,
-					  }
+						}
 					: undefined,
 				subjectSize: observation?.box
 					? {
 							width: observation.box.fitWidth ?? observation.box.width,
 							height: observation.box.fitHeight ?? observation.box.height,
-					  }
+						}
 					: undefined,
 			};
 		}),
@@ -1408,6 +1465,12 @@ function buildSubjectBoxFromDetections(detections: SubjectBox[]): SubjectBox {
 		centerY: median(detections.map((entry) => entry.centerY)),
 		width: median(detections.map((entry) => entry.width)),
 		height: median(detections.map((entry) => entry.height)),
+		anchorX: median(detections.map((entry) => entry.anchorX ?? entry.centerX)),
+		anchorY: median(detections.map((entry) => entry.anchorY ?? entry.centerY)),
+		fitWidth: median(detections.map((entry) => entry.fitWidth ?? entry.width)),
+		fitHeight: median(
+			detections.map((entry) => entry.fitHeight ?? entry.height),
+		),
 	};
 }
 
@@ -1560,7 +1623,8 @@ function getClusterCenterXs(clusters: SubjectBox[][]): {
 	if (clusters.length < 2) return null;
 	return {
 		left: buildSubjectBoxFromDetections(clusters[0]!).centerX,
-		right: buildSubjectBoxFromDetections(clusters[clusters.length - 1]!).centerX,
+		right: buildSubjectBoxFromDetections(clusters[clusters.length - 1]!)
+			.centerX,
 	};
 }
 
@@ -1695,15 +1759,18 @@ function buildAutoSectionSwitches({
 			.map((observation) => ({
 				...observation,
 				presetName:
-					(observation as SubjectObservation & {
-						presetName?: AutoSectionKind;
-					}).presetName ?? "Subject",
+					(
+						observation as SubjectObservation & {
+							presetName?: AutoSectionKind;
+						}
+					).presetName ?? "Subject",
 			}))
 			.filter(
 				(
 					observation,
-				): observation is SubjectObservation & { presetName: AutoSectionKind } =>
-					Boolean(observation.presetName),
+				): observation is SubjectObservation & {
+					presetName: AutoSectionKind;
+				} => Boolean(observation.presetName),
 			),
 	);
 	if (classified.length === 0) {
@@ -1757,7 +1824,8 @@ function buildAutoSectionSwitches({
 		mergedRuns.push({ ...run });
 	}
 
-	const defaultPresetId = presetIdByName[mergedRuns[0]?.presetName ?? "Subject"] ?? null;
+	const defaultPresetId =
+		presetIdByName[mergedRuns[0]?.presetName ?? "Subject"] ?? null;
 	const switches = mergedRuns.slice(1).flatMap((run) => {
 		const presetId = presetIdByName[run.presetName];
 		if (!presetId) return [];
@@ -1964,7 +2032,8 @@ export function buildAutoReframePresetsFromDetections({
 		null;
 	return {
 		presets: dedupedPresets,
-		switches: autoSections.switches.length > 0 ? autoSections.switches : switches,
+		switches:
+			autoSections.switches.length > 0 ? autoSections.switches : switches,
 		defaultPresetId: resolvedDefaultPresetId,
 		detectionCount: detections.length,
 		subjectClusterCount: clusters.length,
@@ -2153,6 +2222,7 @@ export async function analyzeGeneratedClipMotionTracking({
 	targetSubjectSeed,
 	animateScale = false,
 	trackingStrength = DEFAULT_MOTION_TRACKING_STRENGTH,
+	onProgress,
 	signal,
 }: {
 	asset: MediaAsset;
@@ -2165,6 +2235,12 @@ export async function analyzeGeneratedClipMotionTracking({
 	targetSubjectSeed?: VideoReframeSubjectSeed | null;
 	animateScale?: boolean;
 	trackingStrength?: number;
+	onProgress?: (progress: {
+		completedSamples: number;
+		totalSamples: number;
+		progress: number;
+		message: string;
+	}) => void;
 	signal?: AbortSignal;
 }): Promise<{
 	keyframes: MotionTrackingTransformKeyframe[];
@@ -2190,7 +2266,7 @@ export async function analyzeGeneratedClipMotionTracking({
 					canvasSize,
 					sourceWidth,
 					sourceHeight,
-			  })
+				})
 			: null;
 	const targetViewportBounds =
 		targetTransform && sourceWidth > 0 && sourceHeight > 0
@@ -2199,7 +2275,7 @@ export async function analyzeGeneratedClipMotionTracking({
 					canvasSize,
 					sourceWidth,
 					sourceHeight,
-			  })
+				})
 			: null;
 	if (sourceWidth <= 0 || sourceHeight <= 0) {
 		return {
@@ -2219,6 +2295,12 @@ export async function analyzeGeneratedClipMotionTracking({
 			const sampleTimes = buildMotionTrackingSampleTimes({
 				startTime,
 				duration,
+			});
+			onProgress?.({
+				completedSamples: 0,
+				totalSamples: sampleTimes.length,
+				progress: sampleTimes.length === 0 ? 100 : 0,
+				message: "Sampling motion tracking frames...",
 			});
 			const sampledFrames: Array<{
 				time: number;
@@ -2285,7 +2367,7 @@ export async function analyzeGeneratedClipMotionTracking({
 								video,
 								getMonotonicVisionTimestampMs({
 									kind: "pose",
-								candidateMs: frameTimestampMs,
+									candidateMs: frameTimestampMs,
 								}),
 							),
 						);
@@ -2313,6 +2395,22 @@ export async function analyzeGeneratedClipMotionTracking({
 					faceCandidates,
 					poseCandidates,
 				});
+				onProgress?.({
+					completedSamples: sampledFrames.length,
+					totalSamples: sampleTimes.length,
+					progress:
+						sampleTimes.length === 0
+							? 100
+							: (sampledFrames.length / sampleTimes.length) * 100,
+					message: `Tracking subject motion ${Math.min(
+						100,
+						Math.round(
+							sampleTimes.length === 0
+								? 100
+								: (sampledFrames.length / sampleTimes.length) * 100,
+						),
+					)}%`,
+				});
 			}
 
 			const observations: SubjectTrackingObservation[] = [];
@@ -2322,7 +2420,7 @@ export async function analyzeGeneratedClipMotionTracking({
 					? buildTwoSubjectClusters({
 							detections: identityDetections,
 							sourceWidth,
-					  })
+						})
 					: [];
 			const targetIdentity =
 				targetSubjectSeed?.identity === "left" ||
@@ -2338,7 +2436,7 @@ export async function analyzeGeneratedClipMotionTracking({
 								candidates: frame.faceCandidates,
 								clusters: identityClusters,
 								targetIdentity,
-						  })
+							})
 						: frame.faceCandidates;
 				const candidates =
 					clusteredFaceCandidates.length > 0
@@ -2371,6 +2469,12 @@ export async function analyzeGeneratedClipMotionTracking({
 				baseScale,
 				animateScale,
 				trackingStrength,
+			});
+			onProgress?.({
+				completedSamples: sampleTimes.length,
+				totalSamples: sampleTimes.length,
+				progress: 100,
+				message: "Baking tracking keyframes...",
 			});
 			return {
 				keyframes: result.keyframes,

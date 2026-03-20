@@ -13,6 +13,7 @@ import {
 	FONT_SIZE_SCALE_REFERENCE,
 } from "@/constants/text-constants";
 import {
+	getMiddleBaselineCompensation,
 	getTextVisualRectForBackgroundMode,
 	measureTextBlock,
 	resolveTextPlacement,
@@ -648,6 +649,7 @@ export function getElementBounds({
 						lineMetrics: candidateMetrics,
 						lineHeightPx,
 						fallbackFontSize: scaledFontSize,
+						useUniformMetrics: captionWords.length > 0,
 					});
 					const fontSizeRatio = getBackgroundFontSizeRatio({
 						fontSize: element.fontSize,
@@ -798,6 +800,7 @@ export function getElementBounds({
 				lineMetrics,
 				lineHeightPx,
 				fallbackFontSize: scaledFontSize,
+				useUniformMetrics: captionWords.length > 0,
 			});
 			const fontSizeRatio = getBackgroundFontSizeRatio({
 				fontSize: element.fontSize,
@@ -877,12 +880,22 @@ export function getElementBounds({
 						const dividerCenterY =
 							splitViewport?.dividerCenterY ?? splitViewport?.y ?? 0;
 						const halfHeight = (visualRect.height * resolvedTransform.scale) / 2;
+						const baselineCompensation =
+							getMiddleBaselineCompensation({
+								fallbackFontSize: scaledFontSize,
+							}) * resolvedTransform.scale;
 						const targetCenterY =
 							dividerPlacement === "above-divider"
-								? dividerTopY - DIVIDER_PLACEMENT_GAP - halfHeight
+								? dividerTopY -
+									DIVIDER_PLACEMENT_GAP -
+									halfHeight -
+									baselineCompensation
 								: dividerPlacement === "below-divider"
-									? dividerBottomY + DIVIDER_PLACEMENT_GAP + halfHeight
-									: dividerCenterY;
+									? dividerBottomY +
+										DIVIDER_PLACEMENT_GAP +
+										halfHeight -
+										baselineCompensation
+									: dividerCenterY - baselineCompensation;
 						return targetCenterY - placementOffsetY;
 					})()
 				: anchoredPositionY;

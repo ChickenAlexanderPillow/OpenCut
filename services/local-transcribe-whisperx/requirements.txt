@@ -3,3 +3,5 @@ uvicorn[standard]==0.30.6
 python-multipart==0.0.9
 faster-whisper==1.1.1
 whisperx==3.8.1
+pyannote-audio>=4.0.0
+huggingface-hub<1.0.0

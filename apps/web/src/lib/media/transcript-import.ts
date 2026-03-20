@@ -3,6 +3,7 @@ import {
 	buildClipTranscriptCacheEntryForAsset,
 	buildProjectMediaTranscriptLinkKey,
 	clipTranscriptSegmentsForWindow,
+	clipTranscriptWordsForWindow,
 	getOrCreateClipTranscriptForAsset,
 	PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
 	PROJECT_MEDIA_TRANSCRIPT_MODEL,
@@ -24,6 +25,7 @@ import type {
 import type {
 	TranscriptEditWord,
 	TranscriptionSegment,
+	TranscriptionWord,
 } from "@/types/transcription";
 
 function isEditableMediaElement(
@@ -43,7 +45,7 @@ function resolveMediaIdFromElement({
 	return element.sourceType === "upload" ? element.mediaId : null;
 }
 
-function buildTranscriptWordsFromSegments({
+export function buildTranscriptWordsFromSegments({
 	mediaElementId,
 	segments,
 }: {
@@ -81,6 +83,25 @@ function buildTranscriptWordsFromSegments({
 		});
 	});
 	return normalizeTranscriptWords({ words });
+}
+
+export function buildTranscriptWordsFromTimedWords({
+	mediaElementId,
+	words,
+}: {
+	mediaElementId: string;
+	words: TranscriptionWord[];
+}): TranscriptEditWord[] {
+	return normalizeTranscriptWords({
+		words: words.map((word, index) => ({
+			id: `${mediaElementId}:word:${index}:${word.start.toFixed(3)}`,
+			text: word.word,
+			startTime: word.start,
+			endTime: word.end,
+			speakerId: word.speakerId,
+			removed: false,
+		})),
+	});
 }
 
 type EditorForTranscriptImport = {
@@ -133,6 +154,7 @@ export async function prepareImportedAssetWithTranscript({
 	const linkedTranscript = project.mediaTranscriptLinks?.[linkKey];
 	let text = linkedTranscript?.text ?? "";
 	let segments = linkedTranscript?.segments ?? [];
+	let words = linkedTranscript?.words ?? [];
 	let updatedAt = linkedTranscript?.updatedAt ?? new Date().toISOString();
 
 	if (!linkedTranscript) {
@@ -165,6 +187,7 @@ export async function prepareImportedAssetWithTranscript({
 		});
 		text = localResult.text;
 		segments = localResult.segments;
+		words = localResult.words;
 		updatedAt = new Date().toISOString();
 		onProgress?.({
 			progress: 99,
@@ -188,6 +211,7 @@ export async function prepareImportedAssetWithTranscript({
 		language: PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
 		text,
 		segments,
+		words,
 		updatedAt,
 	});
 
@@ -206,6 +230,7 @@ export async function prepareImportedAssetWithTranscript({
 					language: PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
 					text,
 					segments,
+					words,
 					updatedAt,
 				},
 			},
@@ -261,6 +286,7 @@ export async function autoLinkTranscriptAndCaptionsForMediaElement({
 				language: PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
 				text: transcriptResult.transcript.text,
 				segments: transcriptResult.transcript.segments,
+				words: transcriptResult.transcript.words,
 				updatedAt: transcriptResult.transcript.updatedAt,
 			},
 		},
@@ -291,17 +317,32 @@ export async function autoLinkTranscriptAndCaptionsForMediaElement({
 		});
 	}
 
-	const sourceWindowSegments = clipTranscriptSegmentsForWindow({
-		segments: transcriptResult.transcript.segments,
+	const sourceWindowWords = clipTranscriptWordsForWindow({
+		words: transcriptResult.transcript.words ?? [],
 		startTime: element.trimStart,
 		endTime: element.trimStart + element.duration,
 	});
-	if (sourceWindowSegments.length === 0) return;
+	const sourceWindowSegments =
+		sourceWindowWords.length === 0
+			? clipTranscriptSegmentsForWindow({
+					segments: transcriptResult.transcript.segments,
+					startTime: element.trimStart,
+					endTime: element.trimStart + element.duration,
+				})
+			: [];
+	if (sourceWindowWords.length === 0 && sourceWindowSegments.length === 0)
+		return;
 
-	const wordsForEdit = buildTranscriptWordsFromSegments({
-		mediaElementId: element.id,
-		segments: sourceWindowSegments,
-	});
+	const wordsForEdit =
+		sourceWindowWords.length > 0
+			? buildTranscriptWordsFromTimedWords({
+					mediaElementId: element.id,
+					words: sourceWindowWords,
+				})
+			: buildTranscriptWordsFromSegments({
+					mediaElementId: element.id,
+					segments: sourceWindowSegments,
+				});
 	const transcriptDraft = {
 		version: 1 as const,
 		source: "word-level" as const,

@@ -14,8 +14,10 @@ import {
 	snapToNearestPoint,
 	type SnapPoint,
 } from "@/lib/timeline/snap-utils";
+import { didRevealNewSourceRange } from "@/lib/timeline/clip-expansion";
 import { useTimelineStore } from "@/stores/timeline-store";
 import { getTranscriptDraft } from "@/lib/transcript-editor/state";
+import { invokeAction } from "@/lib/actions";
 
 export interface ResizeState {
 	elementId: string;
@@ -198,8 +200,14 @@ export function useTimelineElementResize({
 						isDraggingFurtherLeft &&
 						currentStartTimeRef.current <= minDurationSeconds
 					) {
-						nextStartTime = Math.min(nextStartTime, currentStartTimeRef.current);
-						nextTrimStart = Math.min(nextTrimStart, currentTrimStartRef.current);
+						nextStartTime = Math.min(
+							nextStartTime,
+							currentStartTimeRef.current,
+						);
+						nextTrimStart = Math.min(
+							nextTrimStart,
+							currentTrimStartRef.current,
+						);
 						nextDuration = Math.max(nextDuration, currentDurationRef.current);
 					}
 
@@ -437,7 +445,32 @@ export function useTimelineElementResize({
 						}
 					: undefined,
 			});
-		} else if (isResizableTranscriptElement && editor.timeline.isPreviewActive()) {
+			if (
+				isResizableTranscriptElement &&
+				didRevealNewSourceRange({
+					before: {
+						trimStart: resizing.initialTrimStart,
+						duration: resizing.initialDuration,
+					},
+					after: {
+						trimStart: finalTrimStart,
+						duration: finalDuration,
+					},
+				})
+			) {
+				invokeAction("refresh-derived-media-after-clip-expansion", {
+					trackId: _track.id,
+					elementId: element.id,
+					previousTrimStart: resizing.initialTrimStart,
+					previousDuration: resizing.initialDuration,
+					previousTranscriptUpdatedAt:
+						resizing.initialTranscriptEdit?.updatedAt ?? "",
+				});
+			}
+		} else if (
+			isResizableTranscriptElement &&
+			editor.timeline.isPreviewActive()
+		) {
 			// Always tear down preview mode after transcript resize interactions.
 			// Without this, a trim preview can linger and hide captions until reload.
 			editor.timeline.discardPreview();
@@ -452,6 +485,7 @@ export function useTimelineElementResize({
 		resizing,
 		editor.timeline,
 		element.id,
+		_track.id,
 		onResizeStateChange,
 		onSnapPointChange,
 		rippleEditingEnabled,

@@ -203,6 +203,7 @@ export function resolveLiveCaptionElementFromTranscriptSource({
 		updatedAt: timingRevisionSalt,
 		words: transcriptDraft.words,
 		cuts: transcriptApplied.removedRanges,
+		gapEdits: transcriptDraft.gapEdits,
 		mediaStartTime: sourceMedia.startTime,
 		mediaDuration: sourceMedia.duration,
 	});
@@ -213,12 +214,32 @@ export function resolveLiveCaptionElementFromTranscriptSource({
 	const timings = snapshot.captionPayload.wordTimings;
 	const clipStartTime = sourceMedia.startTime;
 	const clipEndTime = sourceMedia.startTime + sourceMedia.duration;
-	const visibilityWindows = transcriptApplied.keptSegments
+	const rawVisibilityWindows = transcriptApplied.keptSegments
 		.map((segment) => ({
-			startTime: Math.max(clipStartTime, sourceMedia.startTime + segment.start),
-			endTime: Math.min(clipEndTime, sourceMedia.startTime + segment.end),
+			startTime: Math.max(
+				clipStartTime,
+				sourceMedia.startTime + snapshot.timeMap.toCompressedTime(segment.start),
+			),
+			endTime: Math.min(
+				clipEndTime,
+				sourceMedia.startTime + snapshot.timeMap.toCompressedTime(segment.end),
+			),
 		}))
 		.filter((segment) => segment.endTime - segment.startTime > 0.001);
+	const visibilityWindows = rawVisibilityWindows.reduce<
+		Array<{ startTime: number; endTime: number }>
+	>((merged, segment) => {
+		const previous = merged[merged.length - 1];
+		if (
+			previous &&
+			Math.abs(previous.endTime - segment.startTime) <= 0.01
+		) {
+			previous.endTime = Math.max(previous.endTime, segment.endTime);
+			return merged;
+		}
+		merged.push({ ...segment });
+		return merged;
+	}, []);
 
 	return {
 		...element,

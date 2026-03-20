@@ -32,6 +32,8 @@ import type {
 	TimelineElement,
 	TimelineTrack,
 	VideoElement,
+	VideoMotionTracking,
+	VideoReframePreset,
 	VisualElement,
 } from "@/types/timeline";
 import type {
@@ -50,6 +52,8 @@ import {
 } from "@/lib/clips/scoring";
 import {
 	buildClipTranscriptEntryFromLinkedExternalTranscript,
+	clipTranscriptSegmentsForWindow,
+	clipTranscriptWordsForWindow,
 	getOrCreateClipTranscriptForAsset,
 	PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
 } from "@/lib/clips/transcript";
@@ -85,11 +89,17 @@ import {
 	buildPauseCutsFromWords,
 	buildCaptionPayloadFromTranscriptWords,
 	buildTranscriptCutsFromWords,
+	buildTranscriptGapId,
 	computeKeepDuration,
 	isFillerWordOrPhrase,
 	mergeCutRanges,
+	normalizeTranscriptGapEdits,
 	normalizeTranscriptWords,
 } from "@/lib/transcript-editor/core";
+import {
+	buildTranscriptWordsFromSegments,
+	buildTranscriptWordsFromTimedWords,
+} from "@/lib/media/transcript-import";
 import { buildTranscriptWordsFromCaptionTimings } from "@/lib/transcript-editor/caption-fallback";
 import { DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import { clearTranscriptTimelineSnapshotCache } from "@/lib/transcript-editor/snapshot";
@@ -100,6 +110,7 @@ import {
 	getTranscriptDraft,
 	withTranscriptState,
 } from "@/lib/transcript-editor/state";
+import { buildDefaultTranscriptSegmentsUi } from "@/lib/transcript-editor/segments";
 import {
 	dedupeTranscriptEditsInTracks,
 	rebuildCaptionTrackForMediaElement,
@@ -111,8 +122,15 @@ import {
 	PREPARING_PLAYBACK_REASON,
 	startPlaybackWhenReady,
 } from "@/lib/playback/start-playback";
-import { analyzeGeneratedClipReframes } from "@/lib/reframe/subject-aware";
+import {
+	analyzeGeneratedClipMotionTracking,
+	analyzeGeneratedClipReframes,
+	getVideoElementSourceRange,
+} from "@/lib/reframe/subject-aware";
+import { buildSpeakerTurnReframeSwitches } from "@/lib/reframe/speaker-turns";
+import { normalizeMotionTrackingStrength } from "@/lib/reframe/motion-tracking";
 import { buildDefaultVideoSplitScreenBindings } from "@/lib/reframe/video-reframe";
+import { didRevealNewSourceRange } from "@/lib/timeline/clip-expansion";
 const MIN_VIRAL_CLIP_SCORE = 56;
 const MAX_VIRAL_CLIP_COUNT = 5;
 const VIRAL_CLIP_MIN_SECONDS = 18;
@@ -739,6 +757,73 @@ function rangesOverlap({
 	return aEnd > bStart - tolerance && bEnd > aStart - tolerance;
 }
 
+function replaceElementInTracks({
+	tracks,
+	trackId,
+	elementId,
+	element,
+}: {
+	tracks: TimelineTrack[];
+	trackId: string;
+	elementId: string;
+	element: TimelineElement;
+}): TimelineTrack[] {
+	return tracks.map((track) => {
+		if (track.id !== trackId) return track;
+		return {
+			...track,
+			elements: track.elements.map((candidate) =>
+				candidate.id === elementId ? (element as typeof candidate) : candidate,
+			),
+		} as TimelineTrack;
+	});
+}
+
+function hasMatchingSourceWindow({
+	element,
+	trimStart,
+	duration,
+}: {
+	element: TimelineElement | null;
+	trimStart: number;
+	duration: number;
+}): boolean {
+	return Boolean(
+		element &&
+			Math.abs(element.trimStart - trimStart) <= 1e-6 &&
+			Math.abs(element.duration - duration) <= 1e-6,
+	);
+}
+
+function buildMotionTrackingPresetSignature({
+	preset,
+}: {
+	preset: VideoReframePreset;
+}): string {
+	return [
+		preset.name.trim().toLowerCase(),
+		preset.transform.position.x.toFixed(3),
+		preset.transform.position.y.toFixed(3),
+		preset.transform.scale.toFixed(4),
+		(preset.motionTracking?.animateScale ?? false) ? "scale:1" : "scale:0",
+		`strength:${normalizeMotionTrackingStrength(
+			preset.motionTracking?.trackingStrength,
+		).toFixed(2)}`,
+	].join("|");
+}
+
+function getTrackingSubjectHint({
+	preset,
+}: {
+	preset: VideoReframePreset;
+}): "left" | "right" | "center" {
+	return preset.name === "Subject Left"
+		? "left"
+		: preset.name === "Subject Right"
+			? "right"
+			: "center";
+}
+
 function getTranscriptCompanionElementIds({
 	tracks,
 	target,
@@ -851,44 +936,6 @@ function initializeTranscriptEditFromExistingCaption({
 	};
 }
 
-function buildDefaultTranscriptSegmentsUi({
-	elementId,
-	words,
-}: {
-	elementId: string;
-	words: NonNullable<VideoElement["transcriptDraft"]>["words"];
-}): NonNullable<VideoElement["transcriptDraft"]>["segmentsUi"] {
-	if (words.length === 0) return [];
-	const segments: Array<{ wordStartIndex: number; wordEndIndex: number }> = [];
-	let segmentStart = 0;
-	const MAX_WORDS_PER_SEGMENT = 20;
-	const SEGMENT_GAP_SECONDS = 0.65;
-
-	for (let index = 0; index < words.length - 1; index++) {
-		const current = words[index];
-		const next = words[index + 1];
-		const gap = Math.max(0, next.startTime - current.endTime);
-		const endsPhrase = /[.!?,:;]$/.test(current.text.trim());
-		const reachedWordLimit = index - segmentStart + 1 >= MAX_WORDS_PER_SEGMENT;
-		if (gap >= SEGMENT_GAP_SECONDS || endsPhrase || reachedWordLimit) {
-			segments.push({
-				wordStartIndex: segmentStart,
-				wordEndIndex: index,
-			});
-			segmentStart = index + 1;
-		}
-	}
-	segments.push({
-		wordStartIndex: segmentStart,
-		wordEndIndex: words.length - 1,
-	});
-	return segments.map((segment, index) => ({
-		id: `${elementId}:seg:${index}`,
-		wordStartIndex: segment.wordStartIndex,
-		wordEndIndex: segment.wordEndIndex,
-	}));
-}
-
 function areTranscriptWordsEqual({
 	before,
 	after,
@@ -907,7 +954,58 @@ function areTranscriptWordsEqual({
 		if (Math.abs(a.endTime - b.endTime) > 0.0001) return false;
 		if (Boolean(a.removed) !== Boolean(b.removed)) return false;
 		if (Boolean(a.hidden) !== Boolean(b.hidden)) return false;
+		if ((a.speakerId ?? undefined) !== (b.speakerId ?? undefined)) return false;
 		if ((a.segmentId ?? undefined) !== (b.segmentId ?? undefined)) return false;
+	}
+	return true;
+}
+
+function areTranscriptSpeakerLabelsEqual({
+	before,
+	after,
+}: {
+	before?: Record<string, string>;
+	after?: Record<string, string>;
+}): boolean {
+	const beforeEntries = Object.entries(before ?? {}).sort(([a], [b]) =>
+		a.localeCompare(b),
+	);
+	const afterEntries = Object.entries(after ?? {}).sort(([a], [b]) =>
+		a.localeCompare(b),
+	);
+	if (beforeEntries.length !== afterEntries.length) return false;
+	for (let index = 0; index < beforeEntries.length; index++) {
+		const beforeEntry = beforeEntries[index];
+		const afterEntry = afterEntries[index];
+		if (!beforeEntry || !afterEntry) return false;
+		if (beforeEntry[0] !== afterEntry[0]) return false;
+		if (beforeEntry[1] !== afterEntry[1]) return false;
+	}
+	return true;
+}
+
+function areTranscriptGapEditsEqual({
+	before,
+	after,
+}: {
+	before?: Record<string, { text?: string; removed?: boolean }>;
+	after?: Record<string, { text?: string; removed?: boolean }>;
+}): boolean {
+	const beforeEntries = Object.entries(before ?? {}).sort(([a], [b]) =>
+		a.localeCompare(b),
+	);
+	const afterEntries = Object.entries(after ?? {}).sort(([a], [b]) =>
+		a.localeCompare(b),
+	);
+	if (beforeEntries.length !== afterEntries.length) return false;
+	for (let index = 0; index < beforeEntries.length; index++) {
+		const beforeEntry = beforeEntries[index];
+		const afterEntry = afterEntries[index];
+		if (!beforeEntry || !afterEntry) return false;
+		if (beforeEntry[0] !== afterEntry[0]) return false;
+		if ((beforeEntry[1].text ?? "") !== (afterEntry[1].text ?? "")) return false;
+		if (Boolean(beforeEntry[1].removed) !== Boolean(afterEntry[1].removed))
+			return false;
 	}
 	return true;
 }
@@ -1200,9 +1298,7 @@ class CompactTranscriptMutationCommand extends Command {
 								? patch.beforeDuration
 								: patch.afterDuration,
 						trimEnd:
-							direction === "before"
-								? patch.beforeTrimEnd
-								: patch.afterTrimEnd,
+							direction === "before" ? patch.beforeTrimEnd : patch.afterTrimEnd,
 					},
 					draft: nextDraft,
 					applied: compileTranscriptDraft({
@@ -1414,6 +1510,8 @@ function applyTranscriptEditMutation({
 	mutateWords,
 	mutateSegmentsUi,
 	mutateCuts,
+	mutateSpeakerLabels,
+	mutateGapEdits,
 }: {
 	editor: ReturnType<typeof useEditor>;
 	trackId: string;
@@ -1429,6 +1527,14 @@ function applyTranscriptEditMutation({
 		cuts: TranscriptEditCutRange[],
 		words: NonNullable<VideoElement["transcriptDraft"]>["words"],
 	) => TranscriptEditCutRange[];
+	mutateSpeakerLabels?: (
+		speakerLabels: Record<string, string>,
+		words: NonNullable<VideoElement["transcriptDraft"]>["words"],
+	) => Record<string, string>;
+	mutateGapEdits?: (
+		gapEdits: Record<string, { text?: string; removed?: boolean }>,
+		words: NonNullable<VideoElement["transcriptDraft"]>["words"],
+	) => Record<string, { text?: string; removed?: boolean }> | undefined;
 }): { changed: boolean; error?: string } {
 	const tracks = editor.timeline.getTracks();
 	const target = getElementFromTracks({ tracks, trackId, elementId });
@@ -1482,6 +1588,18 @@ function applyTranscriptEditMutation({
 				});
 	const nextSegmentsUi =
 		mutateSegmentsUi?.(initialSegmentsUi, nextWords) ?? initialSegmentsUi;
+	const initialSpeakerLabels = transcriptDraft.speakerLabels ?? {};
+	const nextSpeakerLabels = mutateSpeakerLabels
+		? mutateSpeakerLabels(initialSpeakerLabels, nextWords)
+		: initialSpeakerLabels;
+	const initialGapEdits = normalizeTranscriptGapEdits({
+		gapEdits: transcriptDraft.gapEdits,
+	}) ?? {};
+	const nextGapEdits = mutateGapEdits
+		? normalizeTranscriptGapEdits({
+				gapEdits: mutateGapEdits(initialGapEdits, nextWords),
+			})
+		: initialGapEdits;
 	const wordsChanged = !areTranscriptWordsEqual({
 		before: baseWords,
 		after: nextWords,
@@ -1494,7 +1612,21 @@ function applyTranscriptEditMutation({
 		before: transcriptDraft.cuts ?? [],
 		after: cuts,
 	});
-	if (!wordsChanged && !segmentsChanged && !cutsChanged) {
+	const speakerLabelsChanged = !areTranscriptSpeakerLabelsEqual({
+		before: initialSpeakerLabels,
+		after: nextSpeakerLabels,
+	});
+	const gapEditsChanged = !areTranscriptGapEditsEqual({
+		before: initialGapEdits,
+		after: nextGapEdits,
+	});
+	if (
+		!wordsChanged &&
+		!segmentsChanged &&
+		!cutsChanged &&
+		!speakerLabelsChanged &&
+		!gapEditsChanged
+	) {
 		return { changed: false };
 	}
 
@@ -1505,6 +1637,8 @@ function applyTranscriptEditMutation({
 		cuts,
 		cutTimeDomain: "clip-local-source" as const,
 		segmentsUi: nextSegmentsUi,
+		speakerLabels: nextSpeakerLabels,
+		gapEdits: nextGapEdits,
 		updatedAt: new Date().toISOString(),
 	};
 	const relatedElementIds = getTranscriptCompanionElementIds({
@@ -1613,9 +1747,7 @@ function buildClipElement({
 	endTime: number;
 	canvasSize: { width: number; height: number };
 	scaleOverride?: number;
-	reframeSeed?:
-		| Awaited<ReturnType<typeof analyzeGeneratedClipReframes>>
-		| null;
+	reframeSeed?: Awaited<ReturnType<typeof analyzeGeneratedClipReframes>> | null;
 }) {
 	const duration = Math.max(0.1, endTime - startTime);
 	const sourceDuration = Math.max(endTime, asset.duration ?? endTime);
@@ -3209,6 +3341,102 @@ export function useEditorActions() {
 	);
 
 	useActionHandler(
+		"transcript-update-speaker-label",
+		(args) => {
+			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
+			const elementId =
+				typeof args?.elementId === "string" ? args.elementId : "";
+			const speakerId =
+				typeof args?.speakerId === "string" ? args.speakerId.trim() : "";
+			const label = typeof args?.label === "string" ? args.label.trim() : "";
+			if (!trackId || !elementId || !speakerId || !label) {
+				if (!label) {
+					toast.error("Speaker name cannot be empty");
+				}
+				return;
+			}
+
+			const result = applyTranscriptEditMutation({
+				editor,
+				trackId,
+				elementId,
+				mutateSpeakerLabels: (speakerLabels) => ({
+					...speakerLabels,
+					[speakerId]: label,
+				}),
+			});
+			if (result.error) {
+				toast.error(result.error);
+			}
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"transcript-update-gap-text",
+		(args) => {
+			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
+			const elementId =
+				typeof args?.elementId === "string" ? args.elementId : "";
+			const leftWordId =
+				typeof args?.leftWordId === "string" ? args.leftWordId : "";
+			const rightWordId =
+				typeof args?.rightWordId === "string" ? args.rightWordId : "";
+			const text = typeof args?.text === "string" ? args.text : "";
+			if (!trackId || !elementId || !leftWordId || !rightWordId) return;
+			const gapId = buildTranscriptGapId(leftWordId, rightWordId);
+			const result = applyTranscriptEditMutation({
+				editor,
+				trackId,
+				elementId,
+				mutateGapEdits: (gapEdits) => ({
+					...gapEdits,
+					[gapId]: {
+						...(gapEdits[gapId] ?? {}),
+						text,
+					},
+				}),
+			});
+			if (result.error) {
+				toast.error(result.error);
+			}
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"transcript-toggle-gap-removed",
+		(args) => {
+			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
+			const elementId =
+				typeof args?.elementId === "string" ? args.elementId : "";
+			const leftWordId =
+				typeof args?.leftWordId === "string" ? args.leftWordId : "";
+			const rightWordId =
+				typeof args?.rightWordId === "string" ? args.rightWordId : "";
+			if (!trackId || !elementId || !leftWordId || !rightWordId) return;
+			const removed = Boolean(args?.removed);
+			const gapId = buildTranscriptGapId(leftWordId, rightWordId);
+			const result = applyTranscriptEditMutation({
+				editor,
+				trackId,
+				elementId,
+				mutateGapEdits: (gapEdits) => ({
+					...gapEdits,
+					[gapId]: {
+						...(gapEdits[gapId] ?? {}),
+						removed,
+					},
+				}),
+			});
+			if (result.error) {
+				toast.error(result.error);
+			}
+		},
+		undefined,
+	);
+
+	useActionHandler(
 		"rebuild-captions-for-clip",
 		(args) => {
 			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
@@ -3248,7 +3476,7 @@ export function useEditorActions() {
 									status: "idle",
 									updatedAt: transcriptDraft.updatedAt,
 								},
-						  })
+							})
 						: element,
 				);
 				return { ...track, elements: nextElements } as TimelineTrack;
@@ -3273,6 +3501,338 @@ export function useEditorActions() {
 			clearTranscriptTimelineSnapshotCache();
 			editor.save.markDirty();
 			toast.success("Rebuilt captions for clip");
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"refresh-derived-media-after-clip-expansion",
+		(args) => {
+			void (async () => {
+				const trackId = typeof args?.trackId === "string" ? args.trackId : "";
+				const elementId =
+					typeof args?.elementId === "string" ? args.elementId : "";
+				if (!trackId || !elementId) return;
+
+				const previousTrimStart =
+					typeof args?.previousTrimStart === "number"
+						? args.previousTrimStart
+						: Number.NaN;
+				const previousDuration =
+					typeof args?.previousDuration === "number"
+						? args.previousDuration
+						: Number.NaN;
+				if (
+					!Number.isFinite(previousTrimStart) ||
+					!Number.isFinite(previousDuration)
+				) {
+					return;
+				}
+
+				const initialTracks = editor.timeline.getTracks();
+				const target = getElementFromTracks({
+					tracks: initialTracks,
+					trackId,
+					elementId,
+				});
+				if (!target || !isTranscriptEditableMediaElement(target)) {
+					return;
+				}
+				if (
+					!didRevealNewSourceRange({
+						before: {
+							trimStart: previousTrimStart,
+							duration: previousDuration,
+						},
+						after: {
+							trimStart: target.trimStart,
+							duration: target.duration,
+						},
+					})
+				) {
+					return;
+				}
+
+				const expectedTrimStart = target.trimStart;
+				const expectedDuration = target.duration;
+				const expectedTranscriptUpdatedAt =
+					typeof args?.previousTranscriptUpdatedAt === "string"
+						? args.previousTranscriptUpdatedAt
+						: "";
+
+				let refreshedTranscript:
+					| NonNullable<VideoElement["transcriptDraft"]>
+					| NonNullable<AudioElement["transcriptDraft"]>
+					| null = null;
+
+				const mediaSourceId = getEditableMediaElementSourceId({
+					element: target,
+				});
+				const mediaAsset =
+					mediaSourceId === null
+						? null
+						: (editor.media
+								.getAssets()
+								.find((asset) => asset.id === mediaSourceId) ?? null);
+
+				if (mediaAsset) {
+					try {
+						const project = editor.project.getActive();
+						const transcriptResult = await getOrCreateClipTranscriptWithReuse({
+							project,
+							asset: mediaAsset,
+							modelId: DEFAULT_TRANSCRIPTION_MODEL,
+						});
+						if (!transcriptResult.fromCache) {
+							editor.project.setActiveProject({
+								project: {
+									...project,
+									clipTranscriptCache: {
+										...(project.clipTranscriptCache ?? {}),
+										[transcriptResult.cacheKey]: transcriptResult.transcript,
+									},
+								},
+							});
+						}
+
+						const sourceWindowWords = clipTranscriptWordsForWindow({
+							words: transcriptResult.transcript.words ?? [],
+							startTime: expectedTrimStart,
+							endTime: expectedTrimStart + expectedDuration,
+						});
+						const sourceWindowSegments =
+							sourceWindowWords.length === 0
+								? clipTranscriptSegmentsForWindow({
+										segments: transcriptResult.transcript.segments ?? [],
+										startTime: expectedTrimStart,
+										endTime: expectedTrimStart + expectedDuration,
+									})
+								: [];
+						if (
+							sourceWindowWords.length > 0 ||
+							sourceWindowSegments.length > 0
+						) {
+							const fullProjectionWords =
+								(transcriptResult.transcript.words?.length ?? 0) > 0
+									? buildTranscriptWordsFromTimedWords({
+											mediaElementId: target.id,
+											words: transcriptResult.transcript.words ?? [],
+										})
+									: buildTranscriptWordsFromSegments({
+											mediaElementId: target.id,
+											segments: transcriptResult.transcript.segments ?? [],
+										});
+							const wordsForEdit =
+								sourceWindowWords.length > 0
+									? buildTranscriptWordsFromTimedWords({
+											mediaElementId: target.id,
+											words: sourceWindowWords,
+										})
+									: buildTranscriptWordsFromSegments({
+											mediaElementId: target.id,
+											segments: sourceWindowSegments,
+										});
+							refreshedTranscript = {
+								version: 1 as const,
+								source: "word-level" as const,
+								words: wordsForEdit,
+								cuts: buildTranscriptCutsFromWords({ words: wordsForEdit }),
+								cutTimeDomain: "clip-local-source" as const,
+								updatedAt: new Date().toISOString(),
+								projectionSource: {
+									words: fullProjectionWords,
+									cuts: buildTranscriptCutsFromWords({
+										words: fullProjectionWords,
+									}),
+									updatedAt:
+										transcriptResult.transcript.updatedAt ??
+										new Date().toISOString(),
+									baseTrimStart: 0,
+								},
+							};
+						}
+					} catch (error) {
+						console.warn(
+							"Failed to refresh transcript window after clip expansion:",
+							error,
+						);
+					}
+				}
+
+				type MotionTrackingRefreshResult = {
+					presetId: string;
+					signature: string;
+					motionTracking: VideoMotionTracking;
+				};
+				const motionTrackingResults: MotionTrackingRefreshResult[] = [];
+				if (target.type === "video" && mediaAsset?.type === "video") {
+					const projectCanvas = editor.project.getActive().settings.canvasSize;
+					const sourceRange = getVideoElementSourceRange({
+						element: target,
+						asset: mediaAsset,
+					});
+					for (const preset of target.reframePresets ?? []) {
+						if (!preset.motionTracking?.enabled) continue;
+						try {
+							const result = await analyzeGeneratedClipMotionTracking({
+								asset: mediaAsset,
+								startTime: sourceRange.startTime,
+								endTime: sourceRange.endTime,
+								canvasSize: projectCanvas,
+								baseScale: preset.transform.scale,
+								targetTransform: preset.transform,
+								targetSubjectHint: getTrackingSubjectHint({ preset }),
+								targetSubjectSeed: preset.subjectSeed,
+								animateScale: preset.motionTracking?.animateScale ?? false,
+								trackingStrength: normalizeMotionTrackingStrength(
+									preset.motionTracking?.trackingStrength,
+								),
+							});
+							if (result.keyframes.length === 0) continue;
+							motionTrackingResults.push({
+								presetId: preset.id,
+								signature: buildMotionTrackingPresetSignature({ preset }),
+								motionTracking: {
+									enabled: true,
+									mode: "subject-single-v1",
+									source: "baked-keyframes",
+									lastAnalyzedAt: new Date().toISOString(),
+									animateScale: preset.motionTracking?.animateScale ?? false,
+									trackingStrength: normalizeMotionTrackingStrength(
+										preset.motionTracking?.trackingStrength,
+									),
+									sourceAssetId: mediaAsset.id,
+									sourceStartTime: sourceRange.startTime,
+									sourceEndTime: sourceRange.endTime,
+									presetSignature: buildMotionTrackingPresetSignature({
+										preset,
+									}),
+									sampleCount: result.sampleCount,
+									trackedSampleCount: result.trackedSampleCount,
+									keyframes: result.keyframes,
+								},
+							});
+						} catch (error) {
+							console.warn(
+								"Failed to refresh motion tracking after clip expansion:",
+								error,
+							);
+						}
+					}
+				}
+
+				let nextTracks = editor.timeline.getTracks();
+				let didChangeTracks = false;
+				const latestTarget = getElementFromTracks({
+					tracks: nextTracks,
+					trackId,
+					elementId,
+				});
+				if (
+					!latestTarget ||
+					!isTranscriptEditableMediaElement(latestTarget) ||
+					!hasMatchingSourceWindow({
+						element: latestTarget,
+						trimStart: expectedTrimStart,
+						duration: expectedDuration,
+					})
+				) {
+					return;
+				}
+
+				const transcriptWasEditedSinceResize =
+					latestTarget.transcriptDraft &&
+					expectedTranscriptUpdatedAt.length > 0 &&
+					latestTarget.transcriptDraft.updatedAt !==
+						expectedTranscriptUpdatedAt;
+
+				if (refreshedTranscript && !transcriptWasEditedSinceResize) {
+					const refreshedTarget = withTranscriptState({
+						element: latestTarget,
+						draft: refreshedTranscript,
+						applied: compileTranscriptDraft({
+							mediaElementId: latestTarget.id,
+							draft: refreshedTranscript,
+							mediaStartTime: latestTarget.startTime,
+							mediaDuration: latestTarget.duration,
+						}),
+						compileState: {
+							status: "idle",
+							updatedAt: refreshedTranscript.updatedAt,
+						},
+					});
+					nextTracks = replaceElementInTracks({
+						tracks: nextTracks,
+						trackId,
+						elementId,
+						element: refreshedTarget,
+					});
+					didChangeTracks = true;
+					const rebuilt = rebuildCaptionTrackForMediaElement({
+						tracks: nextTracks,
+						mediaElementId: latestTarget.id,
+					});
+					if (rebuilt.error) {
+						console.warn(
+							"Failed to rebuild captions after clip expansion:",
+							rebuilt.error,
+						);
+					} else if (rebuilt.changed) {
+						const deduped = dedupeTranscriptEditsInTracks({
+							tracks: rebuilt.tracks,
+						});
+						nextTracks = deduped.changed ? deduped.tracks : rebuilt.tracks;
+						clearTranscriptTimelineSnapshotCache();
+						didChangeTracks = true;
+					} else {
+						nextTracks = rebuilt.tracks;
+					}
+				}
+
+				if (motionTrackingResults.length > 0) {
+					const latestVideoTarget = getElementFromTracks({
+						tracks: nextTracks,
+						trackId,
+						elementId,
+					});
+					if (latestVideoTarget?.type === "video") {
+						const motionTrackingByPresetId = new Map(
+							motionTrackingResults.map((entry) => [entry.presetId, entry]),
+						);
+						const nextPresets = (latestVideoTarget.reframePresets ?? []).map(
+							(preset) => {
+								const refreshed = motionTrackingByPresetId.get(preset.id);
+								if (!refreshed) return preset;
+								if (
+									buildMotionTrackingPresetSignature({ preset }) !==
+									refreshed.signature
+								) {
+									return preset;
+								}
+								return {
+									...preset,
+									motionTracking: refreshed.motionTracking,
+								};
+							},
+						);
+						nextTracks = replaceElementInTracks({
+							tracks: nextTracks,
+							trackId,
+							elementId,
+							element: {
+								...latestVideoTarget,
+								reframePresets: nextPresets,
+							},
+						});
+						didChangeTracks = true;
+					}
+				}
+
+				if (didChangeTracks) {
+					editor.timeline.updateTracks(nextTracks);
+					editor.save.markDirty();
+				}
+			})();
 		},
 		undefined,
 	);
@@ -3693,7 +4253,8 @@ export function useEditorActions() {
 										backfillMaxOverlapRatio: 0.2,
 										coverageBucketSeconds: VIRAL_CLIP_TARGET_SECONDS,
 									});
-									const baseline = relaxed.length === 0 ? strictCandidates : relaxed;
+									const baseline =
+										relaxed.length === 0 ? strictCandidates : relaxed;
 									if (baseline.length >= minDesiredClipCount) {
 										return baseline;
 									}
@@ -3711,10 +4272,9 @@ export function useEditorActions() {
 										excludeCutoffFailuresInBackfill: false,
 									});
 									const byId = new Map(
-										[...strictCandidates, ...baseline, ...rescue].map((candidate) => [
-											candidate.id,
-											candidate,
-										]),
+										[...strictCandidates, ...baseline, ...rescue].map(
+											(candidate) => [candidate.id, candidate],
+										),
 									);
 									const resolved = Array.from(byId.values())
 										.sort((a, b) => b.scoreOverall - a.scoreOverall)
@@ -3855,9 +4415,9 @@ export function useEditorActions() {
 						clipAudioBuffer: AudioBuffer | null;
 						continuousCaption: ReturnType<typeof buildContinuousCaptionForClip>;
 						captionSource: "local-word" | "transcript-cache" | null;
-						reframeSeed:
-							| Awaited<ReturnType<typeof analyzeGeneratedClipReframes>>
-							| null;
+						reframeSeed: Awaited<
+							ReturnType<typeof analyzeGeneratedClipReframes>
+						> | null;
 					};
 					const preparedImports: PreparedClipImport[] = [];
 					const updatedWordTranscriptionCacheEntries: Record<
@@ -4501,6 +5061,49 @@ export function useEditorActions() {
 	);
 
 	useActionHandler(
+		"generate-speaker-turn-reframes",
+		(args) => {
+			const trackId = args?.trackId;
+			const elementId = args?.elementId;
+			if (!trackId || !elementId) {
+				toast.error("Missing target clip");
+				return;
+			}
+			const track = editor.timeline.getTrackById({ trackId });
+			const element = track?.elements.find(
+				(candidate) => candidate.id === elementId,
+			);
+			if (!track || !element || element.type !== "video") {
+				toast.error("Select a video clip first");
+				return;
+			}
+			const generated = buildSpeakerTurnReframeSwitches({ element });
+			if (!generated) {
+				toast.error(
+					"Speaker turn reframes need diarized transcript words plus Subject Left and Subject Right presets.",
+				);
+				return;
+			}
+			editor.timeline.updateElements({
+				updates: [
+					{
+						trackId,
+						elementId,
+						updates: {
+							defaultReframePresetId: generated.defaultPresetId,
+							reframeSwitches: generated.switches,
+						},
+					},
+				],
+			});
+			toast.success(
+				`Generated ${generated.switches.length} speaker turn switches from ${generated.speakerOrder.length} diarized speakers.`,
+			);
+		},
+		undefined,
+	);
+
+	useActionHandler(
 		"toggle-split-screen-selected",
 		() => {
 			if (selectedElements.length !== 1) {
@@ -4522,10 +5125,11 @@ export function useEditorActions() {
 				updates: target.element.splitScreen?.enabled
 					? {
 							enabled: false,
-					  }
+						}
 					: {
 							enabled: true,
-							layoutPreset: target.element.splitScreen?.layoutPreset ?? "top-bottom",
+							layoutPreset:
+								target.element.splitScreen?.layoutPreset ?? "top-bottom",
 							slots:
 								target.element.splitScreen?.slots ??
 								buildDefaultVideoSplitScreenBindings({
@@ -4534,7 +5138,7 @@ export function useEditorActions() {
 									presets,
 								}),
 							sections: target.element.splitScreen?.sections ?? [],
-					  },
+						},
 			});
 		},
 		undefined,

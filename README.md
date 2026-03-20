@@ -59,14 +59,11 @@ Thanks to [Vercel](https://vercel.com?utm_source=github-opencut&utm_campaign=oss
 
 1. Fork and clone the repository
 
-2. Copy the environment file:
+2. Create `apps/web/.env` and put your local config there:
 
    ```bash
-   # Unix/Linux/Mac
-   cp apps/web/.env.example apps/web/.env.local
-
    # Windows PowerShell
-   Copy-Item apps/web/.env.example apps/web/.env.local
+   New-Item -ItemType File apps/web/.env
    ```
 
 3. Start Redis:
@@ -99,7 +96,7 @@ Thanks to [Vercel](https://vercel.com?utm_source=github-opencut&utm_campaign=oss
 
 The application will be available at [http://localhost:3000](http://localhost:3000).
 
-The `.env.example` has sensible defaults that match the Docker Compose config — it should work out of the box.
+Use `apps/web/.env` as the active local config for both dev and Docker-based transcription.
 
 ### Self-Hosting with Docker
 
@@ -131,6 +128,19 @@ Web-only shortcut (rebuilds/starts `web` without stopping an already-running `lo
 bun run docker:up:web
 ```
 
+Transcription Docker workflows:
+
+```bash
+# Normal startup; reuses existing images
+bun run docker:up
+
+# Rebuild the thin local-transcribe app image only
+bun run docker:rebuild
+
+# Rebuild the heavy CUDA/Torch/pyannote base image only when dependencies change
+bun run docker:rebuild:transcribe-base
+```
+
 Transcription quality/memory tuning (Docker env overrides):
 
 ```bash
@@ -150,6 +160,24 @@ LOCAL_TRANSCRIBE_MAX_CONCURRENCY=1 bun run docker:up
 LOCAL_TRANSCRIBE_PRIMARY_LANGUAGE=en LOCAL_TRANSCRIBE_FORCE_PRIMARY_LANGUAGE=true LOCAL_TRANSCRIBE_PREWARM=true bun run docker:up
 ```
 
+Speaker diarization with the existing Docker transcription sidecar:
+
+1. Add these to `apps/web/.env`:
+
+```bash
+LOCAL_TRANSCRIBE_DIARIZATION=true
+LOCAL_TRANSCRIBE_HF_TOKEN=hf_your_token_here
+LOCAL_TRANSCRIBE_DIARIZATION_ENABLED=true
+```
+
+2. Rebuild and start the stack:
+
+```bash
+bun run docker:up
+```
+
+The Docker helper now reads only `apps/web/.env`, so the web app container and `local-transcribe` container use the same transcription config.
+
 Verify local-transcribe is actually running on GPU:
 
 ```bash
@@ -157,6 +185,8 @@ docker compose exec -T local-transcribe nvidia-smi --query-gpu=name,driver_versi
 docker compose exec -T local-transcribe python3 -c "import torch; print('cuda_available=', torch.cuda.is_available()); print('device_count=', torch.cuda.device_count()); print('device_name=', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'n/a')"
 curl http://127.0.0.1:8765/healthz
 ```
+
+For diarization specifically, `/healthz` should include `"diarization_enabled": true`.
 
 `local-transcribe` now uses a named Docker volume (`local-transcribe-cache`) for model/cache persistence so repeated restarts avoid re-downloading alignment/model artifacts.
 

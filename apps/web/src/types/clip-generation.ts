@@ -1,4 +1,7 @@
-import type { TranscriptionSegment } from "@/types/transcription";
+import type {
+	TranscriptionSegment,
+	TranscriptionWord,
+} from "@/types/transcription";
 
 export type ViralityFactor =
 	| "hook"
@@ -99,5 +102,6 @@ export interface ClipTranscriptCacheEntry {
 	modelId: string;
 	text: string;
 	segments: TranscriptionSegment[];
+	words?: TranscriptionWord[];
 	updatedAt: string;
 }

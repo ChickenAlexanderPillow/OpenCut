@@ -237,6 +237,8 @@ interface BaseAudioElement extends BaseTimelineElement {
 		cutTimeDomain?: TranscriptCutTimeDomain;
 		projectionSource?: TranscriptProjectionSource;
 		segmentsUi?: TranscriptSegmentUi[];
+		speakerLabels?: Record<string, string>;
+		gapEdits?: Record<string, import("./transcription").TranscriptGapEdit>;
 		updatedAt: string;
 	};
 }
@@ -280,6 +282,8 @@ export interface VideoElement extends BaseTimelineElement {
 		cutTimeDomain?: TranscriptCutTimeDomain;
 		projectionSource?: TranscriptProjectionSource;
 		segmentsUi?: TranscriptSegmentUi[];
+		speakerLabels?: Record<string, string>;
+		gapEdits?: Record<string, import("./transcription").TranscriptGapEdit>;
 		updatedAt: string;
 	};
 	transform: Transform;

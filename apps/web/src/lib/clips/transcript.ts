@@ -12,6 +12,7 @@ import type {
 	TranscriptionModelId,
 	TranscriptionProgress,
 	TranscriptionSegment,
+	TranscriptionWord,
 } from "@/types/transcription";
 import {
 	evaluateTranscriptSuitability,
@@ -19,7 +20,7 @@ import {
 } from "@/lib/external-projects/transcript-suitability";
 import type { ExternalProjectTranscriptCacheEntry } from "@/types/external-projects";
 
-export const CLIP_TRANSCRIPT_CACHE_VERSION = 1;
+export const CLIP_TRANSCRIPT_CACHE_VERSION = 2;
 export const PROJECT_MEDIA_TRANSCRIPT_MODEL: TranscriptionModelId =
 	DEFAULT_TRANSCRIPTION_MODEL;
 export const PROJECT_MEDIA_TRANSCRIPT_LANGUAGE: TranscriptionLanguage = "en";
@@ -113,7 +114,7 @@ export function buildProjectMediaTranscriptLinkKey({
 	});
 }
 
-function getClipTranscriptCacheKey({
+export function getClipTranscriptCacheKey({
 	mediaId,
 	modelId,
 	language,
@@ -131,6 +132,7 @@ export function buildClipTranscriptCacheEntryForAsset({
 	language,
 	text,
 	segments,
+	words,
 	updatedAt = new Date().toISOString(),
 }: {
 	asset: MediaAsset;
@@ -138,6 +140,7 @@ export function buildClipTranscriptCacheEntryForAsset({
 	language: TranscriptionLanguage;
 	text: string;
 	segments: TranscriptionSegment[];
+	words?: TranscriptionWord[];
 	updatedAt?: string;
 }): {
 	transcript: ClipTranscriptCacheEntry;
@@ -163,6 +166,7 @@ export function buildClipTranscriptCacheEntryForAsset({
 		modelId,
 		text,
 		segments: normalizeTranscriptionSegments({ segments }),
+		words: normalizeTranscriptionWords({ words: words ?? [] }),
 		updatedAt,
 	};
 	return {
@@ -268,31 +272,45 @@ function encodeMonoPcm16WavBlob({
 	return new Blob([buffer], { type: "audio/wav" });
 }
 
-function resolveClipTranscriptionApiCandidates(): string[] {
+function resolveClipTranscriptionApiCandidates({
+	endpointPath = "/api/clips/transcribe",
+}: {
+	endpointPath?: string;
+} = {}): string[] {
 	const fallbackBase = process.env.NEXT_PUBLIC_SITE_URL?.trim();
 	const candidates: string[] = [];
 
 	if (typeof window !== "undefined") {
 		const origin = window.location.origin;
 		if (origin.startsWith("http://") || origin.startsWith("https://")) {
-			candidates.push(`${origin}/api/clips/transcribe`);
+			candidates.push(`${origin}${endpointPath}`);
 		}
-		candidates.push("/api/clips/transcribe");
+		candidates.push(endpointPath);
 		if (fallbackBase) {
-			candidates.push(
-				`${fallbackBase.replace(/\/$/, "")}/api/clips/transcribe`,
-			);
+			const normalizedFallbackBase = fallbackBase.replace(/\/$/, "");
+			if (normalizedFallbackBase === origin) {
+				candidates.push(`${normalizedFallbackBase}${endpointPath}`);
+			}
 		}
 	} else {
-		candidates.push("/api/clips/transcribe");
+		candidates.push(endpointPath);
 		if (fallbackBase) {
-			candidates.push(
-				`${fallbackBase.replace(/\/$/, "")}/api/clips/transcribe`,
-			);
+			candidates.push(`${fallbackBase.replace(/\/$/, "")}${endpointPath}`);
 		}
 	}
 
 	return Array.from(new Set(candidates));
+}
+
+function isRetryableClipTranscriptionError(error: Error): boolean {
+	const message = error.message.toLowerCase();
+	return (
+		message.includes("failed to fetch") ||
+		message.includes("networkerror") ||
+		message.includes("load failed") ||
+		message.includes("timed out") ||
+		message.includes("abort")
+	);
 }
 
 async function transcribeWithClipApi({
@@ -301,13 +319,21 @@ async function transcribeWithClipApi({
 	language,
 	modelId,
 	cacheKey,
+	bypassCache = false,
+	endpointPath,
 }: {
 	samples: Float32Array;
 	sampleRate: number;
 	language: TranscriptionLanguage;
 	modelId: TranscriptionModelId;
 	cacheKey: string;
-}): Promise<{ text: string; segments: TranscriptionSegment[] }> {
+	bypassCache?: boolean;
+	endpointPath?: string;
+}): Promise<{
+	text: string;
+	segments: TranscriptionSegment[];
+	words: TranscriptionWord[];
+}> {
 	const normalizedAudio = resampleMonoSamplesForTranscription({
 		samples,
 		sampleRate,
@@ -321,6 +347,8 @@ async function transcribeWithClipApi({
 		language,
 		modelId,
 		cacheKey,
+		bypassCache,
+		endpointPath,
 	});
 }
 
@@ -329,14 +357,22 @@ async function transcribeWavBlobWithClipApi({
 	language,
 	modelId,
 	cacheKey,
+	bypassCache = false,
+	endpointPath = "/api/clips/transcribe",
 }: {
 	wavBlob: Blob;
 	language: TranscriptionLanguage;
 	modelId: TranscriptionModelId;
 	cacheKey: string;
-}): Promise<{ text: string; segments: TranscriptionSegment[] }> {
+	bypassCache?: boolean;
+	endpointPath?: string;
+}): Promise<{
+	text: string;
+	segments: TranscriptionSegment[];
+	words: TranscriptionWord[];
+}> {
 	if (wavBlob.size <= 0) {
-		return { text: "", segments: [] };
+		return { text: "", segments: [], words: [] };
 	}
 	const requestStartedAt = nowMs();
 	const approxAudioDurationSeconds = Math.max(
@@ -349,7 +385,7 @@ async function transcribeWavBlobWithClipApi({
 		) / 1000,
 	);
 
-	const endpoints = resolveClipTranscriptionApiCandidates();
+	const endpoints = resolveClipTranscriptionApiCandidates({ endpointPath });
 	let lastError: Error | null = null;
 
 	for (const endpoint of endpoints) {
@@ -367,7 +403,9 @@ async function transcribeWavBlobWithClipApi({
 					modelId,
 				}),
 			);
-			form.append("cacheKey", cacheKey);
+			if (!bypassCache && cacheKey.trim().length > 0) {
+				form.append("cacheKey", cacheKey);
+			}
 			if (language !== "auto") {
 				form.append("language", language);
 			}
@@ -388,13 +426,27 @@ async function transcribeWavBlobWithClipApi({
 			}
 
 			const payload = (await response.json()) as {
-				segments?: Array<{ text: string; start: number; end: number }>;
+				segments?: Array<{
+					text: string;
+					start: number;
+					end: number;
+					speakerId?: string;
+				}>;
+				words?: Array<{
+					word: string;
+					start: number;
+					end: number;
+					speakerId?: string;
+				}>;
 				granularity?: "word" | "segment" | "none";
 				engine?: string;
 				model?: string;
 				timingsMs?: Record<string, number>;
 				audioDurationSeconds?: number;
 				wordCount?: number;
+				diarization?: boolean;
+				diarizationError?: string;
+				speakerCount?: number;
 			};
 			if (payload.granularity && payload.granularity !== "word") {
 				throw new Error(
@@ -406,6 +458,23 @@ async function transcribeWavBlobWithClipApi({
 					text: segment.text,
 					start: segment.start,
 					end: segment.end,
+					speakerId:
+						typeof segment.speakerId === "string" &&
+						segment.speakerId.trim().length > 0
+							? segment.speakerId.trim()
+							: undefined,
+				})),
+			});
+			const words = normalizeTranscriptionWords({
+				words: (payload.words ?? []).map((word) => ({
+					word: word.word,
+					start: word.start,
+					end: word.end,
+					speakerId:
+						typeof word.speakerId === "string" &&
+						word.speakerId.trim().length > 0
+							? word.speakerId.trim()
+							: undefined,
 				})),
 			});
 			const elapsedMs = Math.round(nowMs() - requestStartedAt);
@@ -424,6 +493,11 @@ async function transcribeWavBlobWithClipApi({
 				audioDurationSeconds: resolvedAudioDuration,
 				realtimeFactor,
 				wordCount: payload.wordCount ?? segments.length,
+				diarization: payload.diarization ?? null,
+				diarizationError: payload.diarizationError ?? null,
+				speakerCount:
+					payload.speakerCount ??
+					new Set(words.map((word) => word.speakerId).filter(Boolean)).size,
 				timingsMs: payload.timingsMs ?? null,
 			});
 			return {
@@ -432,6 +506,7 @@ async function transcribeWavBlobWithClipApi({
 					.join(" ")
 					.trim(),
 				segments,
+				words,
 			};
 		} catch (error) {
 			window.clearTimeout(timeoutId);
@@ -439,6 +514,9 @@ async function transcribeWavBlobWithClipApi({
 				error instanceof Error
 					? error
 					: new Error("Failed to reach clip transcription API");
+			if (!isRetryableClipTranscriptionError(lastError)) {
+				throw lastError;
+			}
 		}
 	}
 
@@ -457,6 +535,41 @@ function normalizeTranscriptionSegments({
 				Number.isFinite(segment.end) &&
 				segment.end > segment.start,
 		)
+		.map((segment) => ({
+			...segment,
+			text: segment.text.trim(),
+			speakerId:
+				typeof segment.speakerId === "string" &&
+				segment.speakerId.trim().length > 0
+					? segment.speakerId.trim()
+					: undefined,
+		}))
+		.sort((a, b) => a.start - b.start);
+}
+
+function normalizeTranscriptionWords({
+	words,
+}: {
+	words: TranscriptionWord[];
+}): TranscriptionWord[] {
+	return [...words]
+		.filter(
+			(word) =>
+				typeof word.word === "string" &&
+				word.word.trim().length > 0 &&
+				Number.isFinite(word.start) &&
+				Number.isFinite(word.end) &&
+				word.end > word.start,
+		)
+		.map((word) => ({
+			word: word.word.trim(),
+			start: Math.max(0, word.start),
+			end: Math.max(Math.max(0, word.start) + 0.01, word.end),
+			speakerId:
+				typeof word.speakerId === "string" && word.speakerId.trim().length > 0
+					? word.speakerId.trim()
+					: undefined,
+		}))
 		.sort((a, b) => a.start - b.start);
 }
 
@@ -481,12 +594,18 @@ export async function transcribeClipTranscriptLocallyForAsset({
 	modelId = PROJECT_MEDIA_TRANSCRIPT_MODEL,
 	language = PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
 	onProgress,
+	bypassCache = false,
 }: {
 	asset: MediaAsset;
 	modelId?: TranscriptionModelId;
 	language?: TranscriptionLanguage;
 	onProgress?: (progress: TranscriptionProgress) => void;
-}): Promise<{ text: string; segments: TranscriptionSegment[] }> {
+	bypassCache?: boolean;
+}): Promise<{
+	text: string;
+	segments: TranscriptionSegment[];
+	words: TranscriptionWord[];
+}> {
 	const resolvedLanguage = language ?? "auto";
 	const emitProgress = ({
 		progress,
@@ -507,6 +626,7 @@ export async function transcribeClipTranscriptLocallyForAsset({
 				modelId,
 				language: resolvedLanguage,
 				onProgress,
+				bypassCache,
 			})
 		: await (async () => {
 				emitProgress({ progress: 0, message: "Preparing audio..." });
@@ -562,7 +682,11 @@ export async function transcribeClipTranscriptLocallyForAsset({
 						message: "Transcribing...",
 					});
 				}, CHUNK_PROGRESS_HEARTBEAT_MS);
-				let result: { text: string; segments: TranscriptionSegment[] };
+				let result: {
+					text: string;
+					segments: TranscriptionSegment[];
+					words: TranscriptionWord[];
+				};
 				try {
 					result = await transcribeWithClipApi({
 						samples: decoded.samples,
@@ -570,6 +694,7 @@ export async function transcribeClipTranscriptLocallyForAsset({
 						language: resolvedLanguage,
 						modelId,
 						cacheKey: `${asset.id}:${modelId}:${resolvedLanguage}:single`,
+						bypassCache,
 					});
 				} finally {
 					window.clearInterval(transcribeHeartbeatId);
@@ -784,12 +909,18 @@ async function transcribeAssetInChunks({
 	modelId,
 	language,
 	onProgress,
+	bypassCache = false,
 }: {
 	asset: MediaAsset;
 	modelId: TranscriptionModelId;
 	language: TranscriptionLanguage;
 	onProgress?: (progress: TranscriptionProgress) => void;
-}): Promise<{ text: string; segments: TranscriptionSegment[] }> {
+	bypassCache?: boolean;
+}): Promise<{
+	text: string;
+	segments: TranscriptionSegment[];
+	words: TranscriptionWord[];
+}> {
 	const totalStartedAt = nowMs();
 	const duration = Math.max(0, asset.duration ?? 0);
 	if (!Number.isFinite(duration) || duration <= 0) {
@@ -803,10 +934,12 @@ async function transcribeAssetInChunks({
 			language,
 			modelId,
 			cacheKey: `${asset.id}:${modelId}:${language}:full`,
+			bypassCache,
 		});
 		return {
 			text: result.text,
 			segments: normalizeTranscriptionSegments({ segments: result.segments }),
+			words: normalizeTranscriptionWords({ words: result.words }),
 		};
 	}
 
@@ -814,6 +947,7 @@ async function transcribeAssetInChunks({
 	const plans = buildChunkDecodePlans({ duration, windowSeconds });
 	const chunkCount = plans.length;
 	const mergedSegments: TranscriptionSegment[] = [];
+	const mergedWords: TranscriptionWord[] = [];
 	const mergedTextParts: string[] = [];
 	const prepareStartedAt = nowMs();
 	const preparedChunks = await prepareChunkAudioForTranscription({
@@ -829,6 +963,7 @@ async function transcribeAssetInChunks({
 		number,
 		{
 			segments: TranscriptionSegment[];
+			words: TranscriptionWord[];
 			textPart: string;
 		}
 	>();
@@ -878,12 +1013,13 @@ async function transcribeAssetInChunks({
 						const prepared = preparedByIndex.get(plan.chunkIndex);
 						const chunkResult =
 							!prepared || prepared.wavBlob.size <= 0
-								? { text: "", segments: [] }
+								? { text: "", segments: [], words: [] }
 								: await transcribeWavBlobWithClipApi({
 										wavBlob: prepared.wavBlob,
 										language,
 										modelId,
 										cacheKey: `${asset.id}:${modelId}:${language}:chunk:${plan.chunkIndex}:${plan.decodeStart.toFixed(3)}:${plan.decodeEnd.toFixed(3)}`,
+										bypassCache,
 									});
 
 						const adjustedSegments = chunkResult.segments
@@ -891,6 +1027,7 @@ async function transcribeAssetInChunks({
 								text: segment.text,
 								start: segment.start + plan.decodeStart,
 								end: segment.end + plan.decodeStart,
+								speakerId: segment.speakerId,
 							}))
 							.filter(
 								(segment) =>
@@ -901,11 +1038,31 @@ async function transcribeAssetInChunks({
 								text: segment.text,
 								start: clamp(segment.start, plan.logicalStart, plan.logicalEnd),
 								end: clamp(segment.end, plan.logicalStart, plan.logicalEnd),
+								speakerId: segment.speakerId,
 							}))
 							.filter((segment) => segment.end > segment.start);
+						const adjustedWords = chunkResult.words
+							.map((word) => ({
+								word: word.word,
+								start: word.start + plan.decodeStart,
+								end: word.end + plan.decodeStart,
+								speakerId: word.speakerId,
+							}))
+							.filter(
+								(word) =>
+									word.end > plan.logicalStart && word.start < plan.logicalEnd,
+							)
+							.map((word) => ({
+								word: word.word,
+								start: clamp(word.start, plan.logicalStart, plan.logicalEnd),
+								end: clamp(word.end, plan.logicalStart, plan.logicalEnd),
+								speakerId: word.speakerId,
+							}))
+							.filter((word) => word.end > word.start);
 
 						adjustedByChunk.set(plan.chunkIndex, {
 							segments: adjustedSegments,
+							words: adjustedWords,
 							textPart: chunkResult.text.trim(),
 						});
 						completedChunks += 1;
@@ -947,6 +1104,7 @@ async function transcribeAssetInChunks({
 		const adjusted = adjustedByChunk.get(plan.chunkIndex);
 		if (!adjusted) continue;
 		mergedSegments.push(...adjusted.segments);
+		mergedWords.push(...adjusted.words);
 		if (adjusted.textPart.length > 0) {
 			mergedTextParts.push(adjusted.textPart);
 		}
@@ -954,6 +1112,9 @@ async function transcribeAssetInChunks({
 
 	const normalizedSegments = normalizeTranscriptionSegments({
 		segments: mergedSegments,
+	});
+	const normalizedWords = normalizeTranscriptionWords({
+		words: mergedWords,
 	});
 	const totalDurationMs = Math.round(nowMs() - totalStartedAt);
 	console.info("Chunked transcript pipeline metrics", {
@@ -978,6 +1139,7 @@ async function transcribeAssetInChunks({
 				.join(" ")
 				.trim() || mergedTextParts.join(" ").trim(),
 		segments: normalizedSegments,
+		words: normalizedWords,
 	};
 }
 
@@ -1231,6 +1393,7 @@ export async function getOrCreateClipTranscriptForAsset({
 			language: resolvedLanguage,
 			text: linkedProjectTranscript.entry.text,
 			segments: linkedProjectTranscript.entry.segments,
+			words: linkedProjectTranscript.entry.words,
 			updatedAt: linkedProjectTranscript.entry.updatedAt,
 		});
 		return {
@@ -1278,6 +1441,7 @@ export async function getOrCreateClipTranscriptForAsset({
 		language: resolvedLanguage,
 		text: result.text,
 		segments: result.segments,
+		words: result.words,
 	});
 	return {
 		transcript: derived.transcript,
@@ -1407,4 +1571,24 @@ export function clipTranscriptSegmentsForWindow({
 				segment.end > segment.start &&
 				segment.text.length > 0,
 		);
+}
+
+export function clipTranscriptWordsForWindow({
+	words,
+	startTime,
+	endTime,
+}: {
+	words: TranscriptionWord[];
+	startTime: number;
+	endTime: number;
+}): TranscriptionWord[] {
+	return normalizeTranscriptionWords({ words })
+		.filter((word) => word.end > startTime && word.start < endTime)
+		.map((word) => ({
+			word: word.word,
+			start: Math.max(0, Math.max(startTime, word.start) - startTime),
+			end: Math.max(0.01, Math.min(endTime, word.end) - startTime),
+			speakerId: word.speakerId,
+		}))
+		.filter((word) => word.end > word.start);
 }

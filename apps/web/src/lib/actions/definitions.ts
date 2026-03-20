@@ -166,11 +166,55 @@ export const ACTIONS = {
 		category: "editing",
 		args: { trackId: "string", elementId: "string", wordId: "string" },
 	},
+	"transcript-update-speaker-label": {
+		description: "Update a transcript speaker label",
+		category: "editing",
+		args: {
+			trackId: "string",
+			elementId: "string",
+			speakerId: "string",
+			label: "string",
+		},
+	},
+	"transcript-update-gap-text": {
+		description: "Update transcript gap text",
+		category: "editing",
+		args: {
+			trackId: "string",
+			elementId: "string",
+			leftWordId: "string",
+			rightWordId: "string",
+			text: "string",
+		},
+	},
+	"transcript-toggle-gap-removed": {
+		description: "Toggle transcript gap removed state",
+		category: "editing",
+		args: {
+			trackId: "string",
+			elementId: "string",
+			leftWordId: "string",
+			rightWordId: "string",
+			removed: "boolean",
+		},
+	},
 	"rebuild-captions-for-clip": {
 		description:
 			"Rebuild captions for a clip and replace the current caption track",
 		category: "editing",
 		args: { trackId: "string", elementId: "string" },
+	},
+	"refresh-derived-media-after-clip-expansion": {
+		description:
+			"Refresh generated captions and motion tracking after a clip expansion",
+		category: "editing",
+		args: {
+			trackId: "string",
+			elementId: "string",
+			previousTrimStart: "number",
+			previousDuration: "number",
+			previousTranscriptUpdatedAt: "string",
+		},
 	},
 	"apply-transition-in": {
 		description: "Apply an in transition preset to selected or targeted clips",
@@ -213,6 +257,11 @@ export const ACTIONS = {
 	"toggle-split-screen-selected": {
 		description: "Toggle split screen for selected video clip",
 		category: "editing",
+	},
+	"generate-speaker-turn-reframes": {
+		description: "Generate reframe switches from diarized speaker turns",
+		category: "editing",
+		args: { trackId: "string", elementId: "string" },
 	},
 	"delete-selected": {
 		description: "Delete selected elements",
