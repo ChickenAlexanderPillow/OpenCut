@@ -9,9 +9,9 @@ import { DEFAULT_TRANSCRIPTION_MODEL } from "@/constants/transcription-constants
 import {
 	applyCutRangesToWords,
 	buildTranscriptGapId,
+	detectTranscriptFillerCandidates,
 	getTranscriptGapEdit,
 	buildTranscriptCutsFromWords,
-	isFillerWordOrPhrase,
 	mapCompressedTimeToSourceTime,
 	mapSourceTimeToCompressedTime,
 	normalizeTranscriptWords,
@@ -54,7 +54,7 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
-import { AlignJustify, Check, Pencil, X } from "lucide-react";
+import { Check, Pencil, X } from "lucide-react";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 
@@ -83,6 +83,17 @@ type TranscriptPanelGap = {
 	rightWord: TranscriptEditWord;
 	sourceDurationSeconds: number;
 	compressedDurationSeconds: number;
+	compressedStartTime: number;
+	compressedEndTime: number;
+};
+
+const MIN_VISIBLE_TRANSCRIPT_GAP_SECONDS = 0.7;
+const MAX_DISFLUENCY_REPEAT_GAP_SECONDS = 0.35;
+
+type TranscriptBracketDecoration = {
+	prefix?: string;
+	suffix?: string;
+	kind: "filler" | "repeat";
 };
 
 const EDITOR_SUBSCRIBE_TRANSCRIPT_VIEW = [
@@ -101,6 +112,13 @@ function formatTime(time: number): string {
 	return `${mins}:${secs}`;
 }
 
+function normalizeTranscriptDisplayToken(token: string): string {
+	return token
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}'\s]+/gu, "")
+		.trim();
+}
+
 function findActiveWordIdAtSourceTime({
 	words,
 	time,
@@ -114,7 +132,21 @@ function findActiveWordIdAtSourceTime({
 		const word = words[index];
 		if (word.removed) continue;
 		if (Boolean(word.hidden) !== matchHidden) continue;
-		if (time >= word.startTime && time < word.endTime) {
+		const nextWord = words[index + 1];
+		let effectiveEndTime = word.endTime;
+		if (
+			nextWord &&
+			Boolean(nextWord.hidden) === matchHidden &&
+			!nextWord.removed &&
+			nextWord.startTime < effectiveEndTime
+		) {
+			effectiveEndTime =
+				nextWord.startTime > word.startTime
+					? nextWord.startTime
+					: Math.min(effectiveEndTime, nextWord.endTime);
+		}
+		effectiveEndTime = Math.max(word.startTime + 0.01, effectiveEndTime);
+		if (time >= word.startTime && time < effectiveEndTime) {
 			return word.id;
 		}
 	}
@@ -514,14 +546,8 @@ export function TranscriptView() {
 		() => wordsWithCutState.length > 0,
 		[wordsWithCutState],
 	);
-	const visibleCaptionWords = useMemo(
-		() =>
-			wordsWithCutState.filter(
-				(word) =>
-					!word.removed &&
-					!word.hidden &&
-					!isFillerWordOrPhrase({ text: word.text }),
-			),
+	const visibleTranscriptWords = useMemo(
+		() => wordsWithCutState.filter((word) => !word.removed && !word.hidden),
 		[wordsWithCutState],
 	);
 	const currentSourceTime = useMemo(() => {
@@ -535,15 +561,19 @@ export function TranscriptView() {
 			cuts,
 		});
 	}, [activeMedia, currentTime, cuts]);
+	const currentCompressedTime = useMemo(() => {
+		if (!activeMedia) return null;
+		return Math.max(0, currentTime - activeMedia.element.startTime);
+	}, [activeMedia, currentTime]);
 
 	const currentWordId = useMemo(() => {
 		if (currentSourceTime == null) return null;
 		return findActiveWordIdAtSourceTime({
-			words: visibleCaptionWords,
+			words: visibleTranscriptWords,
 			time: currentSourceTime,
 			matchHidden: false,
 		});
-	}, [currentSourceTime, visibleCaptionWords]);
+	}, [currentSourceTime, visibleTranscriptWords]);
 
 	const currentHiddenWordId = useMemo(() => {
 		if (currentSourceTime == null) return null;
@@ -576,6 +606,45 @@ export function TranscriptView() {
 			),
 		[speakerIds],
 	);
+	const fillerCandidates = useMemo(
+		() => detectTranscriptFillerCandidates({ words: wordsWithCutState }),
+		[wordsWithCutState],
+	);
+	const fillerCandidateByStartWordId = useMemo(() => {
+		const map = new Map<
+			string,
+			{
+				id: string;
+				wordIds: string[];
+				text: string;
+				startTime: number;
+				endTime: number;
+				kind: "phrase" | "repeat";
+			}
+		>();
+		for (const candidate of fillerCandidates) {
+			const firstWordId = candidate.wordIds[0];
+			if (!firstWordId) continue;
+			map.set(firstWordId, {
+				id: candidate.id,
+				wordIds: candidate.wordIds,
+				text: `[${candidate.text}]`,
+				startTime: candidate.startTime,
+				endTime: candidate.endTime,
+				kind: candidate.kind === "phrase" ? "phrase" : "repeat",
+			});
+		}
+		return map;
+	}, [fillerCandidates]);
+	const coveredFillerWordIds = useMemo(() => {
+		const ids = new Set<string>();
+		for (const candidate of fillerCandidates) {
+			for (const wordId of candidate.wordIds.slice(1)) {
+				ids.add(wordId);
+			}
+		}
+		return ids;
+	}, [fillerCandidates]);
 	const groups =
 		segmentsUi && segmentsUi.length > 0
 			? segmentsUi
@@ -617,6 +686,10 @@ export function TranscriptView() {
 			const current = orderedPanelWords[index];
 			const next = orderedPanelWords[index + 1];
 			if (!current || !next) continue;
+			const currentToken = normalizeTranscriptDisplayToken(current.text);
+			const nextToken = normalizeTranscriptDisplayToken(next.text);
+			const gapId = buildTranscriptGapId(current.id, next.id);
+			const gapEdit = gapEdits[gapId];
 			const sourceDurationSeconds = Math.max(0, next.startTime - current.endTime);
 			const compressedDurationSeconds = Math.max(
 				0,
@@ -629,17 +702,60 @@ export function TranscriptView() {
 						cuts,
 					}),
 			);
+			const compressedStartTime = mapSourceTimeToCompressedTime({
+				sourceTime: current.endTime,
+				cuts,
+			});
+			const compressedEndTime = compressedStartTime + compressedDurationSeconds;
+			const hasPlayableGap =
+				compressedDurationSeconds > MIN_VISIBLE_TRANSCRIPT_GAP_SECONDS;
+			const hasSourceGap =
+				sourceDurationSeconds > MIN_VISIBLE_TRANSCRIPT_GAP_SECONDS;
+			const hasExplicitGapEdit =
+				Boolean(gapEdit?.removed) ||
+				(typeof gapEdit?.text === "string" && gapEdit.text !== " ");
+			const isImmediateRepeatedWord =
+				Boolean(currentToken) &&
+				currentToken === nextToken &&
+				current.speakerId === next.speakerId &&
+				sourceDurationSeconds <= MAX_DISFLUENCY_REPEAT_GAP_SECONDS &&
+				compressedDurationSeconds <= MAX_DISFLUENCY_REPEAT_GAP_SECONDS;
+			if (isImmediateRepeatedWord && !hasExplicitGapEdit) {
+				continue;
+			}
+			if (!hasPlayableGap && !hasExplicitGapEdit && !hasSourceGap) {
+				continue;
+			}
+			if (!hasPlayableGap && !hasExplicitGapEdit) {
+				continue;
+			}
 			nextWordMap.set(current.id, {
-				id: buildTranscriptGapId(current.id, next.id),
+				id: gapId,
 				leftWordId: current.id,
 				rightWordId: next.id,
 				rightWord: next,
 				sourceDurationSeconds,
 				compressedDurationSeconds,
+				compressedStartTime,
+				compressedEndTime,
 			});
 		}
 		return nextWordMap;
-	}, [cuts, orderedPanelWords]);
+	}, [cuts, gapEdits, orderedPanelWords]);
+	const currentGapId = useMemo(() => {
+		if (currentCompressedTime == null) return null;
+		for (const gap of nextPanelWordById.values()) {
+			if (
+				currentCompressedTime >= gap.compressedStartTime &&
+				currentCompressedTime < gap.compressedEndTime
+			) {
+				return gap.id;
+			}
+		}
+		return null;
+	}, [currentCompressedTime, nextPanelWordById]);
+	const activeWordId = currentGapId ? null : currentWordId;
+	const activeHiddenWordId = currentGapId ? null : currentHiddenWordId;
 	const orderedWordIds = useMemo(
 		() => panelGroups.flatMap((group) => group.words.map((word) => word.id)),
 		[panelGroups],
@@ -657,8 +773,8 @@ export function TranscriptView() {
 		if (timings.length === 0) return new Set<string>();
 		const visibleTimings = timings.filter((timing) => !timing.hidden);
 		if (visibleTimings.length === 0) return new Set<string>();
-		if (visibleTimings.length === visibleCaptionWords.length) {
-			return new Set(visibleCaptionWords.map((word) => word.id));
+		if (visibleTimings.length === visibleTranscriptWords.length) {
+			return new Set(visibleTranscriptWords.map((word) => word.id));
 		}
 		const ranges = visibleTimings.map((timing) => ({
 			start: mapCompressedTimeToSourceTime({
@@ -680,7 +796,7 @@ export function TranscriptView() {
 				cuts,
 			}),
 		}));
-		const highlighted = visibleCaptionWords
+		const highlighted = visibleTranscriptWords
 			.filter((word) =>
 				ranges.some(
 					(range) => word.endTime > range.start && word.startTime < range.end,
@@ -688,7 +804,7 @@ export function TranscriptView() {
 			)
 			.map((word) => word.id);
 		return new Set(highlighted);
-	}, [selectedCaption, activeMedia, cuts, visibleCaptionWords]);
+	}, [selectedCaption, activeMedia, cuts, visibleTranscriptWords]);
 	const selectedWordIdsSet = useMemo(
 		() => new Set(selectedWordIds),
 		[selectedWordIds],
@@ -799,7 +915,11 @@ export function TranscriptView() {
 			);
 			const selectedIds = wordNodes
 				.filter((node) => range.intersectsNode(node))
-				.map((node) => node.dataset.wordId ?? "")
+				.flatMap((node) =>
+					(node.dataset.wordIds ?? node.dataset.wordId ?? "")
+						.split(",")
+						.map((id) => id.trim()),
+				)
 				.filter((id) => id.length > 0);
 			if (selectedIds.length === 0) {
 				setIsSelectionActive(false);
@@ -1721,20 +1841,43 @@ export function TranscriptView() {
 												setFocusedWordId(wordId);
 											}}
 										>
-											{group.words.map((word, wordIndex) => {
-									const isCurrentWord = currentWordId === word.id;
-									const isCurrentHiddenWord = currentHiddenWordId === word.id;
-									const isSelectedWord = selectedWordIds.includes(word.id);
-									const isCaptionLinkedWord = selectedCaptionWordIds.has(word.id);
-									const isFocusedWord = focusedWordId === word.id;
-									const gap = nextPanelWordById.get(word.id);
+											{group.words.map((word) => {
+									if (coveredFillerWordIds.has(word.id)) {
+										return null;
+									}
+									const fillerCandidate =
+										fillerCandidateByStartWordId.get(word.id);
+									const tokenWordIds = fillerCandidate?.wordIds ?? [word.id];
+									const tokenWordIdSet = new Set(tokenWordIds);
+									const tokenWords = wordsWithCutState.filter((candidateWord) =>
+										tokenWordIdSet.has(candidateWord.id),
+									);
+									const displayWord = tokenWords[0] ?? word;
+									const displayLastWord =
+										tokenWords[tokenWords.length - 1] ?? word;
+									const displayText = fillerCandidate?.text ?? word.text;
+									const isCurrentWord = tokenWordIds.some(
+										(tokenWordId) => activeWordId === tokenWordId,
+									);
+									const isCurrentHiddenWord = tokenWordIds.some(
+										(tokenWordId) => activeHiddenWordId === tokenWordId,
+									);
+									const isSelectedWord = tokenWordIds.some((tokenWordId) =>
+										selectedWordIdsSet.has(tokenWordId),
+									);
+									const isCaptionLinkedWord = tokenWordIds.some((tokenWordId) =>
+										selectedCaptionWordIds.has(tokenWordId),
+									);
+									const isFocusedWord =
+										focusedWordId != null && tokenWordIdSet.has(focusedWordId);
+									const gap = nextPanelWordById.get(displayLastWord.id);
 									const nextWord = gap?.rightWord;
 									const gapId = gap?.id ?? null;
 									const isFocusedGap = focusedGap?.id === gapId;
 									const gapEdit = nextWord
 										? getTranscriptGapEdit({
 												gapEdits,
-												leftWordId: word.id,
+												leftWordId: displayLastWord.id,
 												rightWordId: nextWord.id,
 											})
 										: undefined;
@@ -1742,15 +1885,14 @@ export function TranscriptView() {
 									const gapWidthClass = getTranscriptGapWidthClass(
 										gapDurationSeconds,
 									);
-									const gapIsSelected =
-										Boolean(nextWord) && isFocusedGap;
-									const gapIsCurrent =
-										Boolean(nextWord) &&
-										(currentWordId === word.id || currentWordId === nextWord.id);
+									const gapIsSelected = Boolean(gap) && isFocusedGap;
+									const gapIsCurrent = gap ? currentGapId === gap.id : false;
 									const isHoverSelectedGroupWord =
 										isFocusedWord &&
 										selectedWordIds.length > 1 &&
-										selectedWordIdsSet.has(word.id);
+										tokenWordIds.some((tokenWordId) =>
+											selectedWordIdsSet.has(tokenWordId),
+										);
 									const tone = group.tone;
 									const wordStyle = isCurrentWord
 										? {
@@ -1793,7 +1935,7 @@ export function TranscriptView() {
 													),
 												};
 									const editingWidthCh = Math.max(
-										word.text.length,
+										displayText.length,
 										editingWordText.length,
 										3,
 									);
@@ -1801,7 +1943,8 @@ export function TranscriptView() {
 										<span key={word.id} className="contents">
 											<span
 												className="relative group/word mr-1 inline-block my-1 align-baseline"
-												data-word-id={word.id}
+												data-word-id={displayWord.id}
+												data-word-ids={tokenWordIds.join(",")}
 											>
 												{isFocusedWord && selectedWordIds.length === 0 && (
 													<span className="absolute left-0 bottom-full z-10 mb-1 flex items-center gap-1">
@@ -1809,7 +1952,9 @@ export function TranscriptView() {
 															variant="ghost"
 															size="sm"
 															className="h-6 rounded-md border border-zinc-700 bg-zinc-900/95 px-1.5 text-[11px] text-zinc-100 shadow-sm hover:bg-zinc-800"
-															onClick={() => startEditingWord(word)}
+															onClick={() =>
+																startEditingWordIds(tokenWordIds)
+															}
 														>
 															<Pencil className="mr-1 size-3" />
 															Edit
@@ -1818,15 +1963,28 @@ export function TranscriptView() {
 															variant="ghost"
 															size="sm"
 															className="h-6 rounded-md border border-zinc-700 bg-zinc-900/95 px-1.5 text-[11px] text-zinc-100 shadow-sm hover:bg-zinc-800"
-															onClick={() =>
-																invokeAction("transcript-toggle-word", {
+															onClick={() => {
+																if (tokenWordIds.length === 1) {
+																	invokeAction("transcript-toggle-word", {
+																		trackId: activeMedia.trackId,
+																		elementId: activeMedia.element.id,
+																		wordId: displayWord.id,
+																	});
+																	return;
+																}
+																invokeAction("transcript-set-words-removed", {
 																	trackId: activeMedia.trackId,
 																	elementId: activeMedia.element.id,
-																	wordId: word.id,
-																})
-															}
+																	wordIds: tokenWordIds,
+																	removed: !tokenWords.every(
+																		(tokenWord) => tokenWord.removed,
+																	),
+																});
+															}}
 														>
-															{word.removed ? "Restore" : "Mute"}
+															{tokenWords.every((tokenWord) => tokenWord.removed)
+																? "Restore"
+																: "Mute"}
 														</Button>
 													</span>
 												)}
@@ -1840,10 +1998,12 @@ export function TranscriptView() {
 														!isSelectionActive && isFocusedWord
 															? "bg-zinc-800/40"
 															: "",
-														word.removed
+														tokenWords.every((tokenWord) => tokenWord.removed)
 															? "line-through decoration-red-600 decoration-2 opacity-75"
 															: "",
-														word.hidden ? "opacity-55" : "",
+														tokenWords.every((tokenWord) => tokenWord.hidden)
+															? "opacity-55"
+															: "",
 														isCurrentWord ? "text-white" : "",
 														isCurrentHiddenWord
 															? "bg-zinc-500/50 text-white"
@@ -1875,22 +2035,33 @@ export function TranscriptView() {
 														event.preventDefault();
 														event.stopPropagation();
 														window.getSelection()?.removeAllRanges();
-														startEditingWord(word);
+														startEditingWordIds(tokenWordIds);
 													}}
 													onContextMenu={(event) => {
 														event.preventDefault();
 														event.stopPropagation();
-														setFocusedWordId(word.id);
-														invokeAction("transcript-toggle-word", {
+														setFocusedWordId(displayWord.id);
+														if (tokenWordIds.length === 1) {
+															invokeAction("transcript-toggle-word", {
+																trackId: activeMedia.trackId,
+																elementId: activeMedia.element.id,
+																wordId: displayWord.id,
+															});
+															return;
+														}
+														invokeAction("transcript-set-words-removed", {
 															trackId: activeMedia.trackId,
 															elementId: activeMedia.element.id,
-															wordId: word.id,
+															wordIds: tokenWordIds,
+															removed: !tokenWords.every(
+																(tokenWord) => tokenWord.removed,
+															),
 														});
 													}}
 												>
-													{word.text}
+													{displayText}
 												</span>
-												{editingWordId === word.id && (
+												{editingWordId === displayWord.id && (
 													<span className="absolute left-0 top-1/2 z-20 inline-flex -translate-y-1/2 items-center rounded-sm border border-zinc-500 bg-zinc-800 px-2 pr-1 align-middle shadow-sm">
 														<input
 															value={editingWordText}
@@ -1932,7 +2103,7 @@ export function TranscriptView() {
 												<span
 													role="button"
 													tabIndex={0}
-													aria-label={`Select gap between ${word.text} and ${nextWord.text}`}
+													aria-label={`Select gap between ${displayText} and ${nextWord.text}`}
 													data-gap-id={gapId ?? undefined}
 													title={`${gapDurationSeconds.toFixed(2)}s playback gap${gap ? ` (${gap.sourceDurationSeconds.toFixed(2)}s source)` : ""}`}
 													className={[
@@ -1954,21 +2125,21 @@ export function TranscriptView() {
 													}}
 													onClick={(event) => {
 														event.stopPropagation();
-														focusWordGap(word.id, nextWord.id);
+														focusWordGap(displayLastWord.id, nextWord.id);
 													}}
 													onDoubleClick={(event) => {
 														event.preventDefault();
 														event.stopPropagation();
-														startEditingGap(word.id, nextWord.id);
+														startEditingGap(displayLastWord.id, nextWord.id);
 													}}
 													onContextMenu={(event) => {
 														event.preventDefault();
 														event.stopPropagation();
-														focusWordGap(word.id, nextWord.id);
+														focusWordGap(displayLastWord.id, nextWord.id);
 														invokeAction("transcript-toggle-gap-removed", {
 															trackId: activeMedia.trackId,
 															elementId: activeMedia.element.id,
-															leftWordId: word.id,
+															leftWordId: displayLastWord.id,
 															rightWordId: nextWord.id,
 															removed: !Boolean(gapEdit?.removed),
 														});
@@ -2048,13 +2219,13 @@ export function TranscriptView() {
 															) : (
 																<>
 																	<Button
-																		variant="ghost"
-																		size="sm"
-																		className="h-6 rounded-md border border-zinc-700 bg-zinc-900/95 px-1.5 text-[11px] text-zinc-100 shadow-sm hover:bg-zinc-800"
-																		onClick={() =>
-																			startEditingGap(word.id, nextWord.id)
-																		}
-																	>
+																	variant="ghost"
+																	size="sm"
+																	className="h-6 rounded-md border border-zinc-700 bg-zinc-900/95 px-1.5 text-[11px] text-zinc-100 shadow-sm hover:bg-zinc-800"
+																	onClick={() =>
+																		startEditingGap(displayLastWord.id, nextWord.id)
+																	}
+																>
 																		<Pencil className="mr-1 size-3" />
 																		Edit
 																	</Button>
@@ -2092,12 +2263,7 @@ export function TranscriptView() {
 				</div>
 			</div>
 
-			<div className="text-[11px] text-muted-foreground px-1 flex items-center gap-1">
-				<AlignJustify className="size-3.5" />
-				Transcript edits update captions, playback, and export
-				non-destructively.
-			</div>
-			{transcriptCompileState.status === "compiling" && (
+				{transcriptCompileState.status === "compiling" && (
 				<div className="text-[11px] text-muted-foreground px-1 flex items-center gap-1">
 					<Spinner className="size-3" />
 					Updating clip playback…

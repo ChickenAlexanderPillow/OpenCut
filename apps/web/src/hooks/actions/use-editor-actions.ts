@@ -2091,6 +2091,7 @@ async function transcribeClipAudioWithApi({
 			form.append("file", wavBlob, "clip.wav");
 			form.append("model", CLIP_IMPORT_TRANSCRIPTION_MODEL);
 			form.append("cacheKey", cacheKey);
+			form.append("diarize", "true");
 
 			const response = await fetch(endpoint, {
 				method: "POST",
@@ -2105,7 +2106,12 @@ async function transcribeClipAudioWithApi({
 				);
 			}
 			const json = (await response.json()) as {
-				segments?: Array<{ text: string; start: number; end: number }>;
+				segments?: Array<{
+					text: string;
+					start: number;
+					end: number;
+					speakerId?: string;
+				}>;
 				granularity?: "word" | "segment" | "none";
 				engine?: string;
 				model?: string;
@@ -2129,6 +2135,11 @@ async function transcribeClipAudioWithApi({
 					text: segment.text.trim(),
 					start: Math.max(0, segment.start),
 					end: Math.max(segment.start + 0.01, segment.end),
+					speakerId:
+						typeof segment.speakerId === "string" &&
+						segment.speakerId.trim().length > 0
+							? segment.speakerId.trim()
+							: undefined,
 				}));
 			if (segments.length > 0) {
 				const durationMs = Date.now() - requestStartedAt;
@@ -2146,6 +2157,11 @@ async function transcribeClipAudioWithApi({
 						durationSeconds > 0
 							? Number((durationMs / 1000 / durationSeconds).toFixed(3))
 							: null,
+					speakerCount: new Set(
+						segments
+							.map((segment) => segment.speakerId)
+							.filter((speakerId): speakerId is string => Boolean(speakerId)),
+					).size,
 					timingsMs: json.timingsMs ?? null,
 				});
 			}

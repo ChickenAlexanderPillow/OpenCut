@@ -5,7 +5,7 @@ import {
 	mapCompressedTimeToSourceTime,
 	mapSourceTimeToCompressedTime,
 } from "@/lib/transcript-editor/core";
-import { TRANSCRIPT_CUT_AUDIO_SMOOTHING_SECONDS } from "@/lib/transcript-editor/constants";
+import { getTranscriptBoundaryMicroFadeGain } from "@/lib/media/transcript-audio-smoothing";
 import type { TimelineTrack } from "@/types/timeline";
 import type { MediaAsset } from "@/types/assets";
 import type { TranscriptEditCutRange } from "@/types/transcription";
@@ -206,10 +206,9 @@ async function decodeAndMixAudioSource({
 					const rightSample = channelData[rightIndex] ?? leftSample;
 					const smoothing =
 						cutBoundaries.length > 0
-							? getBoundarySmoothingGain({
+							? getTranscriptBoundaryMicroFadeGain({
 									compressedTime,
 									boundaries: cutBoundaries,
-									fadeSeconds: TRANSCRIPT_CUT_AUDIO_SMOOTHING_SECONDS,
 									boundaryIndex: boundaryIndexes[ch] ?? 0,
 								})
 							: { gain: 1, boundaryIndex: boundaryIndexes[ch] ?? 0 };
@@ -278,49 +277,4 @@ function writeString({
 	for (let i = 0; i < str.length; i++) {
 		view.setUint8(offset + i, str.charCodeAt(i));
 	}
-}
-
-function getBoundarySmoothingGain({
-	compressedTime,
-	boundaries,
-	fadeSeconds,
-	boundaryIndex,
-}: {
-	compressedTime: number;
-	boundaries: number[];
-	fadeSeconds: number;
-	boundaryIndex: number;
-}): { gain: number; boundaryIndex: number } {
-	if (boundaries.length === 0 || fadeSeconds <= 0) {
-		return { gain: 1, boundaryIndex };
-	}
-	let nextBoundaryIndex = Math.max(0, boundaryIndex);
-	while (
-		nextBoundaryIndex < boundaries.length - 1 &&
-		compressedTime > boundaries[nextBoundaryIndex + 1]
-	) {
-		nextBoundaryIndex += 1;
-	}
-	let nearestDistance = Number.POSITIVE_INFINITY;
-	const currentBoundary = boundaries[nextBoundaryIndex];
-	if (typeof currentBoundary === "number") {
-		nearestDistance = Math.min(
-			nearestDistance,
-			Math.abs(compressedTime - currentBoundary),
-		);
-	}
-	const nextBoundary = boundaries[nextBoundaryIndex + 1];
-	if (typeof nextBoundary === "number") {
-		nearestDistance = Math.min(
-			nearestDistance,
-			Math.abs(compressedTime - nextBoundary),
-		);
-	}
-	if (nearestDistance >= fadeSeconds) {
-		return { gain: 1, boundaryIndex: nextBoundaryIndex };
-	}
-	return {
-		gain: Math.max(0, nearestDistance / fadeSeconds),
-		boundaryIndex: nextBoundaryIndex,
-	};
 }

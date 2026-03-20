@@ -8,11 +8,29 @@ import type {
 
 const GAP_EPSILON = 1e-6;
 
+export function supportsSelectableTrackGaps({
+	track,
+}: {
+	track: TimelineTrack;
+}): boolean {
+	if (track.type !== "text") return true;
+	if (track.name.trim().toLowerCase() === "captions") return false;
+	return !track.elements.some(
+		(element) =>
+			element.type === "text" &&
+			(Boolean(element.captionSourceRef) ||
+				element.name.trim().startsWith("Caption ")),
+	);
+}
+
 export function getTrackGaps({
 	track,
 }: {
 	track: TimelineTrack;
 }): TimelineGapSelection[] {
+	if (!supportsSelectableTrackGaps({ track })) {
+		return [];
+	}
 	const sortedElements = [...track.elements].sort(
 		(left, right) => left.startTime - right.startTime,
 	);
@@ -84,16 +102,21 @@ function shiftElementForGapDelete({
 export function rippleDeleteGapFromTrack({
 	track,
 	gap,
+	elementIds,
 }: {
 	track: TimelineTrack;
 	gap: TimelineGapSelection;
+	elementIds?: ReadonlySet<string>;
 }): TimelineTrack {
 	const shiftAmount = Math.max(0, gap.endTime - gap.startTime);
 	if (shiftAmount <= GAP_EPSILON) return track;
-	if (track.id !== gap.trackId) return track;
+	if (!elementIds && !supportsSelectableTrackGaps({ track })) return track;
+	if (track.id !== gap.trackId && !elementIds) return track;
 
 	const elements = track.elements.map((element) =>
-		element.startTime >= gap.endTime - GAP_EPSILON
+		(elementIds
+			? elementIds.has(element.id)
+			: element.startTime >= gap.endTime - GAP_EPSILON)
 			? shiftElementForGapDelete({
 					element,
 					shiftAmount,

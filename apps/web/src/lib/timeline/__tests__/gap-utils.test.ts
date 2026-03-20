@@ -46,6 +46,46 @@ describe("gap utils", () => {
 		]);
 	});
 
+	test("does not expose selectable gaps for caption tracks", () => {
+		const track: TextTrack = {
+			id: "caption-track-1",
+			name: "Captions",
+			type: "text",
+			hidden: false,
+			elements: [
+				{
+					id: "caption-1",
+					type: "text",
+					name: "Caption 1",
+					content: "hello",
+					startTime: 4,
+					duration: 1,
+					trimStart: 0,
+					trimEnd: 0,
+					fontSize: 48,
+					fontFamily: "Geist",
+					color: "#fff",
+					background: { color: "transparent" },
+					textAlign: "center",
+					fontWeight: "bold",
+					fontStyle: "normal",
+					textDecoration: "none",
+					transform: DEFAULT_TRANSFORM,
+					opacity: 1,
+					captionWordTimings: [
+						{ word: "hello", startTime: 4, endTime: 4.45, hidden: false },
+					],
+					captionSourceRef: {
+						mediaElementId: "video-1",
+						transcriptVersion: 1,
+					},
+				},
+			],
+		};
+
+		expect(getTrackGaps({ track })).toEqual([]);
+	});
+
 	test("ripple deletes a selected gap and shifts absolute caption timings", () => {
 		const track: TextTrack = {
 			id: "text-track-1",
@@ -54,9 +94,9 @@ describe("gap utils", () => {
 			hidden: false,
 			elements: [
 				{
-					id: "caption-1",
+					id: "text-1",
 					type: "text",
-					name: "Caption 1",
+					name: "Title 1",
 					content: "hello",
 					startTime: 4,
 					duration: 1,
@@ -95,5 +135,50 @@ describe("gap utils", () => {
 			2.45,
 			6,
 		);
+	});
+
+	test("does not ripple delete gaps directly from caption tracks", () => {
+		const track: TextTrack = {
+			id: "caption-track-1",
+			name: "Captions",
+			type: "text",
+			hidden: false,
+			elements: [
+				{
+					id: "caption-1",
+					type: "text",
+					name: "Caption 1",
+					content: "hello",
+					startTime: 4,
+					duration: 1,
+					trimStart: 0,
+					trimEnd: 0,
+					fontSize: 48,
+					fontFamily: "Geist",
+					color: "#fff",
+					background: { color: "transparent" },
+					textAlign: "center",
+					fontWeight: "bold",
+					fontStyle: "normal",
+					textDecoration: "none",
+					transform: DEFAULT_TRANSFORM,
+					opacity: 1,
+					captionWordTimings: [
+						{ word: "hello", startTime: 4, endTime: 4.45, hidden: false },
+					],
+					captionSourceRef: {
+						mediaElementId: "video-1",
+						transcriptVersion: 1,
+					},
+				},
+			],
+		};
+
+		const updated = rippleDeleteGapFromTrack({
+			track,
+			gap: { trackId: "caption-track-1", startTime: 0, endTime: 2 },
+		});
+
+		expect(updated).toEqual(track);
 	});
 });

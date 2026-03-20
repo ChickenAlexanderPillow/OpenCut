@@ -18,7 +18,7 @@ import {
 	buildCompressedCutBoundaryTimes,
 	mapCompressedTimeToSourceTime,
 } from "@/lib/transcript-editor/core";
-import { TRANSCRIPT_CUT_AUDIO_SMOOTHING_SECONDS } from "@/lib/transcript-editor/constants";
+import { getTranscriptBoundaryMicroFadeGain } from "@/lib/media/transcript-audio-smoothing";
 import {
 	getTranscriptAudioRevisionKey,
 	getTranscriptApplied,
@@ -898,51 +898,6 @@ export async function renderTrackAudioEffectsOffline({
 	return offlineContext.startRendering();
 }
 
-function getBoundarySmoothingGain({
-	compressedTime,
-	boundaries,
-	fadeSeconds,
-	boundaryIndex,
-}: {
-	compressedTime: number;
-	boundaries: number[];
-	fadeSeconds: number;
-	boundaryIndex: number;
-}): { gain: number; boundaryIndex: number } {
-	if (boundaries.length === 0 || fadeSeconds <= 0) {
-		return { gain: 1, boundaryIndex };
-	}
-	let nextBoundaryIndex = Math.max(0, boundaryIndex);
-	while (
-		nextBoundaryIndex < boundaries.length - 1 &&
-		compressedTime > boundaries[nextBoundaryIndex + 1]
-	) {
-		nextBoundaryIndex += 1;
-	}
-	let nearestDistance = Number.POSITIVE_INFINITY;
-	const currentBoundary = boundaries[nextBoundaryIndex];
-	if (typeof currentBoundary === "number") {
-		nearestDistance = Math.min(
-			nearestDistance,
-			Math.abs(compressedTime - currentBoundary),
-		);
-	}
-	const nextBoundary = boundaries[nextBoundaryIndex + 1];
-	if (typeof nextBoundary === "number") {
-		nearestDistance = Math.min(
-			nearestDistance,
-			Math.abs(compressedTime - nextBoundary),
-		);
-	}
-	if (nearestDistance >= fadeSeconds) {
-		return { gain: 1, boundaryIndex: nextBoundaryIndex };
-	}
-	return {
-		gain: Math.max(0, nearestDistance / fadeSeconds),
-		boundaryIndex: nextBoundaryIndex,
-	};
-}
-
 export async function decodeMediaFileToAudioBuffer({
 	file,
 	sampleRate,
@@ -1617,10 +1572,9 @@ function mixAudioChannels({
 			const sample = leftSample * (1 - alpha) + rightSample * alpha;
 			const smoothing =
 				cutBoundaries.length > 0
-					? getBoundarySmoothingGain({
+					? getTranscriptBoundaryMicroFadeGain({
 							compressedTime: elapsedInTimelineSeconds,
 							boundaries: cutBoundaries,
-							fadeSeconds: TRANSCRIPT_CUT_AUDIO_SMOOTHING_SECONDS,
 							boundaryIndex,
 						})
 					: { gain: 1, boundaryIndex };

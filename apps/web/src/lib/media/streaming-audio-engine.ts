@@ -5,7 +5,10 @@ import {
 	buildCompressedCutBoundaryTimes,
 	mapCompressedTimeToSourceTime,
 } from "@/lib/transcript-editor/core";
-import { TRANSCRIPT_CUT_AUDIO_OVERLAP_SECONDS } from "@/lib/transcript-editor/constants";
+import {
+	TRANSCRIPT_CUT_AUDIO_FADE_IN_SECONDS,
+	TRANSCRIPT_CUT_AUDIO_OVERLAP_SECONDS,
+} from "@/lib/transcript-editor/constants";
 import {
 	collectAudioClips,
 	connectTrackAudioEffects,
@@ -190,7 +193,8 @@ export class StreamingTimelineAudioEngine {
 	private readonly schedulerIntervalMs = 50;
 	private readonly minSegmentDurationSeconds = 1 / 120;
 	private readonly boundaryToleranceSeconds = 1 / 1000;
-	private readonly boundaryCrossfadeSeconds = 0.02;
+	private readonly boundaryCrossfadeSeconds =
+		TRANSCRIPT_CUT_AUDIO_FADE_IN_SECONDS;
 	private readonly unscheduleFadeSeconds = 0.01;
 	private readonly slipCrossfadeSeconds = 0.02;
 	private readonly transcriptBoundaryOverlapSeconds =

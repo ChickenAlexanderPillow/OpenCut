@@ -154,7 +154,16 @@ function resolveActiveWordIndex({
 }): number {
 	for (let i = captionWordTimings.length - 1; i >= 0; i--) {
 		const timing = captionWordTimings[i];
-		if (time >= timing.startTime && time < timing.endTime) {
+		const nextTiming = captionWordTimings[i + 1];
+		let effectiveEndTime = timing.endTime;
+		if (nextTiming && nextTiming.startTime < effectiveEndTime) {
+			effectiveEndTime =
+				nextTiming.startTime > timing.startTime
+					? nextTiming.startTime
+					: Math.min(effectiveEndTime, nextTiming.endTime);
+		}
+		effectiveEndTime = Math.max(timing.startTime + 0.01, effectiveEndTime);
+		if (time >= timing.startTime && time < effectiveEndTime) {
 			return i;
 		}
 	}
@@ -171,7 +180,16 @@ function resolveActiveWordIndices({
 	const indices: number[] = [];
 	for (let i = 0; i < captionWordTimings.length; i++) {
 		const timing = captionWordTimings[i];
-		if (time >= timing.startTime && time < timing.endTime) {
+		const nextTiming = captionWordTimings[i + 1];
+		let effectiveEndTime = timing.endTime;
+		if (nextTiming && nextTiming.startTime < effectiveEndTime) {
+			effectiveEndTime =
+				nextTiming.startTime > timing.startTime
+					? nextTiming.startTime
+					: Math.min(effectiveEndTime, nextTiming.endTime);
+		}
+		effectiveEndTime = Math.max(timing.startTime + 0.01, effectiveEndTime);
+		if (time >= timing.startTime && time < effectiveEndTime) {
 			indices.push(i);
 		}
 	}
