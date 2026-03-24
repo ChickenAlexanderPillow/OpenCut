@@ -376,7 +376,11 @@ export class AudioManager {
 				reason: "prepare-complete",
 			});
 			if (prewarm) {
-				void engine.prewarm({ playhead, horizonSeconds: 12 });
+				void engine.prewarm({
+					playhead,
+					horizonSeconds: 6,
+					maxCandidates: 8,
+				});
 			}
 		} catch (error) {
 			if (prepareSequence !== this.prepareGraphSequence) return;
@@ -641,8 +645,16 @@ export class AudioManager {
 	} = {}): Promise<void> {
 		await this.unlockAudioContext();
 		await this.prepareStreamingGraph({ playhead });
-		await this.streamingEngine?.prewarm({ playhead, horizonSeconds: 2 });
-		void this.streamingEngine?.prewarm({ playhead, horizonSeconds: 12 });
+		await this.streamingEngine?.prewarm({
+			playhead,
+			horizonSeconds: 1,
+			maxCandidates: 4,
+		});
+		void this.streamingEngine?.prewarm({
+			playhead,
+			horizonSeconds: 6,
+			maxCandidates: 8,
+		});
 	}
 
 	private schedulePausedSeekPrime({ time }: { time: number }): void {

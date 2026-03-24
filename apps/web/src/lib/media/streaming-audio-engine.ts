@@ -200,10 +200,10 @@ export class StreamingTimelineAudioEngine {
 	private readonly transcriptBoundaryOverlapSeconds =
 		TRANSCRIPT_CUT_AUDIO_OVERLAP_SECONDS;
 	private readonly decodeSlipThresholdSeconds = 0.004;
-	private readonly decodePaddingSeconds = 1.5;
-	private readonly decodeChunkSeconds = 12;
-	private readonly fullClipDecodeThresholdSeconds = 180;
-	private readonly fullAudioClipDecodeThresholdSeconds = 600;
+	private readonly decodePaddingSeconds = 0.5;
+	private readonly decodeChunkSeconds = 6;
+	private readonly fullClipDecodeThresholdSeconds = 30;
+	private readonly fullAudioClipDecodeThresholdSeconds = 60;
 	private readonly maxDecodedWindows = 96;
 
 	private isRunStale(runGeneration: number): boolean {
@@ -457,9 +457,11 @@ export class StreamingTimelineAudioEngine {
 	async prewarm({
 		playhead,
 		horizonSeconds = 2,
+		maxCandidates = 16,
 	}: {
 		playhead: number;
 		horizonSeconds?: number;
+		maxCandidates?: number;
 	}): Promise<void> {
 		const windowStart = clampTime(playhead);
 		const windowEnd = windowStart + Math.max(0.25, horizonSeconds);
@@ -470,7 +472,7 @@ export class StreamingTimelineAudioEngine {
 					clip.startTime < windowEnd &&
 					clip.startTime + clip.duration > windowStart,
 			)
-			.slice(0, 16);
+			.slice(0, Math.max(1, maxCandidates));
 		await Promise.all(
 			candidates.map((clip) => {
 				const request = this.buildDecodeWindowRequest({
