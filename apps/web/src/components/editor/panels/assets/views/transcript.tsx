@@ -32,12 +32,15 @@ import { toElementLocalCaptionTime } from "@/lib/captions/timing";
 import {
 	buildClipTranscriptCacheEntryForAsset,
 	buildProjectMediaTranscriptLinkKey,
-	clipTranscriptSegmentsForWindow,
 	clipTranscriptWordsForWindow,
 	getClipTranscriptCacheKey,
 	getOrCreateClipTranscriptForAsset,
 	transcribeClipTranscriptLocallyForAsset,
 } from "@/lib/clips/transcript";
+import {
+	cancelPreparedPlaybackStart,
+	startPlaybackWhenReady,
+} from "@/lib/playback/start-playback";
 import type {
 	AudioElement,
 	TextElement,
@@ -76,6 +79,13 @@ type TranscriptGapFocus = {
 	rightWordId: string;
 };
 
+type HeldWordPreview = {
+	wordIds: string[];
+	startTime: number;
+	endTime: number;
+	gapId?: string;
+};
+
 type TranscriptPanelGap = {
 	id: string;
 	leftWordId: string;
@@ -87,8 +97,11 @@ type TranscriptPanelGap = {
 	compressedEndTime: number;
 };
 
-const MIN_VISIBLE_TRANSCRIPT_GAP_SECONDS = 0.7;
 const MAX_DISFLUENCY_REPEAT_GAP_SECONDS = 0.35;
+const MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS = 0.5;
+const HOLD_TO_PREVIEW_DELAY_MS = 45;
+const HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX = 5;
+const HOLD_PREVIEW_STOP_EPSILON_SECONDS = 0.012;
 
 type TranscriptBracketDecoration = {
 	prefix?: string;
@@ -241,52 +254,6 @@ function getMediaAssetForElement({
 				: null;
 	if (!mediaId) return null;
 	return assets.find((asset) => asset.id === mediaId) ?? null;
-}
-
-function buildTranscriptWordsFromSegments({
-	mediaElementId,
-	segments,
-}: {
-	mediaElementId: string;
-	segments: TranscriptionSegment[];
-}): TranscriptEditWord[] {
-	let wordIndex = 0;
-	const words = segments.flatMap((segment) => {
-		const tokens = segment.text.match(/\S+/g) ?? [];
-		if (tokens.length === 0) return [];
-		const segmentStart = Math.max(0, segment.start);
-		const segmentEnd = Math.max(segmentStart + 0.01, segment.end);
-		const duration = Math.max(0.01, segmentEnd - segmentStart);
-		const weights = tokens.map((token) =>
-			Math.max(
-				1,
-				token.replace(/[^\p{L}\p{N}']+/gu, "").length || token.length,
-			),
-		);
-		const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
-		let consumed = 0;
-		return tokens.map((token, tokenIndex) => {
-			const startWeight = consumed;
-			consumed += weights[tokenIndex] ?? 1;
-			const endWeight = consumed;
-			const startTime = segmentStart + (duration * startWeight) / totalWeight;
-			const endTime = Math.max(
-				startTime + 0.01,
-				segmentStart + (duration * endWeight) / totalWeight,
-			);
-			const id = `${mediaElementId}:word:${wordIndex}:${startTime.toFixed(3)}`;
-			wordIndex += 1;
-			return {
-				id,
-				text: token,
-				startTime,
-				endTime,
-				speakerId: segment.speakerId,
-				removed: false,
-			};
-		});
-	});
-	return normalizeTranscriptWords({ words });
 }
 
 function buildTranscriptWordsFromTimedWords({
@@ -461,13 +428,31 @@ export function TranscriptView() {
 	const [isRefreshingTranscript, setIsRefreshingTranscript] = useState(false);
 	const [generateStep, setGenerateStep] = useState("");
 	const [generateError, setGenerateError] = useState<string | null>(null);
-	const [editingSpeakerId, setEditingSpeakerId] = useState<string | null>(null);
+	const [editingSpeakerGroupId, setEditingSpeakerGroupId] = useState<string | null>(
+		null,
+	);
 	const [editingSpeakerName, setEditingSpeakerName] = useState("");
+	const [heldWordPreview, setHeldWordPreview] = useState<HeldWordPreview | null>(
+		null,
+	);
+	const previewCurrentTime = heldWordPreview
+		? Math.min(
+				currentTime,
+				Math.max(
+					heldWordPreview.startTime,
+					heldWordPreview.endTime - HOLD_PREVIEW_STOP_EPSILON_SECONDS,
+				),
+			)
+		: currentTime;
 	const selectionContainerRef = useRef<HTMLDivElement | null>(null);
 	const activeMediaRef = useRef<MediaRef | null>(null);
 	const orderedWordIdsRef = useRef<string[]>([]);
 	const editingWordIdRef = useRef<string | null>(null);
 	const selectedWordIdsRef = useRef<string[]>([]);
+	const holdPreviewTimeoutRef = useRef<number | null>(null);
+	const holdPreviewPointerIdRef = useRef<number | null>(null);
+	const holdPreviewOriginRef = useRef<{ x: number; y: number } | null>(null);
+	const suppressClickSeekRef = useRef(false);
 	const selectedCaption = useMemo(
 		() => getSelectedCaptionElement({ tracks, selectedElements }),
 		[tracks, selectedElements],
@@ -554,17 +539,17 @@ export function TranscriptView() {
 		if (!activeMedia) return null;
 		const localCompressed = Math.max(
 			0,
-			currentTime - activeMedia.element.startTime,
+			previewCurrentTime - activeMedia.element.startTime,
 		);
 		return mapCompressedTimeToSourceTime({
 			compressedTime: localCompressed,
 			cuts,
 		});
-	}, [activeMedia, currentTime, cuts]);
+	}, [activeMedia, previewCurrentTime, cuts]);
 	const currentCompressedTime = useMemo(() => {
 		if (!activeMedia) return null;
-		return Math.max(0, currentTime - activeMedia.element.startTime);
-	}, [activeMedia, currentTime]);
+		return Math.max(0, previewCurrentTime - activeMedia.element.startTime);
+	}, [activeMedia, previewCurrentTime]);
 
 	const currentWordId = useMemo(() => {
 		if (currentSourceTime == null) return null;
@@ -636,6 +621,10 @@ export function TranscriptView() {
 		}
 		return map;
 	}, [fillerCandidates]);
+	const wordById = useMemo(
+		() => new Map(wordsWithCutState.map((word) => [word.id, word])),
+		[wordsWithCutState],
+	);
 	const coveredFillerWordIds = useMemo(() => {
 		const ids = new Set<string>();
 		for (const candidate of fillerCandidates) {
@@ -708,9 +697,9 @@ export function TranscriptView() {
 			});
 			const compressedEndTime = compressedStartTime + compressedDurationSeconds;
 			const hasPlayableGap =
-				compressedDurationSeconds > MIN_VISIBLE_TRANSCRIPT_GAP_SECONDS;
+				compressedDurationSeconds > MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS;
 			const hasSourceGap =
-				sourceDurationSeconds > MIN_VISIBLE_TRANSCRIPT_GAP_SECONDS;
+				sourceDurationSeconds > MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS;
 			const hasExplicitGapEdit =
 				Boolean(gapEdit?.removed) ||
 				(typeof gapEdit?.text === "string" && gapEdit.text !== " ");
@@ -721,9 +710,6 @@ export function TranscriptView() {
 				sourceDurationSeconds <= MAX_DISFLUENCY_REPEAT_GAP_SECONDS &&
 				compressedDurationSeconds <= MAX_DISFLUENCY_REPEAT_GAP_SECONDS;
 			if (isImmediateRepeatedWord && !hasExplicitGapEdit) {
-				continue;
-			}
-			if (!hasPlayableGap && !hasExplicitGapEdit && !hasSourceGap) {
 				continue;
 			}
 			if (!hasPlayableGap && !hasExplicitGapEdit) {
@@ -773,9 +759,6 @@ export function TranscriptView() {
 		if (timings.length === 0) return new Set<string>();
 		const visibleTimings = timings.filter((timing) => !timing.hidden);
 		if (visibleTimings.length === 0) return new Set<string>();
-		if (visibleTimings.length === visibleTranscriptWords.length) {
-			return new Set(visibleTranscriptWords.map((word) => word.id));
-		}
 		const ranges = visibleTimings.map((timing) => ({
 			start: mapCompressedTimeToSourceTime({
 				compressedTime: toElementLocalCaptionTime({
@@ -803,6 +786,10 @@ export function TranscriptView() {
 				),
 			)
 			.map((word) => word.id);
+		if (highlighted.length === 0) return new Set<string>();
+		if (highlighted.length === visibleTranscriptWords.length) {
+			return new Set<string>();
+		}
 		return new Set(highlighted);
 	}, [selectedCaption, activeMedia, cuts, visibleTranscriptWords]);
 	const selectedWordIdsSet = useMemo(
@@ -813,6 +800,10 @@ export function TranscriptView() {
 		() =>
 			wordsWithCutState.filter((word) => selectedWordIdsSet.has(word.id)),
 		[wordsWithCutState, selectedWordIdsSet],
+	);
+	const heldWordPreviewIds = useMemo(
+		() => new Set(heldWordPreview?.wordIds ?? []),
+		[heldWordPreview],
 	);
 	const focusedWord = useMemo(
 		() =>
@@ -850,12 +841,12 @@ export function TranscriptView() {
 	}, [focusedGap, wordsWithCutState]);
 
 	useEffect(() => {
-		if (!editingSpeakerId) return;
-		if (!speakerIds.includes(editingSpeakerId)) {
-			setEditingSpeakerId(null);
+		if (!editingSpeakerGroupId) return;
+		if (!panelGroups.some((group) => group.id === editingSpeakerGroupId)) {
+			setEditingSpeakerGroupId(null);
 			setEditingSpeakerName("");
 		}
-	}, [editingSpeakerId, speakerIds]);
+	}, [editingSpeakerGroupId, panelGroups]);
 
 	const setSelectedWordIdsIfChanged = useCallback((next: string[]) => {
 		setSelectedWordIds((previous) => {
@@ -868,6 +859,34 @@ export function TranscriptView() {
 			return next;
 		});
 	}, []);
+
+	const clearHeldWordPreviewTimer = useCallback(() => {
+		if (holdPreviewTimeoutRef.current !== null) {
+			window.clearTimeout(holdPreviewTimeoutRef.current);
+			holdPreviewTimeoutRef.current = null;
+		}
+	}, []);
+
+	const stopHeldWordPreview = useCallback(() => {
+		clearHeldWordPreviewTimer();
+		holdPreviewPointerIdRef.current = null;
+		holdPreviewOriginRef.current = null;
+		setHeldWordPreview(null);
+		cancelPreparedPlaybackStart({ editor });
+		editor.playback.pause();
+		editor.playback.clearTransientPlaybackRange();
+	}, [clearHeldWordPreviewTimer, editor]);
+
+	useEffect(() => {
+		if (!heldWordPreview) return;
+		if (
+			currentTime <
+			heldWordPreview.endTime - HOLD_PREVIEW_STOP_EPSILON_SECONDS
+		) {
+			return;
+		}
+		stopHeldWordPreview();
+	}, [currentTime, heldWordPreview, stopHeldWordPreview]);
 
 	useEffect(() => {
 		activeMediaRef.current = activeMedia;
@@ -889,6 +908,7 @@ export function TranscriptView() {
 		const captureSelectionWords = () => {
 			const container = selectionContainerRef.current;
 			if (!container) {
+				stopHeldWordPreview();
 				setSelectedWordIdsIfChanged([]);
 				setIsSelectionActive(false);
 				return;
@@ -902,6 +922,7 @@ export function TranscriptView() {
 				setIsSelectionActive(false);
 				return;
 			}
+			stopHeldWordPreview();
 			if (
 				!container.contains(selection.anchorNode) ||
 				!container.contains(selection.focusNode)
@@ -974,7 +995,7 @@ export function TranscriptView() {
 			document.removeEventListener("selectionchange", captureSelectionWords);
 			window.removeEventListener("keydown", onKeyDown);
 		};
-	}, [setSelectedWordIdsIfChanged]);
+	}, [setSelectedWordIdsIfChanged, stopHeldWordPreview]);
 
 	const clearEditingState = useCallback(() => {
 		setEditingWordId(null);
@@ -986,6 +1007,113 @@ export function TranscriptView() {
 		setEditingGapId(null);
 		setEditingGapText(" ");
 	}, []);
+
+	useEffect(() => {
+		return () => {
+			stopHeldWordPreview();
+		};
+	}, [stopHeldWordPreview]);
+
+	const seekToTranscriptWord = useCallback(
+		(word: TranscriptEditWord) => {
+			if (!activeMedia) return;
+			editor.playback.seek({
+				time:
+					activeMedia.element.startTime +
+					mapSourceTimeToCompressedTime({
+						sourceTime: word.startTime,
+						cuts,
+					}),
+			});
+		},
+		[activeMedia, cuts, editor],
+	);
+
+	const startHeldWordPreview = useCallback(
+		({
+			wordIds,
+			wordStartTime,
+			wordEndTime,
+			gapId,
+		}: {
+			wordIds: string[];
+			wordStartTime: number;
+			wordEndTime: number;
+			gapId?: string;
+		}) => {
+			if (!activeMedia) return;
+			const timelineStart =
+				activeMedia.element.startTime +
+				mapSourceTimeToCompressedTime({
+					sourceTime: wordStartTime,
+					cuts,
+				});
+			const timelineEnd =
+				activeMedia.element.startTime +
+				mapSourceTimeToCompressedTime({
+					sourceTime: wordEndTime,
+					cuts,
+				});
+			const boundedEnd = Math.max(timelineStart + 0.01, timelineEnd);
+			suppressClickSeekRef.current = true;
+			setHeldWordPreview({
+				wordIds,
+				startTime: timelineStart,
+				endTime: boundedEnd,
+				gapId,
+			});
+			editor.playback.pause();
+			editor.playback.setTransientPlaybackRange({
+				inPoint: timelineStart,
+				outPoint: boundedEnd,
+			});
+			editor.playback.seek({ time: timelineStart });
+			void startPlaybackWhenReady({ editor });
+		},
+		[activeMedia, cuts, editor],
+	);
+
+	const scheduleHeldPreview = useCallback(
+		({
+			pointerId,
+			clientX,
+			clientY,
+			wordIds,
+			wordStartTime,
+			wordEndTime,
+			gapId,
+		}: {
+			pointerId: number;
+			clientX: number;
+			clientY: number;
+			wordIds: string[];
+			wordStartTime: number;
+			wordEndTime: number;
+			gapId?: string;
+		}) => {
+			clearHeldWordPreviewTimer();
+			holdPreviewPointerIdRef.current = pointerId;
+			holdPreviewOriginRef.current = { x: clientX, y: clientY };
+			holdPreviewTimeoutRef.current = window.setTimeout(() => {
+				const selection = window.getSelection();
+				if (
+					selection &&
+					!selection.isCollapsed &&
+					selectionContainerRef.current?.contains(selection.anchorNode) &&
+					selectionContainerRef.current?.contains(selection.focusNode)
+				) {
+					return;
+				}
+				startHeldWordPreview({
+					wordIds,
+					wordStartTime,
+					wordEndTime,
+					gapId,
+				});
+			}, HOLD_TO_PREVIEW_DELAY_MS);
+		},
+		[clearHeldWordPreviewTimer, startHeldWordPreview],
+	);
 
 	const startEditingWordIds = useCallback((targetIds: string[]) => {
 		if (targetIds.length === 0) return;
@@ -1073,7 +1201,7 @@ export function TranscriptView() {
 	}, [activeMedia, focusedGap, editingGapId, editingGapText, clearGapEditingState]);
 
 	const clearSpeakerEditingState = useCallback(() => {
-		setEditingSpeakerId(null);
+		setEditingSpeakerGroupId(null);
 		setEditingSpeakerName("");
 	}, []);
 
@@ -1118,7 +1246,11 @@ export function TranscriptView() {
 	]);
 
 	const commitSpeakerEdit = useCallback(() => {
-		if (!activeMedia || !editingSpeakerId) return;
+		if (!activeMedia || !editingSpeakerGroupId) return;
+		const editingGroup =
+			panelGroups.find((group) => group.id === editingSpeakerGroupId) ?? null;
+		const editingSpeakerId = editingGroup?.speakerId?.trim() ?? "";
+		if (!editingSpeakerId) return;
 		const nextLabel = editingSpeakerName.trim();
 		if (!nextLabel) {
 			toast.error("Speaker name cannot be empty");
@@ -1134,8 +1266,9 @@ export function TranscriptView() {
 	}, [
 		activeMedia,
 		clearSpeakerEditingState,
-		editingSpeakerId,
+		editingSpeakerGroupId,
 		editingSpeakerName,
+		panelGroups,
 	]);
 
 	const handleGenerateCaptions = useCallback(async () => {
@@ -1215,28 +1348,15 @@ export function TranscriptView() {
 				startTime: activeMedia.element.trimStart,
 				endTime: activeMedia.element.trimStart + activeMedia.element.duration,
 			});
-			const sourceWindowSegments =
-				sourceWindowWords.length === 0
-					? clipTranscriptSegmentsForWindow({
-							segments: transcriptResult.transcript.segments,
-							startTime: activeMedia.element.trimStart,
-							endTime:
-								activeMedia.element.trimStart + activeMedia.element.duration,
-						})
-					: [];
-			if (sourceWindowWords.length === 0 && sourceWindowSegments.length === 0) {
-				throw new Error("No transcript words found for this media window.");
+			if (sourceWindowWords.length === 0) {
+				throw new Error(
+					"Word-level alignment failed for this clip. Re-generate after fixing the local WhisperX alignment error to avoid inaccurate caption timing.",
+				);
 			}
-			const wordsForEdit =
-				sourceWindowWords.length > 0
-					? buildTranscriptWordsFromTimedWords({
-							mediaElementId: activeMedia.element.id,
-							words: sourceWindowWords,
-						})
-					: buildTranscriptWordsFromSegments({
-							mediaElementId: activeMedia.element.id,
-							segments: sourceWindowSegments,
-						});
+			const wordsForEdit = buildTranscriptWordsFromTimedWords({
+				mediaElementId: activeMedia.element.id,
+				words: sourceWindowWords,
+			});
 			const transcriptVersion = 1 as const;
 			const transcriptDraft = {
 				version: transcriptVersion,
@@ -1369,29 +1489,16 @@ export function TranscriptView() {
 				startTime: activeMedia.element.trimStart,
 				endTime: activeMedia.element.trimStart + activeMedia.element.duration,
 			});
-			const sourceWindowSegments =
-				sourceWindowWords.length === 0
-					? clipTranscriptSegmentsForWindow({
-							segments,
-							startTime: activeMedia.element.trimStart,
-							endTime:
-								activeMedia.element.trimStart + activeMedia.element.duration,
-						})
-					: [];
-			if (sourceWindowWords.length === 0 && sourceWindowSegments.length === 0) {
-				throw new Error("No transcript words found for this media window.");
+			if (sourceWindowWords.length === 0) {
+				throw new Error(
+					"Word-level alignment failed for this clip. Re-generate after fixing the local WhisperX alignment error to avoid inaccurate caption timing.",
+				);
 			}
 
-			const wordsForEdit =
-				sourceWindowWords.length > 0
-					? buildTranscriptWordsFromTimedWords({
-							mediaElementId: activeMedia.element.id,
-							words: sourceWindowWords,
-						})
-					: buildTranscriptWordsFromSegments({
-							mediaElementId: activeMedia.element.id,
-							segments: sourceWindowSegments,
-						});
+			const wordsForEdit = buildTranscriptWordsFromTimedWords({
+				mediaElementId: activeMedia.element.id,
+				words: sourceWindowWords,
+			});
 			const transcriptDraft = {
 				version: 1 as const,
 				source: "word-level" as const,
@@ -1757,7 +1864,7 @@ export function TranscriptView() {
 									<div className={showSpeakerHeader ? "space-y-4" : "space-y-2"}>
 										{showSpeakerHeader && group.speakerId ? (
 											<div className="flex items-center gap-2 text-xs">
-												{editingSpeakerId === group.speakerId ? (
+												{editingSpeakerGroupId === group.id ? (
 													<span className="inline-flex items-center gap-1">
 														<input
 															value={editingSpeakerName}
@@ -1806,7 +1913,7 @@ export function TranscriptView() {
 																group.tone?.accent ?? "rgb(226 232 240)",
 														}}
 														onClick={() => {
-															setEditingSpeakerId(group.speakerId ?? null);
+															setEditingSpeakerGroupId(group.id);
 															setEditingSpeakerName(
 																group.speakerLabel ?? "",
 															);
@@ -1838,7 +1945,17 @@ export function TranscriptView() {
 												) {
 													return;
 												}
+												if (suppressClickSeekRef.current) {
+													suppressClickSeekRef.current = false;
+													return;
+												}
 												setFocusedWordId(wordId);
+												const targetWord =
+													wordsWithCutState.find((candidate) => candidate.id === wordId) ??
+													null;
+												if (targetWord) {
+													seekToTranscriptWord(targetWord);
+												}
 											}}
 										>
 											{group.words.map((word) => {
@@ -1849,9 +1966,11 @@ export function TranscriptView() {
 										fillerCandidateByStartWordId.get(word.id);
 									const tokenWordIds = fillerCandidate?.wordIds ?? [word.id];
 									const tokenWordIdSet = new Set(tokenWordIds);
-									const tokenWords = wordsWithCutState.filter((candidateWord) =>
-										tokenWordIdSet.has(candidateWord.id),
-									);
+									const tokenWords = tokenWordIds
+										.map((tokenWordId) => wordById.get(tokenWordId) ?? null)
+										.filter((candidateWord): candidateWord is TranscriptEditWord =>
+											candidateWord !== null,
+										);
 									const displayWord = tokenWords[0] ?? word;
 									const displayLastWord =
 										tokenWords[tokenWords.length - 1] ?? word;
@@ -2034,12 +2153,67 @@ export function TranscriptView() {
 													onDoubleClick={(event) => {
 														event.preventDefault();
 														event.stopPropagation();
+														stopHeldWordPreview();
 														window.getSelection()?.removeAllRanges();
 														startEditingWordIds(tokenWordIds);
+													}}
+													onPointerDown={(event) => {
+														if (editingWordId || event.button !== 0) return;
+														suppressClickSeekRef.current = false;
+														const previewStartTime = word.startTime;
+														const previewEndTime = Math.max(
+															previewStartTime + 0.01,
+															word.endTime,
+														);
+														scheduleHeldPreview({
+															pointerId: event.pointerId,
+															clientX: event.clientX,
+															clientY: event.clientY,
+															wordIds: [word.id],
+															wordStartTime: previewStartTime,
+															wordEndTime: previewEndTime,
+														});
+													}}
+													onPointerMove={(event) => {
+														if (holdPreviewPointerIdRef.current !== event.pointerId) {
+															return;
+														}
+														const origin = holdPreviewOriginRef.current;
+														if (!origin || heldWordPreview) return;
+														const deltaX = event.clientX - origin.x;
+														const deltaY = event.clientY - origin.y;
+														if (
+															Math.hypot(deltaX, deltaY) >=
+															HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX
+														) {
+															clearHeldWordPreviewTimer();
+														}
+													}}
+													onPointerUp={(event) => {
+														if (holdPreviewPointerIdRef.current !== event.pointerId) {
+															return;
+														}
+														stopHeldWordPreview();
+													}}
+													onPointerCancel={(event) => {
+														if (holdPreviewPointerIdRef.current !== event.pointerId) {
+															return;
+														}
+														stopHeldWordPreview();
+													}}
+													onPointerLeave={(event) => {
+														if (
+															(event.buttons & 1) === 0 ||
+															holdPreviewPointerIdRef.current !== event.pointerId
+														) {
+															return;
+														}
+														stopHeldWordPreview();
 													}}
 													onContextMenu={(event) => {
 														event.preventDefault();
 														event.stopPropagation();
+														stopHeldWordPreview();
 														setFocusedWordId(displayWord.id);
 														if (tokenWordIds.length === 1) {
 															invokeAction("transcript-toggle-word", {
@@ -2059,7 +2233,31 @@ export function TranscriptView() {
 														});
 													}}
 												>
-													{displayText}
+													{heldWordPreview &&
+													tokenWordIds.some((tokenWordId) =>
+														heldWordPreviewIds.has(tokenWordId),
+													) ? (
+														<span
+															aria-hidden="true"
+															className="pointer-events-none absolute inset-y-0 left-0 rounded-sm bg-white/25"
+															style={{
+																width: `${Math.max(
+																	0,
+																	Math.min(
+																		100,
+																		((currentTime - heldWordPreview.startTime) /
+																			Math.max(
+																				0.01,
+																				heldWordPreview.endTime -
+																					heldWordPreview.startTime,
+																			)) *
+																			100,
+																	),
+																)}%`,
+															}}
+														/>
+													) : null}
+													<span className="relative z-10">{displayText}</span>
 												</span>
 												{editingWordId === displayWord.id && (
 													<span className="absolute left-0 top-1/2 z-20 inline-flex -translate-y-1/2 items-center rounded-sm border border-zinc-500 bg-zinc-800 px-2 pr-1 align-middle shadow-sm">
@@ -2125,16 +2323,71 @@ export function TranscriptView() {
 													}}
 													onClick={(event) => {
 														event.stopPropagation();
+														if (suppressClickSeekRef.current) {
+															suppressClickSeekRef.current = false;
+															return;
+														}
 														focusWordGap(displayLastWord.id, nextWord.id);
+													}}
+													onPointerDown={(event) => {
+														if (editingWordId || event.button !== 0 || !gap) return;
+														suppressClickSeekRef.current = false;
+														scheduleHeldPreview({
+															pointerId: event.pointerId,
+															clientX: event.clientX,
+															clientY: event.clientY,
+															wordIds: [],
+															wordStartTime: displayLastWord.endTime,
+															wordEndTime: nextWord.startTime,
+															gapId: gapId ?? undefined,
+														});
+													}}
+													onPointerMove={(event) => {
+														if (holdPreviewPointerIdRef.current !== event.pointerId) {
+															return;
+														}
+														const origin = holdPreviewOriginRef.current;
+														if (!origin || heldWordPreview) return;
+														const deltaX = event.clientX - origin.x;
+														const deltaY = event.clientY - origin.y;
+														if (
+															Math.hypot(deltaX, deltaY) >=
+															HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX
+														) {
+															clearHeldWordPreviewTimer();
+														}
+													}}
+													onPointerUp={(event) => {
+														if (holdPreviewPointerIdRef.current !== event.pointerId) {
+															return;
+														}
+														stopHeldWordPreview();
+													}}
+													onPointerCancel={(event) => {
+														if (holdPreviewPointerIdRef.current !== event.pointerId) {
+															return;
+														}
+														stopHeldWordPreview();
+													}}
+													onPointerLeave={(event) => {
+														if (
+															(event.buttons & 1) === 0 ||
+															holdPreviewPointerIdRef.current !== event.pointerId
+														) {
+															return;
+														}
+														stopHeldWordPreview();
 													}}
 													onDoubleClick={(event) => {
 														event.preventDefault();
 														event.stopPropagation();
+														stopHeldWordPreview();
 														startEditingGap(displayLastWord.id, nextWord.id);
 													}}
 													onContextMenu={(event) => {
 														event.preventDefault();
 														event.stopPropagation();
+														stopHeldWordPreview();
 														focusWordGap(displayLastWord.id, nextWord.id);
 														invokeAction("transcript-toggle-gap-removed", {
 															trackId: activeMedia.trackId,
@@ -2151,6 +2404,31 @@ export function TranscriptView() {
 														}
 													}}
 												>
+													{heldWordPreview?.gapId === gapId ? (
+														<span
+															aria-hidden="true"
+															className="pointer-events-none absolute inset-y-0 left-0 z-0"
+															style={{
+																backgroundColor: hexToRgba(
+																	tone?.accent ?? "#ffffff",
+																	0.32,
+																),
+																width: `${Math.max(
+																	0,
+																	Math.min(
+																		100,
+																		((currentTime - heldWordPreview.startTime) /
+																			Math.max(
+																				0.01,
+																				heldWordPreview.endTime -
+																					heldWordPreview.startTime,
+																			)) *
+																			100,
+																	),
+																)}%`,
+															}}
+														/>
+													) : null}
 													{gapEdit?.removed ? (
 														<span
 															aria-hidden="true"

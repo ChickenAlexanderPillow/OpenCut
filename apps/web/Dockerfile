@@ -8,6 +8,7 @@ FROM base AS builder
 
 WORKDIR /app
 
+ARG WEB_BUILD_NODE_OPTIONS="--max-old-space-size=1536"
 ARG FREESOUND_CLIENT_ID
 ARG FREESOUND_API_KEY
 
@@ -27,7 +28,7 @@ COPY packages/ui/ packages/ui/
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NODE_OPTIONS="--max-old-space-size=1024"
+ENV NODE_OPTIONS=$WEB_BUILD_NODE_OPTIONS
 
 # Build-time env stubs to pass zod validation
 ENV BETTER_AUTH_SECRET="build-time-secret"

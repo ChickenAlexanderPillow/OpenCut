@@ -13,6 +13,8 @@ export class PlaybackManager {
 	private lastUpdate = 0;
 	private lastNotifiedAt = 0;
 	private blockedReason: string | null = null;
+	private transientPlaybackRange: { inPoint: number | null; outPoint: number | null } | null =
+		null;
 
 	constructor(private editor: EditorCore) {}
 
@@ -191,6 +193,44 @@ export class PlaybackManager {
 		});
 	}
 
+	setTransientPlaybackRange({
+		inPoint,
+		outPoint,
+	}: {
+		inPoint: number | null;
+		outPoint: number | null;
+	}): void {
+		const duration = this.editor.timeline.getTotalDuration();
+		const nextInPoint =
+			inPoint === null ? null : this.clampToDuration({ value: inPoint, duration });
+		const nextOutPoint =
+			outPoint === null ? null : this.clampToDuration({ value: outPoint, duration });
+		if (
+			nextInPoint !== null &&
+			nextOutPoint !== null &&
+			nextOutPoint <= nextInPoint + 1e-6
+		) {
+			return;
+		}
+		if (
+			this.transientPlaybackRange?.inPoint === nextInPoint &&
+			this.transientPlaybackRange?.outPoint === nextOutPoint
+		) {
+			return;
+		}
+		this.transientPlaybackRange = {
+			inPoint: nextInPoint,
+			outPoint: nextOutPoint,
+		};
+		this.notify();
+	}
+
+	clearTransientPlaybackRange(): void {
+		if (this.transientPlaybackRange === null) return;
+		this.transientPlaybackRange = null;
+		this.notify();
+	}
+
 	setInPointAtCurrentTime(): void {
 		this.setInPoint({ time: this.currentTime });
 	}
@@ -208,7 +248,8 @@ export class PlaybackManager {
 	}: {
 		duration?: number;
 	} = {}): { start: number; end: number; hasCustomRange: boolean } {
-		const { inPoint, outPoint } = this.getStoredRange();
+		const { inPoint, outPoint } =
+			this.transientPlaybackRange ?? this.getStoredRange();
 		const clampedInPoint =
 			inPoint === null ? null : this.clampToDuration({ value: inPoint, duration });
 		const clampedOutPoint =

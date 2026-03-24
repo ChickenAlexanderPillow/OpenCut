@@ -101,6 +101,7 @@ curl http://127.0.0.1:8765/healthz
   - `LOCAL_TRANSCRIBE_PREWARM=true`
 - To enable diarization:
   - `LOCAL_TRANSCRIBE_DIARIZATION=true`
+  - `LOCAL_TRANSCRIBE_DIARIZATION_DEVICE=cuda`
   - `LOCAL_TRANSCRIBE_HF_TOKEN=<hugging-face-read-token>`
 
 ## Docker GPU checks

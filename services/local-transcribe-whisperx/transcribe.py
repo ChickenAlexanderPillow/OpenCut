@@ -4,14 +4,20 @@ from collections import OrderedDict
 import gc
 import os
 import time
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from faster_whisper import WhisperModel
+from pyannote.audio.utils.reproducibility import ReproducibilityWarning
 import torch
 import whisperx
 from whisperx.diarize import DiarizationPipeline, assign_word_speakers
+
+MIN_ALIGNMENT_SEGMENT_SECONDS = 0.02
+MIN_DIARIZATION_AUDIO_SECONDS = 1.0
+MIN_DIARIZATION_WORD_COUNT = 2
 
 
 @dataclass
@@ -38,6 +44,11 @@ class LocalWhisperXEngine:
 		self._model_cache: "OrderedDict[tuple[str, str, str], WhisperModel]" = OrderedDict()
 		self._align_cache: "OrderedDict[tuple[str, str], tuple[Any, Any]]" = OrderedDict()
 		self._diarize_cache: "OrderedDict[str, Any]" = OrderedDict()
+		warnings.filterwarnings(
+			"ignore",
+			message=r"TensorFloat-32 \(TF32\) has been disabled.*",
+			category=ReproducibilityWarning,
+		)
 
 	def _release_runtime_memory(self, *, clear_cuda_cache: bool) -> None:
 		gc.collect()
@@ -104,17 +115,123 @@ class LocalWhisperXEngine:
 	def _get_diarization_pipeline(self, *, device: str) -> Any | None:
 		if not self._diarize_enabled or not self._hf_token:
 			return None
-		existing = self._diarize_cache.get(device)
+		configured_device = (
+			os.getenv("LOCAL_TRANSCRIBE_DIARIZATION_DEVICE", "").strip().lower() or device
+		)
+		resolved_device = self._resolve_device(configured_device)
+		existing = self._diarize_cache.get(resolved_device)
 		if existing:
-			self._diarize_cache.move_to_end(device)
+			self._diarize_cache.move_to_end(resolved_device)
 			return existing
 		diarization = DiarizationPipeline(
 			token=self._hf_token,
-			device=device,
+			device=resolved_device,
 		)
-		self._diarize_cache[device] = diarization
+		self._diarize_cache[resolved_device] = diarization
 		self._trim_caches()
 		return diarization
+
+	def _build_alignment_language_candidates(
+		self,
+		*,
+		detected_language: str | None,
+		requested_language: str | None,
+	) -> list[str]:
+		candidates: list[str] = []
+		for candidate in (
+			(detected_language or "").strip().lower(),
+			(requested_language or "").strip().lower(),
+			(os.getenv("LOCAL_TRANSCRIBE_PRIMARY_LANGUAGE", "en").strip().lower()),
+			"en",
+		):
+			if not candidate or candidate in candidates:
+				continue
+			candidates.append(candidate)
+		return candidates or ["en"]
+
+	def _sanitize_segments_for_alignment(
+		self,
+		*,
+		segments: list[dict[str, Any]],
+		dictionary: dict[str, int],
+		language: str,
+	) -> list[dict[str, Any]]:
+		sanitized: list[dict[str, Any]] = []
+		language_without_spaces = language in whisperx.alignment.LANGUAGES_WITHOUT_SPACES
+		for segment in segments:
+			text = " ".join(str(segment.get("text") or "").split()).strip()
+			if not text:
+				continue
+			has_alignable_character = False
+			for char in text:
+				normalized = char.lower()
+				if not language_without_spaces:
+					normalized = normalized.replace(" ", "|")
+				if normalized in dictionary:
+					has_alignable_character = True
+					break
+			if not has_alignable_character:
+				continue
+			start = max(0.0, float(segment.get("start") or 0.0))
+			end = max(start + MIN_ALIGNMENT_SEGMENT_SECONDS, float(segment.get("end") or start))
+			sanitized.append(
+				{
+					"start": start,
+					"end": end,
+					"text": text,
+				}
+			)
+		return sanitized
+
+	def _align_with_fallback(
+		self,
+		*,
+		segments: list[dict[str, Any]],
+		audio: Any,
+		detected_language: str | None,
+		requested_language: str | None,
+		preferred_device: str,
+	) -> tuple[dict[str, Any], str, str]:
+		alignment_errors: list[str] = []
+		devices = [preferred_device]
+		if preferred_device != "cpu":
+			devices.append("cpu")
+		for language in self._build_alignment_language_candidates(
+			detected_language=detected_language,
+			requested_language=requested_language,
+		):
+			for device in devices:
+				try:
+					align_model, metadata = self._get_align_model(
+						language=language,
+						device=device,
+					)
+					sanitized_segments = self._sanitize_segments_for_alignment(
+						segments=segments,
+						dictionary=metadata["dictionary"],
+						language=metadata["language"],
+					)
+					if len(sanitized_segments) == 0:
+						raise RuntimeError("alignment received no alignable transcript segments")
+					aligned = whisperx.align(
+						sanitized_segments,
+						align_model,
+						metadata,
+						audio,
+						device,
+						return_char_alignments=False,
+					)
+					word_segments = aligned.get("word_segments", []) or []
+					if len(word_segments) == 0:
+						raise RuntimeError("alignment produced no word segments")
+					return aligned, language, device
+				except Exception as error:
+					alignment_errors.append(
+						f"{language}@{device}:{type(error).__name__}: {error}"
+					)
+		raise RuntimeError(
+			"WhisperX alignment failed after retries: " + " | ".join(alignment_errors)
+		)
 
 	def get_runtime_device_info(self) -> dict[str, Any]:
 		cuda_available = False
@@ -165,11 +282,16 @@ class LocalWhisperXEngine:
 		)
 		segments: list[dict[str, Any]] = []
 		for segment in segments_iter:
+			text = (segment.text or "").strip()
+			start = max(0.0, float(segment.start))
+			end = max(start + 0.01, float(segment.end))
+			if not text:
+				continue
 			segments.append(
 				{
-					"start": float(segment.start),
-					"end": float(segment.end),
-					"text": segment.text,
+					"start": start,
+					"end": end,
+					"text": text,
 				}
 			)
 		return {
@@ -215,81 +337,84 @@ class LocalWhisperXEngine:
 
 		language = asr_result["language"] or "en"
 		align_started_at = time.perf_counter()
-		align_model, metadata = self._get_align_model(
-			language=language,
-			device=used_device,
-		)
 		try:
-			aligned = whisperx.align(
-				asr_result["segments"],
-				align_model,
-				metadata,
-				audio,
-				used_device,
-				return_char_alignments=False,
+			aligned, aligned_language, aligned_device = self._align_with_fallback(
+				segments=asr_result["segments"],
+				audio=audio,
+				detected_language=language,
+				requested_language=config.language,
+				preferred_device=used_device,
 			)
-		except Exception:
-			if used_device != "cpu":
-				used_device = "cpu"
-				align_model, metadata = self._get_align_model(
-					language=language,
-					device=used_device,
-				)
-				aligned = whisperx.align(
-					asr_result["segments"],
-					align_model,
-					metadata,
-					audio,
-					used_device,
-					return_char_alignments=False,
-				)
-			else:
-				raise
+			used_device = aligned_device
+		except Exception as error:
+			print(
+				"Local transcribe alignment failed",
+				{
+					"device": used_device,
+					"model": used_model,
+					"detected_language": language,
+					"requested_language": config.language,
+					"error": str(error),
+				},
+				flush=True,
+			)
+			raise
 		timings_ms["align"] = (time.perf_counter() - align_started_at) * 1000.0
 		word_segments = aligned.get("word_segments", []) or []
 		diarization_started_at = time.perf_counter()
 		speaker_segments: list[dict[str, Any]] = []
 		diarization_used = False
 		diarization_error: str | None = None
-		if config.diarize:
-			try:
-				diarization = self._get_diarization_pipeline(device=used_device)
-				if diarization is not None:
-					diarize_segments = diarization(
-						audio,
-						min_speakers=config.min_speakers,
-						max_speakers=config.max_speakers,
-					)
-					aligned = assign_word_speakers(diarize_segments, aligned)
-					word_segments = aligned.get("word_segments", []) or []
-					for segment in aligned.get("segments", []) or []:
-						speaker_id = segment.get("speaker")
-						start = segment.get("start")
-						end = segment.get("end")
-						text = (segment.get("text") or "").strip()
-						if not speaker_id or start is None or end is None:
-							continue
-						start_f = max(0.0, float(start))
-						end_f = max(start_f + 0.01, float(end))
-						speaker_segments.append(
-							{
-								"text": text,
-								"start": start_f,
-								"end": end_f,
-								"speakerId": str(speaker_id),
-							}
+		if config.diarize and len(word_segments) > 0:
+			if audio_duration_seconds < MIN_DIARIZATION_AUDIO_SECONDS:
+				diarization_error = (
+					f"Audio too short for diarization ({audio_duration_seconds:.2f}s < "
+					f"{MIN_DIARIZATION_AUDIO_SECONDS:.2f}s)"
+				)
+			elif len(word_segments) < MIN_DIARIZATION_WORD_COUNT:
+				diarization_error = (
+					f"Not enough aligned words for diarization ({len(word_segments)} < "
+					f"{MIN_DIARIZATION_WORD_COUNT})"
+				)
+			else:
+				try:
+					diarization = self._get_diarization_pipeline(device=used_device)
+					if diarization is not None:
+						diarize_segments = diarization(
+							audio,
+							min_speakers=config.min_speakers,
+							max_speakers=config.max_speakers,
 						)
-					diarization_used = True
-				else:
-					if not self._diarize_enabled:
-						diarization_error = "Diarization is disabled by LOCAL_TRANSCRIBE_DIARIZATION"
-					elif not self._hf_token:
-						diarization_error = (
-							"Diarization requested but no Hugging Face token was provided"
-						)
-			except Exception as error:
-				diarization_used = False
-				diarization_error = f"{type(error).__name__}: {error}"
+						aligned = assign_word_speakers(diarize_segments, aligned)
+						word_segments = aligned.get("word_segments", []) or []
+						for segment in aligned.get("segments", []) or []:
+							speaker_id = segment.get("speaker")
+							start = segment.get("start")
+							end = segment.get("end")
+							text = (segment.get("text") or "").strip()
+							if not speaker_id or start is None or end is None:
+								continue
+							start_f = max(0.0, float(start))
+							end_f = max(start_f + 0.01, float(end))
+							speaker_segments.append(
+								{
+									"text": text,
+									"start": start_f,
+									"end": end_f,
+									"speakerId": str(speaker_id),
+								}
+							)
+						diarization_used = True
+					else:
+						if not self._diarize_enabled:
+							diarization_error = "Diarization is disabled by LOCAL_TRANSCRIBE_DIARIZATION"
+						elif not self._hf_token:
+							diarization_error = (
+								"Diarization requested but no Hugging Face token was provided"
+							)
+				except Exception as error:
+					diarization_used = False
+					diarization_error = f"{type(error).__name__}: {error}"
 		timings_ms["diarization"] = (time.perf_counter() - diarization_started_at) * 1000.0
 		postprocess_started_at = time.perf_counter()
 		words = []
@@ -331,6 +456,7 @@ class LocalWhisperXEngine:
 			"words": words,
 			"segments": speaker_segments,
 			"language": language,
+			"alignment_language": aligned_language,
 			"model": used_model,
 			"compute_type": used_compute,
 			"device": used_device,
