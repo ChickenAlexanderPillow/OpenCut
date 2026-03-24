@@ -145,7 +145,7 @@ Transcription quality/memory tuning (Docker env overrides):
 
 ```bash
 # Higher quality, higher memory
-LOCAL_TRANSCRIBE_MODEL=large-v3 LOCAL_TRANSCRIBE_COMPUTE_TYPE=float16 bun run docker:up
+LOCAL_TRANSCRIBE_MODEL=large-v2 LOCAL_TRANSCRIBE_COMPUTE_TYPE=float16 bun run docker:up
 
 # Lower memory (default in this repo)
 LOCAL_TRANSCRIBE_MODEL=medium LOCAL_TRANSCRIBE_COMPUTE_TYPE=int8_float16 bun run docker:up

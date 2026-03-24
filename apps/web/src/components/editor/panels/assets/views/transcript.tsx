@@ -39,7 +39,7 @@ import {
 } from "@/lib/clips/transcript";
 import {
 	cancelPreparedPlaybackStart,
-	startPlaybackWhenReady,
+	startPlaybackWithAudioWarmup,
 } from "@/lib/playback/start-playback";
 import type {
 	AudioElement,
@@ -57,7 +57,7 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
-import { Check, Pencil, X } from "lucide-react";
+import { Check, Pencil, RefreshCw, RotateCcw, X } from "lucide-react";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
 
@@ -99,15 +99,54 @@ type TranscriptPanelGap = {
 
 const MAX_DISFLUENCY_REPEAT_GAP_SECONDS = 0.35;
 const MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS = 0.5;
-const HOLD_TO_PREVIEW_DELAY_MS = 45;
 const HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX = 5;
+const HOLD_TO_PREVIEW_CANCEL_DISTANCE_SQUARED_PX =
+	HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX * HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX;
+const MIN_HOLD_PREVIEW_DURATION_SECONDS = 0.18;
 const HOLD_PREVIEW_STOP_EPSILON_SECONDS = 0.012;
+const WORD_PREVIEW_MAX_ONSET_PAD_SECONDS = 0.06;
+const WORD_PREVIEW_MAX_RELEASE_PAD_SECONDS = 0.05;
+const WORD_PREVIEW_PAD_GAP_RATIO = 0.35;
 
 type TranscriptBracketDecoration = {
 	prefix?: string;
 	suffix?: string;
 	kind: "filler" | "repeat";
 };
+
+function getWordPreviewStartTime({
+	word,
+	previousWord,
+}: {
+	word: TranscriptEditWord;
+	previousWord: TranscriptEditWord | null;
+}): number {
+	if (!previousWord) return word.startTime;
+	const gapBefore = Math.max(0, word.startTime - previousWord.endTime);
+	if (gapBefore <= 0) return word.startTime;
+	const onsetPad = Math.min(
+		WORD_PREVIEW_MAX_ONSET_PAD_SECONDS,
+		gapBefore * WORD_PREVIEW_PAD_GAP_RATIO,
+	);
+	return Math.max(previousWord.endTime, word.startTime - onsetPad);
+}
+
+function getWordPreviewEndTime({
+	word,
+	nextWord,
+}: {
+	word: TranscriptEditWord;
+	nextWord: TranscriptEditWord | null;
+}): number {
+	if (!nextWord) return word.endTime;
+	const gapAfter = Math.max(0, nextWord.startTime - word.endTime);
+	if (gapAfter <= 0) return word.endTime;
+	const releasePad = Math.min(
+		WORD_PREVIEW_MAX_RELEASE_PAD_SECONDS,
+		gapAfter * WORD_PREVIEW_PAD_GAP_RATIO,
+	);
+	return Math.min(nextWord.startTime, word.endTime + releasePad);
+}
 
 const EDITOR_SUBSCRIBE_TRANSCRIPT_VIEW = [
 	"timeline",
@@ -130,6 +169,17 @@ function normalizeTranscriptDisplayToken(token: string): string {
 		.toLowerCase()
 		.replace(/[^\p{L}\p{N}'\s]+/gu, "")
 		.trim();
+}
+
+function hasExpandedSelectionWithinContainer(container: HTMLElement | null) {
+	if (!container) return false;
+	const selection = window.getSelection();
+	return Boolean(
+		selection &&
+			!selection.isCollapsed &&
+			container.contains(selection.anchorNode) &&
+			container.contains(selection.focusNode),
+	);
 }
 
 function findActiveWordIdAtSourceTime({
@@ -669,6 +719,16 @@ export function TranscriptView() {
 		() => panelGroups.flatMap((group) => group.words),
 		[panelGroups],
 	);
+	const previousPanelWordById = useMemo(() => {
+		const previousWordMap = new Map<string, TranscriptEditWord>();
+		for (let index = 1; index < orderedPanelWords.length; index++) {
+			const previous = orderedPanelWords[index - 1];
+			const current = orderedPanelWords[index];
+			if (!previous || !current) continue;
+			previousWordMap.set(current.id, previous);
+		}
+		return previousWordMap;
+	}, [orderedPanelWords]);
 	const nextPanelWordById = useMemo(() => {
 		const nextWordMap = new Map<string, TranscriptPanelGap>();
 		for (let index = 0; index < orderedPanelWords.length - 1; index++) {
@@ -1054,7 +1114,10 @@ export function TranscriptView() {
 					sourceTime: wordEndTime,
 					cuts,
 				});
-			const boundedEnd = Math.max(timelineStart + 0.01, timelineEnd);
+			const boundedEnd = Math.max(
+				timelineStart + MIN_HOLD_PREVIEW_DURATION_SECONDS,
+				timelineEnd,
+			);
 			suppressClickSeekRef.current = true;
 			setHeldWordPreview({
 				wordIds,
@@ -1068,7 +1131,8 @@ export function TranscriptView() {
 				outPoint: boundedEnd,
 			});
 			editor.playback.seek({ time: timelineStart });
-			void startPlaybackWhenReady({ editor });
+			cancelPreparedPlaybackStart({ editor });
+			void startPlaybackWithAudioWarmup({ editor });
 		},
 		[activeMedia, cuts, editor],
 	);
@@ -1094,25 +1158,74 @@ export function TranscriptView() {
 			clearHeldWordPreviewTimer();
 			holdPreviewPointerIdRef.current = pointerId;
 			holdPreviewOriginRef.current = { x: clientX, y: clientY };
-			holdPreviewTimeoutRef.current = window.setTimeout(() => {
-				const selection = window.getSelection();
-				if (
-					selection &&
-					!selection.isCollapsed &&
-					selectionContainerRef.current?.contains(selection.anchorNode) &&
-					selectionContainerRef.current?.contains(selection.focusNode)
-				) {
-					return;
-				}
-				startHeldWordPreview({
-					wordIds,
-					wordStartTime,
-					wordEndTime,
-					gapId,
-				});
-			}, HOLD_TO_PREVIEW_DELAY_MS);
+			if (hasExpandedSelectionWithinContainer(selectionContainerRef.current)) {
+				return;
+			}
+			startHeldWordPreview({
+				wordIds,
+				wordStartTime,
+				wordEndTime,
+				gapId,
+			});
 		},
 		[clearHeldWordPreviewTimer, startHeldWordPreview],
+	);
+
+	const handleHeldPreviewPointerMove = useCallback(
+		({
+			pointerId,
+			clientX,
+			clientY,
+		}: {
+			pointerId: number;
+			clientX: number;
+			clientY: number;
+		}) => {
+			if (holdPreviewPointerIdRef.current !== pointerId || heldWordPreview) {
+				return;
+			}
+			const origin = holdPreviewOriginRef.current;
+			if (!origin) return;
+			const deltaX = clientX - origin.x;
+			const deltaY = clientY - origin.y;
+			if (
+				deltaX * deltaX + deltaY * deltaY >=
+				HOLD_TO_PREVIEW_CANCEL_DISTANCE_SQUARED_PX
+			) {
+				clearHeldWordPreviewTimer();
+			}
+		},
+		[clearHeldWordPreviewTimer, heldWordPreview],
+	);
+
+	const handleHeldPreviewPointerEnd = useCallback(
+		(pointerId: number) => {
+			if (holdPreviewPointerIdRef.current !== pointerId) {
+				return;
+			}
+			stopHeldWordPreview();
+		},
+		[stopHeldWordPreview],
+	);
+
+	const captureHeldPreviewPointer = useCallback(
+		(target: HTMLElement, pointerId: number) => {
+			try {
+				target.setPointerCapture?.(pointerId);
+			} catch {}
+		},
+		[],
+	);
+
+	const releaseHeldPreviewPointer = useCallback(
+		(target: HTMLElement, pointerId: number) => {
+			try {
+				if (target.hasPointerCapture?.(pointerId)) {
+					target.releasePointerCapture?.(pointerId);
+				}
+			} catch {}
+		},
+		[],
 	);
 
 	const startEditingWordIds = useCallback((targetIds: string[]) => {
@@ -1656,7 +1769,7 @@ export function TranscriptView() {
 
 	if (!activeMedia) {
 		return (
-			<PanelView title="Transcript & Captions" contentClassName="space-y-2">
+			<PanelView title="Transcript" contentClassName="space-y-2">
 				<div className="text-sm text-muted-foreground p-3 border rounded-md">
 					Select a clip audio/video element to edit transcript words.
 				</div>
@@ -1666,7 +1779,7 @@ export function TranscriptView() {
 
 	if (!hasLinkedCaptions || !hasTranscriptData) {
 		return (
-			<PanelView title="Transcript & Captions" contentClassName="space-y-2">
+			<PanelView title="Transcript" contentClassName="space-y-2">
 				<div className="text-sm text-muted-foreground p-3 border rounded-md">
 					No captions for this clip.
 				</div>
@@ -1699,33 +1812,49 @@ export function TranscriptView() {
 
 	return (
 		<PanelView
-			title="Transcript & Captions"
+			title="Transcript"
 			contentClassName="space-y-3 pb-3"
 			actions={
 				<div className="flex items-center gap-1">
 					{activeMediaAsset && (
 						<Button
 							variant="outline"
-							size="sm"
+							size="icon"
+							className="shrink-0"
 							onClick={() => void handleRefreshTranscript()}
 							disabled={isRefreshingTranscript || isGeneratingCaptions}
+							aria-label={
+								isRefreshingTranscript
+									? "Re-generating transcript"
+									: "Re-generate transcript"
+							}
+							title={
+								isRefreshingTranscript
+									? "Re-generating transcript"
+									: "Re-generate transcript"
+							}
 						>
-							{isRefreshingTranscript
-								? "Re-generating..."
-								: "Re-generate transcript"}
+							{isRefreshingTranscript ? (
+								<Spinner />
+							) : (
+								<RefreshCw className="size-4" />
+							)}
 						</Button>
 					)}
 					<Button
 						variant="outline"
-						size="sm"
+						size="icon"
+						className="shrink-0"
 						onClick={() =>
 							invokeAction("transcript-restore-all", {
 								trackId: activeMedia.trackId,
 								elementId: activeMedia.element.id,
 							})
 						}
+						aria-label="Restore all transcript edits"
+						title="Restore all"
 					>
-						Restore All
+						<RotateCcw className="size-4" />
 					</Button>
 				</div>
 			}
@@ -1975,6 +2104,21 @@ export function TranscriptView() {
 									const displayLastWord =
 										tokenWords[tokenWords.length - 1] ?? word;
 									const displayText = fillerCandidate?.text ?? word.text;
+									const previousWord =
+										previousPanelWordById.get(word.id) ?? null;
+									const followingWord =
+										nextPanelWordById.get(word.id)?.rightWord ?? null;
+									const previewStartTime = getWordPreviewStartTime({
+										word,
+										previousWord,
+									});
+									const previewEndTime = Math.max(
+										previewStartTime + 0.01,
+										getWordPreviewEndTime({
+											word,
+											nextWord: followingWord,
+										}),
+									);
 									const isCurrentWord = tokenWordIds.some(
 										(tokenWordId) => activeWordId === tokenWordId,
 									);
@@ -2160,10 +2304,9 @@ export function TranscriptView() {
 													onPointerDown={(event) => {
 														if (editingWordId || event.button !== 0) return;
 														suppressClickSeekRef.current = false;
-														const previewStartTime = word.startTime;
-														const previewEndTime = Math.max(
-															previewStartTime + 0.01,
-															word.endTime,
+														captureHeldPreviewPointer(
+															event.currentTarget,
+															event.pointerId,
 														);
 														scheduleHeldPreview({
 															pointerId: event.pointerId,
@@ -2175,40 +2318,25 @@ export function TranscriptView() {
 														});
 													}}
 													onPointerMove={(event) => {
-														if (holdPreviewPointerIdRef.current !== event.pointerId) {
-															return;
-														}
-														const origin = holdPreviewOriginRef.current;
-														if (!origin || heldWordPreview) return;
-														const deltaX = event.clientX - origin.x;
-														const deltaY = event.clientY - origin.y;
-														if (
-															Math.hypot(deltaX, deltaY) >=
-															HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX
-														) {
-															clearHeldWordPreviewTimer();
-														}
+														handleHeldPreviewPointerMove({
+															pointerId: event.pointerId,
+															clientX: event.clientX,
+															clientY: event.clientY,
+														});
 													}}
 													onPointerUp={(event) => {
-														if (holdPreviewPointerIdRef.current !== event.pointerId) {
-															return;
-														}
-														stopHeldWordPreview();
+														releaseHeldPreviewPointer(
+															event.currentTarget,
+															event.pointerId,
+														);
+														handleHeldPreviewPointerEnd(event.pointerId);
 													}}
 													onPointerCancel={(event) => {
-														if (holdPreviewPointerIdRef.current !== event.pointerId) {
-															return;
-														}
-														stopHeldWordPreview();
-													}}
-													onPointerLeave={(event) => {
-														if (
-															(event.buttons & 1) === 0 ||
-															holdPreviewPointerIdRef.current !== event.pointerId
-														) {
-															return;
-														}
-														stopHeldWordPreview();
+														releaseHeldPreviewPointer(
+															event.currentTarget,
+															event.pointerId,
+														);
+														handleHeldPreviewPointerEnd(event.pointerId);
 													}}
 													onContextMenu={(event) => {
 														event.preventDefault();
@@ -2332,51 +2460,54 @@ export function TranscriptView() {
 													onPointerDown={(event) => {
 														if (editingWordId || event.button !== 0 || !gap) return;
 														suppressClickSeekRef.current = false;
+														captureHeldPreviewPointer(
+															event.currentTarget,
+															event.pointerId,
+														);
+														const gapPreviewStartTime = getWordPreviewEndTime({
+															word: displayLastWord,
+															nextWord,
+														});
+														const gapPreviewEndTime = getWordPreviewStartTime({
+															word: nextWord,
+															previousWord: displayLastWord,
+														});
+														if (
+															gapPreviewEndTime <=
+															gapPreviewStartTime + 0.01
+														) {
+															return;
+														}
 														scheduleHeldPreview({
 															pointerId: event.pointerId,
 															clientX: event.clientX,
 															clientY: event.clientY,
 															wordIds: [],
-															wordStartTime: displayLastWord.endTime,
-															wordEndTime: nextWord.startTime,
+															wordStartTime: gapPreviewStartTime,
+															wordEndTime: gapPreviewEndTime,
 															gapId: gapId ?? undefined,
 														});
 													}}
 													onPointerMove={(event) => {
-														if (holdPreviewPointerIdRef.current !== event.pointerId) {
-															return;
-														}
-														const origin = holdPreviewOriginRef.current;
-														if (!origin || heldWordPreview) return;
-														const deltaX = event.clientX - origin.x;
-														const deltaY = event.clientY - origin.y;
-														if (
-															Math.hypot(deltaX, deltaY) >=
-															HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX
-														) {
-															clearHeldWordPreviewTimer();
-														}
+														handleHeldPreviewPointerMove({
+															pointerId: event.pointerId,
+															clientX: event.clientX,
+															clientY: event.clientY,
+														});
 													}}
 													onPointerUp={(event) => {
-														if (holdPreviewPointerIdRef.current !== event.pointerId) {
-															return;
-														}
-														stopHeldWordPreview();
+														releaseHeldPreviewPointer(
+															event.currentTarget,
+															event.pointerId,
+														);
+														handleHeldPreviewPointerEnd(event.pointerId);
 													}}
 													onPointerCancel={(event) => {
-														if (holdPreviewPointerIdRef.current !== event.pointerId) {
-															return;
-														}
-														stopHeldWordPreview();
-													}}
-													onPointerLeave={(event) => {
-														if (
-															(event.buttons & 1) === 0 ||
-															holdPreviewPointerIdRef.current !== event.pointerId
-														) {
-															return;
-														}
-														stopHeldWordPreview();
+														releaseHeldPreviewPointer(
+															event.currentTarget,
+															event.pointerId,
+														);
+														handleHeldPreviewPointerEnd(event.pointerId);
 													}}
 													onDoubleClick={(event) => {
 														event.preventDefault();

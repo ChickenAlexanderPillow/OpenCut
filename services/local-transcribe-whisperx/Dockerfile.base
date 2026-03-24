@@ -19,7 +19,7 @@ WORKDIR /app
 
 COPY requirements.txt /app/requirements.txt
 
-# whisperx==3.8.1 expects torch~=2.8.0; install CUDA build explicitly.
+# whisperx==3.8.2 expects torch~=2.8.0; install CUDA build explicitly.
 RUN --mount=type=cache,id=local-transcribe-pip-cache,target=/root/.cache/pip,sharing=locked \
 	python3 -m pip install --index-url https://download.pytorch.org/whl/cu128 \
 		torch==2.8.0+cu128 torchaudio==2.8.0+cu128

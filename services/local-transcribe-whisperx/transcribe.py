@@ -3,13 +3,13 @@ from __future__ import annotations
 from collections import OrderedDict
 import gc
 import os
+import re
 import time
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from faster_whisper import WhisperModel
 from pyannote.audio.utils.reproducibility import ReproducibilityWarning
 import torch
 import whisperx
@@ -18,11 +18,15 @@ from whisperx.diarize import DiarizationPipeline, assign_word_speakers
 MIN_ALIGNMENT_SEGMENT_SECONDS = 0.02
 MIN_DIARIZATION_AUDIO_SECONDS = 1.0
 MIN_DIARIZATION_WORD_COUNT = 2
+MIN_WORD_DURATION_SECONDS = 0.01
+WORD_MATCH_LOOKAHEAD = 6
+WHISPERX_BATCH_SIZE = 16
+WHISPERX_BEAM_SIZE = 5
 
 
 @dataclass
 class TranscribeConfig:
-	model: str = "large-v3"
+	model: str = "large-v2"
 	device: str = "cuda"
 	compute_type: str = "float16"
 	vad_filter: bool = False
@@ -41,7 +45,7 @@ class LocalWhisperXEngine:
 			in {"1", "true", "yes", "on"}
 		)
 		self._hf_token = (os.getenv("LOCAL_TRANSCRIBE_HF_TOKEN") or "").strip() or None
-		self._model_cache: "OrderedDict[tuple[str, str, str], WhisperModel]" = OrderedDict()
+		self._model_cache: "OrderedDict[tuple[str, str, str], Any]" = OrderedDict()
 		self._align_cache: "OrderedDict[tuple[str, str], tuple[Any, Any]]" = OrderedDict()
 		self._diarize_cache: "OrderedDict[str, Any]" = OrderedDict()
 		warnings.filterwarnings(
@@ -87,13 +91,23 @@ class LocalWhisperXEngine:
 			pass
 		return "cpu"
 
-	def _get_asr_model(self, *, model: str, device: str, compute_type: str) -> WhisperModel:
+	def _get_asr_model(self, *, model: str, device: str, compute_type: str) -> Any:
 		key = (model, device, compute_type)
 		existing = self._model_cache.get(key)
 		if existing:
 			self._model_cache.move_to_end(key)
 			return existing
-		asr_model = WhisperModel(model, device=device, compute_type=compute_type)
+		asr_model = whisperx.load_model(
+			model,
+			device,
+			compute_type=compute_type,
+			asr_options={
+				"beam_size": WHISPERX_BEAM_SIZE,
+				"best_of": WHISPERX_BEAM_SIZE,
+			},
+			vad_method="pyannote",
+			language=None,
+		)
 		self._model_cache[key] = asr_model
 		self._trim_caches()
 		return asr_model
@@ -182,6 +196,90 @@ class LocalWhisperXEngine:
 				}
 			)
 		return sanitized
+
+	def _normalize_word_token(self, token: str) -> str:
+		text = str(token or "").strip().lower()
+		if not text:
+			return ""
+		normalized = re.sub(r"[^\w']+", "", text, flags=re.UNICODE)
+		return normalized or text
+
+	def _merge_aligned_with_asr_words(
+		self,
+		*,
+		aligned_words: list[dict[str, Any]],
+		asr_words: list[dict[str, Any]],
+	) -> list[dict[str, Any]]:
+		if len(aligned_words) == 0:
+			return []
+		if len(asr_words) == 0:
+			return aligned_words
+
+		merged: list[dict[str, Any]] = []
+		asr_index = 0
+		for aligned_word in aligned_words:
+			word = (aligned_word.get("word") or "").strip()
+			start = aligned_word.get("start")
+			end = aligned_word.get("end")
+			if not word or start is None or end is None:
+				continue
+
+			start_f = max(0.0, float(start))
+			end_f = max(start_f + MIN_WORD_DURATION_SECONDS, float(end))
+			normalized_word = self._normalize_word_token(word)
+			matched_asr_word: dict[str, Any] | None = None
+
+			if normalized_word:
+				for candidate_index in range(
+					asr_index,
+					min(len(asr_words), asr_index + WORD_MATCH_LOOKAHEAD),
+				):
+					candidate = asr_words[candidate_index]
+					if self._normalize_word_token(candidate.get("word") or "") != normalized_word:
+						continue
+					matched_asr_word = candidate
+					asr_index = candidate_index + 1
+					break
+
+			if matched_asr_word is not None:
+				candidate_start = matched_asr_word.get("start")
+				candidate_end = matched_asr_word.get("end")
+				if candidate_start is not None:
+					start_f = min(start_f, max(0.0, float(candidate_start)))
+				if candidate_end is not None:
+					end_f = max(end_f, float(candidate_end))
+
+			next_entry = {
+				**aligned_word,
+				"word": word,
+				"start": start_f,
+				"end": max(start_f + MIN_WORD_DURATION_SECONDS, end_f),
+			}
+			merged.append(next_entry)
+
+		for index in range(len(merged) - 1):
+			current = merged[index]
+			next_item = merged[index + 1]
+			current_start = float(current["start"])
+			current_end = float(current["end"])
+			next_start = float(next_item["start"])
+			next_end = float(next_item["end"])
+			if current_end <= next_start:
+				continue
+			boundary = (current_end + next_start) / 2.0
+			boundary = max(current_start + MIN_WORD_DURATION_SECONDS, boundary)
+			boundary = min(next_end - MIN_WORD_DURATION_SECONDS, boundary)
+			current["end"] = boundary
+			next_item["start"] = boundary
+
+		for item in merged:
+			item["start"] = max(0.0, float(item["start"]))
+			item["end"] = max(
+				float(item["start"]) + MIN_WORD_DURATION_SECONDS,
+				float(item["end"]),
+			)
+
+		return merged
 
 	def _align_with_fallback(
 		self,
@@ -273,18 +371,16 @@ class LocalWhisperXEngine:
 			compute_type=compute_type,
 		)
 		effective_language = (language or "").strip().lower() or None
-		segments_iter, info = asr_model.transcribe(
+		asr_result = asr_model.transcribe(
 			audio,
-			beam_size=1,
-			word_timestamps=True,
-			vad_filter=vad_filter,
+			batch_size=WHISPERX_BATCH_SIZE,
 			language=effective_language,
 		)
 		segments: list[dict[str, Any]] = []
-		for segment in segments_iter:
-			text = (segment.text or "").strip()
-			start = max(0.0, float(segment.start))
-			end = max(start + 0.01, float(segment.end))
+		for segment in asr_result.get("segments", []) or []:
+			text = (segment.get("text") or "").strip()
+			start = max(0.0, float(segment.get("start") or 0.0))
+			end = max(start + MIN_WORD_DURATION_SECONDS, float(segment.get("end") or start))
 			if not text:
 				continue
 			segments.append(
@@ -296,7 +392,8 @@ class LocalWhisperXEngine:
 			)
 		return {
 			"segments": segments,
-			"language": getattr(info, "language", "en"),
+			"words": [],
+			"language": str(asr_result.get("language") or "en"),
 		}
 
 	def transcribe_file_with_alignment(
@@ -360,7 +457,10 @@ class LocalWhisperXEngine:
 			)
 			raise
 		timings_ms["align"] = (time.perf_counter() - align_started_at) * 1000.0
-		word_segments = aligned.get("word_segments", []) or []
+		word_segments = self._merge_aligned_with_asr_words(
+			aligned_words=aligned.get("word_segments", []) or [],
+			asr_words=asr_result.get("words", []) or [],
+		)
 		diarization_started_at = time.perf_counter()
 		speaker_segments: list[dict[str, Any]] = []
 		diarization_used = False
@@ -386,7 +486,10 @@ class LocalWhisperXEngine:
 							max_speakers=config.max_speakers,
 						)
 						aligned = assign_word_speakers(diarize_segments, aligned)
-						word_segments = aligned.get("word_segments", []) or []
+						word_segments = self._merge_aligned_with_asr_words(
+							aligned_words=aligned.get("word_segments", []) or [],
+							asr_words=asr_result.get("words", []) or [],
+						)
 						for segment in aligned.get("segments", []) or []:
 							speaker_id = segment.get("speaker")
 							start = segment.get("start")

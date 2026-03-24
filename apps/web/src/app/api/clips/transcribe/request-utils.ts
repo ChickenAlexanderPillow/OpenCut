@@ -37,7 +37,6 @@ export function buildOpenAITranscriptionFormData({
 
 export function buildLocalWhisperXFormData({
 	file,
-	requestedModel,
 	language,
 	defaultModel,
 	device,
@@ -56,7 +55,8 @@ export function buildLocalWhisperXFormData({
 }): FormData {
 	const form = new FormData();
 	form.append("file", file, file.name || "clip.wav");
-	form.append("model", requestedModel || defaultModel);
+	// Keep local WhisperX pinned to the configured backend profile.
+	form.append("model", defaultModel);
 	form.append("device", device);
 	form.append("compute_type", computeType);
 	form.append("vad_filter", vadFilter);

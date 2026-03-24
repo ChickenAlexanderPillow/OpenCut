@@ -261,7 +261,7 @@ async function callLocalWhisperX({
 		file,
 		requestedModel,
 		language,
-		defaultModel: webEnv.LOCAL_TRANSCRIBE_MODEL || "large-v3",
+		defaultModel: webEnv.LOCAL_TRANSCRIBE_MODEL || "large-v2",
 		device: webEnv.LOCAL_TRANSCRIBE_DEVICE || "cuda",
 		computeType: webEnv.LOCAL_TRANSCRIBE_COMPUTE_TYPE || "float16",
 		vadFilter:
@@ -376,9 +376,9 @@ export async function POST(request: NextRequest) {
 		const cacheKey =
 			typeof cacheKeyValue === "string" ? cacheKeyValue.toString().trim() : "";
 		const model =
-			(form.get("model") ?? webEnv.LOCAL_TRANSCRIBE_MODEL ?? "large-v3")
+			(form.get("model") ?? webEnv.LOCAL_TRANSCRIBE_MODEL ?? "large-v2")
 				.toString()
-				.trim() || "large-v3";
+				.trim() || "large-v2";
 		const language = resolveRequestedClipTranscriptionLanguage({
 			language: form.get("language"),
 		});

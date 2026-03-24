@@ -369,7 +369,7 @@ def _run_ffmpeg_command(command: list[str]) -> None:
 async def _prewarm_transcription_models() -> None:
 	if not _prewarm_enabled():
 		return
-	model = os.getenv("LOCAL_TRANSCRIBE_MODEL", "large-v3").strip() or "large-v3"
+	model = os.getenv("LOCAL_TRANSCRIBE_MODEL", "large-v2").strip() or "large-v2"
 	device = os.getenv("LOCAL_TRANSCRIBE_DEVICE", "cuda").strip() or "cuda"
 	compute_type = (
 		os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "float16").strip()
@@ -463,7 +463,7 @@ def healthz() -> HealthResponse:
 		),
 		require_cuda=require_cuda,
 		gpu_ready=gpu_ready,
-		default_model=os.getenv("LOCAL_TRANSCRIBE_MODEL", "large-v3"),
+		default_model=os.getenv("LOCAL_TRANSCRIBE_MODEL", "large-v2"),
 		default_compute_type=os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "float16"),
 		default_vad_filter=_parse_bool(
 			os.getenv("LOCAL_TRANSCRIBE_VAD_FILTER"),
@@ -499,7 +499,7 @@ async def transcribe_word_timestamps(
 	)
 
 	config = TranscribeConfig(
-		model=(model or os.getenv("LOCAL_TRANSCRIBE_MODEL", "large-v3")).strip(),
+		model=(model or os.getenv("LOCAL_TRANSCRIBE_MODEL", "large-v2")).strip(),
 		device=(device or os.getenv("LOCAL_TRANSCRIBE_DEVICE", "cuda")).strip(),
 		compute_type=(
 			compute_type or os.getenv("LOCAL_TRANSCRIBE_COMPUTE_TYPE", "float16")

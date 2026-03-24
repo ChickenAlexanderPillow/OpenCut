@@ -22,7 +22,7 @@ This service provides local word-level transcription and optional speaker diariz
 Multipart form:
 
 - `file`: audio file
-- `model` (optional): default `large-v3`
+- `model` (optional): default `large-v2`
 - `device` (optional): default `cuda`
 - `compute_type` (optional): default `float16`
 - `vad_filter` (optional): default `false` (set `true` to trim low-energy speech/noise)
@@ -42,7 +42,7 @@ Optional auth:
   "words": [{ "word": "Hello", "start": 0.12, "end": 0.28, "speakerId": "SPEAKER_00" }],
   "segments": [{ "text": "Hello there", "start": 0.12, "end": 0.55, "speakerId": "SPEAKER_00" }],
   "language": "en",
-  "model": "large-v3",
+  "model": "large-v2",
   "compute_type": "float16",
   "engine": "whisperx"
 }
@@ -64,7 +64,7 @@ pip install -r requirements.txt
 3. Run server:
 
 ```powershell
-$env:LOCAL_TRANSCRIBE_MODEL="large-v3"
+$env:LOCAL_TRANSCRIBE_MODEL="large-v2"
 $env:LOCAL_TRANSCRIBE_DEVICE="cuda"
 $env:LOCAL_TRANSCRIBE_COMPUTE_TYPE="float16"
 $env:LOCAL_TRANSCRIBE_VAD_FILTER="false"

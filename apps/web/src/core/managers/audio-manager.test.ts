@@ -3,6 +3,7 @@ import { AudioManager } from "./audio-manager";
 
 describe("AudioManager", () => {
 	beforeEach(() => {
+		let timeoutId = 0;
 		(
 			globalThis as typeof globalThis & {
 				__opencut_audio_manager_singleton__?: unknown;
@@ -11,9 +12,10 @@ describe("AudioManager", () => {
 		Object.defineProperty(globalThis, "window", {
 			value: {
 				addEventListener: () => {},
+				clearTimeout: () => {},
 				dispatchEvent: () => true,
 				removeEventListener: () => {},
-				setTimeout: () => 1,
+				setTimeout: () => ++timeoutId,
 			},
 			configurable: true,
 		});
@@ -188,5 +190,91 @@ describe("AudioManager", () => {
 				}
 			).streamingEngine,
 		).toBe(fakeStreamingEngine);
+	});
+
+	test("pending paused seek priming is cancelled when playback starts", () => {
+		const scheduled = new Map<number, () => void>();
+		let timeoutId = 0;
+		Object.defineProperty(globalThis, "window", {
+			value: {
+				addEventListener: () => {},
+				clearTimeout: (id: number) => {
+					scheduled.delete(id);
+				},
+				dispatchEvent: () => true,
+				removeEventListener: () => {},
+				setTimeout: (callback: () => void) => {
+					const id = ++timeoutId;
+					scheduled.set(id, callback);
+					return id;
+				},
+			},
+			configurable: true,
+		});
+
+		let isPlaying = false;
+		const editor = {
+			playback: {
+				getVolume: () => 1,
+				getCurrentTime: () => 0,
+				getIsPlaying: () => isPlaying,
+				getIsScrubbing: () => false,
+				subscribe: () => () => {},
+			},
+			timeline: {
+				subscribe: () => () => {},
+				getTracks: () => [],
+			},
+			media: {
+				subscribe: () => () => {},
+				getAssets: () => [],
+			},
+			scenes: {
+				subscribe: () => () => {},
+			},
+		} as unknown as ConstructorParameters<typeof AudioManager>[0];
+
+		const manager = new AudioManager(editor);
+		scheduled.clear();
+		let prepareCalls = 0;
+		let startPlaybackCalls = 0;
+		(
+			manager as unknown as {
+				prepareStreamingGraph: (args: {
+					playhead: number;
+					prewarm?: boolean;
+				}) => Promise<void>;
+				startPlayback: (args: { time: number }) => Promise<void>;
+				schedulePausedSeekPrime: (args: { time: number }) => void;
+				handlePlaybackChange: () => void;
+			}
+		).prepareStreamingGraph = async () => {
+			prepareCalls += 1;
+		};
+		(
+			manager as unknown as {
+				startPlayback: (args: { time: number }) => Promise<void>;
+			}
+		).startPlayback = async () => {
+			startPlaybackCalls += 1;
+		};
+
+		(
+			manager as unknown as {
+				schedulePausedSeekPrime: (args: { time: number }) => void;
+			}
+		).schedulePausedSeekPrime({ time: 0 });
+		expect(scheduled.size).toBe(1);
+
+		isPlaying = true;
+		(
+			manager as unknown as {
+				handlePlaybackChange: () => void;
+			}
+		).handlePlaybackChange();
+
+		expect(startPlaybackCalls).toBe(1);
+		expect(scheduled.size).toBe(0);
+		expect(prepareCalls).toBe(0);
 	});
 });

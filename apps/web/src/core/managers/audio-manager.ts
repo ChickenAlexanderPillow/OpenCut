@@ -153,6 +153,7 @@ export class AudioManager {
 			// can never leak audible output while paused.
 			this.updateGain();
 			if (isPlaying) {
+				this.clearPausedSeekPrimeTimer();
 				void this.startPlayback({
 					time: this.editor.playback.getCurrentTime(),
 				});
@@ -633,9 +634,12 @@ export class AudioManager {
 		}
 	}
 
-	async primeCurrentTimelineAudio(): Promise<void> {
+	async primeCurrentTimelineAudio({
+		playhead = this.editor.playback.getCurrentTime(),
+	}: {
+		playhead?: number;
+	} = {}): Promise<void> {
 		await this.unlockAudioContext();
-		const playhead = this.editor.playback.getCurrentTime();
 		await this.prepareStreamingGraph({ playhead });
 		await this.streamingEngine?.prewarm({ playhead, horizonSeconds: 2 });
 		void this.streamingEngine?.prewarm({ playhead, horizonSeconds: 12 });
@@ -643,16 +647,23 @@ export class AudioManager {
 
 	private schedulePausedSeekPrime({ time }: { time: number }): void {
 		if (typeof window === "undefined") return;
-		if (this.pausedSeekPrimeTimer !== null) {
-			window.clearTimeout(this.pausedSeekPrimeTimer);
-		}
+		this.clearPausedSeekPrimeTimer();
 		this.pausedSeekPrimeTimer = window.setTimeout(() => {
 			this.pausedSeekPrimeTimer = null;
+			if (this.editor.playback.getIsPlaying()) return;
 			void this.prepareStreamingGraph({
 				playhead: time,
 				prewarm: true,
 			});
 		}, 40);
+	}
+
+	private clearPausedSeekPrimeTimer(): void {
+		if (this.pausedSeekPrimeTimer === null || typeof window === "undefined") {
+			return;
+		}
+		window.clearTimeout(this.pausedSeekPrimeTimer);
+		this.pausedSeekPrimeTimer = null;
 	}
 
 	clearCachedTimelineAudio({

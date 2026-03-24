@@ -24,6 +24,25 @@ function getPlaybackStartToken(editor: EditorCore): number {
 	return playbackStartTokens.get(editor) ?? 0;
 }
 
+function resolvePlaybackPreparationTime({
+	editor,
+}: {
+	editor: EditorCore;
+}): number {
+	const playhead = editor.playback.getCurrentTime();
+	const duration = editor.timeline.getTotalDuration();
+	const playbackBounds = editor.playback.getPlaybackBounds({ duration });
+
+	if (
+		duration > 0 &&
+		(playhead >= playbackBounds.end || playhead < playbackBounds.start)
+	) {
+		return playbackBounds.start;
+	}
+
+	return playhead;
+}
+
 function getPreviewableVideoElementsNearTime({
 	tracks,
 	time,
@@ -118,12 +137,30 @@ async function preparePlayback({
 }: {
 	editor: EditorCore;
 }): Promise<void> {
-	const playhead = editor.playback.getCurrentTime();
+	const playhead = resolvePlaybackPreparationTime({ editor });
 	await Promise.race([
 		Promise.allSettled([
-			editor.audio.primeCurrentTimelineAudio(),
+			editor.audio.primeCurrentTimelineAudio({ playhead }),
 			prewarmPlaybackVideoFrames({ editor, playhead }),
 		]).then(() => undefined),
+		new Promise<void>((resolve) => {
+			if (typeof window === "undefined") {
+				resolve();
+				return;
+			}
+			window.setTimeout(resolve, PLAYBACK_PREP_TIMEOUT_MS);
+		}),
+	]);
+}
+
+async function preparePlaybackAudioOnly({
+	editor,
+}: {
+	editor: EditorCore;
+}): Promise<void> {
+	const playhead = resolvePlaybackPreparationTime({ editor });
+	await Promise.race([
+		editor.audio.primeCurrentTimelineAudio({ playhead }),
 		new Promise<void>((resolve) => {
 			if (typeof window === "undefined") {
 				resolve();
@@ -154,8 +191,12 @@ export async function startPlaybackWhenReady({
 	const blockedReason = editor.playback.getBlockedReason();
 	if (blockedReason && blockedReason !== PREPARING_PLAYBACK_REASON) return;
 	const token = nextPlaybackStartToken(editor);
+	const targetPlayhead = resolvePlaybackPreparationTime({ editor });
 	editor.playback.setBlockedReason({ reason: PREPARING_PLAYBACK_REASON });
 	try {
+		if (targetPlayhead !== editor.playback.getCurrentTime()) {
+			editor.playback.seek({ time: targetPlayhead });
+		}
 		await preparePlayback({ editor });
 		if (token !== getPlaybackStartToken(editor)) return;
 		editor.playback.setBlockedReason({ reason: null });
@@ -168,4 +209,31 @@ export async function startPlaybackWhenReady({
 	}
 }
 
-export { PREPARING_PLAYBACK_REASON };
+export async function startPlaybackWithAudioWarmup({
+	editor,
+}: {
+	editor: EditorCore;
+}): Promise<void> {
+	if (editor.playback.getIsPlaying()) return;
+	const blockedReason = editor.playback.getBlockedReason();
+	if (blockedReason && blockedReason !== PREPARING_PLAYBACK_REASON) return;
+	const token = nextPlaybackStartToken(editor);
+	const targetPlayhead = resolvePlaybackPreparationTime({ editor });
+	editor.playback.setBlockedReason({ reason: PREPARING_PLAYBACK_REASON });
+	try {
+		if (targetPlayhead !== editor.playback.getCurrentTime()) {
+			editor.playback.seek({ time: targetPlayhead });
+		}
+		await preparePlaybackAudioOnly({ editor });
+		if (token !== getPlaybackStartToken(editor)) return;
+		editor.playback.setBlockedReason({ reason: null });
+		editor.playback.play();
+	} catch (error) {
+		if (token !== getPlaybackStartToken(editor)) return;
+		console.warn("Failed to prepare audio-priority playback:", error);
+		editor.playback.setBlockedReason({ reason: null });
+		editor.playback.play();
+	}
+}
+
+export { PREPARING_PLAYBACK_REASON, resolvePlaybackPreparationTime };
