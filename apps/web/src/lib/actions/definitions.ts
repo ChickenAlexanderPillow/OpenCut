@@ -132,6 +132,18 @@ export const ACTIONS = {
 			updates: "Array<{ wordId: string; text: string }>",
 		},
 	},
+	"transcript-update-word-boundary": {
+		description:
+			"Update the shared timing boundary between adjacent transcript words",
+		category: "editing",
+		args: {
+			trackId: "string",
+			elementId: "string",
+			leftWordId: "string",
+			rightWordId: "string",
+			time: "number",
+		},
+	},
 	"transcript-set-words-removed": {
 		description: "Set transcript words removed state",
 		category: "editing",

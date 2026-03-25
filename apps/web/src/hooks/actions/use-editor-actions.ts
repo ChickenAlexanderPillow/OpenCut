@@ -111,6 +111,7 @@ import {
 	withTranscriptState,
 } from "@/lib/transcript-editor/state";
 import { buildDefaultTranscriptSegmentsUi } from "@/lib/transcript-editor/segments";
+import { updateTranscriptWordBoundary } from "@/lib/transcript-editor/timing";
 import {
 	dedupeTranscriptEditsInTracks,
 	rebuildCaptionTrackForMediaElement,
@@ -1003,7 +1004,8 @@ function areTranscriptGapEditsEqual({
 		const afterEntry = afterEntries[index];
 		if (!beforeEntry || !afterEntry) return false;
 		if (beforeEntry[0] !== afterEntry[0]) return false;
-		if ((beforeEntry[1].text ?? "") !== (afterEntry[1].text ?? "")) return false;
+		if ((beforeEntry[1].text ?? "") !== (afterEntry[1].text ?? ""))
+			return false;
 		if (Boolean(beforeEntry[1].removed) !== Boolean(afterEntry[1].removed))
 			return false;
 	}
@@ -1592,9 +1594,10 @@ function applyTranscriptEditMutation({
 	const nextSpeakerLabels = mutateSpeakerLabels
 		? mutateSpeakerLabels(initialSpeakerLabels, nextWords)
 		: initialSpeakerLabels;
-	const initialGapEdits = normalizeTranscriptGapEdits({
-		gapEdits: transcriptDraft.gapEdits,
-	}) ?? {};
+	const initialGapEdits =
+		normalizeTranscriptGapEdits({
+			gapEdits: transcriptDraft.gapEdits,
+		}) ?? {};
 	const nextGapEdits = mutateGapEdits
 		? normalizeTranscriptGapEdits({
 				gapEdits: mutateGapEdits(initialGapEdits, nextWords),
@@ -3165,6 +3168,52 @@ export function useEditorActions() {
 							: word,
 					),
 			});
+			if (result.error) {
+				toast.error(result.error);
+			}
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"transcript-update-word-boundary",
+		(args) => {
+			const trackId = typeof args?.trackId === "string" ? args.trackId : "";
+			const elementId =
+				typeof args?.elementId === "string" ? args.elementId : "";
+			const leftWordId =
+				typeof args?.leftWordId === "string" ? args.leftWordId : "";
+			const rightWordId =
+				typeof args?.rightWordId === "string" ? args.rightWordId : "";
+			const time =
+				typeof args?.time === "number" && Number.isFinite(args.time)
+					? args.time
+					: Number.NaN;
+			if (!trackId || !elementId || !leftWordId || !rightWordId) return;
+
+			let boundaryApplied = false;
+			const result = applyTranscriptEditMutation({
+				editor,
+				trackId,
+				elementId,
+				mutateWords: (words) => {
+					const updated = updateTranscriptWordBoundary({
+						words,
+						leftWordId,
+						rightWordId,
+						time,
+					});
+					if (!updated) {
+						return words;
+					}
+					boundaryApplied = true;
+					return updated;
+				},
+			});
+			if (!boundaryApplied) {
+				toast.error("Unable to update transcript word boundary");
+				return;
+			}
 			if (result.error) {
 				toast.error(result.error);
 			}

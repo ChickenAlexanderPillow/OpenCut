@@ -26,6 +26,15 @@ export type TActionArgsMap = {
 				updates: Array<{ wordId: string; text: string }>;
 		  }
 		| undefined;
+	"transcript-update-word-boundary":
+		| {
+				trackId: string;
+				elementId: string;
+				leftWordId: string;
+				rightWordId: string;
+				time: number;
+		  }
+		| undefined;
 	"transcript-set-words-removed":
 		| {
 				trackId: string;

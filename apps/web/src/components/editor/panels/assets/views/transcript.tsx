@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelView } from "@/components/editor/panels/assets/views/base-view";
+import { TranscriptTimingView } from "@/components/editor/panels/assets/views/transcript-timing-view";
 import { useEditor } from "@/hooks/use-editor";
 import { useElementSelection } from "@/hooks/timeline/element/use-element-selection";
 import { invokeAction } from "@/lib/actions";
@@ -57,9 +58,18 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
-import { Check, Pencil, RefreshCw, RotateCcw, X } from "lucide-react";
+import {
+	Check,
+	ChevronDown,
+	ChevronUp,
+	Pencil,
+	RefreshCw,
+	RotateCcw,
+	X,
+} from "lucide-react";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
+import { MIN_TRANSCRIPT_WORD_DURATION_SECONDS } from "@/lib/transcript-editor/timing";
 
 type MediaRef = {
 	trackId: string;
@@ -102,50 +112,25 @@ const MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS = 0.5;
 const HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX = 5;
 const HOLD_TO_PREVIEW_CANCEL_DISTANCE_SQUARED_PX =
 	HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX * HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX;
-const MIN_HOLD_PREVIEW_DURATION_SECONDS = 0.18;
-const HOLD_PREVIEW_STOP_EPSILON_SECONDS = 0.012;
-const WORD_PREVIEW_MAX_ONSET_PAD_SECONDS = 0.06;
-const WORD_PREVIEW_MAX_RELEASE_PAD_SECONDS = 0.05;
-const WORD_PREVIEW_PAD_GAP_RATIO = 0.35;
-
-type TranscriptBracketDecoration = {
-	prefix?: string;
-	suffix?: string;
-	kind: "filler" | "repeat";
-};
+const MIN_HOLD_PREVIEW_DURATION_SECONDS = MIN_TRANSCRIPT_WORD_DURATION_SECONDS;
+const HOLD_PREVIEW_STOP_EPSILON_SECONDS = 0.001;
 
 function getWordPreviewStartTime({
 	word,
-	previousWord,
 }: {
 	word: TranscriptEditWord;
 	previousWord: TranscriptEditWord | null;
 }): number {
-	if (!previousWord) return word.startTime;
-	const gapBefore = Math.max(0, word.startTime - previousWord.endTime);
-	if (gapBefore <= 0) return word.startTime;
-	const onsetPad = Math.min(
-		WORD_PREVIEW_MAX_ONSET_PAD_SECONDS,
-		gapBefore * WORD_PREVIEW_PAD_GAP_RATIO,
-	);
-	return Math.max(previousWord.endTime, word.startTime - onsetPad);
+	return word.startTime;
 }
 
 function getWordPreviewEndTime({
 	word,
-	nextWord,
 }: {
 	word: TranscriptEditWord;
 	nextWord: TranscriptEditWord | null;
 }): number {
-	if (!nextWord) return word.endTime;
-	const gapAfter = Math.max(0, nextWord.startTime - word.endTime);
-	if (gapAfter <= 0) return word.endTime;
-	const releasePad = Math.min(
-		WORD_PREVIEW_MAX_RELEASE_PAD_SECONDS,
-		gapAfter * WORD_PREVIEW_PAD_GAP_RATIO,
-	);
-	return Math.min(nextWord.startTime, word.endTime + releasePad);
+	return word.endTime;
 }
 
 const EDITOR_SUBSCRIBE_TRANSCRIPT_VIEW = [
@@ -180,6 +165,12 @@ function hasExpandedSelectionWithinContainer(container: HTMLElement | null) {
 			container.contains(selection.anchorNode) &&
 			container.contains(selection.focusNode),
 	);
+}
+
+function getEventTargetElement(target: EventTarget | null): HTMLElement | null {
+	if (target instanceof HTMLElement) return target;
+	if (target instanceof Node) return target.parentElement;
+	return null;
 }
 
 function findActiveWordIdAtSourceTime({
@@ -380,7 +371,7 @@ function buildSpeakerLabels({
 		nextLabels[speakerId] =
 			customLabel && customLabel.length > 0
 				? customLabel
-				: formatSpeakerLabel({ speakerId }) ?? speakerId;
+				: (formatSpeakerLabel({ speakerId }) ?? speakerId);
 	}
 	return Object.keys(nextLabels).length > 0 ? nextLabels : undefined;
 }
@@ -478,13 +469,14 @@ export function TranscriptView() {
 	const [isRefreshingTranscript, setIsRefreshingTranscript] = useState(false);
 	const [generateStep, setGenerateStep] = useState("");
 	const [generateError, setGenerateError] = useState<string | null>(null);
-	const [editingSpeakerGroupId, setEditingSpeakerGroupId] = useState<string | null>(
-		null,
-	);
+	const [editingSpeakerGroupId, setEditingSpeakerGroupId] = useState<
+		string | null
+	>(null);
 	const [editingSpeakerName, setEditingSpeakerName] = useState("");
-	const [heldWordPreview, setHeldWordPreview] = useState<HeldWordPreview | null>(
-		null,
-	);
+	const [isTimingToolbarExpanded, setIsTimingToolbarExpanded] = useState(false);
+	const [, setTranscriptUiRefreshVersion] = useState(0);
+	const [heldWordPreview, setHeldWordPreview] =
+		useState<HeldWordPreview | null>(null);
 	const previewCurrentTime = heldWordPreview
 		? Math.min(
 				currentTime,
@@ -497,6 +489,9 @@ export function TranscriptView() {
 	const selectionContainerRef = useRef<HTMLDivElement | null>(null);
 	const activeMediaRef = useRef<MediaRef | null>(null);
 	const orderedWordIdsRef = useRef<string[]>([]);
+	const originalTimingWordsCacheRef = useRef<Map<string, TranscriptEditWord[]>>(
+		new Map(),
+	);
 	const editingWordIdRef = useRef<string | null>(null);
 	const selectedWordIdsRef = useRef<string[]>([]);
 	const holdPreviewTimeoutRef = useRef<number | null>(null);
@@ -507,6 +502,8 @@ export function TranscriptView() {
 		() => getSelectedCaptionElement({ tracks, selectedElements }),
 		[tracks, selectedElements],
 	);
+	const activeProjectId =
+		editor.project.getActive()?.metadata.id ?? "no-project";
 
 	const activeMedia = useMemo(() => {
 		const sourceMediaId =
@@ -530,6 +527,9 @@ export function TranscriptView() {
 				: null,
 		[activeMedia, editor],
 	);
+	const activeTranscriptSourceKey = activeMedia
+		? `${activeProjectId}:${activeMedia.trackId}:${activeMedia.element.id}`
+		: `${activeProjectId}:none`;
 
 	const words = useMemo(() => {
 		if (!activeMedia) return [];
@@ -545,26 +545,64 @@ export function TranscriptView() {
 	const activeTranscriptDraft = activeMedia
 		? getTranscriptDraft(activeMedia.element)
 		: undefined;
+	const originalTimingWords = useMemo(() => {
+		if (!activeMedia) return [];
+		const projectionWords =
+			activeTranscriptDraft?.projectionSource?.words ?? null;
+		if (projectionWords && projectionWords.length > 0) {
+			const normalizedProjectionWords = normalizeTranscriptWords({
+				words: projectionWords,
+			}).filter((word) => !word.removed && !word.hidden);
+			originalTimingWordsCacheRef.current.set(
+				activeTranscriptSourceKey,
+				normalizedProjectionWords.map((word) => ({ ...word })),
+			);
+			return normalizedProjectionWords;
+		}
 
-	const cuts = useMemo(() => {
-		if (!activeMedia) {
-			return buildTranscriptCutsFromWords({ words });
+		const cached =
+			originalTimingWordsCacheRef.current.get(activeTranscriptSourceKey) ??
+			null;
+		if (cached && cached.length > 0) {
+			return cached;
 		}
-		if (!activeTranscriptDraft) {
-			return buildTranscriptCutsFromWords({ words });
+
+		const baselineWords =
+			words.length > 0
+				? words
+				: getFallbackWordsFromCaptions({
+						tracks,
+						mediaElementId: activeMedia.element.id,
+					});
+		const normalizedBaselineWords = normalizeTranscriptWords({
+			words: baselineWords,
+		}).filter((word) => !word.removed && !word.hidden);
+		if (normalizedBaselineWords.length > 0) {
+			originalTimingWordsCacheRef.current.set(
+				activeTranscriptSourceKey,
+				normalizedBaselineWords.map((word) => ({ ...word })),
+			);
 		}
-		return getEffectiveTranscriptCutsFromTranscriptEdit({
-			transcriptEdit: activeTranscriptDraft,
-		});
-	}, [activeMedia, activeTranscriptDraft, words]);
-	const wordsWithCutState = useMemo(
-		() =>
-			applyCutRangesToWords({
-				words,
-				cuts,
-			}),
-		[words, cuts],
-	);
+		return normalizedBaselineWords;
+	}, [
+		activeMedia,
+		activeTranscriptDraft?.projectionSource?.words,
+		activeTranscriptSourceKey,
+		tracks,
+		words,
+	]);
+
+	const cuts = !activeMedia
+		? buildTranscriptCutsFromWords({ words })
+		: !activeTranscriptDraft
+			? buildTranscriptCutsFromWords({ words })
+			: getEffectiveTranscriptCutsFromTranscriptEdit({
+					transcriptEdit: activeTranscriptDraft,
+				});
+	const wordsWithCutState = applyCutRangesToWords({
+		words,
+		cuts,
+	});
 	const hasLinkedCaptions = useMemo(() => {
 		if (!activeMedia) return false;
 		return tracks.some((track) => {
@@ -637,7 +675,10 @@ export function TranscriptView() {
 	const speakerToneById = useMemo(
 		() =>
 			new Map(
-				speakerIds.map((speakerId, index) => [speakerId, getSpeakerTone(index)]),
+				speakerIds.map((speakerId, index) => [
+					speakerId,
+					getSpeakerTone(index),
+				]),
 			),
 		[speakerIds],
 	);
@@ -739,7 +780,10 @@ export function TranscriptView() {
 			const nextToken = normalizeTranscriptDisplayToken(next.text);
 			const gapId = buildTranscriptGapId(current.id, next.id);
 			const gapEdit = gapEdits[gapId];
-			const sourceDurationSeconds = Math.max(0, next.startTime - current.endTime);
+			const sourceDurationSeconds = Math.max(
+				0,
+				next.startTime - current.endTime,
+			);
 			const compressedDurationSeconds = Math.max(
 				0,
 				mapSourceTimeToCompressedTime({
@@ -758,8 +802,6 @@ export function TranscriptView() {
 			const compressedEndTime = compressedStartTime + compressedDurationSeconds;
 			const hasPlayableGap =
 				compressedDurationSeconds > MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS;
-			const hasSourceGap =
-				sourceDurationSeconds > MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS;
 			const hasExplicitGapEdit =
 				Boolean(gapEdit?.removed) ||
 				(typeof gapEdit?.text === "string" && gapEdit.text !== " ");
@@ -857,22 +899,13 @@ export function TranscriptView() {
 		[selectedWordIds],
 	);
 	const selectedWordsForEdit = useMemo(
-		() =>
-			wordsWithCutState.filter((word) => selectedWordIdsSet.has(word.id)),
+		() => wordsWithCutState.filter((word) => selectedWordIdsSet.has(word.id)),
 		[wordsWithCutState, selectedWordIdsSet],
 	);
 	const heldWordPreviewIds = useMemo(
 		() => new Set(heldWordPreview?.wordIds ?? []),
 		[heldWordPreview],
 	);
-	const focusedWord = useMemo(
-		() =>
-			focusedWordId
-				? wordsWithCutState.find((word) => word.id === focusedWordId) ?? null
-				: null,
-		[focusedWordId, wordsWithCutState],
-	);
-
 	useEffect(() => {
 		if (!editingWordId) return;
 		if (!wordsWithCutState.some((word) => word.id === editingWordId)) {
@@ -1228,36 +1261,34 @@ export function TranscriptView() {
 		[],
 	);
 
-	const startEditingWordIds = useCallback((targetIds: string[]) => {
-		if (targetIds.length === 0) return;
-		const targetIdSet = new Set(targetIds);
-		const orderedSelected = orderedWordIds.filter((id) => targetIdSet.has(id));
-		const wordsById = new Map(
-			wordsWithCutState.map((item) => [item.id, item.text]),
-		);
-		setFocusedGap(null);
-		setEditingTargetWordIds(orderedSelected);
-		setEditingWordId(orderedSelected[0] ?? null);
-		clearGapEditingState();
-		setEditingWordText(
-			orderedSelected
-				.map((id) => wordsById.get(id) ?? "")
-				.filter(Boolean)
-				.join(" "),
-		);
-	}, [orderedWordIds, wordsWithCutState]);
+	const startEditingWordIds = useCallback(
+		(targetIds: string[]) => {
+			if (targetIds.length === 0) return;
+			const targetIdSet = new Set(targetIds);
+			const orderedSelected = orderedWordIds.filter((id) =>
+				targetIdSet.has(id),
+			);
+			const wordsById = new Map(
+				wordsWithCutState.map((item) => [item.id, item.text]),
+			);
+			setFocusedGap(null);
+			setEditingTargetWordIds(orderedSelected);
+			setEditingWordId(orderedSelected[0] ?? null);
+			clearGapEditingState();
+			setEditingWordText(
+				orderedSelected
+					.map((id) => wordsById.get(id) ?? "")
+					.filter(Boolean)
+					.join(" "),
+			);
+		},
+		[clearGapEditingState, orderedWordIds, wordsWithCutState],
+	);
 
 	const startEditingSelectedWords = useCallback(() => {
 		if (selectedWordIds.length === 0) return;
 		startEditingWordIds(selectedWordIds);
 	}, [selectedWordIds, startEditingWordIds]);
-
-	const startEditingWord = useCallback(
-		(word: TranscriptEditWord) => {
-			startEditingWordIds([word.id]);
-		},
-		[startEditingWordIds],
-	);
 
 	const focusWordGap = useCallback(
 		(leftWordId: string, rightWordId: string) => {
@@ -1301,6 +1332,10 @@ export function TranscriptView() {
 		[gapEdits, setSelectedWordIdsIfChanged],
 	);
 
+	const refreshTranscriptUi = useCallback(() => {
+		setTranscriptUiRefreshVersion((current) => current + 1);
+	}, []);
+
 	const commitGapEdit = useCallback(() => {
 		if (!activeMedia || !focusedGap || !editingGapId) return;
 		invokeAction("transcript-update-gap-text", {
@@ -1310,13 +1345,45 @@ export function TranscriptView() {
 			rightWordId: focusedGap.rightWordId,
 			text: editingGapText,
 		});
+		refreshTranscriptUi();
 		clearGapEditingState();
-	}, [activeMedia, focusedGap, editingGapId, editingGapText, clearGapEditingState]);
+	}, [
+		activeMedia,
+		focusedGap,
+		editingGapId,
+		editingGapText,
+		clearGapEditingState,
+		refreshTranscriptUi,
+	]);
 
 	const clearSpeakerEditingState = useCallback(() => {
 		setEditingSpeakerGroupId(null);
 		setEditingSpeakerName("");
 	}, []);
+
+	const resetTranscriptPanelUi = useCallback(() => {
+		stopHeldWordPreview();
+		clearEditingState();
+		clearGapEditingState();
+		clearSpeakerEditingState();
+		setFocusedGap(null);
+		setFocusedWordId(null);
+		setIsTimingToolbarExpanded(false);
+		setSelectedWordIdsIfChanged([]);
+		setIsSelectionActive(false);
+		suppressClickSeekRef.current = false;
+		window.getSelection()?.removeAllRanges();
+	}, [
+		clearEditingState,
+		clearGapEditingState,
+		clearSpeakerEditingState,
+		setSelectedWordIdsIfChanged,
+		stopHeldWordPreview,
+	]);
+
+	useEffect(() => {
+		resetTranscriptPanelUi();
+	}, [activeTranscriptSourceKey, resetTranscriptPanelUi]);
 
 	const commitWordEdit = useCallback(() => {
 		if (!activeMedia) return;
@@ -1815,7 +1882,7 @@ export function TranscriptView() {
 			title="Transcript"
 			contentClassName="space-y-3 pb-3"
 			actions={
-				<div className="flex items-center gap-1">
+				<div className="flex items-center gap-2">
 					{activeMediaAsset && (
 						<Button
 							variant="outline"
@@ -1859,820 +1926,954 @@ export function TranscriptView() {
 				</div>
 			}
 		>
-			{selectedWordIds.length > 1 && (
-				<div className="pointer-events-none sticky top-2 z-20 flex h-0 justify-center overflow-visible">
-					<div className="pointer-events-auto -translate-y-1 flex items-center justify-between gap-3 rounded-lg border border-zinc-700/90 bg-zinc-900/90 px-3 py-2 text-xs shadow-lg backdrop-blur-sm">
-						<div className="whitespace-nowrap text-zinc-300">
-							<span className="font-medium text-zinc-100">
-								{selectedWordIds.length}
-							</span>{" "}
-							words selected
-						</div>
-						<div className="flex items-center gap-2">
-							<Button
-								variant="ghost"
-								size="sm"
-								className="h-7 px-2 text-zinc-100 hover:bg-zinc-800"
-								onClick={startEditingSelectedWords}
-							>
-								Edit
-							</Button>
-							<Button
-								variant="ghost"
-								size="sm"
-								className="h-7 px-2 text-zinc-100 hover:bg-zinc-800"
-								onClick={() =>
-									invokeAction("transcript-set-words-removed", {
-										trackId: activeMedia.trackId,
-										elementId: activeMedia.element.id,
-										wordIds: selectedWordIds,
-										removed: !selectedWordsForEdit.every((word) => word.removed),
-									})
-								}
-							>
-								{selectedWordsForEdit.every((word) => word.removed)
-									? "Restore"
-									: "Remove"}
-							</Button>
-							<Button
-								variant="ghost"
-								size="sm"
-								className="h-7 px-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-								onClick={() => {
-									setSelectedWordIdsIfChanged([]);
-									setIsSelectionActive(false);
-									window.getSelection()?.removeAllRanges();
-								}}
-							>
-								Clear
-							</Button>
+			<>
+				{selectedWordIds.length > 1 && (
+					<div className="pointer-events-none sticky top-2 z-20 flex h-0 justify-center overflow-visible">
+						<div className="pointer-events-auto -translate-y-1 flex items-center justify-between gap-3 rounded-lg border border-zinc-700/90 bg-zinc-900/90 px-3 py-2 text-xs shadow-lg backdrop-blur-sm">
+							<div className="whitespace-nowrap text-zinc-300">
+								<span className="font-medium text-zinc-100">
+									{selectedWordIds.length}
+								</span>{" "}
+								words selected
+							</div>
+							<div className="flex items-center gap-2">
+								<Button
+									variant="ghost"
+									size="sm"
+									className="h-7 px-2 text-zinc-100 hover:bg-zinc-800"
+									onClick={startEditingSelectedWords}
+								>
+									Edit
+								</Button>
+								<Button
+									variant="ghost"
+									size="sm"
+									className="h-7 px-2 text-zinc-100 hover:bg-zinc-800"
+									onClick={() =>
+										invokeAction("transcript-set-words-removed", {
+											trackId: activeMedia.trackId,
+											elementId: activeMedia.element.id,
+											wordIds: selectedWordIds,
+											removed: !selectedWordsForEdit.every(
+												(word) => word.removed,
+											),
+										})
+									}
+								>
+									{selectedWordsForEdit.every((word) => word.removed)
+										? "Restore"
+										: "Remove"}
+								</Button>
+								<Button
+									variant="ghost"
+									size="sm"
+									className="h-7 px-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+									onClick={() => {
+										setSelectedWordIdsIfChanged([]);
+										setIsSelectionActive(false);
+										window.getSelection()?.removeAllRanges();
+									}}
+								>
+									Clear
+								</Button>
+							</div>
 						</div>
 					</div>
-				</div>
-			)}
-			<div
-				ref={selectionContainerRef}
-				className={[
-					"space-y-4 [&_*::selection]:bg-transparent [&_*::selection]:text-inherit",
-					isSelectionActive ? "cursor-text" : "",
-				].join(" ")}
-				onContextMenu={(event) => {
-					event.preventDefault();
-				}}
-				onMouseDownCapture={(event) => {
-					const target =
-						event.target instanceof HTMLElement ? event.target : null;
-					if (
-						event.detail > 1 &&
-						(target?.closest<HTMLElement>("[data-word-id]") ||
-							target?.closest<HTMLElement>("[data-gap-id]"))
-					) {
+				)}
+				<div
+					ref={selectionContainerRef}
+					className={[
+						"space-y-4 pb-24 [&_*::selection]:bg-transparent [&_*::selection]:text-inherit",
+						isSelectionActive ? "cursor-text" : "",
+					].join(" ")}
+					onContextMenu={(event) => {
 						event.preventDefault();
-					}
-					const clickedWordId =
-						target?.closest<HTMLElement>("[data-word-id]")?.dataset.wordId ??
-						null;
-					const clickedGapId =
-						target?.closest<HTMLElement>("[data-gap-id]")?.dataset.gapId ?? null;
-					if (!clickedGapId) {
-						setFocusedGap(null);
-						clearGapEditingState();
-					}
-					if (!clickedWordId) {
-						setFocusedWordId(null);
-					}
-					if (selectedWordIds.length === 0) return;
-					if (
-						(!clickedWordId || !selectedWordIdsSet.has(clickedWordId)) &&
-						!clickedGapId
-					) {
-						setSelectedWordIdsIfChanged([]);
-						setIsSelectionActive(false);
-					}
-				}}
-			>
-				<div className="px-1 py-1">
-					{panelGroups.map((group, groupIndex) => {
-						if (group.words.length === 0) return null;
-						const start = group.words[0]?.startTime ?? 0;
-						const timelineJumpTime = activeMedia.element.startTime +
-							mapSourceTimeToCompressedTime({
-								sourceTime: start,
-								cuts,
-							});
-						const previousSpeakerId =
-							groupIndex > 0 ? panelGroups[groupIndex - 1]?.speakerId : undefined;
-						const showSpeakerHeader =
-							Boolean(group.speakerId) && group.speakerId !== previousSpeakerId;
-						return (
-							<div
-								key={group.id}
-								className={[
-									"space-y-3 px-1",
-									showSpeakerHeader
-										? groupIndex === 0
-											? "pt-1"
-											: "mt-7 border-t border-zinc-600/80 pt-7"
-										: "mt-0.5",
-								].join(" ")}
-							>
-								<div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3">
-									<div className="pt-0.5">
-										<button
-											type="button"
-											className="text-left text-xs font-medium text-zinc-500 transition-colors hover:text-zinc-300"
-											onClick={() =>
-												editor.playback.seek({
-													time: Math.max(0, timelineJumpTime),
-												})
-											}
-										>
-											{formatTime(start)}
-										</button>
-									</div>
-									<div className={showSpeakerHeader ? "space-y-4" : "space-y-2"}>
-										{showSpeakerHeader && group.speakerId ? (
-											<div className="flex items-center gap-2 text-xs">
-												{editingSpeakerGroupId === group.id ? (
-													<span className="inline-flex items-center gap-1">
-														<input
-															value={editingSpeakerName}
-															onChange={(event) =>
-																setEditingSpeakerName(event.target.value)
-															}
-															onKeyDown={(event) => {
-																if (event.key === "Enter") {
-																	commitSpeakerEdit();
-																}
-																if (event.key === "Escape") {
-																	clearSpeakerEditingState();
-																}
-															}}
-															className="h-7 min-w-28 border-b-2 bg-zinc-800 px-1 text-sm font-semibold text-zinc-100 shadow-sm outline-none"
-															style={{
-																borderBottomColor:
-																	group.tone?.accent ??
-																	"rgb(226 232 240)",
-															}}
-															autoFocus
-														/>
-														<Button
-															variant="ghost"
-															size="icon"
-															className="size-6 bg-zinc-800 text-zinc-100 shadow-sm hover:bg-zinc-700"
-															onClick={commitSpeakerEdit}
-														>
-															<Check className="size-3.5" />
-														</Button>
-														<Button
-															variant="ghost"
-															size="icon"
-															className="size-6 bg-zinc-800 text-zinc-100 shadow-sm hover:bg-zinc-700"
-															onClick={clearSpeakerEditingState}
-														>
-															<X className="size-3.5" />
-														</Button>
-													</span>
-												) : (
-													<button
-														type="button"
-														className="inline-flex items-center text-sm font-semibold transition-opacity hover:opacity-80"
-														style={{
-															color:
-																group.tone?.accent ?? "rgb(226 232 240)",
-														}}
-														onClick={() => {
-															setEditingSpeakerGroupId(group.id);
-															setEditingSpeakerName(
-																group.speakerLabel ?? "",
-															);
-														}}
-													>
-														<span>{group.speakerLabel}</span>
-													</button>
-												)}
-											</div>
-										) : null}
-										<p
-											className="select-text pr-1 text-[15px] leading-6 text-zinc-100"
-											onMouseUp={(event) => {
-												if (editingWordId) return;
-												const target =
-													event.target instanceof HTMLElement
-														? event.target
-														: null;
-												if (!target) return;
-												const wordId =
-													target.closest<HTMLElement>("[data-word-id]")?.dataset
-														.wordId ?? null;
-												if (!wordId) return;
-												const selection = window.getSelection();
-												if (selection && !selection.isCollapsed) return;
-												if (
-													selectedWordIds.length > 1 &&
-													selectedWordIdsSet.has(wordId)
-												) {
-													return;
+					}}
+					onMouseDownCapture={(event) => {
+						const target = getEventTargetElement(event.target);
+						if (
+							event.detail > 1 &&
+							(target?.closest<HTMLElement>("[data-word-id]") ||
+								target?.closest<HTMLElement>("[data-gap-id]"))
+						) {
+							event.preventDefault();
+						}
+						const clickedWordId =
+							target?.closest<HTMLElement>("[data-word-id]")?.dataset.wordId ??
+							null;
+						const clickedGapId =
+							target?.closest<HTMLElement>("[data-gap-id]")?.dataset.gapId ??
+							null;
+						if (!clickedGapId) {
+							setFocusedGap(null);
+							clearGapEditingState();
+						}
+						if (!clickedWordId) {
+							setFocusedWordId(null);
+						}
+						if (selectedWordIds.length === 0) return;
+						if (
+							(!clickedWordId || !selectedWordIdsSet.has(clickedWordId)) &&
+							!clickedGapId
+						) {
+							setSelectedWordIdsIfChanged([]);
+							setIsSelectionActive(false);
+						}
+					}}
+				>
+					<div className="px-1 py-1">
+						{panelGroups.map((group, groupIndex) => {
+							if (group.words.length === 0) return null;
+							const start = group.words[0]?.startTime ?? 0;
+							const timelineJumpTime =
+								activeMedia.element.startTime +
+								mapSourceTimeToCompressedTime({
+									sourceTime: start,
+									cuts,
+								});
+							const previousSpeakerId =
+								groupIndex > 0
+									? panelGroups[groupIndex - 1]?.speakerId
+									: undefined;
+							const showSpeakerHeader =
+								Boolean(group.speakerId) &&
+								group.speakerId !== previousSpeakerId;
+							return (
+								<div
+									key={group.id}
+									className={[
+										"space-y-3 px-1",
+										showSpeakerHeader
+											? groupIndex === 0
+												? "pt-1"
+												: "mt-7 border-t border-zinc-600/80 pt-7"
+											: "mt-0.5",
+									].join(" ")}
+								>
+									<div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3">
+										<div className="pt-0.5">
+											<button
+												type="button"
+												className="text-left text-xs font-medium text-zinc-500 transition-colors hover:text-zinc-300"
+												onClick={() =>
+													editor.playback.seek({
+														time: Math.max(0, timelineJumpTime),
+													})
 												}
-												if (suppressClickSeekRef.current) {
-													suppressClickSeekRef.current = false;
-													return;
-												}
-												setFocusedWordId(wordId);
-												const targetWord =
-													wordsWithCutState.find((candidate) => candidate.id === wordId) ??
-													null;
-												if (targetWord) {
-													seekToTranscriptWord(targetWord);
-												}
-											}}
-										>
-											{group.words.map((word) => {
-									if (coveredFillerWordIds.has(word.id)) {
-										return null;
-									}
-									const fillerCandidate =
-										fillerCandidateByStartWordId.get(word.id);
-									const tokenWordIds = fillerCandidate?.wordIds ?? [word.id];
-									const tokenWordIdSet = new Set(tokenWordIds);
-									const tokenWords = tokenWordIds
-										.map((tokenWordId) => wordById.get(tokenWordId) ?? null)
-										.filter((candidateWord): candidateWord is TranscriptEditWord =>
-											candidateWord !== null,
-										);
-									const displayWord = tokenWords[0] ?? word;
-									const displayLastWord =
-										tokenWords[tokenWords.length - 1] ?? word;
-									const displayText = fillerCandidate?.text ?? word.text;
-									const previousWord =
-										previousPanelWordById.get(word.id) ?? null;
-									const followingWord =
-										nextPanelWordById.get(word.id)?.rightWord ?? null;
-									const previewStartTime = getWordPreviewStartTime({
-										word,
-										previousWord,
-									});
-									const previewEndTime = Math.max(
-										previewStartTime + 0.01,
-										getWordPreviewEndTime({
-											word,
-											nextWord: followingWord,
-										}),
-									);
-									const isCurrentWord = tokenWordIds.some(
-										(tokenWordId) => activeWordId === tokenWordId,
-									);
-									const isCurrentHiddenWord = tokenWordIds.some(
-										(tokenWordId) => activeHiddenWordId === tokenWordId,
-									);
-									const isSelectedWord = tokenWordIds.some((tokenWordId) =>
-										selectedWordIdsSet.has(tokenWordId),
-									);
-									const isCaptionLinkedWord = tokenWordIds.some((tokenWordId) =>
-										selectedCaptionWordIds.has(tokenWordId),
-									);
-									const isFocusedWord =
-										focusedWordId != null && tokenWordIdSet.has(focusedWordId);
-									const gap = nextPanelWordById.get(displayLastWord.id);
-									const nextWord = gap?.rightWord;
-									const gapId = gap?.id ?? null;
-									const isFocusedGap = focusedGap?.id === gapId;
-									const gapEdit = nextWord
-										? getTranscriptGapEdit({
-												gapEdits,
-												leftWordId: displayLastWord.id,
-												rightWordId: nextWord.id,
-											})
-										: undefined;
-									const gapDurationSeconds = gap?.compressedDurationSeconds ?? 0;
-									const gapWidthClass = getTranscriptGapWidthClass(
-										gapDurationSeconds,
-									);
-									const gapIsSelected = Boolean(gap) && isFocusedGap;
-									const gapIsCurrent = gap ? currentGapId === gap.id : false;
-									const isHoverSelectedGroupWord =
-										isFocusedWord &&
-										selectedWordIds.length > 1 &&
-										tokenWordIds.some((tokenWordId) =>
-											selectedWordIdsSet.has(tokenWordId),
-										);
-									const tone = group.tone;
-									const wordStyle = isCurrentWord
-										? {
-												backgroundColor: tone?.accent ?? "#0f766e",
-												color: "#ffffff",
-											}
-										: isSelectedWord
-											? {
-													backgroundColor: tone?.accent ?? "#0f766e",
-													color: "#ffffff",
-												}
-											: isHoverSelectedGroupWord
-												? {
-														backgroundColor:
-															tone?.background ?? "rgba(39, 39, 42, 0.4)",
-														color: "#ffffff",
-													}
-												: tone
-													? { color: tone.mutedText }
-													: { color: "#e4e4e7" };
-									const removedWordDecorationStyle = word.removed
-										? {
-												textDecorationColor:
-													tone?.accent ?? "#ef4444",
-											}
-										: undefined;
-									const gapBaseAlpha = gapIsSelected || gapIsCurrent ? 0.34 : 0.16;
-									const gapStyle =
-										gapIsSelected || gapIsCurrent
-											? {
-													backgroundColor: hexToRgba(
-														tone?.accent ?? "#a1a1aa",
-														gapIsCurrent ? 0.42 : 0.3,
-													),
-												}
-											: {
-													backgroundColor: hexToRgba(
-														tone?.accent ?? "#a1a1aa",
-														gapBaseAlpha,
-													),
-												};
-									const editingWidthCh = Math.max(
-										displayText.length,
-										editingWordText.length,
-										3,
-									);
-									return (
-										<span key={word.id} className="contents">
-											<span
-												className="relative group/word mr-1 inline-block my-1 align-baseline"
-												data-word-id={displayWord.id}
-												data-word-ids={tokenWordIds.join(",")}
 											>
-												{isFocusedWord && selectedWordIds.length === 0 && (
-													<span className="absolute left-0 bottom-full z-10 mb-1 flex items-center gap-1">
-														<Button
-															variant="ghost"
-															size="sm"
-															className="h-6 rounded-md border border-zinc-700 bg-zinc-900/95 px-1.5 text-[11px] text-zinc-100 shadow-sm hover:bg-zinc-800"
-															onClick={() =>
-																startEditingWordIds(tokenWordIds)
-															}
-														>
-															<Pencil className="mr-1 size-3" />
-															Edit
-														</Button>
-														<Button
-															variant="ghost"
-															size="sm"
-															className="h-6 rounded-md border border-zinc-700 bg-zinc-900/95 px-1.5 text-[11px] text-zinc-100 shadow-sm hover:bg-zinc-800"
-															onClick={() => {
-																if (tokenWordIds.length === 1) {
-																	invokeAction("transcript-toggle-word", {
-																		trackId: activeMedia.trackId,
-																		elementId: activeMedia.element.id,
-																		wordId: displayWord.id,
-																	});
-																	return;
+												{formatTime(start)}
+											</button>
+										</div>
+										<div
+											className={showSpeakerHeader ? "space-y-4" : "space-y-2"}
+										>
+											{showSpeakerHeader && group.speakerId ? (
+												<div className="flex items-center gap-2 text-xs">
+													{editingSpeakerGroupId === group.id ? (
+														<span className="inline-flex items-center gap-1">
+															<input
+																value={editingSpeakerName}
+																onChange={(event) =>
+																	setEditingSpeakerName(event.target.value)
 																}
-																invokeAction("transcript-set-words-removed", {
-																	trackId: activeMedia.trackId,
-																	elementId: activeMedia.element.id,
-																	wordIds: tokenWordIds,
-																	removed: !tokenWords.every(
-																		(tokenWord) => tokenWord.removed,
-																	),
-																});
-															}}
-														>
-															{tokenWords.every((tokenWord) => tokenWord.removed)
-																? "Restore"
-																: "Mute"}
-														</Button>
-													</span>
-												)}
-												<span
-													className={[
-														"cursor-pointer rounded-sm px-1 py-0.5 select-text whitespace-nowrap",
-														editingWordId === word.id ? "invisible" : "",
-														!editingWordId && !isSelectionActive
-															? ""
-															: "",
-														!isSelectionActive && isFocusedWord
-															? "bg-zinc-800/40"
-															: "",
-														tokenWords.every((tokenWord) => tokenWord.removed)
-															? "line-through decoration-red-600 decoration-2 opacity-75"
-															: "",
-														tokenWords.every((tokenWord) => tokenWord.hidden)
-															? "opacity-55"
-															: "",
-														isCurrentWord ? "text-white" : "",
-														isCurrentHiddenWord
-															? "bg-zinc-500/50 text-white"
-															: "",
-														isCaptionLinkedWord
-															? "ring-2 ring-primary/80 ring-offset-1 ring-offset-zinc-950/80"
-															: "",
-													]
-														.filter(Boolean)
-														.join(" ")}
-													style={{
-														...wordStyle,
-														...removedWordDecorationStyle,
-													}}
-													onMouseEnter={(event) => {
-														if (editingWordId || !tone) return;
-														if (!isCurrentWord && !isSelectedWord) {
-															event.currentTarget.style.backgroundColor =
-																hexToRgba(tone.accent, 0.1);
-														}
-													}}
-													onMouseLeave={(event) => {
-														if (editingWordId || isCurrentWord || isSelectedWord) {
-															return;
-														}
-														event.currentTarget.style.backgroundColor = "";
-													}}
-													onDoubleClick={(event) => {
-														event.preventDefault();
-														event.stopPropagation();
-														stopHeldWordPreview();
-														window.getSelection()?.removeAllRanges();
-														startEditingWordIds(tokenWordIds);
-													}}
-													onPointerDown={(event) => {
-														if (editingWordId || event.button !== 0) return;
-														suppressClickSeekRef.current = false;
-														captureHeldPreviewPointer(
-															event.currentTarget,
-															event.pointerId,
-														);
-														scheduleHeldPreview({
-															pointerId: event.pointerId,
-															clientX: event.clientX,
-															clientY: event.clientY,
-															wordIds: [word.id],
-															wordStartTime: previewStartTime,
-															wordEndTime: previewEndTime,
-														});
-													}}
-													onPointerMove={(event) => {
-														handleHeldPreviewPointerMove({
-															pointerId: event.pointerId,
-															clientX: event.clientX,
-															clientY: event.clientY,
-														});
-													}}
-													onPointerUp={(event) => {
-														releaseHeldPreviewPointer(
-															event.currentTarget,
-															event.pointerId,
-														);
-														handleHeldPreviewPointerEnd(event.pointerId);
-													}}
-													onPointerCancel={(event) => {
-														releaseHeldPreviewPointer(
-															event.currentTarget,
-															event.pointerId,
-														);
-														handleHeldPreviewPointerEnd(event.pointerId);
-													}}
-													onContextMenu={(event) => {
-														event.preventDefault();
-														event.stopPropagation();
-														stopHeldWordPreview();
-														setFocusedWordId(displayWord.id);
-														if (tokenWordIds.length === 1) {
-															invokeAction("transcript-toggle-word", {
-																trackId: activeMedia.trackId,
-																elementId: activeMedia.element.id,
-																wordId: displayWord.id,
-															});
-															return;
-														}
-														invokeAction("transcript-set-words-removed", {
-															trackId: activeMedia.trackId,
-															elementId: activeMedia.element.id,
-															wordIds: tokenWordIds,
-															removed: !tokenWords.every(
-																(tokenWord) => tokenWord.removed,
-															),
-														});
-													}}
-												>
-													{heldWordPreview &&
-													tokenWordIds.some((tokenWordId) =>
-														heldWordPreviewIds.has(tokenWordId),
-													) ? (
-														<span
-															aria-hidden="true"
-															className="pointer-events-none absolute inset-y-0 left-0 rounded-sm bg-white/25"
-															style={{
-																width: `${Math.max(
-																	0,
-																	Math.min(
-																		100,
-																		((currentTime - heldWordPreview.startTime) /
-																			Math.max(
-																				0.01,
-																				heldWordPreview.endTime -
-																					heldWordPreview.startTime,
-																			)) *
-																			100,
-																	),
-																)}%`,
-															}}
-														/>
-													) : null}
-													<span className="relative z-10">{displayText}</span>
-												</span>
-												{editingWordId === displayWord.id && (
-													<span className="absolute left-0 top-1/2 z-20 inline-flex -translate-y-1/2 items-center rounded-sm border border-zinc-500 bg-zinc-800 px-2 pr-1 align-middle shadow-sm">
-														<input
-															value={editingWordText}
-															onChange={(event) =>
-																setEditingWordText(event.target.value)
-															}
-															onKeyDown={(event) => {
-																if (event.key === "Enter") {
-																	commitWordEdit();
-																}
-																if (event.key === "Escape") {
-																	clearEditingState();
-																}
-															}}
-															className="min-w-0 bg-transparent text-sm font-medium text-zinc-100 outline-none"
-															style={{ width: `${editingWidthCh}ch` }}
-															autoFocus
-														/>
-														<Button
-															variant="ghost"
-															size="icon"
-															className="size-6 text-zinc-100 hover:bg-emerald-950/60"
-															onClick={commitWordEdit}
-														>
-															<Check className="size-3.5" />
-														</Button>
-														<Button
-															variant="ghost"
-															size="icon"
-															className="size-6 text-zinc-100 hover:bg-rose-950/60"
-															onClick={clearEditingState}
-														>
-															<X className="size-3.5" />
-														</Button>
-													</span>
-												)}
-											</span>
-											{nextWord ? (
-												<span
-													role="button"
-													tabIndex={0}
-													aria-label={`Select gap between ${displayText} and ${nextWord.text}`}
-													data-gap-id={gapId ?? undefined}
-													title={`${gapDurationSeconds.toFixed(2)}s playback gap${gap ? ` (${gap.sourceDurationSeconds.toFixed(2)}s source)` : ""}`}
-													className={[
-														"relative mx-1 inline-flex h-[1.05em] min-w-2.5 max-w-6 cursor-pointer items-center justify-center align-middle px-0.5 text-[11px] leading-none transition-none",
-														gapWidthClass,
-														!editingWordId ? "opacity-80 hover:opacity-100" : "",
-													].join(" ")}
-													style={gapStyle}
-													onMouseEnter={(event) => {
-														if (!tone) return;
-														event.currentTarget.style.backgroundColor = hexToRgba(
-															tone.accent,
-															0.24,
-														);
-													}}
-													onMouseLeave={(event) => {
-														event.currentTarget.style.backgroundColor =
-															String(gapStyle.backgroundColor);
-													}}
-													onClick={(event) => {
-														event.stopPropagation();
-														if (suppressClickSeekRef.current) {
-															suppressClickSeekRef.current = false;
-															return;
-														}
-														focusWordGap(displayLastWord.id, nextWord.id);
-													}}
-													onPointerDown={(event) => {
-														if (editingWordId || event.button !== 0 || !gap) return;
-														suppressClickSeekRef.current = false;
-														captureHeldPreviewPointer(
-															event.currentTarget,
-															event.pointerId,
-														);
-														const gapPreviewStartTime = getWordPreviewEndTime({
-															word: displayLastWord,
-															nextWord,
-														});
-														const gapPreviewEndTime = getWordPreviewStartTime({
-															word: nextWord,
-															previousWord: displayLastWord,
-														});
-														if (
-															gapPreviewEndTime <=
-															gapPreviewStartTime + 0.01
-														) {
-															return;
-														}
-														scheduleHeldPreview({
-															pointerId: event.pointerId,
-															clientX: event.clientX,
-															clientY: event.clientY,
-															wordIds: [],
-															wordStartTime: gapPreviewStartTime,
-															wordEndTime: gapPreviewEndTime,
-															gapId: gapId ?? undefined,
-														});
-													}}
-													onPointerMove={(event) => {
-														handleHeldPreviewPointerMove({
-															pointerId: event.pointerId,
-															clientX: event.clientX,
-															clientY: event.clientY,
-														});
-													}}
-													onPointerUp={(event) => {
-														releaseHeldPreviewPointer(
-															event.currentTarget,
-															event.pointerId,
-														);
-														handleHeldPreviewPointerEnd(event.pointerId);
-													}}
-													onPointerCancel={(event) => {
-														releaseHeldPreviewPointer(
-															event.currentTarget,
-															event.pointerId,
-														);
-														handleHeldPreviewPointerEnd(event.pointerId);
-													}}
-													onDoubleClick={(event) => {
-														event.preventDefault();
-														event.stopPropagation();
-														stopHeldWordPreview();
-														startEditingGap(displayLastWord.id, nextWord.id);
-													}}
-													onContextMenu={(event) => {
-														event.preventDefault();
-														event.stopPropagation();
-														stopHeldWordPreview();
-														focusWordGap(displayLastWord.id, nextWord.id);
-														invokeAction("transcript-toggle-gap-removed", {
-															trackId: activeMedia.trackId,
-															elementId: activeMedia.element.id,
-															leftWordId: displayLastWord.id,
-															rightWordId: nextWord.id,
-															removed: !Boolean(gapEdit?.removed),
-														});
-													}}
-													onKeyDown={(event) => {
-														if (event.key === "Enter" || event.key === " ") {
-															event.preventDefault();
-															focusWordGap(word.id, nextWord.id);
-														}
-													}}
-												>
-													{heldWordPreview?.gapId === gapId ? (
-														<span
-															aria-hidden="true"
-															className="pointer-events-none absolute inset-y-0 left-0 z-0"
-															style={{
-																backgroundColor: hexToRgba(
-																	tone?.accent ?? "#ffffff",
-																	0.32,
-																),
-																width: `${Math.max(
-																	0,
-																	Math.min(
-																		100,
-																		((currentTime - heldWordPreview.startTime) /
-																			Math.max(
-																				0.01,
-																				heldWordPreview.endTime -
-																					heldWordPreview.startTime,
-																			)) *
-																			100,
-																	),
-																)}%`,
-															}}
-														/>
-													) : null}
-													{gapEdit?.removed ? (
-														<span
-															aria-hidden="true"
-															className="pointer-events-none absolute inset-x-0 top-1/2 z-10 -translate-y-1/2 border-t-2"
-															style={{
-																borderTopColor:
-																	tone?.accent ?? "#ef4444",
-															}}
-														/>
-													) : null}
-													<span
-														className={[
-															"pointer-events-none whitespace-pre",
-														]
-															.filter(Boolean)
-															.join(" ")}
-														style={{
-															color: tone?.accent ?? "#d4d4d8",
-															opacity: gapEdit?.removed ? 0.78 : 0.6,
-														}}
-													>
-														{gapEdit?.text && gapEdit.text !== " "
-															? gapEdit.text
-															: " "}
-													</span>
-													{isFocusedGap && selectedWordIds.length === 0 && (
-														<span className="absolute left-1/2 bottom-full z-10 mb-1 flex -translate-x-1/2 items-center gap-1">
-															{editingGapId === gapId ? (
-																<span className="inline-flex items-center gap-1 rounded-sm border border-zinc-700 bg-zinc-900/95 px-1.5 py-1 shadow-sm">
-																	<input
-																		value={editingGapText}
-																		onChange={(event) =>
-																			setEditingGapText(event.target.value)
-																		}
-																		onKeyDown={(event) => {
-																			if (event.key === "Enter") {
-																				commitGapEdit();
-																			}
-																			if (event.key === "Escape") {
-																				clearGapEditingState();
-																			}
-																		}}
-																		className="min-w-[3ch] bg-transparent text-[11px] text-zinc-100 outline-none"
-																		style={{
-																			width: `${Math.max(3, editingGapText.length + 1)}ch`,
-																		}}
-																		autoFocus
-																	/>
-																	<Button
-																		variant="ghost"
-																		size="icon"
-																		className="size-5 text-zinc-100 hover:bg-zinc-800"
-																		onClick={commitGapEdit}
-																	>
-																		<Check className="size-3" />
-																	</Button>
-																	<Button
-																		variant="ghost"
-																		size="icon"
-																		className="size-5 text-zinc-100 hover:bg-zinc-800"
-																		onClick={clearGapEditingState}
-																	>
-																		<X className="size-3" />
-																	</Button>
-																</span>
-															) : (
-																<>
-																	<Button
-																	variant="ghost"
-																	size="sm"
-																	className="h-6 rounded-md border border-zinc-700 bg-zinc-900/95 px-1.5 text-[11px] text-zinc-100 shadow-sm hover:bg-zinc-800"
-																	onClick={() =>
-																		startEditingGap(displayLastWord.id, nextWord.id)
+																onKeyDown={(event) => {
+																	if (event.key === "Enter") {
+																		commitSpeakerEdit();
 																	}
-																>
-																		<Pencil className="mr-1 size-3" />
-																		Edit
-																	</Button>
-																	<Button
-																		variant="ghost"
-																		size="sm"
-																		className="h-6 rounded-md border border-zinc-700 bg-zinc-900/95 px-1.5 text-[11px] text-zinc-100 shadow-sm hover:bg-zinc-800"
-																		onClick={() =>
-																			invokeAction("transcript-toggle-gap-removed", {
+																	if (event.key === "Escape") {
+																		clearSpeakerEditingState();
+																	}
+																}}
+																className="h-7 min-w-28 border-b-2 bg-zinc-800 px-1 text-sm font-semibold text-zinc-100 shadow-sm outline-none"
+																style={{
+																	borderBottomColor:
+																		group.tone?.accent ?? "rgb(226 232 240)",
+																}}
+																autoFocus
+															/>
+															<Button
+																variant="ghost"
+																size="icon"
+																className="size-6 bg-zinc-800 text-zinc-100 shadow-sm hover:bg-zinc-700"
+																onClick={commitSpeakerEdit}
+															>
+																<Check className="size-3.5" />
+															</Button>
+															<Button
+																variant="ghost"
+																size="icon"
+																className="size-6 bg-zinc-800 text-zinc-100 shadow-sm hover:bg-zinc-700"
+																onClick={clearSpeakerEditingState}
+															>
+																<X className="size-3.5" />
+															</Button>
+														</span>
+													) : (
+														<button
+															type="button"
+															className="inline-flex items-center text-sm font-semibold transition-opacity hover:opacity-80"
+															style={{
+																color: group.tone?.accent ?? "rgb(226 232 240)",
+															}}
+															onClick={() => {
+																setEditingSpeakerGroupId(group.id);
+																setEditingSpeakerName(group.speakerLabel ?? "");
+															}}
+														>
+															<span>{group.speakerLabel}</span>
+														</button>
+													)}
+												</div>
+											) : null}
+											<p
+												className="select-text pr-1 text-[15px] leading-6 text-zinc-100"
+												onMouseUp={(event) => {
+													if (editingWordId) return;
+													const target = getEventTargetElement(event.target);
+													if (!target) return;
+													const wordId =
+														target.closest<HTMLElement>("[data-word-id]")
+															?.dataset.wordId ?? null;
+													if (!wordId) return;
+													const selection = window.getSelection();
+													if (selection && !selection.isCollapsed) return;
+													if (
+														selectedWordIds.length > 1 &&
+														selectedWordIdsSet.has(wordId)
+													) {
+														return;
+													}
+													setFocusedWordId(wordId);
+													if (suppressClickSeekRef.current) {
+														suppressClickSeekRef.current = false;
+														return;
+													}
+													const targetWord =
+														wordsWithCutState.find(
+															(candidate) => candidate.id === wordId,
+														) ?? null;
+													if (targetWord) {
+														seekToTranscriptWord(targetWord);
+													}
+												}}
+											>
+												{group.words.map((word) => {
+													if (coveredFillerWordIds.has(word.id)) {
+														return null;
+													}
+													const fillerCandidate =
+														fillerCandidateByStartWordId.get(word.id);
+													const tokenWordIds = fillerCandidate?.wordIds ?? [
+														word.id,
+													];
+													const tokenWordIdSet = new Set(tokenWordIds);
+													const tokenWords = tokenWordIds
+														.map(
+															(tokenWordId) =>
+																wordById.get(tokenWordId) ?? null,
+														)
+														.filter(
+															(
+																candidateWord,
+															): candidateWord is TranscriptEditWord =>
+																candidateWord !== null,
+														);
+													const displayWord = tokenWords[0] ?? word;
+													const displayLastWord =
+														tokenWords[tokenWords.length - 1] ?? word;
+													const displayText =
+														fillerCandidate?.text ?? word.text;
+													const previousWord =
+														previousPanelWordById.get(word.id) ?? null;
+													const followingWord =
+														nextPanelWordById.get(word.id)?.rightWord ?? null;
+													const previewStartTime = getWordPreviewStartTime({
+														word,
+														previousWord,
+													});
+													const previewEndTime = Math.max(
+														previewStartTime + 0.01,
+														getWordPreviewEndTime({
+															word,
+															nextWord: followingWord,
+														}),
+													);
+													const isCurrentWord = tokenWordIds.some(
+														(tokenWordId) => activeWordId === tokenWordId,
+													);
+													const isCurrentHiddenWord = tokenWordIds.some(
+														(tokenWordId) => activeHiddenWordId === tokenWordId,
+													);
+													const isSelectedWord = tokenWordIds.some(
+														(tokenWordId) =>
+															selectedWordIdsSet.has(tokenWordId),
+													);
+													const isCaptionLinkedWord = tokenWordIds.some(
+														(tokenWordId) =>
+															selectedCaptionWordIds.has(tokenWordId),
+													);
+													const isFocusedWord =
+														focusedWordId != null &&
+														tokenWordIdSet.has(focusedWordId);
+													const gap = nextPanelWordById.get(displayLastWord.id);
+													const nextWord = gap?.rightWord;
+													const gapId = gap?.id ?? null;
+													const isFocusedGap = focusedGap?.id === gapId;
+													const gapEdit = nextWord
+														? getTranscriptGapEdit({
+																gapEdits,
+																leftWordId: displayLastWord.id,
+																rightWordId: nextWord.id,
+															})
+														: undefined;
+													const gapDurationSeconds =
+														gap?.compressedDurationSeconds ?? 0;
+													const gapWidthClass =
+														getTranscriptGapWidthClass(gapDurationSeconds);
+													const gapIsSelected = Boolean(gap) && isFocusedGap;
+													const gapIsCurrent = gap
+														? currentGapId === gap.id
+														: false;
+													const isHoverSelectedGroupWord =
+														isFocusedWord &&
+														selectedWordIds.length > 1 &&
+														tokenWordIds.some((tokenWordId) =>
+															selectedWordIdsSet.has(tokenWordId),
+														);
+													const tone = group.tone;
+													const wordStyle = isCurrentWord
+														? {
+																backgroundColor: tone?.accent ?? "#0f766e",
+																color: "#ffffff",
+															}
+														: isSelectedWord
+															? {
+																	backgroundColor: tone?.accent ?? "#0f766e",
+																	color: "#ffffff",
+																}
+															: isHoverSelectedGroupWord
+																? {
+																		backgroundColor:
+																			tone?.background ??
+																			"rgba(39, 39, 42, 0.4)",
+																		color: "#ffffff",
+																	}
+																: tone
+																	? { color: tone.mutedText }
+																	: { color: "#e4e4e7" };
+													const removedWordDecorationStyle = word.removed
+														? {
+																textDecorationColor: tone?.accent ?? "#ef4444",
+															}
+														: undefined;
+													const gapBaseAlpha =
+														gapIsSelected || gapIsCurrent ? 0.34 : 0.16;
+													const gapStyle =
+														gapIsSelected || gapIsCurrent
+															? {
+																	backgroundColor: hexToRgba(
+																		tone?.accent ?? "#a1a1aa",
+																		gapIsCurrent ? 0.42 : 0.3,
+																	),
+																}
+															: {
+																	backgroundColor: hexToRgba(
+																		tone?.accent ?? "#a1a1aa",
+																		gapBaseAlpha,
+																	),
+																};
+													const editingWidthCh = Math.max(
+														displayText.length,
+														editingWordText.length,
+														3,
+													);
+													return (
+														<span key={word.id} className="contents">
+															<span
+																className="relative group/word mr-1 inline-block my-1 align-baseline"
+																data-word-id={displayWord.id}
+																data-word-ids={tokenWordIds.join(",")}
+															>
+																{isFocusedWord &&
+																	selectedWordIds.length === 0 && (
+																		<span className="absolute left-0 bottom-full z-10 mb-1 flex items-center gap-1">
+																			<Button
+																				variant="ghost"
+																				size="sm"
+																				className="h-6 rounded-md border border-zinc-700 bg-zinc-900/95 px-1.5 text-[11px] text-zinc-100 shadow-sm hover:bg-zinc-800"
+																				onClick={() =>
+																					startEditingWordIds(tokenWordIds)
+																				}
+																			>
+																				<Pencil className="mr-1 size-3" />
+																				Edit
+																			</Button>
+																			<Button
+																				variant="ghost"
+																				size="sm"
+																				className="h-6 rounded-md border border-zinc-700 bg-zinc-900/95 px-1.5 text-[11px] text-zinc-100 shadow-sm hover:bg-zinc-800"
+																				onClick={() => {
+																					if (tokenWordIds.length === 1) {
+																						invokeAction(
+																							"transcript-toggle-word",
+																							{
+																								trackId: activeMedia.trackId,
+																								elementId:
+																									activeMedia.element.id,
+																								wordId: displayWord.id,
+																							},
+																						);
+																						return;
+																					}
+																					invokeAction(
+																						"transcript-set-words-removed",
+																						{
+																							trackId: activeMedia.trackId,
+																							elementId: activeMedia.element.id,
+																							wordIds: tokenWordIds,
+																							removed: !tokenWords.every(
+																								(tokenWord) =>
+																									tokenWord.removed,
+																							),
+																						},
+																					);
+																				}}
+																			>
+																				{tokenWords.every(
+																					(tokenWord) => tokenWord.removed,
+																				)
+																					? "Restore"
+																					: "Mute"}
+																			</Button>
+																		</span>
+																	)}
+																<span
+																	className={[
+																		"cursor-pointer rounded-sm px-1 py-0.5 select-text whitespace-nowrap",
+																		editingWordId === word.id
+																			? "invisible"
+																			: "",
+																		!editingWordId && !isSelectionActive
+																			? ""
+																			: "",
+																		!isSelectionActive && isFocusedWord
+																			? "bg-zinc-800/40"
+																			: "",
+																		tokenWords.every(
+																			(tokenWord) => tokenWord.removed,
+																		)
+																			? "line-through decoration-red-600 decoration-2 opacity-75"
+																			: "",
+																		tokenWords.every(
+																			(tokenWord) => tokenWord.hidden,
+																		)
+																			? "opacity-55"
+																			: "",
+																		isCurrentWord ? "text-white" : "",
+																		isCurrentHiddenWord
+																			? "bg-zinc-500/50 text-white"
+																			: "",
+																		isCaptionLinkedWord
+																			? "ring-2 ring-primary/80 ring-offset-1 ring-offset-zinc-950/80"
+																			: "",
+																	]
+																		.filter(Boolean)
+																		.join(" ")}
+																	style={{
+																		...wordStyle,
+																		...removedWordDecorationStyle,
+																	}}
+																	onMouseEnter={(event) => {
+																		if (editingWordId || !tone) return;
+																		if (!isCurrentWord && !isSelectedWord) {
+																			event.currentTarget.style.backgroundColor =
+																				hexToRgba(tone.accent, 0.1);
+																		}
+																	}}
+																	onMouseLeave={(event) => {
+																		if (
+																			editingWordId ||
+																			isCurrentWord ||
+																			isSelectedWord
+																		) {
+																			return;
+																		}
+																		event.currentTarget.style.backgroundColor =
+																			"";
+																	}}
+																	onDoubleClick={(event) => {
+																		event.preventDefault();
+																		event.stopPropagation();
+																		stopHeldWordPreview();
+																		window.getSelection()?.removeAllRanges();
+																		startEditingWordIds(tokenWordIds);
+																	}}
+																	onPointerDown={(event) => {
+																		if (editingWordId || event.button !== 0)
+																			return;
+																		suppressClickSeekRef.current = false;
+																		captureHeldPreviewPointer(
+																			event.currentTarget,
+																			event.pointerId,
+																		);
+																		scheduleHeldPreview({
+																			pointerId: event.pointerId,
+																			clientX: event.clientX,
+																			clientY: event.clientY,
+																			wordIds: [word.id],
+																			wordStartTime: previewStartTime,
+																			wordEndTime: previewEndTime,
+																		});
+																	}}
+																	onPointerMove={(event) => {
+																		handleHeldPreviewPointerMove({
+																			pointerId: event.pointerId,
+																			clientX: event.clientX,
+																			clientY: event.clientY,
+																		});
+																	}}
+																	onPointerUp={(event) => {
+																		releaseHeldPreviewPointer(
+																			event.currentTarget,
+																			event.pointerId,
+																		);
+																		handleHeldPreviewPointerEnd(
+																			event.pointerId,
+																		);
+																	}}
+																	onPointerCancel={(event) => {
+																		releaseHeldPreviewPointer(
+																			event.currentTarget,
+																			event.pointerId,
+																		);
+																		handleHeldPreviewPointerEnd(
+																			event.pointerId,
+																		);
+																	}}
+																	onContextMenu={(event) => {
+																		event.preventDefault();
+																		event.stopPropagation();
+																		stopHeldWordPreview();
+																		setFocusedWordId(displayWord.id);
+																		if (tokenWordIds.length === 1) {
+																			invokeAction("transcript-toggle-word", {
 																				trackId: activeMedia.trackId,
 																				elementId: activeMedia.element.id,
-																				leftWordId: word.id,
-																				rightWordId: nextWord.id,
-																				removed: !Boolean(gapEdit?.removed),
-																			})
+																				wordId: displayWord.id,
+																			});
+																			return;
 																		}
+																		invokeAction(
+																			"transcript-set-words-removed",
+																			{
+																				trackId: activeMedia.trackId,
+																				elementId: activeMedia.element.id,
+																				wordIds: tokenWordIds,
+																				removed: !tokenWords.every(
+																					(tokenWord) => tokenWord.removed,
+																				),
+																			},
+																		);
+																	}}
+																>
+																	{heldWordPreview &&
+																	tokenWordIds.some((tokenWordId) =>
+																		heldWordPreviewIds.has(tokenWordId),
+																	) ? (
+																		<span
+																			aria-hidden="true"
+																			className="pointer-events-none absolute inset-y-0 left-0 rounded-sm bg-white/25"
+																			style={{
+																				width: `${Math.max(
+																					0,
+																					Math.min(
+																						100,
+																						((previewCurrentTime -
+																							heldWordPreview.startTime) /
+																							Math.max(
+																								0.01,
+																								heldWordPreview.endTime -
+																									heldWordPreview.startTime,
+																							)) *
+																							100,
+																					),
+																				)}%`,
+																			}}
+																		/>
+																	) : null}
+																	<span className="relative z-10">
+																		{displayText}
+																	</span>
+																</span>
+																{editingWordId === displayWord.id && (
+																	<span className="absolute left-0 top-1/2 z-20 inline-flex -translate-y-1/2 items-center rounded-sm border border-zinc-500 bg-zinc-800 px-2 pr-1 align-middle shadow-sm">
+																		<input
+																			value={editingWordText}
+																			onChange={(event) =>
+																				setEditingWordText(event.target.value)
+																			}
+																			onKeyDown={(event) => {
+																				if (event.key === "Enter") {
+																					commitWordEdit();
+																				}
+																				if (event.key === "Escape") {
+																					clearEditingState();
+																				}
+																			}}
+																			className="min-w-0 bg-transparent text-sm font-medium text-zinc-100 outline-none"
+																			style={{ width: `${editingWidthCh}ch` }}
+																			autoFocus
+																		/>
+																		<Button
+																			variant="ghost"
+																			size="icon"
+																			className="size-6 text-zinc-100 hover:bg-emerald-950/60"
+																			onClick={commitWordEdit}
+																		>
+																			<Check className="size-3.5" />
+																		</Button>
+																		<Button
+																			variant="ghost"
+																			size="icon"
+																			className="size-6 text-zinc-100 hover:bg-rose-950/60"
+																			onClick={clearEditingState}
+																		>
+																			<X className="size-3.5" />
+																		</Button>
+																	</span>
+																)}
+															</span>
+															{nextWord ? (
+																<span
+																	role="button"
+																	tabIndex={0}
+																	aria-label={`Select gap between ${displayText} and ${nextWord.text}`}
+																	data-gap-id={gapId ?? undefined}
+																	title={`${gapDurationSeconds.toFixed(2)}s playback gap${gap ? ` (${gap.sourceDurationSeconds.toFixed(2)}s source)` : ""}`}
+																	className={[
+																		"relative mx-1 inline-flex h-[1.05em] min-w-2.5 max-w-6 cursor-pointer items-center justify-center align-middle px-0.5 text-[11px] leading-none transition-none",
+																		gapWidthClass,
+																		!editingWordId
+																			? "opacity-80 hover:opacity-100"
+																			: "",
+																	].join(" ")}
+																	style={gapStyle}
+																	onMouseEnter={(event) => {
+																		if (!tone) return;
+																		event.currentTarget.style.backgroundColor =
+																			hexToRgba(tone.accent, 0.24);
+																	}}
+																	onMouseLeave={(event) => {
+																		event.currentTarget.style.backgroundColor =
+																			String(gapStyle.backgroundColor);
+																	}}
+																	onClick={(event) => {
+																		event.stopPropagation();
+																		if (suppressClickSeekRef.current) {
+																			suppressClickSeekRef.current = false;
+																			return;
+																		}
+																		focusWordGap(
+																			displayLastWord.id,
+																			nextWord.id,
+																		);
+																	}}
+																	onPointerDown={(event) => {
+																		if (editingWordId || event.button !== 0)
+																			return;
+																		captureHeldPreviewPointer(
+																			event.currentTarget,
+																			event.pointerId,
+																		);
+																		scheduleHeldPreview({
+																			pointerId: event.pointerId,
+																			clientX: event.clientX,
+																			clientY: event.clientY,
+																			wordIds: [],
+																			wordStartTime: displayLastWord.endTime,
+																			wordEndTime: nextWord.startTime,
+																			gapId: gapId ?? undefined,
+																		});
+																	}}
+																	onPointerMove={(event) => {
+																		handleHeldPreviewPointerMove({
+																			pointerId: event.pointerId,
+																			clientX: event.clientX,
+																			clientY: event.clientY,
+																		});
+																	}}
+																	onPointerUp={(event) => {
+																		releaseHeldPreviewPointer(
+																			event.currentTarget,
+																			event.pointerId,
+																		);
+																		handleHeldPreviewPointerEnd(
+																			event.pointerId,
+																		);
+																	}}
+																	onPointerCancel={(event) => {
+																		releaseHeldPreviewPointer(
+																			event.currentTarget,
+																			event.pointerId,
+																		);
+																		handleHeldPreviewPointerEnd(
+																			event.pointerId,
+																		);
+																	}}
+																	onDoubleClick={(event) => {
+																		event.preventDefault();
+																		event.stopPropagation();
+																		stopHeldWordPreview();
+																		startEditingGap(
+																			displayLastWord.id,
+																			nextWord.id,
+																		);
+																	}}
+																	onContextMenu={(event) => {
+																		event.preventDefault();
+																		event.stopPropagation();
+																		stopHeldWordPreview();
+																		focusWordGap(
+																			displayLastWord.id,
+																			nextWord.id,
+																		);
+																		invokeAction(
+																			"transcript-toggle-gap-removed",
+																			{
+																				trackId: activeMedia.trackId,
+																				elementId: activeMedia.element.id,
+																				leftWordId: displayLastWord.id,
+																				rightWordId: nextWord.id,
+																				removed: !gapEdit?.removed,
+																			},
+																		);
+																		refreshTranscriptUi();
+																	}}
+																	onKeyDown={(event) => {
+																		if (
+																			event.key === "Enter" ||
+																			event.key === " "
+																		) {
+																			event.preventDefault();
+																			focusWordGap(word.id, nextWord.id);
+																		}
+																	}}
+																>
+																	{heldWordPreview?.gapId === gapId ? (
+																		<span
+																			aria-hidden="true"
+																			className="pointer-events-none absolute inset-y-0 left-0 z-0"
+																			style={{
+																				backgroundColor: hexToRgba(
+																					tone?.accent ?? "#ffffff",
+																					0.32,
+																				),
+																				width: `${Math.max(
+																					0,
+																					Math.min(
+																						100,
+																						((currentTime -
+																							heldWordPreview.startTime) /
+																							Math.max(
+																								0.01,
+																								heldWordPreview.endTime -
+																									heldWordPreview.startTime,
+																							)) *
+																							100,
+																					),
+																				)}%`,
+																			}}
+																		/>
+																	) : null}
+																	{gapEdit?.removed ? (
+																		<span
+																			aria-hidden="true"
+																			className="pointer-events-none absolute inset-x-0 top-1/2 z-10 -translate-y-1/2 border-t-2"
+																			style={{
+																				borderTopColor:
+																					tone?.accent ?? "#ef4444",
+																			}}
+																		/>
+																	) : null}
+																	<span
+																		className={[
+																			"pointer-events-none whitespace-pre",
+																		]
+																			.filter(Boolean)
+																			.join(" ")}
+																		style={{
+																			color: tone?.accent ?? "#d4d4d8",
+																			opacity: gapEdit?.removed ? 0.78 : 0.6,
+																		}}
 																	>
-																		{gapEdit?.removed ? "Restore" : "Mute"}
-																	</Button>
-																</>
-															)}
+																		{gapEdit?.text && gapEdit.text !== " "
+																			? gapEdit.text
+																			: " "}
+																	</span>
+																	{isFocusedGap &&
+																		selectedWordIds.length === 0 && (
+																			<span className="absolute left-1/2 bottom-full z-10 mb-1 flex -translate-x-1/2 items-center gap-1">
+																				{editingGapId === gapId ? (
+																					<span className="inline-flex items-center gap-1 rounded-sm border border-zinc-700 bg-zinc-900/95 px-1.5 py-1 shadow-sm">
+																						<input
+																							value={editingGapText}
+																							onChange={(event) =>
+																								setEditingGapText(
+																									event.target.value,
+																								)
+																							}
+																							onKeyDown={(event) => {
+																								if (event.key === "Enter") {
+																									commitGapEdit();
+																								}
+																								if (event.key === "Escape") {
+																									clearGapEditingState();
+																								}
+																							}}
+																							className="min-w-[3ch] bg-transparent text-[11px] text-zinc-100 outline-none"
+																							style={{
+																								width: `${Math.max(3, editingGapText.length + 1)}ch`,
+																							}}
+																							autoFocus
+																						/>
+																						<Button
+																							variant="ghost"
+																							size="icon"
+																							className="size-5 text-zinc-100 hover:bg-zinc-800"
+																							onClick={commitGapEdit}
+																						>
+																							<Check className="size-3" />
+																						</Button>
+																						<Button
+																							variant="ghost"
+																							size="icon"
+																							className="size-5 text-zinc-100 hover:bg-zinc-800"
+																							onClick={clearGapEditingState}
+																						>
+																							<X className="size-3" />
+																						</Button>
+																					</span>
+																				) : (
+																					<>
+																						<Button
+																							variant="ghost"
+																							size="sm"
+																							className="h-6 rounded-md border border-zinc-700 bg-zinc-900/95 px-1.5 text-[11px] text-zinc-100 shadow-sm hover:bg-zinc-800"
+																							onClick={() =>
+																								startEditingGap(
+																									displayLastWord.id,
+																									nextWord.id,
+																								)
+																							}
+																						>
+																							<Pencil className="mr-1 size-3" />
+																							Edit
+																						</Button>
+																						<Button
+																							variant="ghost"
+																							size="sm"
+																							className="h-6 rounded-md border border-zinc-700 bg-zinc-900/95 px-1.5 text-[11px] text-zinc-100 shadow-sm hover:bg-zinc-800"
+																							onClick={() => {
+																								invokeAction(
+																									"transcript-toggle-gap-removed",
+																									{
+																										trackId:
+																											activeMedia.trackId,
+																										elementId:
+																											activeMedia.element.id,
+																										leftWordId: word.id,
+																										rightWordId: nextWord.id,
+																										removed: !gapEdit?.removed,
+																									},
+																								);
+																								refreshTranscriptUi();
+																							}}
+																						>
+																							{gapEdit?.removed
+																								? "Restore"
+																								: "Mute"}
+																						</Button>
+																					</>
+																				)}
+																			</span>
+																		)}
+																</span>
+															) : null}
 														</span>
-													)}
-												</span>
-											) : null}
-										</span>
-									);
-								})}
-										</p>
+													);
+												})}
+											</p>
+										</div>
 									</div>
 								</div>
-							</div>
-						);
-					})}
+							);
+						})}
+					</div>
 				</div>
-			</div>
+				{focusedWordId ? (
+					<div className="sticky bottom-0 z-30 -mx-2 bg-background px-3 py-2 shadow-[0_-10px_18px_rgba(0,0,0,0.28)]">
+						<div className="flex items-center justify-between">
+							<button
+								type="button"
+								className="inline-flex items-center gap-1.5 text-xs text-zinc-300 transition-colors hover:text-zinc-100"
+								onClick={() =>
+									setIsTimingToolbarExpanded((current) => !current)
+								}
+							>
+								<span>Timing</span>
+								{isTimingToolbarExpanded ? (
+									<ChevronDown className="size-3.5" />
+								) : (
+									<ChevronUp className="size-3.5" />
+								)}
+							</button>
+						</div>
+						{isTimingToolbarExpanded ? (
+							<div className="pt-1">
+								<TranscriptTimingView
+									key={activeTranscriptSourceKey}
+									trackId={activeMedia.trackId}
+									elementId={activeMedia.element.id}
+									words={visibleTranscriptWords}
+									cuts={cuts}
+									originalWords={originalTimingWords}
+									focusedWordId={focusedWordId}
+									currentWordId={currentWordId}
+									currentCompressedTime={currentCompressedTime}
+									speakerToneById={speakerToneById}
+									heldWordPreview={heldWordPreview}
+									heldWordPreviewIds={heldWordPreviewIds}
+									previewCurrentTime={previewCurrentTime}
+									onSeekWord={(word) => {
+										setFocusedWordId(word.id);
+										if (suppressClickSeekRef.current) {
+											suppressClickSeekRef.current = false;
+											return;
+										}
+										seekToTranscriptWord(word);
+									}}
+									onScheduleWordPreview={scheduleHeldPreview}
+									onHeldPreviewPointerMove={handleHeldPreviewPointerMove}
+									onHeldPreviewPointerEnd={handleHeldPreviewPointerEnd}
+									onCaptureHeldPreviewPointer={captureHeldPreviewPointer}
+									onReleaseHeldPreviewPointer={releaseHeldPreviewPointer}
+									onClearInteractionState={() => {
+										stopHeldWordPreview();
+										clearGapEditingState();
+										clearEditingState();
+										setFocusedGap(null);
+										setSelectedWordIdsIfChanged([]);
+										setIsSelectionActive(false);
+										window.getSelection()?.removeAllRanges();
+									}}
+								/>
+							</div>
+						) : null}
+					</div>
+				) : null}
+			</>
 
-				{transcriptCompileState.status === "compiling" && (
+			{transcriptCompileState.status === "compiling" && (
 				<div className="text-[11px] text-muted-foreground px-1 flex items-center gap-1">
 					<Spinner className="size-3" />
 					Updating clip playback…
