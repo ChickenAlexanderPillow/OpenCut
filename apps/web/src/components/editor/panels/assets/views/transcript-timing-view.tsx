@@ -1029,6 +1029,9 @@ export function TranscriptTimingView({
 							const isHidden =
 								tokenWords.length > 0 &&
 								tokenWords.every((tokenWord) => tokenWord.hidden);
+							const emphasizeWordBoundary =
+								isFocused || (isCurrent && !isPlaying);
+							const showWordBoundary = !isPlaying;
 							const playbackProgress =
 								isCurrent && currentSourceTime != null
 									? Math.max(
@@ -1048,23 +1051,26 @@ export function TranscriptTimingView({
 								<button
 									key={timingWord.id}
 									type="button"
-									className="absolute top-1/2 z-20 h-10 -translate-y-1/2 overflow-hidden border text-left transition-colors hover:brightness-110"
+									className="absolute top-1/2 z-20 h-10 -translate-y-1/2 overflow-hidden text-left transition-colors hover:brightness-110"
 									style={{
 										left: `${getPercent(item.displayStartTime)}%`,
 										width: `${widthPercent}%`,
-										borderColor:
-											isFocused || isCurrent
+										borderWidth: showWordBoundary ? 1 : 0,
+										borderStyle: "solid",
+										borderColor: showWordBoundary
+											? emphasizeWordBoundary
 												? (tone?.accent ?? "rgba(228,228,231,0.95)")
-												: (tone?.border ?? "rgba(63,63,70,0.9)"),
+												: (tone?.border ?? "rgba(63,63,70,0.9)")
+											: "transparent",
 										backgroundColor: tone
 											? hexToRgba(
 													tone.accent,
-													isFocused || isCurrent ? 0.2 : 0.08,
+													emphasizeWordBoundary ? 0.2 : 0.08,
 												)
 											: "rgba(39,39,42,0.32)",
 										color: tone?.mutedText ?? undefined,
 										boxShadow:
-											isFocused || isCurrent
+											emphasizeWordBoundary
 												? `0 0 0 1px ${tone?.accent ?? "rgba(228,228,231,0.95)"}`
 												: undefined,
 									}}
@@ -1131,13 +1137,13 @@ export function TranscriptTimingView({
 									{heldWordPreview && isHeldPreviewWord ? (
 										<span
 											aria-hidden="true"
-											className="pointer-events-none absolute inset-y-0 left-0 bg-white/40 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.22)]"
+											className="pointer-events-none absolute inset-0 bg-white/40 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.22)]"
 											style={{ width: `${previewProgress}%` }}
 										/>
 									) : isCurrent ? (
 										<span
 											aria-hidden="true"
-											className="pointer-events-none absolute inset-y-0 left-0 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)]"
+											className="pointer-events-none absolute inset-0 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)]"
 											style={{
 												width: `${playbackProgress}%`,
 												backgroundColor: hexToRgba(
