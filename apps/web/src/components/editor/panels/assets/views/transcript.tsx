@@ -757,6 +757,10 @@ export function TranscriptView() {
 		() => wordsWithCutState.filter((word) => !word.removed && !word.hidden),
 		[wordsWithCutState],
 	);
+	const timingToolbarWords = useMemo(
+		() => wordsWithCutState.filter((word) => !word.hidden),
+		[wordsWithCutState],
+	);
 	const currentSourceTime = useMemo(() => {
 		if (!activeMedia) return null;
 		const localCompressed = Math.max(
@@ -1045,10 +1049,10 @@ export function TranscriptView() {
 	const timingToolbarWordId =
 		displayedTimingWordId ??
 		persistedTimingWordId ??
-		visibleTranscriptWords[0]?.id ??
+		timingToolbarWords[0]?.id ??
 		null;
 	const shouldRenderTimingToolbar =
-		Boolean(activeMedia) && visibleTranscriptWords.length > 0;
+		Boolean(activeMedia) && timingToolbarWords.length > 0;
 	const isTimingViewVisible =
 		shouldRenderTimingToolbar && (isTimingToolbarExpanded || isPlaying);
 	useEffect(() => {
@@ -3081,7 +3085,7 @@ export function TranscriptView() {
 									key={activeTranscriptSourceKey}
 									trackId={activeMedia.trackId}
 									elementId={activeMedia.element.id}
-									words={visibleTranscriptWords}
+									words={timingToolbarWords}
 									cuts={cuts}
 									originalWords={originalTimingWords}
 									focusedWordId={timingToolbarWordId}

@@ -441,6 +441,10 @@ export function TranscriptTimingView({
 		() => buildTimingTokens(originalWords),
 		[originalWords],
 	);
+	const wordStateById = useMemo(
+		() => new Map(words.map((word) => [word.id, word])),
+		[words],
+	);
 
 	const focusedIndex = focusedWordId
 		? tokens.findIndex((token) => token.wordIds.includes(focusedWordId))
@@ -882,27 +886,29 @@ export function TranscriptTimingView({
 							ref={waveformCanvasRef}
 							className="pointer-events-none absolute inset-0 z-10 opacity-95"
 						/>
-						{showOriginalLeftBoundary ? (
+						{!isPlaying && showOriginalLeftBoundary ? (
 							<div
 								aria-hidden="true"
-								className="pointer-events-none absolute top-1/2 z-20 h-12 -translate-x-1/2 -translate-y-1/2 border-l-2 border-dashed"
+								className="pointer-events-none absolute top-1/2 z-20 h-12 -translate-x-1/2 -translate-y-1/2 border-l-2 border-dashed transition-opacity duration-200"
 								style={{
 									left: `${getPercent(originalLeftBoundaryDisplayTime ?? 0)}%`,
 									borderColor: hasResettableLeftBoundary
 										? hexToRgba(focusedTone?.accent ?? "#f4f4f5", 0.8)
 										: "rgba(212,212,216,0.42)",
+									opacity: 0.88,
 								}}
 							/>
 						) : null}
-						{showOriginalRightBoundary ? (
+						{!isPlaying && showOriginalRightBoundary ? (
 							<div
 								aria-hidden="true"
-								className="pointer-events-none absolute top-1/2 z-20 h-12 -translate-x-1/2 -translate-y-1/2 border-l-2 border-dashed"
+								className="pointer-events-none absolute top-1/2 z-20 h-12 -translate-x-1/2 -translate-y-1/2 border-l-2 border-dashed transition-opacity duration-200"
 								style={{
 									left: `${getPercent(originalRightBoundaryDisplayTime ?? 0)}%`,
 									borderColor: hasResettableRightBoundary
 										? hexToRgba(focusedTone?.accent ?? "#f4f4f5", 0.8)
 										: "rgba(212,212,216,0.42)",
+									opacity: 0.88,
 								}}
 							/>
 						) : null}
@@ -1011,6 +1017,18 @@ export function TranscriptTimingView({
 								);
 							}
 							const timingWord = item.word;
+							const tokenWords = timingWord.wordIds
+								.map((wordId) => wordStateById.get(wordId) ?? null)
+								.filter(
+									(candidateWord): candidateWord is TranscriptEditWord =>
+										candidateWord !== null,
+								);
+							const isRemoved =
+								tokenWords.length > 0 &&
+								tokenWords.every((tokenWord) => tokenWord.removed);
+							const isHidden =
+								tokenWords.length > 0 &&
+								tokenWords.every((tokenWord) => tokenWord.hidden);
 							const playbackProgress =
 								isCurrent && currentSourceTime != null
 									? Math.max(
@@ -1052,6 +1070,27 @@ export function TranscriptTimingView({
 									}}
 									title={`${timingWord.text} ${timingWord.startTime.toFixed(2)}s-${timingWord.endTime.toFixed(2)}s`}
 									onClick={() => onSeekWord(timingWord.firstWord)}
+									onContextMenu={(event) => {
+										event.preventDefault();
+										event.stopPropagation();
+										onClearInteractionState();
+										if (timingWord.wordIds.length === 1) {
+											invokeAction("transcript-toggle-word", {
+												trackId,
+												elementId,
+												wordId: timingWord.firstWord.id,
+											});
+											return;
+										}
+										invokeAction("transcript-set-words-removed", {
+											trackId,
+											elementId,
+											wordIds: timingWord.wordIds,
+											removed: !tokenWords.every(
+												(tokenWord) => tokenWord.removed,
+											),
+										});
+									}}
 									onPointerDown={(event) => {
 										if (event.button !== 0) return;
 										onCaptureHeldPreviewPointer(
@@ -1110,7 +1149,24 @@ export function TranscriptTimingView({
 									) : null}
 									<span className="relative z-10 flex h-full flex-col justify-center px-1.5">
 										{showLabel ? (
-											<span className="truncate text-[10px] font-medium">
+											<span
+												className={[
+													"truncate text-[10px] font-medium",
+													isRemoved
+														? "line-through decoration-red-600 decoration-2 opacity-75"
+														: "",
+													isHidden ? "opacity-55" : "",
+												]
+													.filter(Boolean)
+													.join(" ")}
+												style={
+													isRemoved
+														? {
+																textDecorationColor: tone?.accent ?? "#ef4444",
+															}
+														: undefined
+												}
+											>
 												{item.word.text}
 											</span>
 										) : null}
