@@ -2,6 +2,7 @@
 
 import {
 	useCallback,
+	useEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -13,10 +14,15 @@ import { invokeAction } from "@/lib/actions";
 import {
 	buildTranscriptGapId,
 	detectTranscriptFillerCandidates,
-	mapCompressedTimeToSourceTime,
 	mapSourceTimeToCompressedTime,
 } from "@/lib/transcript-editor/core";
 import { clampTranscriptWordBoundaryTime } from "@/lib/transcript-editor/timing";
+import type { TWaveformPeaksCacheEntry } from "@/types/project";
+import {
+	getWaveformMinMaxInRange,
+	resolveWaveformEnvelopeSource,
+	type WaveformEnvelope,
+} from "@/lib/media/waveform-envelope";
 import type {
 	TranscriptEditCutRange,
 	TranscriptEditWord,
@@ -69,6 +75,12 @@ type TranscriptTimingViewProps = {
 	onCaptureHeldPreviewPointer: (target: HTMLElement, pointerId: number) => void;
 	onReleaseHeldPreviewPointer: (target: HTMLElement, pointerId: number) => void;
 	onClearInteractionState: () => void;
+	waveformAudioBuffer?: AudioBuffer;
+	waveformAudioFile?: File;
+	waveformAudioUrl?: string;
+	waveformCacheKey?: string;
+	initialWaveformEnvelope?: TWaveformPeaksCacheEntry;
+	onWaveformEnvelopeResolved?: (envelope: WaveformEnvelope) => void;
 };
 
 type TimingToken = {
@@ -101,6 +113,11 @@ type LocalWord = {
 	word: TimingItem;
 	displayStartTime: number;
 	displayEndTime: number;
+};
+
+export type TranscriptWaveformBar = {
+	min: number;
+	max: number;
 };
 
 const HANDLE_HITBOX_PX = 20;
@@ -193,6 +210,48 @@ function mapSourceTimeToLocalDisplayTime({
 	}
 
 	return lastWord.displayEndTime;
+}
+
+export function buildTranscriptWaveformBars({
+	envelope,
+	localWords,
+	localWindow,
+	barCount,
+}: {
+	envelope: WaveformEnvelope;
+	localWords: LocalWord[];
+	localWindow: { startTime: number; duration: number };
+	barCount: number;
+}): TranscriptWaveformBar[] {
+	if (
+		barCount <= 0 ||
+		envelope.peaks.length === 0 ||
+		localWords.length === 0 ||
+		localWindow.duration <= 0
+	) {
+		return [];
+	}
+
+	return Array.from({ length: barCount }, (_, index) => {
+		const displayStartTime =
+			localWindow.startTime + (index / barCount) * localWindow.duration;
+		const displayEndTime =
+			localWindow.startTime + ((index + 1) / barCount) * localWindow.duration;
+		const sourceStartTime = mapLocalDisplayTimeToSourceTime({
+			displayTime: displayStartTime,
+			localWords,
+		});
+		const sourceEndTime = mapLocalDisplayTimeToSourceTime({
+			displayTime: displayEndTime,
+			localWords,
+		});
+		const { min, max } = getWaveformMinMaxInRange({
+			envelope,
+			startTime: Math.min(sourceStartTime, sourceEndTime),
+			endTime: Math.max(sourceStartTime, sourceEndTime),
+		});
+		return { min, max };
+	});
 }
 
 function getBoundaryHandleStyle(accent?: string) {
@@ -339,8 +398,15 @@ export function TranscriptTimingView({
 	onCaptureHeldPreviewPointer,
 	onReleaseHeldPreviewPointer,
 	onClearInteractionState,
+	waveformAudioBuffer,
+	waveformAudioFile,
+	waveformAudioUrl,
+	waveformCacheKey,
+	initialWaveformEnvelope,
+	onWaveformEnvelopeResolved,
 }: TranscriptTimingViewProps) {
 	const stripRef = useRef<HTMLDivElement | null>(null);
+	const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
 	const [dragState, setDragState] = useState<{
 		pointerId: number;
 		side: "left" | "right";
@@ -465,20 +531,6 @@ export function TranscriptTimingView({
 		previewNextWord,
 		previewPreviousWord,
 	]);
-	const originalLocalWords = useMemo(() => {
-		const sequence = [
-			originalPreviousWord,
-			originalFocusedWord,
-			originalNextWord,
-		].filter((word): word is TimingToken => word !== null);
-		return buildLocalLayout(sequence);
-	}, [
-		buildLocalLayout,
-		originalFocusedWord,
-		originalNextWord,
-		originalPreviousWord,
-	]);
-
 	const localWindow = useMemo(() => {
 		const windowWords = baseLocalWords.length > 0 ? baseLocalWords : localWords;
 		if (windowWords.length === 0) return null;
@@ -611,6 +663,112 @@ export function TranscriptTimingView({
 		},
 		[dragState, elementId, focusedWord, nextWord, previousWord, trackId],
 	);
+	const resetFocusedTiming = () => {
+		if (!focusedWord || !originalFocusedWord) return;
+		if (hasResettableLeftBoundary && previousWord) {
+			invokeAction("transcript-update-word-boundary", {
+				trackId,
+				elementId,
+				leftWordId: previousWord.lastWord.id,
+				rightWordId: focusedWord.firstWord.id,
+				time: originalFocusedWord.startTime,
+			});
+		}
+		if (hasResettableRightBoundary && nextWord) {
+			invokeAction("transcript-update-word-boundary", {
+				trackId,
+				elementId,
+				leftWordId: focusedWord.lastWord.id,
+				rightWordId: nextWord.firstWord.id,
+				time: originalFocusedWord.endTime,
+			});
+		}
+	};
+
+	const [waveformEnvelope, setWaveformEnvelope] = useState<WaveformEnvelope | null>(
+		initialWaveformEnvelope ?? null,
+	);
+
+	useEffect(() => {
+		let mounted = true;
+
+		void resolveWaveformEnvelopeSource({
+			audioBuffer: waveformAudioBuffer,
+			audioFile: waveformAudioFile,
+			audioUrl: waveformAudioUrl,
+			cacheKey: waveformCacheKey,
+			initialEnvelope: initialWaveformEnvelope,
+		}).then((resolvedEnvelope) => {
+			if (!mounted) return;
+			setWaveformEnvelope(resolvedEnvelope);
+			if (resolvedEnvelope) {
+				onWaveformEnvelopeResolved?.(resolvedEnvelope);
+			}
+		});
+
+		return () => {
+			mounted = false;
+		};
+	}, [
+		initialWaveformEnvelope,
+		waveformAudioBuffer,
+		waveformAudioFile,
+		waveformAudioUrl,
+		waveformCacheKey,
+		onWaveformEnvelopeResolved,
+	]);
+
+	const waveformBars = useMemo(() => {
+		if (!waveformEnvelope || !localWindow) return [];
+		return buildTranscriptWaveformBars({
+			envelope: waveformEnvelope,
+			localWords,
+			localWindow,
+			barCount: 160,
+		});
+	}, [localWindow, localWords, waveformEnvelope]);
+
+	useEffect(() => {
+		const canvas = waveformCanvasRef.current;
+		const strip = stripRef.current;
+		if (!canvas || !strip) return;
+
+		const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+		const width = Math.max(120, strip.clientWidth || 120);
+		const height = Math.max(24, strip.clientHeight || 24);
+		canvas.width = width * dpr;
+		canvas.height = height * dpr;
+		canvas.style.width = `${width}px`;
+		canvas.style.height = `${height}px`;
+
+		const context = canvas.getContext("2d");
+		if (!context) return;
+
+		context.setTransform(1, 0, 0, 1, 0, 0);
+		context.scale(dpr, dpr);
+		context.clearRect(0, 0, width, height);
+		if (waveformBars.length === 0) return;
+
+		const centerY = height / 2;
+		const maxBarHeight = Math.max(4, height / 2 - 4);
+		const step = width / waveformBars.length;
+		context.fillStyle = "rgba(255,255,255,0.5)";
+		for (let index = 0; index < waveformBars.length; index++) {
+			const bar = waveformBars[index];
+			const x = index * step;
+			const topHeight = Math.max(
+				1,
+				Math.round(Math.abs(Math.max(0, bar.max)) * maxBarHeight),
+			);
+			const bottomHeight = Math.max(
+				1,
+				Math.round(Math.abs(Math.min(0, bar.min)) * maxBarHeight),
+			);
+			const barWidth = Math.max(1, Math.ceil(step * 0.8));
+			context.fillRect(x, centerY - topHeight, barWidth, topHeight);
+			context.fillRect(x, centerY, barWidth, bottomHeight);
+		}
+	}, [waveformBars]);
 
 	if (!focusedWord || !previewFocusedWord || !localWindow) return null;
 
@@ -656,28 +814,6 @@ export function TranscriptTimingView({
 		nextWord && originalNextWord && originalRightBoundaryDisplayTime != null,
 	);
 
-	const resetFocusedTiming = () => {
-		if (!focusedWord || !originalFocusedWord) return;
-		if (hasResettableLeftBoundary && previousWord) {
-			invokeAction("transcript-update-word-boundary", {
-				trackId,
-				elementId,
-				leftWordId: previousWord.lastWord.id,
-				rightWordId: focusedWord.firstWord.id,
-				time: originalFocusedWord.startTime,
-			});
-		}
-		if (hasResettableRightBoundary && nextWord) {
-			invokeAction("transcript-update-word-boundary", {
-				trackId,
-				elementId,
-				leftWordId: focusedWord.lastWord.id,
-				rightWordId: nextWord.firstWord.id,
-				time: originalFocusedWord.endTime,
-			});
-		}
-	};
-
 	return (
 		<div>
 			<div className="grid grid-cols-[minmax(0,1fr)_2rem] items-center gap-2">
@@ -691,10 +827,14 @@ export function TranscriptTimingView({
 						}}
 					>
 						<div className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-full bg-zinc-800" />
+						<canvas
+							ref={waveformCanvasRef}
+							className="pointer-events-none absolute inset-0 z-10 opacity-95"
+						/>
 						{showOriginalLeftBoundary ? (
 							<div
 								aria-hidden="true"
-								className="pointer-events-none absolute top-1/2 z-10 h-12 -translate-x-1/2 -translate-y-1/2 border-l-2 border-dashed"
+								className="pointer-events-none absolute top-1/2 z-20 h-12 -translate-x-1/2 -translate-y-1/2 border-l-2 border-dashed"
 								style={{
 									left: `${getPercent(originalLeftBoundaryDisplayTime ?? 0)}%`,
 									borderColor: hasResettableLeftBoundary
@@ -706,7 +846,7 @@ export function TranscriptTimingView({
 						{showOriginalRightBoundary ? (
 							<div
 								aria-hidden="true"
-								className="pointer-events-none absolute top-1/2 z-10 h-12 -translate-x-1/2 -translate-y-1/2 border-l-2 border-dashed"
+								className="pointer-events-none absolute top-1/2 z-20 h-12 -translate-x-1/2 -translate-y-1/2 border-l-2 border-dashed"
 								style={{
 									left: `${getPercent(originalRightBoundaryDisplayTime ?? 0)}%`,
 									borderColor: hasResettableRightBoundary
@@ -761,18 +901,18 @@ export function TranscriptTimingView({
 										)
 									: 0;
 							if (item.word.kind === "gap") {
-								return (
-									<button
-										key={item.word.id}
-										type="button"
-										className="absolute top-1/2 h-8 -translate-y-1/2 overflow-hidden rounded-sm border border-dashed text-left transition-colors hover:bg-zinc-700/50"
+									return (
+										<button
+											key={item.word.id}
+											type="button"
+											className="absolute top-1/2 z-20 h-8 -translate-y-1/2 overflow-hidden rounded-sm border border-dashed text-left transition-colors hover:bg-zinc-700/50"
 										style={{
 											left: `${getPercent(item.displayStartTime)}%`,
 											width: `${widthPercent}%`,
 											borderColor: tone?.border ?? "rgba(113,113,122,0.75)",
 											backgroundColor: hexToRgba(
 												tone?.accent ?? "#a1a1aa",
-												0.08,
+												0.03,
 											),
 											color: tone?.mutedText ?? "#d4d4d8",
 										}}
@@ -828,11 +968,12 @@ export function TranscriptTimingView({
 									</button>
 								);
 							}
+							const timingWord = item.word;
 							return (
 								<button
-									key={item.word.id}
+									key={timingWord.id}
 									type="button"
-									className="absolute top-1/2 h-10 -translate-y-1/2 overflow-hidden border text-left transition-colors hover:brightness-110"
+									className="absolute top-1/2 z-20 h-10 -translate-y-1/2 overflow-hidden border text-left transition-colors hover:brightness-110"
 									style={{
 										left: `${getPercent(item.displayStartTime)}%`,
 										width: `${widthPercent}%`,
@@ -840,15 +981,17 @@ export function TranscriptTimingView({
 											isFocused || isCurrent
 												? (tone?.accent ?? "rgba(228,228,231,0.95)")
 												: (tone?.border ?? "rgba(63,63,70,0.9)"),
-										backgroundColor: tone?.background ?? "rgba(39,39,42,0.9)",
+										backgroundColor: tone
+											? hexToRgba(tone.accent, isFocused || isCurrent ? 0.2 : 0.08)
+											: "rgba(39,39,42,0.32)",
 										color: tone?.mutedText ?? undefined,
 										boxShadow:
 											isFocused || isCurrent
 												? `0 0 0 1px ${tone?.accent ?? "rgba(228,228,231,0.95)"}`
 												: undefined,
 									}}
-									title={`${item.word.text} ${item.word.startTime.toFixed(2)}s-${item.word.endTime.toFixed(2)}s`}
-									onClick={() => onSeekWord(item.word.firstWord)}
+									title={`${timingWord.text} ${timingWord.startTime.toFixed(2)}s-${timingWord.endTime.toFixed(2)}s`}
+									onClick={() => onSeekWord(timingWord.firstWord)}
 									onPointerDown={(event) => {
 										if (event.button !== 0) return;
 										onCaptureHeldPreviewPointer(
@@ -859,9 +1002,9 @@ export function TranscriptTimingView({
 											pointerId: event.pointerId,
 											clientX: event.clientX,
 											clientY: event.clientY,
-											wordIds: item.word.wordIds,
-											wordStartTime: item.word.startTime,
-											wordEndTime: item.word.endTime,
+											wordIds: timingWord.wordIds,
+											wordStartTime: timingWord.startTime,
+											wordEndTime: timingWord.endTime,
 										});
 									}}
 									onPointerMove={(event) => {
@@ -900,14 +1043,14 @@ export function TranscriptTimingView({
 											</span>
 										) : null}
 										{dragState &&
-										(item.word.id === focusedWord.id ||
+										(timingWord.id === focusedWord.id ||
 											(dragState.side === "left" &&
-												item.word.id === previousWord?.id) ||
+												timingWord.id === previousWord?.id) ||
 											(dragState.side === "right" &&
-												item.word.id === nextWord?.id)) ? (
+												timingWord.id === nextWord?.id)) ? (
 											<span className="truncate text-[9px] leading-tight text-white/85">
-												{item.word.startTime.toFixed(2)}-
-												{item.word.endTime.toFixed(2)}s
+												{timingWord.startTime.toFixed(2)}-
+												{timingWord.endTime.toFixed(2)}s
 											</span>
 										) : null}
 									</span>

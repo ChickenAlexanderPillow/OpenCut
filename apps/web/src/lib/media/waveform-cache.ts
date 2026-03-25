@@ -1,6 +1,8 @@
+import type { WaveformEnvelope } from "@/lib/media/waveform-envelope";
+
 const MAX_CACHED_WAVEFORMS = 256;
-const waveformPeaksCache = new Map<string, Promise<number[] | null>>();
-const resolvedWaveformPeaksCache = new Map<string, number[]>();
+const waveformPeaksCache = new Map<string, Promise<WaveformEnvelope | null>>();
+const resolvedWaveformPeaksCache = new Map<string, WaveformEnvelope>();
 
 export function clearWaveformPeaksCache(): void {
 	waveformPeaksCache.clear();
@@ -11,7 +13,7 @@ export function getWaveformPeaksCacheEntry({
 	cacheKey,
 }: {
 	cacheKey: string;
-}): Promise<number[] | null> | undefined {
+}): Promise<WaveformEnvelope | null> | undefined {
 	return waveformPeaksCache.get(cacheKey);
 }
 
@@ -31,7 +33,7 @@ export function setWaveformPeaksCacheEntry({
 	value,
 }: {
 	cacheKey: string;
-	value: Promise<number[] | null>;
+	value: Promise<WaveformEnvelope | null>;
 }): void {
 	if (
 		!waveformPeaksCache.has(cacheKey) &&
@@ -50,7 +52,7 @@ export function setResolvedWaveformPeaksCacheEntry({
 	value,
 }: {
 	cacheKey: string;
-	value: number[];
+	value: WaveformEnvelope;
 }): void {
 	if (
 		!resolvedWaveformPeaksCache.has(cacheKey) &&
@@ -68,7 +70,7 @@ export function getResolvedWaveformPeaksCacheEntry({
 	cacheKey,
 }: {
 	cacheKey: string;
-}): number[] | undefined {
+}): WaveformEnvelope | undefined {
 	return resolvedWaveformPeaksCache.get(cacheKey);
 }
 

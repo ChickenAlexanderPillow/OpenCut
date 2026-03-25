@@ -111,6 +111,9 @@ export interface TMediaTranscriptLinkEntry {
 }
 
 export interface TWaveformPeaksCacheEntry {
+	version: 2;
+	sourceDurationSeconds: number;
+	bucketsPerSecond: number;
 	peaks: number[];
 	updatedAt: string;
 }

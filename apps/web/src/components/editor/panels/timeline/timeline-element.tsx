@@ -46,12 +46,14 @@ import type {
 	ElementDragState,
 } from "@/types/timeline";
 import type { MediaAsset } from "@/types/assets";
+import type { TWaveformPeaksCacheEntry } from "@/types/project";
 import { mediaSupportsAudio } from "@/lib/media/media-utils";
 import { getActionDefinition, type TAction, invokeAction } from "@/lib/actions";
 import { useElementSelection } from "@/hooks/timeline/element/use-element-selection";
 import { resolveStickerId } from "@/lib/stickers";
 import type { TimelineVisualModel } from "@/lib/transcript-editor/visual-timeline";
 import { getTimelineElementVisualLayout as getElementVisualLayout } from "@/lib/transcript-editor/visual-timeline";
+import { isWaveformEnvelope } from "@/lib/media/waveform-envelope";
 import Image from "next/image";
 import {
 	ScissorIcon,
@@ -89,7 +91,6 @@ import {
 
 const MAX_PERSISTED_WAVEFORM_ENTRIES = 200;
 const timelineSectionThumbnailCache = new Map<string, Record<string, string>>();
-const MAX_PERSISTED_PEAKS = 768;
 const TIMELINE_SECTION_BOUNDARY_EPSILON = 1 / 1000;
 
 type TimelineBoundaryMarker = {
@@ -194,23 +195,6 @@ function scaleTransformToThumbnailCanvas({
 			y: transform.position.y * yScale,
 		},
 	};
-}
-
-function downsamplePeaksForPersistence({
-	peaks,
-	maxLength = MAX_PERSISTED_PEAKS,
-}: {
-	peaks: number[];
-	maxLength?: number;
-}): number[] {
-	if (peaks.length <= maxLength) return peaks;
-	const step = peaks.length / maxLength;
-	const sampled: number[] = [];
-	for (let i = 0; i < maxLength; i++) {
-		const index = Math.min(peaks.length - 1, Math.floor(i * step));
-		sampled.push(peaks[index] ?? 0);
-	}
-	return sampled;
 }
 
 function getDisplayShortcut(action: TAction) {
@@ -421,27 +405,37 @@ export function TimelineElement({
 		cacheKey,
 	}: {
 		cacheKey?: string;
-	}): number[] | undefined => {
+	}): TWaveformPeaksCacheEntry | undefined => {
 		if (!cacheKey) return undefined;
-		const cached = waveformPeaksCache[cacheKey]?.peaks;
-		return Array.isArray(cached) && cached.length > 0 ? cached : undefined;
+		const cached = waveformPeaksCache[cacheKey];
+		return cached && isWaveformEnvelope(cached) && cached.peaks.length > 0
+			? cached
+			: undefined;
 	};
 
 	const persistWaveformPeaks = ({
 		cacheKey,
-		peaks,
+		envelope,
 	}: {
 		cacheKey?: string;
-		peaks: number[];
+		envelope: TWaveformPeaksCacheEntry;
 	}): void => {
-		if (!cacheKey || peaks.length === 0) return;
+		if (!cacheKey || envelope.peaks.length === 0) return;
 		const currentProject = editor.project.getActive();
 		if (!currentProject) return;
-		const existing = currentProject.waveformPeaksCache?.[cacheKey]?.peaks;
-		if (existing && existing.length === peaks.length) return;
+		const existing = currentProject.waveformPeaksCache?.[cacheKey];
+		if (
+			existing &&
+			existing.version === envelope.version &&
+			existing.sourceDurationSeconds === envelope.sourceDurationSeconds &&
+			existing.bucketsPerSecond === envelope.bucketsPerSecond &&
+			existing.peaks.length === envelope.peaks.length
+		) {
+			return;
+		}
 
 		const nextEntry = {
-			peaks: downsamplePeaksForPersistence({ peaks }),
+			...envelope,
 			updatedAt: new Date().toISOString(),
 		};
 		const nextCache = {
@@ -704,13 +698,13 @@ function ElementInner({
 		cacheKey,
 	}: {
 		cacheKey?: string;
-	}) => number[] | undefined;
+	}) => TWaveformPeaksCacheEntry | undefined;
 	onWaveformPeaksResolved: ({
 		cacheKey,
-		peaks,
+		envelope,
 	}: {
 		cacheKey?: string;
-		peaks: number[];
+		envelope: TWaveformPeaksCacheEntry;
 	}) => void;
 	onElementClick: (e: React.MouseEvent, element: TimelineElementType) => void;
 	onElementMouseDown: (
@@ -2396,13 +2390,13 @@ function ElementContent({
 		cacheKey,
 	}: {
 		cacheKey?: string;
-	}) => number[] | undefined;
+	}) => TWaveformPeaksCacheEntry | undefined;
 	onWaveformPeaksResolved: ({
 		cacheKey,
-		peaks,
+		envelope,
 	}: {
 		cacheKey?: string;
-		peaks: number[];
+		envelope: TWaveformPeaksCacheEntry;
 	}) => void;
 }) {
 	if (element.type === "text") {
@@ -2458,19 +2452,22 @@ function ElementContent({
 									? `media:${element.mediaId}`
 									: `library:${element.sourceUrl}`
 							}
-							initialPeaks={getPersistedWaveformPeaks({
+							initialEnvelope={getPersistedWaveformPeaks({
 								cacheKey:
 									element.sourceType === "upload"
 										? `media:${element.mediaId}`
 										: `library:${element.sourceUrl}`,
 							})}
-							onPeaksResolved={(peaks) =>
+							onEnvelopeResolved={(envelope) =>
 								onWaveformPeaksResolved({
 									cacheKey:
 										element.sourceType === "upload"
 											? `media:${element.mediaId}`
 											: `library:${element.sourceUrl}`,
-									peaks,
+									envelope: {
+										...envelope,
+										updatedAt: new Date().toISOString(),
+									},
 								})
 							}
 							audioFile={
@@ -2548,13 +2545,16 @@ function ElementContent({
 							duration={element.duration}
 							sourceDuration={videoMediaAsset.duration}
 							cacheKey={`media:${videoMediaAsset.id}`}
-							initialPeaks={getPersistedWaveformPeaks({
+							initialEnvelope={getPersistedWaveformPeaks({
 								cacheKey: `media:${videoMediaAsset.id}`,
 							})}
-							onPeaksResolved={(peaks) =>
+							onEnvelopeResolved={(envelope) =>
 								onWaveformPeaksResolved({
 									cacheKey: `media:${videoMediaAsset.id}`,
-									peaks,
+									envelope: {
+										...envelope,
+										updatedAt: new Date().toISOString(),
+									},
 								})
 							}
 							height={Math.max(

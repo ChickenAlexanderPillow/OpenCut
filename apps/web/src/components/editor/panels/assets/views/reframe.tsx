@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelView } from "./base-view";
 import { Button } from "@/components/ui/button";
 import {
@@ -141,6 +141,7 @@ export function ReframeView() {
 				fps: projectFps,
 			})
 		: 0;
+	const isPlaying = editor.playback.getIsPlaying();
 	const playheadSection = useMemo(() => {
 		if (!normalizedVideo) return null;
 		return getVideoReframeSectionAtTime({
@@ -161,7 +162,7 @@ export function ReframeView() {
 			localTime <= storedFocusedSection.endTime
 		: false;
 	const focusedSectionStartTime = normalizedVideo
-		? editor.playback.getIsPlaying()
+		? isPlaying
 			? (playheadSection?.startTime ?? null)
 			: isPlayheadWithinStoredSection
 				? (storedFocusedSection?.startTime ??
@@ -172,7 +173,7 @@ export function ReframeView() {
 
 	const selectedPreset = useMemo(() => {
 		if (!normalizedVideo) return null;
-		const explicitlySelectedPresetId = editor.playback.getIsPlaying()
+		const explicitlySelectedPresetId = isPlaying
 			? null
 			: (selectedPresetIdByElementId[normalizedVideo.element.id] ?? null);
 		if (explicitlySelectedPresetId) {
@@ -210,6 +211,7 @@ export function ReframeView() {
 		localTime,
 		focusedSectionStartTime,
 		selectedPresetIdByElementId,
+		isPlaying,
 	]);
 	const visibleReframePresets = useMemo(
 		() =>
@@ -697,7 +699,7 @@ export function ReframeView() {
 			const analysisStartTime = canExtendExistingTail
 				? Math.max(
 						desiredScope.startTime,
-						existingMotionTracking!.sourceEndTime ?? desiredScope.startTime,
+						existingMotionTracking?.sourceEndTime ?? desiredScope.startTime,
 					)
 				: sourceRange.startTime;
 			const analysisBaseTracking =
@@ -892,19 +894,19 @@ export function ReframeView() {
 				elementId: normalizedVideo.element.id,
 				presetId: preset.id,
 				updates: {
-						motionTracking: {
-							...sharedCachedMotionTracking,
-							enabled: true,
-							cacheKey: cacheKey ?? sharedCachedMotionTracking.cacheKey,
-							animateScale: preset.motionTracking?.animateScale ?? false,
-							trackingStrength: normalizeMotionTrackingStrength(
-								preset.motionTracking?.trackingStrength,
-							),
-						},
-						transformAdjustment: undefined,
-						manualTransformAdjustment: undefined,
+					motionTracking: {
+						...sharedCachedMotionTracking,
+						enabled: true,
+						cacheKey: cacheKey ?? sharedCachedMotionTracking.cacheKey,
+						animateScale: preset.motionTracking?.animateScale ?? false,
+						trackingStrength: normalizeMotionTrackingStrength(
+							preset.motionTracking?.trackingStrength,
+						),
 					},
-				});
+					transformAdjustment: undefined,
+					manualTransformAdjustment: undefined,
+				},
+			});
 			setTrackingStatusByPresetId((current) => ({
 				...current,
 				[preset.id]: {
@@ -941,17 +943,17 @@ export function ReframeView() {
 				elementId: normalizedVideo.element.id,
 				presetId: preset.id,
 				updates: {
-						motionTracking: {
-							...existingMotionTracking,
-							enabled: true,
-							trackingStrength: normalizeMotionTrackingStrength(
-								existingMotionTracking.trackingStrength,
-							),
-						},
-						transformAdjustment: undefined,
-						manualTransformAdjustment: undefined,
+					motionTracking: {
+						...existingMotionTracking,
+						enabled: true,
+						trackingStrength: normalizeMotionTrackingStrength(
+							existingMotionTracking.trackingStrength,
+						),
 					},
-				});
+					transformAdjustment: undefined,
+					manualTransformAdjustment: undefined,
+				},
+			});
 			setTrackingStatusByPresetId((current) => ({
 				...current,
 				[preset.id]: {
@@ -1206,25 +1208,26 @@ export function ReframeView() {
 		setSelectedSplitPreviewSlots,
 	]);
 
-	const resolveConcreteSplitBindings = (
-		bindings: VideoSplitScreenSlotBinding[],
-	): VideoSplitScreenSlotBinding[] =>
-		bindings.map((binding) => ({
-			slotId: binding.slotId,
-			mode: "fixed-preset" as const,
-			presetId:
-				binding.presetId ??
-				selectedPreset?.id ??
-				normalizedVideo?.element.defaultReframePresetId ??
-				null,
-			transformOverride: binding.transformOverride ?? null,
-			transformOverridesBySlotId: binding.transformOverridesBySlotId
-				? { ...binding.transformOverridesBySlotId }
-				: undefined,
-			transformAdjustmentsBySlotId: binding.transformAdjustmentsBySlotId
-				? { ...binding.transformAdjustmentsBySlotId }
-				: undefined,
-		}));
+	const resolveConcreteSplitBindings = useCallback(
+		(bindings: VideoSplitScreenSlotBinding[]): VideoSplitScreenSlotBinding[] =>
+			bindings.map((binding) => ({
+				slotId: binding.slotId,
+				mode: "fixed-preset" as const,
+				presetId:
+					binding.presetId ??
+					selectedPreset?.id ??
+					normalizedVideo?.element.defaultReframePresetId ??
+					null,
+				transformOverride: binding.transformOverride ?? null,
+				transformOverridesBySlotId: binding.transformOverridesBySlotId
+					? { ...binding.transformOverridesBySlotId }
+					: undefined,
+				transformAdjustmentsBySlotId: binding.transformAdjustmentsBySlotId
+					? { ...binding.transformAdjustmentsBySlotId }
+					: undefined,
+			})),
+		[normalizedVideo?.element.defaultReframePresetId, selectedPreset?.id],
+	);
 	const withBindingSlotAdjustment = ({
 		binding,
 		slotId = binding.slotId,
@@ -1344,8 +1347,12 @@ export function ReframeView() {
 							(candidateId) => candidateId !== presetId,
 						)) ?? null;
 			if (alternatePresetId) {
+				const conflictingBinding = nextBindings[conflictingBindingIndex];
+				if (!conflictingBinding) {
+					return;
+				}
 				nextBindings[conflictingBindingIndex] = {
-					...nextBindings[conflictingBindingIndex]!,
+					...conflictingBinding,
 					mode: "fixed-preset",
 					presetId: alternatePresetId,
 					transformOverride: null,
@@ -1392,7 +1399,7 @@ export function ReframeView() {
 		});
 	};
 
-	const buildInitialSplitScreen = (): VideoSplitScreen => {
+	const buildInitialSplitScreen = useCallback((): VideoSplitScreen => {
 		const presets = normalizedVideo?.element.reframePresets ?? [];
 		return {
 			enabled: false,
@@ -1404,7 +1411,7 @@ export function ReframeView() {
 			}),
 			sections: [],
 		};
-	};
+	}, [normalizedVideo?.element.reframePresets]);
 
 	const applyPresetSelection = ({ presetId }: { presetId: string }) => {
 		if (!normalizedVideo) return;
@@ -1537,8 +1544,7 @@ export function ReframeView() {
 		) {
 			return;
 		}
-		const sourceWidth = selectedMediaAsset.width!;
-		const sourceHeight = selectedMediaAsset.height!;
+		const { width: sourceWidth, height: sourceHeight } = selectedMediaAsset;
 		const projectCanvas = editor.project.getActive().settings.canvasSize;
 		const applyAdjustment = (bindings: VideoSplitScreenSlotBinding[]) =>
 			bindings.map((binding) => {
@@ -1727,98 +1733,146 @@ export function ReframeView() {
 		});
 	};
 
-	const buildReorderedMarkerStartTimes = ({
-		order,
-		fromStartTime,
-		toStartTime,
-	}: {
-		order: number[];
-		fromStartTime: number;
-		toStartTime: number;
-	}) => {
-		if (fromStartTime === toStartTime) return order;
-		const next = [...order];
-		const fromIndex = next.findIndex(
-			(startTime) => Math.abs(startTime - fromStartTime) <= 1 / 1000,
-		);
-		const toIndex = next.findIndex(
-			(startTime) => Math.abs(startTime - toStartTime) <= 1 / 1000,
-		);
-		if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
-			return order;
-		}
-		const [moved] = next.splice(fromIndex, 1);
-		if (moved === undefined) {
-			return order;
-		}
-		next.splice(toIndex, 0, moved);
-		return next;
-	};
+	const buildReorderedMarkerStartTimes = useCallback(
+		({
+			order,
+			fromStartTime,
+			toStartTime,
+		}: {
+			order: number[];
+			fromStartTime: number;
+			toStartTime: number;
+		}) => {
+			if (fromStartTime === toStartTime) return order;
+			const next = [...order];
+			const fromIndex = next.findIndex(
+				(startTime) => Math.abs(startTime - fromStartTime) <= 1 / 1000,
+			);
+			const toIndex = next.findIndex(
+				(startTime) => Math.abs(startTime - toStartTime) <= 1 / 1000,
+			);
+			if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+				return order;
+			}
+			const [moved] = next.splice(fromIndex, 1);
+			if (moved === undefined) {
+				return order;
+			}
+			next.splice(toIndex, 0, moved);
+			return next;
+		},
+		[],
+	);
 
-	const commitMarkerSectionOrder = ({
-		orderedStartTimes,
-		selectedOrderedStartTime,
-	}: {
-		orderedStartTimes: number[];
-		selectedOrderedStartTime: number | null;
-	}) => {
-		if (!normalizedVideo) return;
-		const sectionByStartTime = new Map(
-			combinedMarkerSections.map(
-				(section) => [section.startTime, section] as const,
-			),
-		);
-		const sections = orderedStartTimes
-			.map((startTime) => sectionByStartTime.get(startTime) ?? null)
-			.filter((section): section is NonNullable<typeof section> =>
-				Boolean(section),
-			)
-			.map((section) => ({
-				startTime: section.startTime,
-				endTime: section.endTime,
-				presetId: section.presetId,
-				switchId: section.switchId,
-				splitSectionId: section.splitSectionId,
-				isSplit: section.isSplit,
+	const commitMarkerSectionOrder = useCallback(
+		({
+			orderedStartTimes,
+			selectedOrderedStartTime,
+		}: {
+			orderedStartTimes: number[];
+			selectedOrderedStartTime: number | null;
+		}) => {
+			if (!normalizedVideo) return;
+			const sectionByStartTime = new Map(
+				combinedMarkerSections.map(
+					(section) => [section.startTime, section] as const,
+				),
+			);
+			const sections = orderedStartTimes
+				.map((startTime) => sectionByStartTime.get(startTime) ?? null)
+				.filter((section): section is NonNullable<typeof section> =>
+					Boolean(section),
+				)
+				.map((section) => ({
+					startTime: section.startTime,
+					endTime: section.endTime,
+					presetId: section.presetId,
+					switchId: section.switchId,
+					splitSectionId: section.splitSectionId,
+					isSplit: section.isSplit,
+				}));
+			if (sections.length === 0) return;
+			const boundaries = [...combinedMarkerSections]
+				.map((section) => section.startTime)
+				.sort((left, right) => left - right);
+			const rebuiltSections = sections.map((section, index) => ({
+				...section,
+				startTime: boundaries[index] ?? 0,
+				endTime: boundaries[index + 1] ?? normalizedVideo.element.duration,
 			}));
-		if (sections.length === 0) return;
-		const boundaries = [...combinedMarkerSections]
-			.map((section) => section.startTime)
-			.sort((left, right) => left - right);
-		const rebuiltSections = sections.map((section, index) => ({
-			...section,
-			startTime: boundaries[index] ?? 0,
-			endTime: boundaries[index + 1] ?? normalizedVideo.element.duration,
-		}));
-		const nextState = rebuildVideoReframeStateFromAngleSections({
-			element: normalizedVideo.element,
-			sections: rebuiltSections,
+			const nextState = rebuildVideoReframeStateFromAngleSections({
+				element: normalizedVideo.element,
+				sections: rebuiltSections,
+			});
+			editor.timeline.updateElements({
+				updates: [
+					{
+						trackId: normalizedVideo.trackId,
+						elementId: normalizedVideo.element.id,
+						updates: nextState,
+					},
+				],
+			});
+			const selectedIndex =
+				selectedOrderedStartTime === null
+					? -1
+					: orderedStartTimes.findIndex(
+							(startTime) =>
+								Math.abs(startTime - selectedOrderedStartTime) <= 1 / 1000,
+						);
+			const selectedSection =
+				(selectedIndex >= 0 ? rebuiltSections[selectedIndex] : null) ??
+				rebuiltSections[0] ??
+				null;
+			setSelectedSectionStartTime({
+				elementId: normalizedVideo.element.id,
+				startTime: selectedSection?.startTime ?? null,
+			});
+		},
+		[
+			combinedMarkerSections,
+			editor.timeline,
+			normalizedVideo,
+			setSelectedSectionStartTime,
+		],
+	);
+
+	const handleSplitPresetSelection = useCallback(() => {
+		if (!normalizedVideo) return;
+		setSelectedPresetId({
+			elementId: normalizedVideo.element.id,
+			presetId: null,
 		});
-		editor.timeline.updateElements({
-			updates: [
-				{
-					trackId: normalizedVideo.trackId,
-					elementId: normalizedVideo.element.id,
-					updates: nextState,
-				},
-			],
+		setSelectedSplitSectionId(null);
+		setSelectedSplitPreviewSlots({
+			elementId: normalizedVideo.element.id,
+			slots: resolveConcreteSplitBindings(
+				editingSplitSection?.slots ??
+					splitScreen?.slots ??
+					buildInitialSplitScreen().slots,
+			),
+			viewportBalance:
+				splitScreen?.viewportBalance ??
+				previewSplitViewportBalance ??
+				buildInitialSplitScreen().viewportBalance,
 		});
-		const selectedIndex =
-			selectedOrderedStartTime === null
-				? -1
-				: orderedStartTimes.findIndex(
-						(startTime) =>
-							Math.abs(startTime - selectedOrderedStartTime) <= 1 / 1000,
-					);
-		const selectedSection =
-			(selectedIndex >= 0 ? rebuiltSections[selectedIndex] : null) ??
-			rebuiltSections[0] ??
-			null;
 		setSelectedSectionStartTime({
 			elementId: normalizedVideo.element.id,
-			startTime: selectedSection?.startTime ?? null,
+			startTime: focusedSectionStartTime,
 		});
-	};
+	}, [
+		buildInitialSplitScreen,
+		editingSplitSection?.slots,
+		focusedSectionStartTime,
+		normalizedVideo,
+		previewSplitViewportBalance,
+		resolveConcreteSplitBindings,
+		setSelectedPresetId,
+		setSelectedSectionStartTime,
+		setSelectedSplitPreviewSlots,
+		splitScreen?.slots,
+		splitScreen?.viewportBalance,
+	]);
 
 	useEffect(() => {
 		if (!markerDragState) return;
@@ -1968,6 +2022,9 @@ export function ReframeView() {
 								return (
 									<div
 										key={preset.id}
+										role="option"
+										tabIndex={0}
+										aria-selected={isActive}
 										className={cn(
 											"rounded-lg border p-2 transition-colors",
 											isActive && "border-primary bg-primary/5",
@@ -1976,6 +2033,14 @@ export function ReframeView() {
 											applyPresetSelection({
 												presetId: preset.id,
 											});
+										}}
+										onKeyDown={(event) => {
+											if (event.key === "Enter" || event.key === " ") {
+												event.preventDefault();
+												applyPresetSelection({
+													presetId: preset.id,
+												});
+											}
 										}}
 									>
 										<div className="flex items-center gap-2">
@@ -2279,33 +2344,20 @@ export function ReframeView() {
 								);
 							})}
 							<div
+								role="option"
+								tabIndex={0}
+								aria-selected={selectedAngleMode === "split"}
 								className={cn(
 									"rounded-lg border p-2 transition-colors",
 									selectedAngleMode === "split" &&
 										"border-primary bg-primary/5",
 								)}
-								onClick={() => {
-									setSelectedPresetId({
-										elementId: normalizedVideo.element.id,
-										presetId: null,
-									});
-									setSelectedSplitSectionId(null);
-									setSelectedSplitPreviewSlots({
-										elementId: normalizedVideo.element.id,
-										slots: resolveConcreteSplitBindings(
-											editingSplitSection?.slots ??
-												splitScreen?.slots ??
-												buildInitialSplitScreen().slots,
-										),
-										viewportBalance:
-											splitScreen?.viewportBalance ??
-											previewSplitViewportBalance ??
-											buildInitialSplitScreen().viewportBalance,
-									});
-									setSelectedSectionStartTime({
-										elementId: normalizedVideo.element.id,
-										startTime: focusedSectionStartTime,
-									});
+								onClick={handleSplitPresetSelection}
+								onKeyDown={(event) => {
+									if (event.key === "Enter" || event.key === " ") {
+										event.preventDefault();
+										handleSplitPresetSelection();
+									}
 								}}
 							>
 								<div className="flex items-center gap-2">
@@ -2851,6 +2903,8 @@ function SplitScreenGlyph({ className }: { className?: string }) {
 		<svg
 			viewBox="0 0 16 16"
 			className={className}
+			aria-hidden="true"
+			focusable="false"
 			fill="none"
 			stroke="currentColor"
 			strokeWidth="1.15"
@@ -2872,6 +2926,8 @@ function PersonCameraGlyph({ className }: { className?: string }) {
 		<svg
 			viewBox="0 0 16 16"
 			className={className}
+			aria-hidden="true"
+			focusable="false"
 			fill="none"
 			stroke="currentColor"
 			strokeWidth="1.2"
@@ -2947,39 +3003,52 @@ function ReframeScrubber({
 		};
 	}, []);
 
-	const roundToStep = (nextValue: number) => {
-		const decimals =
-			step >= 1 ? 0 : Math.max(0, (step.toString().split(".")[1] ?? "").length);
-		return Number(nextValue.toFixed(decimals));
-	};
+	const roundToStep = useCallback(
+		(nextValue: number) => {
+			const decimals =
+				step >= 1
+					? 0
+					: Math.max(0, (step.toString().split(".")[1] ?? "").length);
+			return Number(nextValue.toFixed(decimals));
+		},
+		[step],
+	);
 
-	const clampValue = (nextValue: number) =>
-		Math.max(min, Math.min(max, roundToStep(nextValue)));
+	const clampValue = useCallback(
+		(nextValue: number) => Math.max(min, Math.min(max, roundToStep(nextValue))),
+		[max, min, roundToStep],
+	);
 
-	const setValueFromClientX = ({ clientX }: { clientX: number }) => {
-		if (disabled) return;
-		const deltaX = clientX - startXRef.current;
-		const nextValue = clampValue(
-			startValueRef.current + deltaX * resolvedDragScale,
-		);
-		latestDragValueRef.current = nextValue;
-		onChange(nextValue, false);
-	};
+	const setValueFromClientX = useCallback(
+		({ clientX }: { clientX: number }) => {
+			if (disabled) return;
+			const deltaX = clientX - startXRef.current;
+			const nextValue = clampValue(
+				startValueRef.current + deltaX * resolvedDragScale,
+			);
+			latestDragValueRef.current = nextValue;
+			onChange(nextValue, false);
+		},
+		[clampValue, disabled, onChange, resolvedDragScale],
+	);
 
-	const setValueFromMovementX = ({ movementX }: { movementX: number }) => {
-		if (disabled) return;
-		dragDeltaRef.current += Math.max(
-			-MAX_POINTER_DRAG_DELTA_PX,
-			Math.min(MAX_POINTER_DRAG_DELTA_PX, movementX),
-		);
-		const nextValue = clampValue(
-			startValueRef.current + dragDeltaRef.current * resolvedDragScale,
-		);
-		latestDragValueRef.current = nextValue;
-		onChange(nextValue, false);
-	};
+	const setValueFromMovementX = useCallback(
+		({ movementX }: { movementX: number }) => {
+			if (disabled) return;
+			dragDeltaRef.current += Math.max(
+				-MAX_POINTER_DRAG_DELTA_PX,
+				Math.min(MAX_POINTER_DRAG_DELTA_PX, movementX),
+			);
+			const nextValue = clampValue(
+				startValueRef.current + dragDeltaRef.current * resolvedDragScale,
+			);
+			latestDragValueRef.current = nextValue;
+			onChange(nextValue, false);
+		},
+		[clampValue, disabled, onChange, resolvedDragScale],
+	);
 
-	const stopDrag = () => {
+	const stopDrag = useCallback(() => {
 		if (disabled) {
 			setIsDragging(false);
 			return;
@@ -3009,7 +3078,7 @@ function ReframeScrubber({
 			window.cancelAnimationFrame(dragFrameRef.current);
 			dragFrameRef.current = null;
 		}
-	};
+	}, [disabled, formatValue, onChange, value]);
 
 	useEffect(() => {
 		if (!isDragging || disabled) return;
@@ -3079,7 +3148,13 @@ function ReframeScrubber({
 			window.removeEventListener("pointerup", stopDrag);
 			window.removeEventListener("pointercancel", stopDrag);
 		};
-	}, [isDragging]);
+	}, [
+		disabled,
+		isDragging,
+		setValueFromClientX,
+		setValueFromMovementX,
+		stopDrag,
+	]);
 
 	const roundToStepString = (nextValue: number) =>
 		formatValue(clampValue(nextValue));
@@ -3107,107 +3182,111 @@ function ReframeScrubber({
 	};
 
 	return (
-		<div
-			className="bg-muted/30 rounded-md px-2 py-1"
-			onClick={(event) => event.stopPropagation()}
-			onMouseEnter={() => setIsHovering(true)}
-			onMouseLeave={() => setIsHovering(false)}
-		>
-			<div className="flex items-center justify-between gap-2">
-				<div className="text-[10px] uppercase tracking-[0.14em]">{label}</div>
-				{onReset ? (
+		<>
+			{/* biome-ignore lint/a11y/noStaticElementInteractions: Hover state is visual-only and the interactive controls are nested inside this container. */}
+			<div
+				className="bg-muted/30 rounded-md px-2 py-1"
+				onMouseEnter={() => setIsHovering(true)}
+				onMouseLeave={() => setIsHovering(false)}
+			>
+				<div className="flex items-center justify-between gap-2">
+					<div className="text-[10px] uppercase tracking-[0.14em]">{label}</div>
+					{onReset ? (
+						<button
+							type="button"
+							className={cn(
+								"text-muted-foreground hover:text-foreground h-5 w-5 rounded-sm transition-opacity",
+								!canReset && "pointer-events-none opacity-30",
+							)}
+							disabled={!canReset}
+							onClick={(event) => {
+								event.stopPropagation();
+								onReset();
+							}}
+							aria-label={`Reset ${label}`}
+							title={`Reset ${label}`}
+						>
+							<RotateCcw className="mx-auto size-3" />
+						</button>
+					) : null}
+				</div>
+				{isEditing ? (
+					<Input
+						autoFocus
+						value={draftValue}
+						disabled={disabled}
+						inputMode="decimal"
+						className="mt-1 h-7 text-center text-xs font-medium"
+						onClick={(event) => event.stopPropagation()}
+						onFocus={(event) => event.currentTarget.select()}
+						onChange={(event) => setDraftValue(event.target.value)}
+						onBlur={commitDraft}
+						onKeyDown={(event) => {
+							if (event.key === "Enter") {
+								event.currentTarget.blur();
+								return;
+							}
+							if (event.key === "Escape") {
+								event.preventDefault();
+								cancelDraft();
+							}
+						}}
+						aria-label={`Edit ${label}`}
+					/>
+				) : (
 					<button
 						type="button"
 						className={cn(
-							"text-muted-foreground hover:text-foreground h-5 w-5 rounded-sm transition-opacity",
-							!canReset && "pointer-events-none opacity-30",
+							"text-foreground mt-0.5 flex w-full items-center justify-between gap-2 text-xs font-medium",
+							isDragging && "text-primary",
+							disabled && "text-muted-foreground cursor-not-allowed opacity-60",
+							!disabled && "cursor-ew-resize",
 						)}
-						disabled={!canReset}
-						onClick={(event) => {
+						onPointerDown={(event) => {
+							if (disabled) return;
 							event.stopPropagation();
-							onReset();
+							startXRef.current = event.clientX;
+							startValueRef.current = value;
+							dragDeltaRef.current = 0;
+							hasDraggedRef.current = false;
+							latestDragValueRef.current = value;
+							pointerLockElementRef.current = event.currentTarget;
+							if (
+								typeof event.currentTarget.requestPointerLock === "function"
+							) {
+								try {
+									event.currentTarget.requestPointerLock();
+								} catch {}
+							}
+							setIsDragging(true);
 						}}
-						aria-label={`Reset ${label}`}
-						title={`Reset ${label}`}
+						aria-label={`Adjust ${label}`}
+						title={
+							disabled
+								? `${label} adjustment is temporarily disabled.`
+								: `Click to edit or drag left/right to adjust ${label}.`
+						}
 					>
-						<RotateCcw className="mx-auto size-3" />
+						<span
+							aria-hidden
+							className={cn(
+								"bg-muted-foreground/60 inline-block h-3 w-[2px] rounded-full transition-opacity",
+								isDragging || isHovering ? "opacity-100" : "opacity-60",
+							)}
+						/>
+						<span className="min-w-0 flex-1 text-center">
+							{formatValue(value)}
+						</span>
+						<span
+							aria-hidden
+							className={cn(
+								"bg-muted-foreground/60 inline-block h-3 w-[2px] rounded-full transition-opacity",
+								isDragging || isHovering ? "opacity-100" : "opacity-60",
+							)}
+						/>
 					</button>
-				) : null}
+				)}
 			</div>
-			{isEditing ? (
-				<Input
-					autoFocus
-					value={draftValue}
-					disabled={disabled}
-					inputMode="decimal"
-					className="mt-1 h-7 text-center text-xs font-medium"
-					onClick={(event) => event.stopPropagation()}
-					onFocus={(event) => event.currentTarget.select()}
-					onChange={(event) => setDraftValue(event.target.value)}
-					onBlur={commitDraft}
-					onKeyDown={(event) => {
-						if (event.key === "Enter") {
-							event.currentTarget.blur();
-							return;
-						}
-						if (event.key === "Escape") {
-							event.preventDefault();
-							cancelDraft();
-						}
-					}}
-					aria-label={`Edit ${label}`}
-				/>
-			) : (
-				<button
-					type="button"
-					className={cn(
-						"text-foreground mt-0.5 flex w-full items-center justify-between gap-2 text-xs font-medium",
-						isDragging && "text-primary",
-						disabled && "text-muted-foreground cursor-not-allowed opacity-60",
-						!disabled && "cursor-ew-resize",
-					)}
-					onPointerDown={(event) => {
-						if (disabled) return;
-						event.stopPropagation();
-						startXRef.current = event.clientX;
-						startValueRef.current = value;
-						dragDeltaRef.current = 0;
-						hasDraggedRef.current = false;
-						latestDragValueRef.current = value;
-						pointerLockElementRef.current = event.currentTarget;
-						if (typeof event.currentTarget.requestPointerLock === "function") {
-							try {
-								event.currentTarget.requestPointerLock();
-							} catch {}
-						}
-						setIsDragging(true);
-					}}
-					aria-label={`Adjust ${label}`}
-					title={
-						disabled
-							? `${label} adjustment is temporarily disabled.`
-							: `Click to edit or drag left/right to adjust ${label}.`
-					}
-				>
-					<span
-						aria-hidden
-						className={cn(
-							"bg-muted-foreground/60 inline-block h-3 w-[2px] rounded-full transition-opacity",
-							isDragging || isHovering ? "opacity-100" : "opacity-60",
-						)}
-					/>
-					<span className="min-w-0 flex-1 text-center">
-						{formatValue(value)}
-					</span>
-					<span
-						aria-hidden
-						className={cn(
-							"bg-muted-foreground/60 inline-block h-3 w-[2px] rounded-full transition-opacity",
-							isDragging || isHovering ? "opacity-100" : "opacity-60",
-						)}
-					/>
-				</button>
-			)}
-		</div>
+		</>
 	);
 }
