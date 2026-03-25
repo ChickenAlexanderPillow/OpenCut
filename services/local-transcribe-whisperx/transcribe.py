@@ -10,6 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# pyannote.audio imports torchcodec for its own file decoding path.
+# This service always preloads audio with ffmpeg/whisperx.load_audio instead,
+# so torchcodec load failures are noisy but not actionable here.
+warnings.filterwarnings(
+	"ignore",
+	message=r".*torchcodec is not installed correctly so built-in audio decoding will fail.*",
+)
+
 from pyannote.audio.utils.reproducibility import ReproducibilityWarning
 import torch
 import whisperx
@@ -45,7 +53,7 @@ class LocalWhisperXEngine:
 			in {"1", "true", "yes", "on"}
 		)
 		self._hf_token = (os.getenv("LOCAL_TRANSCRIBE_HF_TOKEN") or "").strip() or None
-		self._model_cache: "OrderedDict[tuple[str, str, str], Any]" = OrderedDict()
+		self._model_cache: "OrderedDict[tuple[str, str, str, str], Any]" = OrderedDict()
 		self._align_cache: "OrderedDict[tuple[str, str], tuple[Any, Any]]" = OrderedDict()
 		self._diarize_cache: "OrderedDict[str, Any]" = OrderedDict()
 		warnings.filterwarnings(
@@ -91,8 +99,16 @@ class LocalWhisperXEngine:
 			pass
 		return "cpu"
 
-	def _get_asr_model(self, *, model: str, device: str, compute_type: str) -> Any:
-		key = (model, device, compute_type)
+	def _get_asr_model(
+		self,
+		*,
+		model: str,
+		device: str,
+		compute_type: str,
+		language: str | None,
+	) -> Any:
+		effective_language = (language or "").strip().lower() or None
+		key = (model, device, compute_type, effective_language or "auto")
 		existing = self._model_cache.get(key)
 		if existing:
 			self._model_cache.move_to_end(key)
@@ -106,7 +122,7 @@ class LocalWhisperXEngine:
 				"best_of": WHISPERX_BEAM_SIZE,
 			},
 			vad_method="pyannote",
-			language=None,
+			language=effective_language,
 		)
 		self._model_cache[key] = asr_model
 		self._trim_caches()
@@ -369,6 +385,7 @@ class LocalWhisperXEngine:
 			model=model,
 			device=device,
 			compute_type=compute_type,
+			language=language,
 		)
 		effective_language = (language or "").strip().lower() or None
 		asr_result = asr_model.transcribe(
@@ -587,6 +604,7 @@ class LocalWhisperXEngine:
 			model=model,
 			device=resolved_device,
 			compute_type=compute_type,
+			language=language,
 		)
 		effective_language = (language or "").strip().lower() or "en"
 		self._get_align_model(
