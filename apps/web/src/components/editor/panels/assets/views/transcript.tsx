@@ -18,6 +18,7 @@ import {
 	normalizeTranscriptWords,
 } from "@/lib/transcript-editor/core";
 import { buildTranscriptWordsFromCaptionTimings } from "@/lib/transcript-editor/caption-fallback";
+import { MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import {
 	buildDefaultTranscriptSegmentsUi,
 	buildDefaultTranscriptWordGroups,
@@ -108,7 +109,6 @@ type TranscriptPanelGap = {
 };
 
 const MAX_DISFLUENCY_REPEAT_GAP_SECONDS = 0.35;
-const MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS = 0.5;
 const HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX = 5;
 const HOLD_TO_PREVIEW_CANCEL_DISTANCE_SQUARED_PX =
 	HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX * HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX;
@@ -173,6 +173,23 @@ function getEventTargetElement(target: EventTarget | null): HTMLElement | null {
 	return null;
 }
 
+function findScrollableAncestor(
+	element: HTMLElement | null,
+): HTMLElement | null {
+	let current = element?.parentElement ?? null;
+	while (current) {
+		const style = window.getComputedStyle(current);
+		if (
+			(style.overflowY === "auto" || style.overflowY === "scroll") &&
+			current.scrollHeight > current.clientHeight
+		) {
+			return current;
+		}
+		current = current.parentElement;
+	}
+	return null;
+}
+
 function findActiveWordIdAtSourceTime({
 	words,
 	time,
@@ -201,6 +218,20 @@ function findActiveWordIdAtSourceTime({
 		}
 		effectiveEndTime = Math.max(word.startTime + 0.01, effectiveEndTime);
 		if (time >= word.startTime && time < effectiveEndTime) {
+			return word.id;
+		}
+		if (time < effectiveEndTime) {
+			continue;
+		}
+		if (!nextWord) {
+			continue;
+		}
+		const gapSeconds = nextWord.startTime - effectiveEndTime;
+		if (
+			gapSeconds > 0 &&
+			gapSeconds < MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS &&
+			time < nextWord.startTime
+		) {
 			return word.id;
 		}
 	}
@@ -474,10 +505,13 @@ export function TranscriptView() {
 		string | null
 	>(null);
 	const [editingSpeakerName, setEditingSpeakerName] = useState("");
-	const [isTimingToolbarExpanded, setIsTimingToolbarExpanded] = useState(false);
+	const [isTimingToolbarExpanded, setIsTimingToolbarExpanded] = useState(true);
 	const [timingAnchorWordId, setTimingAnchorWordId] = useState<string | null>(
 		null,
 	);
+	const [persistedTimingWordId, setPersistedTimingWordId] = useState<
+		string | null
+	>(null);
 	const [, setTranscriptUiRefreshVersion] = useState(0);
 	const [heldWordPreview, setHeldWordPreview] =
 		useState<HeldWordPreview | null>(null);
@@ -501,6 +535,8 @@ export function TranscriptView() {
 	const editingSpeakerInputRef = useRef<HTMLInputElement | null>(null);
 	const editingWordInputRef = useRef<HTMLInputElement | null>(null);
 	const editingGapInputRef = useRef<HTMLInputElement | null>(null);
+	const transcriptSourceKeyRef = useRef<string | null>(null);
+	const transcriptScrollContainerRef = useRef<HTMLElement | null>(null);
 	const selectedWordIdsRef = useRef<string[]>([]);
 	const holdPreviewTimeoutRef = useRef<number | null>(null);
 	const holdPreviewPointerIdRef = useRef<number | null>(null);
@@ -899,7 +935,7 @@ export function TranscriptView() {
 			});
 			const compressedEndTime = compressedStartTime + compressedDurationSeconds;
 			const hasPlayableGap =
-				compressedDurationSeconds > MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS;
+				compressedDurationSeconds >= MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS;
 			const hasExplicitGapEdit =
 				Boolean(gapEdit?.removed) ||
 				(typeof gapEdit?.text === "string" && gapEdit.text !== " ");
@@ -942,26 +978,8 @@ export function TranscriptView() {
 	}, [currentCompressedTime, nextPanelWordById]);
 	const activeWordId = currentGapId ? null : currentWordId;
 	const activeHiddenWordId = currentGapId ? null : currentHiddenWordId;
-	const effectiveTimingWordId = isPlaying
-		? (currentWordId ?? focusedWordId)
-		: focusedWordId;
+	const effectiveTimingWordId = currentWordId ?? focusedWordId;
 	const displayedTimingWordId = effectiveTimingWordId ?? timingAnchorWordId;
-	const isTimingViewVisible =
-		displayedTimingWordId != null && (isTimingToolbarExpanded || isPlaying);
-	const heldPreviewProgressPercent = heldWordPreview
-		? Math.max(
-				0,
-				Math.min(
-					100,
-					((previewCurrentTime - heldWordPreview.startTime) /
-						Math.max(
-							0.01,
-							heldWordPreview.endTime - heldWordPreview.startTime,
-						)) *
-						100,
-				),
-			)
-		: null;
 	const orderedWordIds = useMemo(
 		() => panelGroups.flatMap((group) => group.words.map((word) => word.id)),
 		[panelGroups],
@@ -1024,6 +1042,15 @@ export function TranscriptView() {
 		() => new Set(heldWordPreview?.wordIds ?? []),
 		[heldWordPreview],
 	);
+	const timingToolbarWordId =
+		displayedTimingWordId ??
+		persistedTimingWordId ??
+		visibleTranscriptWords[0]?.id ??
+		null;
+	const shouldRenderTimingToolbar =
+		Boolean(activeMedia) && visibleTranscriptWords.length > 0;
+	const isTimingViewVisible =
+		shouldRenderTimingToolbar && (isTimingToolbarExpanded || isPlaying);
 	useEffect(() => {
 		if (!editingWordId) return;
 		if (!wordsWithCutState.some((word) => word.id === editingWordId)) {
@@ -1048,13 +1075,26 @@ export function TranscriptView() {
 	}, [effectiveTimingWordId]);
 
 	useEffect(() => {
-		if (
-			timingAnchorWordId &&
-			!wordsWithCutState.some((word) => word.id === timingAnchorWordId)
-		) {
-			setTimingAnchorWordId(null);
+		if (!displayedTimingWordId) return;
+		setPersistedTimingWordId((current) =>
+			current === displayedTimingWordId ? current : displayedTimingWordId,
+		);
+	}, [displayedTimingWordId]);
+
+	useEffect(() => {
+		if (!timingAnchorWordId) return;
+		if (wordsWithCutState.some((word) => word.id === timingAnchorWordId))
+			return;
+		setTimingAnchorWordId(visibleTranscriptWords[0]?.id ?? null);
+	}, [timingAnchorWordId, visibleTranscriptWords, wordsWithCutState]);
+
+	useEffect(() => {
+		if (!persistedTimingWordId) return;
+		if (wordsWithCutState.some((word) => word.id === persistedTimingWordId)) {
+			return;
 		}
-	}, [timingAnchorWordId, wordsWithCutState]);
+		setPersistedTimingWordId(visibleTranscriptWords[0]?.id ?? null);
+	}, [persistedTimingWordId, visibleTranscriptWords, wordsWithCutState]);
 
 	useEffect(() => {
 		if (!focusedGap) return;
@@ -1086,6 +1126,17 @@ export function TranscriptView() {
 			return next;
 		});
 	}, []);
+
+	useEffect(() => {
+		if (!isPlaying) return;
+		setSelectedWordIdsIfChanged([]);
+		setIsSelectionActive(false);
+		window.getSelection()?.removeAllRanges();
+		if (currentWordId) {
+			setFocusedWordId(currentWordId);
+			setFocusedGap(null);
+		}
+	}, [currentWordId, isPlaying, setSelectedWordIdsIfChanged]);
 
 	const clearHeldWordPreviewTimer = useCallback(() => {
 		if (holdPreviewTimeoutRef.current !== null) {
@@ -1132,6 +1183,12 @@ export function TranscriptView() {
 	}, [activeMedia]);
 
 	useEffect(() => {
+		transcriptScrollContainerRef.current = findScrollableAncestor(
+			selectionContainerRef.current,
+		);
+	}, []);
+
+	useEffect(() => {
 		heldWordPreviewRef.current = heldWordPreview;
 	}, [heldWordPreview]);
 
@@ -1146,6 +1203,43 @@ export function TranscriptView() {
 	useEffect(() => {
 		selectedWordIdsRef.current = selectedWordIds;
 	}, [selectedWordIds]);
+
+	useEffect(() => {
+		if (!isPlaying || !currentWordId) return;
+		const selectionContainer = selectionContainerRef.current;
+		const scrollContainer = transcriptScrollContainerRef.current;
+		if (!selectionContainer || !scrollContainer) return;
+
+		const activeWordNode = selectionContainer.querySelector<HTMLElement>(
+			`[data-word-id="${currentWordId}"]`,
+		);
+		if (!activeWordNode) return;
+
+		const containerRect = scrollContainer.getBoundingClientRect();
+		const wordRect = activeWordNode.getBoundingClientRect();
+		const viewportHeight = scrollContainer.clientHeight;
+		if (viewportHeight <= 0) return;
+
+		const footerReservePx = 132;
+		const revealTop = containerRect.top + viewportHeight * 0.12;
+		const revealBottom =
+			containerRect.top +
+			Math.max(viewportHeight * 0.58, viewportHeight - footerReservePx);
+		if (wordRect.top >= revealTop && wordRect.bottom <= revealBottom) {
+			return;
+		}
+
+		const wordCenterY =
+			wordRect.top -
+			containerRect.top +
+			scrollContainer.scrollTop +
+			wordRect.height / 2;
+		const targetTop = Math.max(0, wordCenterY - viewportHeight * 0.35);
+		scrollContainer.scrollTo({
+			top: targetTop,
+			behavior: "smooth",
+		});
+	}, [currentWordId, isPlaying]);
 
 	useEffect(() => {
 		const captureSelectionWords = () => {
@@ -1523,8 +1617,6 @@ export function TranscriptView() {
 		clearSpeakerEditingState();
 		setFocusedGap(null);
 		setFocusedWordId(null);
-		setTimingAnchorWordId(null);
-		setIsTimingToolbarExpanded(false);
 		setSelectedWordIdsIfChanged([]);
 		setIsSelectionActive(false);
 		suppressClickSeekRef.current = false;
@@ -1538,8 +1630,15 @@ export function TranscriptView() {
 	]);
 
 	useEffect(() => {
+		if (transcriptSourceKeyRef.current === activeTranscriptSourceKey) {
+			return;
+		}
+		transcriptSourceKeyRef.current = activeTranscriptSourceKey;
 		resetTranscriptPanelUi();
-	}, [resetTranscriptPanelUi]);
+		setTimingAnchorWordId(null);
+		setPersistedTimingWordId(null);
+		setIsTimingToolbarExpanded(true);
+	}, [activeTranscriptSourceKey, resetTranscriptPanelUi]);
 
 	useEffect(() => {
 		if (!editingSpeakerGroupId) return;
@@ -2157,7 +2256,7 @@ export function TranscriptView() {
 			<div
 				ref={selectionContainerRef}
 				className={[
-					"space-y-4 pb-24 [&_*::selection]:bg-transparent [&_*::selection]:text-inherit",
+					"space-y-4 overflow-x-hidden pb-24 [&_*::selection]:bg-transparent [&_*::selection]:text-inherit",
 					isSelectionActive ? "cursor-text" : "",
 				].join(" ")}
 				onContextMenu={(event) => {
@@ -2464,6 +2563,7 @@ export function TranscriptView() {
 															data-word-ids={tokenWordIds.join(",")}
 														>
 															{isFocusedWord &&
+																!isPlaying &&
 																selectedWordIds.length === 0 && (
 																	<span className="absolute left-0 bottom-full z-10 mb-1 flex items-center gap-1">
 																		<Button
@@ -2958,7 +3058,7 @@ export function TranscriptView() {
 					})}
 				</div>
 			</div>
-			{displayedTimingWordId ? (
+			{shouldRenderTimingToolbar ? (
 				<div className="sticky bottom-0 z-30 -mx-2 bg-background px-3 py-2 shadow-[0_-10px_18px_rgba(0,0,0,0.28)]">
 					<div className="flex items-center justify-between">
 						<button
@@ -2973,65 +3073,59 @@ export function TranscriptView() {
 								<ChevronUp className="size-3.5" />
 							)}
 						</button>
-						{heldPreviewProgressPercent != null ? (
-							<div className="flex min-w-0 items-center gap-2">
-								<div className="w-24 overflow-hidden rounded-full bg-zinc-800/90">
-									<div
-										className="h-1.5 rounded-full bg-zinc-100 transition-[width]"
-										style={{ width: `${heldPreviewProgressPercent}%` }}
-									/>
-								</div>
-								<div className="text-[10px] tabular-nums text-zinc-400">
-									{Math.round(heldPreviewProgressPercent)}%
-								</div>
-							</div>
-						) : null}
 					</div>
 					{isTimingViewVisible ? (
 						<div className="pt-1">
-							<TranscriptTimingView
-								key={activeTranscriptSourceKey}
-								trackId={activeMedia.trackId}
-								elementId={activeMedia.element.id}
-								words={visibleTranscriptWords}
-								cuts={cuts}
-								originalWords={originalTimingWords}
-								focusedWordId={displayedTimingWordId}
-								currentWordId={currentWordId}
-								currentCompressedTime={currentCompressedTime}
-								speakerToneById={speakerToneById}
-								heldWordPreview={heldWordPreview}
-								heldWordPreviewIds={heldWordPreviewIds}
-								previewCurrentTime={previewCurrentTime}
-								waveformAudioBuffer={activeWaveformSource?.audioBuffer}
-								waveformAudioFile={activeWaveformSource?.audioFile}
-								waveformAudioUrl={activeWaveformSource?.audioUrl}
-								waveformCacheKey={activeWaveformSource?.cacheKey}
-								initialWaveformEnvelope={activeWaveformEnvelope}
-								onWaveformEnvelopeResolved={persistActiveWaveformEnvelope}
-								onSeekWord={(word) => {
-									setFocusedWordId(word.id);
-									if (suppressClickSeekRef.current) {
-										suppressClickSeekRef.current = false;
-										return;
-									}
-									seekToTranscriptWord(word);
-								}}
-								onScheduleWordPreview={scheduleHeldPreview}
-								onHeldPreviewPointerMove={handleHeldPreviewPointerMove}
-								onHeldPreviewPointerEnd={handleHeldPreviewPointerEnd}
-								onCaptureHeldPreviewPointer={captureHeldPreviewPointer}
-								onReleaseHeldPreviewPointer={releaseHeldPreviewPointer}
-								onClearInteractionState={() => {
-									stopHeldWordPreview();
-									clearGapEditingState();
-									clearEditingState();
-									setFocusedGap(null);
-									setSelectedWordIdsIfChanged([]);
-									setIsSelectionActive(false);
-									window.getSelection()?.removeAllRanges();
-								}}
-							/>
+							{timingToolbarWordId ? (
+								<TranscriptTimingView
+									key={activeTranscriptSourceKey}
+									trackId={activeMedia.trackId}
+									elementId={activeMedia.element.id}
+									words={visibleTranscriptWords}
+									cuts={cuts}
+									originalWords={originalTimingWords}
+									focusedWordId={timingToolbarWordId}
+									currentWordId={currentWordId}
+									currentSourceTime={currentSourceTime}
+									isPlaying={isPlaying}
+									speakerToneById={speakerToneById}
+									heldWordPreview={heldWordPreview}
+									heldWordPreviewIds={heldWordPreviewIds}
+									previewCurrentTime={previewCurrentTime}
+									waveformAudioBuffer={activeWaveformSource?.audioBuffer}
+									waveformAudioFile={activeWaveformSource?.audioFile}
+									waveformAudioUrl={activeWaveformSource?.audioUrl}
+									waveformCacheKey={activeWaveformSource?.cacheKey}
+									initialWaveformEnvelope={activeWaveformEnvelope}
+									onWaveformEnvelopeResolved={persistActiveWaveformEnvelope}
+									onSeekWord={(word) => {
+										setFocusedWordId(word.id);
+										if (suppressClickSeekRef.current) {
+											suppressClickSeekRef.current = false;
+											return;
+										}
+										seekToTranscriptWord(word);
+									}}
+									onScheduleWordPreview={scheduleHeldPreview}
+									onHeldPreviewPointerMove={handleHeldPreviewPointerMove}
+									onHeldPreviewPointerEnd={handleHeldPreviewPointerEnd}
+									onCaptureHeldPreviewPointer={captureHeldPreviewPointer}
+									onReleaseHeldPreviewPointer={releaseHeldPreviewPointer}
+									onClearInteractionState={() => {
+										stopHeldWordPreview();
+										clearGapEditingState();
+										clearEditingState();
+										setFocusedGap(null);
+										setSelectedWordIdsIfChanged([]);
+										setIsSelectionActive(false);
+										window.getSelection()?.removeAllRanges();
+									}}
+								/>
+							) : (
+								<div className="text-muted-foreground px-1 py-2 text-xs">
+									No transcript timing target available.
+								</div>
+							)}
 						</div>
 					) : null}
 				</div>

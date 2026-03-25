@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_TEXT_ELEMENT } from "@/constants/text-constants";
+import { MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import { TextNode } from "@/services/renderer/nodes/text-node";
 import type { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 
@@ -99,7 +100,64 @@ function createCaptionNode() {
 	});
 }
 
+function createKaraokeCaptionNode(
+	captionWordTimings: Array<{
+		word: string;
+		startTime: number;
+		endTime: number;
+	}>,
+) {
+	return new TextNode({
+		...DEFAULT_TEXT_ELEMENT,
+		id: "caption-karaoke",
+		name: "Caption Karaoke",
+		content: captionWordTimings.map((timing) => timing.word).join(" "),
+		startTime: 10,
+		duration: 2,
+		canvasCenter: { x: 640, y: 360 },
+		canvasWidth: 1280,
+		canvasHeight: 720,
+		background: {
+			...DEFAULT_TEXT_ELEMENT.background,
+			color: "transparent",
+		},
+		captionStyle: {
+			karaokeWordHighlight: true,
+			karaokeHighlightMode: "block",
+		},
+		captionWordTimings,
+	});
+}
+
 describe("TextNode caption gap rendering", () => {
+	test("keeps karaoke highlight on the previous word during sub-threshold gaps", async () => {
+		const node = createKaraokeCaptionNode([
+			{ word: "hello", startTime: 10.0, endTime: 10.4 },
+			{ word: "world", startTime: 10.8, endTime: 11.2 },
+		]);
+		const { operations, renderer } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.6 });
+
+		expect(operations).toContain("roundRect");
+	});
+
+	test("clears karaoke highlight when the gap reaches the transcript threshold", async () => {
+		const node = createKaraokeCaptionNode([
+			{ word: "hello", startTime: 10.0, endTime: 10.4 },
+			{
+				word: "world",
+				startTime: 10.4 + MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS,
+				endTime: 11.3,
+			},
+		]);
+		const { operations, renderer } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.7 });
+
+		expect(operations).not.toContain("roundRect");
+	});
+
 	test("hides captions when timeline time falls inside an explicit visibility gap", async () => {
 		const node = new TextNode({
 			...createCaptionNode().params,

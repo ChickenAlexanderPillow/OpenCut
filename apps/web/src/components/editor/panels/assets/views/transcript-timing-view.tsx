@@ -11,6 +11,7 @@ import {
 import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { invokeAction } from "@/lib/actions";
+import { MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import {
 	buildTranscriptGapId,
 	detectTranscriptFillerCandidates,
@@ -51,7 +52,8 @@ type TranscriptTimingViewProps = {
 	originalWords: TranscriptEditWord[];
 	focusedWordId: string | null;
 	currentWordId: string | null;
-	currentCompressedTime: number | null;
+	currentSourceTime: number | null;
+	isPlaying: boolean;
 	speakerToneById: Map<string, SpeakerTone>;
 	heldWordPreview: HeldWordPreview | null;
 	heldWordPreviewIds: Set<string>;
@@ -124,7 +126,7 @@ const HANDLE_HITBOX_PX = 20;
 const TRACK_HORIZONTAL_INSET_PX = 14;
 const ORIGINAL_BOUNDARY_SNAP_THRESHOLD_SECONDS = 0.012;
 const TRACK_EDGE_PADDING_PERCENT = 4;
-const MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS = 0.5;
+const TIMING_VIEW_WINDOW_SECONDS = 1.2;
 
 function hexToRgba(hex: string, alpha: number): string {
 	const normalized = hex.replace("#", "");
@@ -378,6 +380,27 @@ function buildTimingItems({
 	return items;
 }
 
+function buildDisplayLayout(
+	items: TimingItem[],
+	cuts: TranscriptEditCutRange[],
+) {
+	let cursor = 0;
+	return items.map((word) => {
+		const duration = Math.max(
+			0.01,
+			getCompressedTime(word.endTime, cuts) -
+				getCompressedTime(word.startTime, cuts),
+		);
+		const displayWord = {
+			word,
+			displayStartTime: cursor,
+			displayEndTime: cursor + duration,
+		};
+		cursor += duration;
+		return displayWord;
+	});
+}
+
 export function TranscriptTimingView({
 	trackId,
 	elementId,
@@ -386,7 +409,8 @@ export function TranscriptTimingView({
 	originalWords,
 	focusedWordId,
 	currentWordId,
-	currentCompressedTime,
+	currentSourceTime,
+	isPlaying,
 	speakerToneById,
 	heldWordPreview,
 	heldWordPreviewIds,
@@ -490,59 +514,87 @@ export function TranscriptTimingView({
 			}),
 		};
 	}, [dragState, focusedWord, nextWord]);
-	const buildLocalLayout = useCallback(
-		(sequence: TimingToken[]) => {
-			const sequenceItems = buildTimingItems({ tokens: sequence, cuts });
-			let cursor = 0;
-			return sequenceItems.map((word) => {
-				const duration = Math.max(
-					0.01,
-					getCompressedTime(word.endTime, cuts) -
-						getCompressedTime(word.startTime, cuts),
-				);
-				const displayWord = {
-					word,
-					displayStartTime: cursor,
-					displayEndTime: cursor + duration,
-				};
-				cursor += duration;
-				return displayWord;
-			});
-		},
-		[cuts],
+	const previewTokens = useMemo(
+		() =>
+			tokens.map((token) => {
+				if (previewPreviousWord && token.id === previewPreviousWord.id) {
+					return previewPreviousWord;
+				}
+				if (previewFocusedWord && token.id === previewFocusedWord.id) {
+					return previewFocusedWord;
+				}
+				if (previewNextWord && token.id === previewNextWord.id) {
+					return previewNextWord;
+				}
+				return token;
+			}),
+		[previewFocusedWord, previewNextWord, previewPreviousWord, tokens],
 	);
-	const baseLocalWords = useMemo(() => {
-		const sequence = [previousWord, focusedWord, nextWord].filter(
-			(word): word is TimingToken => word !== null,
-		);
-		return buildLocalLayout(sequence);
-	}, [buildLocalLayout, focusedWord, nextWord, previousWord]);
+	const baseItems = useMemo(
+		() => buildTimingItems({ tokens, cuts }),
+		[cuts, tokens],
+	);
+	const previewItems = useMemo(
+		() => buildTimingItems({ tokens: previewTokens, cuts }),
+		[cuts, previewTokens],
+	);
+	const baseLocalWords = useMemo(
+		() => buildDisplayLayout(baseItems, cuts),
+		[baseItems, cuts],
+	);
+	const localWords = useMemo(
+		() => buildDisplayLayout(previewItems, cuts),
+		[cuts, previewItems],
+	);
+	const focusedLayoutItem = useMemo(
+		() =>
+			localWords.find(
+				(item) =>
+					item.word.kind === "word" && item.word.id === previewFocusedWord?.id,
+			) ?? null,
+		[localWords, previewFocusedWord?.id],
+	);
+	const currentDisplayTime = useMemo(
+		() =>
+			currentSourceTime != null
+				? mapSourceTimeToLocalDisplayTime({
+						sourceTime: currentSourceTime,
+						localWords,
+					})
+				: null,
+		[currentSourceTime, localWords],
+	);
+	const focusedAnchorTime = focusedLayoutItem?.displayStartTime ?? null;
 
-	const localWords = useMemo(() => {
-		const sequence = [
-			previewPreviousWord,
-			previewFocusedWord,
-			previewNextWord,
-		].filter((word): word is TimingToken => word !== null);
-		return buildLocalLayout(sequence);
-	}, [
-		buildLocalLayout,
-		previewFocusedWord,
-		previewNextWord,
-		previewPreviousWord,
-	]);
 	const localWindow = useMemo(() => {
-		const windowWords = baseLocalWords.length > 0 ? baseLocalWords : localWords;
-		if (windowWords.length === 0) return null;
-		const startTime = windowWords[0]?.displayStartTime ?? 0;
-		const endTime =
-			windowWords[windowWords.length - 1]?.displayEndTime ?? startTime;
+		if (localWords.length === 0) return null;
+		const trackStart = localWords[0]?.displayStartTime ?? 0;
+		const trackEnd =
+			localWords[localWords.length - 1]?.displayEndTime ?? trackStart;
+		const totalDuration = Math.max(0.01, trackEnd - trackStart);
+		const duration = Math.min(TIMING_VIEW_WINDOW_SECONDS, totalDuration);
+		const centerTime =
+			currentDisplayTime != null
+				? currentDisplayTime
+				: (focusedAnchorTime ?? trackStart);
+		const unclampedStart = centerTime - duration / 2;
+		const maxStart = Math.max(trackStart, trackEnd - duration);
+		const startTime = Math.max(trackStart, Math.min(maxStart, unclampedStart));
+		const endTime = startTime + duration;
 		return {
 			startTime,
 			endTime,
-			duration: Math.max(0.01, endTime - startTime),
+			duration: Math.max(0.01, duration),
 		};
-	}, [baseLocalWords, localWords]);
+	}, [currentDisplayTime, focusedAnchorTime, localWords]);
+	const visibleWords = useMemo(() => {
+		if (!localWindow) return [];
+		return localWords.filter(
+			(item) =>
+				item.displayEndTime >= localWindow.startTime &&
+				item.displayStartTime <= localWindow.endTime,
+		);
+	}, [localWindow, localWords]);
 
 	const leftBoundaryDisplayTime =
 		previewPreviousWord && previewFocusedWord
@@ -685,9 +737,8 @@ export function TranscriptTimingView({
 		}
 	};
 
-	const [waveformEnvelope, setWaveformEnvelope] = useState<WaveformEnvelope | null>(
-		initialWaveformEnvelope ?? null,
-	);
+	const [waveformEnvelope, setWaveformEnvelope] =
+		useState<WaveformEnvelope | null>(initialWaveformEnvelope ?? null);
 
 	useEffect(() => {
 		let mounted = true;
@@ -855,16 +906,7 @@ export function TranscriptTimingView({
 								}}
 							/>
 						) : null}
-						{currentCompressedTime != null ? (
-							<div
-								aria-hidden="true"
-								className="pointer-events-none absolute inset-y-1.5 z-20 w-px bg-zinc-100/80"
-								style={{
-									left: `${Math.max(0, Math.min(100, getPercent(currentCompressedTime)))}%`,
-								}}
-							/>
-						) : null}
-						{localWords.map((item) => {
+						{visibleWords.map((item) => {
 							const tone = item.word.speakerId
 								? speakerToneById.get(item.word.speakerId)
 								: undefined;
@@ -884,7 +926,7 @@ export function TranscriptTimingView({
 								getPercent(item.displayEndTime) -
 									getPercent(item.displayStartTime),
 							);
-							const showLabel = widthPercent >= 12 || isFocused;
+							const showLabel = widthPercent >= 8 || isFocused || isCurrent;
 							const previewProgress =
 								heldWordPreview && isHeldPreviewWord
 									? Math.max(
@@ -901,11 +943,11 @@ export function TranscriptTimingView({
 										)
 									: 0;
 							if (item.word.kind === "gap") {
-									return (
-										<button
-											key={item.word.id}
-											type="button"
-											className="absolute top-1/2 z-20 h-8 -translate-y-1/2 overflow-hidden rounded-sm border border-dashed text-left transition-colors hover:bg-zinc-700/50"
+								return (
+									<button
+										key={item.word.id}
+										type="button"
+										className="absolute top-1/2 z-20 h-8 -translate-y-1/2 overflow-hidden rounded-sm border border-dashed text-left transition-colors hover:bg-zinc-700/50"
 										style={{
 											left: `${getPercent(item.displayStartTime)}%`,
 											width: `${widthPercent}%`,
@@ -958,7 +1000,7 @@ export function TranscriptTimingView({
 										{heldWordPreview && isHeldPreviewWord ? (
 											<span
 												aria-hidden="true"
-												className="pointer-events-none absolute inset-y-0 left-0 bg-white/12"
+												className="pointer-events-none absolute inset-y-0 left-0 bg-white/35 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)]"
 												style={{ width: `${previewProgress}%` }}
 											/>
 										) : null}
@@ -969,6 +1011,21 @@ export function TranscriptTimingView({
 								);
 							}
 							const timingWord = item.word;
+							const playbackProgress =
+								isCurrent && currentSourceTime != null
+									? Math.max(
+											0,
+											Math.min(
+												100,
+												((currentSourceTime - timingWord.startTime) /
+													Math.max(
+														0.01,
+														timingWord.endTime - timingWord.startTime,
+													)) *
+													100,
+											),
+										)
+									: 0;
 							return (
 								<button
 									key={timingWord.id}
@@ -982,7 +1039,10 @@ export function TranscriptTimingView({
 												? (tone?.accent ?? "rgba(228,228,231,0.95)")
 												: (tone?.border ?? "rgba(63,63,70,0.9)"),
 										backgroundColor: tone
-											? hexToRgba(tone.accent, isFocused || isCurrent ? 0.2 : 0.08)
+											? hexToRgba(
+													tone.accent,
+													isFocused || isCurrent ? 0.2 : 0.08,
+												)
 											: "rgba(39,39,42,0.32)",
 										color: tone?.mutedText ?? undefined,
 										boxShadow:
@@ -1032,8 +1092,20 @@ export function TranscriptTimingView({
 									{heldWordPreview && isHeldPreviewWord ? (
 										<span
 											aria-hidden="true"
-											className="pointer-events-none absolute inset-y-0 left-0 bg-white/18"
+											className="pointer-events-none absolute inset-y-0 left-0 bg-white/40 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.22)]"
 											style={{ width: `${previewProgress}%` }}
+										/>
+									) : isCurrent ? (
+										<span
+											aria-hidden="true"
+											className="pointer-events-none absolute inset-y-0 left-0 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)]"
+											style={{
+												width: `${playbackProgress}%`,
+												backgroundColor: hexToRgba(
+													tone?.accent ?? "#ffffff",
+													0.48,
+												),
+											}}
 										/>
 									) : null}
 									<span className="relative z-10 flex h-full flex-col justify-center px-1.5">
@@ -1057,7 +1129,7 @@ export function TranscriptTimingView({
 								</button>
 							);
 						})}
-						{leftBoundaryDisplayTime != null && previousWord ? (
+						{!isPlaying && leftBoundaryDisplayTime != null && previousWord ? (
 							<button
 								type="button"
 								className="absolute top-1/2 z-40 h-16 -translate-x-1/2 -translate-y-1/2 touch-none"
@@ -1115,7 +1187,7 @@ export function TranscriptTimingView({
 								/>
 							</button>
 						) : null}
-						{rightBoundaryDisplayTime != null && nextWord ? (
+						{!isPlaying && rightBoundaryDisplayTime != null && nextWord ? (
 							<button
 								type="button"
 								className="absolute top-1/2 z-40 h-16 -translate-x-1/2 -translate-y-1/2 touch-none"

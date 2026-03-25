@@ -19,6 +19,7 @@ import {
 } from "@/lib/text/layout";
 import { resolveSafeAreaAnchoredPositionY } from "@/constants/safe-area-constants";
 import { toTimelineCaptionWordTimings } from "@/lib/captions/timing";
+import { MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import {
 	getVideoSplitScreenDividers,
 	getVideoSplitScreenViewports,
@@ -166,6 +167,44 @@ function resolveActiveWordIndex({
 		if (time >= timing.startTime && time < effectiveEndTime) {
 			return i;
 		}
+	}
+	return -1;
+}
+
+function resolveKaraokeActiveWordIndex({
+	captionWordTimings,
+	time,
+}: {
+	captionWordTimings: Array<{ startTime: number; endTime: number }>;
+	time: number;
+}): number {
+	const strictActiveWordIndex = resolveActiveWordIndex({
+		captionWordTimings,
+		time,
+	});
+	if (strictActiveWordIndex !== -1) {
+		return strictActiveWordIndex;
+	}
+	const latestStartedWordIndex = resolveLatestStartedWordIndex({
+		captionWordTimings,
+		time,
+	});
+	if (latestStartedWordIndex === -1) {
+		return -1;
+	}
+	const latestStartedWord = captionWordTimings[latestStartedWordIndex];
+	const nextWord = captionWordTimings[latestStartedWordIndex + 1];
+	if (!latestStartedWord || !nextWord) {
+		return -1;
+	}
+	const gapSeconds = nextWord.startTime - latestStartedWord.endTime;
+	if (
+		gapSeconds > 0 &&
+		gapSeconds < MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS &&
+		time >= latestStartedWord.endTime &&
+		time < nextWord.startTime
+	) {
+		return latestStartedWordIndex;
 	}
 	return -1;
 }
@@ -733,7 +772,10 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			totalWords > 0 ? Math.floor(clampedProgress * totalWords) : -1;
 		const hasWordTimings = visibleCaptionWordTimings.length > 0;
 		const activeWordIndex = hasWordTimings
-			? strictActiveWordIndex
+			? resolveKaraokeActiveWordIndex({
+					captionWordTimings: visibleCaptionWordTimings,
+					time,
+				})
 			: fallbackWordIndex;
 		const captionWords = this.getTimelineCaptionWords().filter(
 			(token) => !token.hidden,
