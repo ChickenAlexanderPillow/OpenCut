@@ -114,10 +114,18 @@ export interface VideoReframeSubjectSeed {
 	identity?: "subject" | "left" | "right";
 }
 
+export interface VideoReframePresetAutoSegment {
+	id: string;
+	startTime: number;
+	transform: VideoReframePresetTransform;
+	subjectSeed?: VideoReframeSubjectSeed;
+}
+
 export interface VideoReframePreset {
 	id: string;
 	name: string;
 	transform: VideoReframePresetTransform;
+	autoSegments?: VideoReframePresetAutoSegment[];
 	transformAdjustment?: VideoReframeTransformAdjustment;
 	manualTransformAdjustment?: VideoReframeTransformAdjustment;
 	autoSeeded?: boolean;
@@ -129,6 +137,12 @@ export interface VideoReframeSwitch {
 	id: string;
 	time: number;
 	presetId: string;
+}
+
+export interface VideoReframeAvailabilitySection {
+	id: string;
+	startTime: number;
+	availablePresetIds: string[];
 }
 
 export type VideoSplitScreenLayoutPreset = "top-bottom";
@@ -150,6 +164,7 @@ export interface VideoSplitScreenSlotBinding {
 	slotId: string;
 	mode: VideoSplitScreenSlotMode;
 	presetId?: string | null;
+	sourceElementId?: string | null;
 	transformOverride?: VideoSplitScreenSlotTransformOverride | null;
 	transformOverridesBySlotId?: Record<
 		string,
@@ -289,6 +304,7 @@ export interface VideoElement extends BaseTimelineElement {
 	transform: Transform;
 	reframePresets?: VideoReframePreset[];
 	reframeSwitches?: VideoReframeSwitch[];
+	reframeAvailabilitySections?: VideoReframeAvailabilitySection[];
 	defaultReframePresetId?: string | null;
 	reframeSeededBy?: "subject-aware-v1";
 	splitScreen?: VideoSplitScreen;

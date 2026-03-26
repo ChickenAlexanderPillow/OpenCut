@@ -1162,6 +1162,7 @@ export class TimelineManager {
 			element: {
 				...targetElement,
 				reframePresets: sourceElement.reframePresets,
+				reframeAvailabilitySections: sourceElement.reframeAvailabilitySections,
 				defaultReframePresetId: sourceElement.defaultReframePresetId,
 				reframeSeededBy: sourceElement.reframeSeededBy,
 				splitScreen: nextSplitScreen,
@@ -1182,6 +1183,10 @@ export class TimelineManager {
 
 		if ("reframePresets" in updates) {
 			nextUpdates.reframePresets = updates.reframePresets;
+		}
+		if ("reframeAvailabilitySections" in updates) {
+			nextUpdates.reframeAvailabilitySections =
+				updates.reframeAvailabilitySections;
 		}
 		if ("defaultReframePresetId" in updates) {
 			nextUpdates.defaultReframePresetId = updates.defaultReframePresetId;

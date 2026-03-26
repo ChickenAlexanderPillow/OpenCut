@@ -3,13 +3,14 @@ import type { RootNode } from "./nodes/root-node";
 import { BlurBackgroundNode } from "./nodes/blur-background-node";
 import { ColorNode } from "./nodes/color-node";
 import { ImageNode } from "./nodes/image-node";
+import { SplitScreenNode } from "./nodes/split-screen-node";
 import { VideoNode } from "./nodes/video-node";
 import type { RendererCapabilities } from "./webgpu-types";
 
 export interface HybridScenePartition {
 	supported: boolean;
 	reasonIfUnsupported?: string;
-	gpuNodes: Array<VideoNode | ImageNode>;
+	gpuNodes: Array<VideoNode | ImageNode | SplitScreenNode>;
 	cpuPreNodes: BaseNode[];
 	cpuPostNodes: BaseNode[];
 	gpuClearColor?: { r: number; g: number; b: number; a: number };
@@ -20,7 +21,7 @@ const SUPPORTED_GPU_BLEND_MODES = new Set(["normal", "source-over", undefined]);
 function hasMotionBlurTransition({
 	node,
 }: {
-	node: VideoNode | ImageNode;
+	node: VideoNode | ImageNode | SplitScreenNode;
 }): boolean {
 	const inPresetId = node.params.transitions?.in?.presetId ?? "";
 	const outPresetId = node.params.transitions?.out?.presetId ?? "";
@@ -123,7 +124,8 @@ export function splitSceneForHybridPreview({
 	for (let i = 0; i < normalizedChildren.length; i++) {
 		if (
 			normalizedChildren[i] instanceof VideoNode ||
-			normalizedChildren[i] instanceof ImageNode
+			normalizedChildren[i] instanceof ImageNode ||
+			normalizedChildren[i] instanceof SplitScreenNode
 		) {
 			gpuIndices.push(i);
 		}
@@ -146,7 +148,10 @@ export function splitSceneForHybridPreview({
 	// Keep phase-1 ordering safe: no CPU node between GPU nodes.
 	for (let i = firstGpuIndex; i <= lastGpuIndex; i++) {
 		const node = normalizedChildren[i];
-		const isGpuNode = node instanceof VideoNode || node instanceof ImageNode;
+		const isGpuNode =
+			node instanceof VideoNode ||
+			node instanceof ImageNode ||
+			node instanceof SplitScreenNode;
 		if (!isGpuNode) {
 			return {
 				supported: false,
@@ -163,8 +168,11 @@ export function splitSceneForHybridPreview({
 	const gpuNodes = normalizedChildren
 		.slice(firstGpuIndex, lastGpuIndex + 1)
 		.filter(
-			(node) => node instanceof VideoNode || node instanceof ImageNode,
-		) as Array<VideoNode | ImageNode>;
+			(node) =>
+				node instanceof VideoNode ||
+				node instanceof ImageNode ||
+				node instanceof SplitScreenNode,
+		) as Array<VideoNode | ImageNode | SplitScreenNode>;
 
 	for (const node of gpuNodes) {
 		if (!SUPPORTED_GPU_BLEND_MODES.has(node.params.blendMode)) {

@@ -25,6 +25,7 @@ import { toTimelineCaptionWordTimings } from "@/lib/captions/timing";
 import {
 	getVideoSplitScreenDividers,
 	getVideoSplitScreenViewports,
+	isVideoSplitScreenExternalSourceSlot,
 	resolveVideoSplitScreenAtTime,
 } from "@/lib/reframe/video-reframe";
 
@@ -964,6 +965,33 @@ export function getVisibleElementsWithBounds({
 		track.elements.filter(isEditableMediaElement),
 	);
 	const mediaElementById = new Map(mediaElements.map((element) => [element.id, element]));
+	const suppressedElementIds = new Set(
+		tracks.flatMap((track) =>
+			track.type !== "video"
+				? []
+				: track.elements.flatMap((element) => {
+						if (element.type !== "video") return [];
+						if (
+							currentTime < element.startTime ||
+							currentTime >= element.startTime + element.duration
+						) {
+							return [];
+						}
+						return [
+							...(element.splitScreen?.slots ?? []),
+							...(element.splitScreen?.sections ?? []).flatMap(
+								(section) => section.slots ?? [],
+							),
+						]
+							.filter((slot) => isVideoSplitScreenExternalSourceSlot({ slot }))
+							.map((slot) => slot.sourceElementId?.trim() ?? "")
+							.filter(
+								(sourceElementId) =>
+									sourceElementId.length > 0 && sourceElementId !== element.id,
+							);
+				  }),
+		),
+	);
 	const visibleTracks = tracks.filter(
 		(track) => !("hidden" in track && track.hidden),
 	);
@@ -977,6 +1005,7 @@ export function getVisibleElementsWithBounds({
 	for (const track of orderedTracks) {
 		const elements = track.elements
 			.filter((element) => !("hidden" in element && element.hidden))
+			.filter((element) => !suppressedElementIds.has(element.id))
 			.filter(
 				(element) =>
 					currentTime >= element.startTime &&

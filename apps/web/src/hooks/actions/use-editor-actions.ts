@@ -1795,7 +1795,8 @@ function buildClipElement({
 					: 1,
 			},
 			reframePresets: reframeSeed?.presets ?? [],
-			reframeSwitches: reframeSeed?.switches ?? [],
+			reframeSwitches: [],
+			reframeAvailabilitySections: reframeSeed?.availabilitySections ?? [],
 			defaultReframePresetId: reframeSeed?.defaultPresetId ?? null,
 			reframeSeededBy:
 				(reframeSeed?.presets.length ?? 0) > 0

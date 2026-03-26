@@ -10,16 +10,19 @@ import {
 	deriveVideoReframeTransformFromSplitSlotTransform,
 	deriveVideoAngleSections,
 	deriveVideoSplitScreenSlotAdjustmentFromTransform,
+	getEffectiveVideoSplitScreenSlotTransformOverride,
 	getSourceCenterForTransform,
 	deriveVideoSplitScreenSectionRanges,
 	getVideoSplitScreenDividers,
 	getVideoSplitScreenViewports,
+	getAvailableReframePresetIdsAtTime,
 	getActiveReframePresetId,
 	getVideoAngleSectionAtTime,
 	getVideoSplitScreenSectionAtTime,
 	remapSplitSlotTransformBetweenViewportBalances,
 	remapSplitSlotTransformBetweenViewports,
 	replaceOrInsertReframeSwitch,
+	rebuildVideoReframeStateFromAngleSections,
 	resolveVideoSplitScreenAtTime,
 	resolveVideoSplitScreenAtTimeFromState,
 	resolveVideoSplitScreenSlotTransform,
@@ -27,6 +30,7 @@ import {
 	resolveVideoBaseTransformAtTime,
 	resolveVideoReframeTransform,
 	resolveVideoReframeTransformFromState,
+	splitVideoAngleSectionsAtTime,
 } from "../video-reframe";
 import { resolveMotionTrackedReframeTransform } from "../motion-tracking";
 import type { TimelineTrack, VideoElement } from "@/types/timeline";
@@ -142,6 +146,136 @@ test("uses the default preset before the first switch", () => {
 		expect(transform.position.y).toBe(-40);
 		expect(transform.scale).toBe(2.5);
 		expect(transform.rotate).toBe(12);
+	});
+
+	test("returns section-local preset availability at a given time", () => {
+		const element: VideoElement = {
+			...baseElement,
+			reframePresets: [
+				{
+					id: "subject-left",
+					name: "Subject Left",
+					transform: {
+						position: { x: -140, y: -20 },
+						scale: 2.4,
+					},
+					subjectSeed: {
+						center: { x: 480, y: 220 },
+						size: { width: 120, height: 180 },
+						identity: "left",
+					},
+				},
+				{
+					id: "subject-right",
+					name: "Subject Right",
+					transform: {
+						position: { x: 140, y: -20 },
+						scale: 2.4,
+					},
+					subjectSeed: {
+						center: { x: 1440, y: 220 },
+						size: { width: 120, height: 180 },
+						identity: "right",
+					},
+				},
+			],
+			reframeAvailabilitySections: [
+				{
+					id: "availability-1",
+					startTime: 0,
+					availablePresetIds: ["subject-left", "subject-right"],
+				},
+				{
+					id: "availability-2",
+					startTime: 4,
+					availablePresetIds: ["subject-right"],
+				},
+			],
+		};
+
+		expect(
+			getAvailableReframePresetIdsAtTime({
+				element,
+				localTime: 1,
+			}),
+		).toEqual(["subject-left", "subject-right"]);
+		expect(
+			getAvailableReframePresetIdsAtTime({
+				element,
+				localTime: 5,
+			}),
+		).toEqual(["subject-right"]);
+	});
+
+	test("preserves availability sections when splitting a clip", () => {
+		const element: VideoElement = {
+			...baseElement,
+			reframePresets: [
+				{
+					id: "subject-left",
+					name: "Subject Left",
+					transform: {
+						position: { x: -140, y: -20 },
+						scale: 2.4,
+					},
+					subjectSeed: {
+						center: { x: 480, y: 220 },
+						size: { width: 120, height: 180 },
+						identity: "left",
+					},
+				},
+				{
+					id: "subject-right",
+					name: "Subject Right",
+					transform: {
+						position: { x: 140, y: -20 },
+						scale: 2.4,
+					},
+					subjectSeed: {
+						center: { x: 1440, y: 220 },
+						size: { width: 120, height: 180 },
+						identity: "right",
+					},
+				},
+			],
+			reframeAvailabilitySections: [
+				{
+					id: "availability-1",
+					startTime: 0,
+					availablePresetIds: ["subject-left", "subject-right"],
+				},
+				{
+					id: "availability-2",
+					startTime: 6,
+					availablePresetIds: ["subject-right"],
+				},
+			],
+		};
+
+		const split = splitVideoAngleSectionsAtTime({
+			element,
+			splitTime: 4,
+		});
+
+		expect(split.left.reframeAvailabilitySections).toEqual([
+			{
+				id: "availability-1",
+				startTime: 0,
+				availablePresetIds: ["subject-left", "subject-right"],
+			},
+		]);
+		expect(split.right.reframeAvailabilitySections).toEqual([
+			{
+				id: "availability-1",
+				startTime: 0,
+				availablePresetIds: ["subject-left", "subject-right"],
+			},
+			{
+				id: "availability-2",
+				startTime: 2,
+				availablePresetIds: ["subject-right"],
+			},
+		]);
 	});
 
 	test("applies baked motion tracking only while the tracked angle is active", () => {
@@ -658,6 +792,34 @@ test("uses the default preset before the first switch", () => {
 		});
 	});
 
+	test("split-screen slot transform overrides prefer the viewport balance variant key", () => {
+		expect(
+			getEffectiveVideoSplitScreenSlotTransformOverride({
+				slot: {
+					slotId: "bottom",
+					transformOverride: {
+						position: { x: 50, y: 60 },
+						scale: 1.5,
+					},
+					transformOverridesBySlotId: {
+						bottom: {
+							position: { x: 100, y: 120 },
+							scale: 2,
+						},
+						"unbalanced:bottom": {
+							position: { x: 360, y: -120 },
+							scale: 3.4,
+						},
+					},
+				},
+				viewportBalance: "unbalanced",
+			}),
+		).toEqual({
+			position: { x: 360, y: -120 },
+			scale: 3.4,
+		});
+	});
+
 	test("split-screen binding applies stored per-slot adjustments when manual slot adjustments are enabled", () => {
 		const resolved = resolveVideoSplitScreenSlotTransformFromState({
 			baseTransform: baseElement.transform,
@@ -691,6 +853,46 @@ test("uses the default preset before the first switch", () => {
 		expect(resolved.position.x).toBeCloseTo(-39, 6);
 		expect(resolved.position.y).toBeCloseTo(13, 6);
 		expect(resolved.scale).toBeCloseTo(1.2669447341, 6);
+		expect(resolved.rotate).toBe(12);
+	});
+
+	test("split-screen binding resolves stored viewport-balance overrides from state", () => {
+		const resolved = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: baseElement.reframePresets,
+			reframeSwitches: baseElement.reframeSwitches,
+			defaultReframePresetId: baseElement.defaultReframePresetId,
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: "subject",
+				transformOverride: {
+					position: { x: 10, y: 20 },
+					scale: 1.2,
+				},
+				transformOverridesBySlotId: {
+					"balanced:bottom": {
+						position: { x: 140, y: -80 },
+						scale: 2.1,
+					},
+					"unbalanced:bottom": {
+						position: { x: 360, y: -120 },
+						scale: 3.4,
+					},
+				},
+			},
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "unbalanced",
+		});
+
+		expect(resolved.position.x).toBeCloseTo(360, 6);
+		expect(resolved.position.y).toBeCloseTo(-120, 6);
+		expect(resolved.scale).toBeCloseTo(3.4, 6);
 		expect(resolved.rotate).toBe(12);
 	});
 
@@ -1234,6 +1436,8 @@ test("uses the default preset before the first switch", () => {
 				presetId: "wide",
 				switchId: null,
 				splitSectionId: null,
+				availabilitySectionId: null,
+				availablePresetIds: null,
 				isSplit: false,
 			},
 			{
@@ -1242,6 +1446,8 @@ test("uses the default preset before the first switch", () => {
 				presetId: "subject",
 				switchId: "switch-1",
 				splitSectionId: "split-at-switch",
+				availabilitySectionId: null,
+				availablePresetIds: null,
 				isSplit: true,
 			},
 		]);
@@ -1280,6 +1486,8 @@ test("uses the default preset before the first switch", () => {
 				presetId: "subject",
 				switchId: null,
 				splitSectionId: null,
+				availabilitySectionId: null,
+				availablePresetIds: null,
 				isSplit: true,
 			},
 			{
@@ -1288,6 +1496,167 @@ test("uses the default preset before the first switch", () => {
 				presetId: "subject",
 				switchId: null,
 				splitSectionId: null,
+				availabilitySectionId: null,
+				availablePresetIds: null,
+				isSplit: false,
+			},
+		]);
+	});
+
+	test("does not create clip angle section boundaries from subject availability changes", () => {
+		const element: VideoElement = {
+			...baseElement,
+			reframePresets: [
+				{
+					id: "subject-left",
+					name: "Subject Left",
+					transform: {
+						position: { x: -140, y: -20 },
+						scale: 2.4,
+					},
+					subjectSeed: {
+						center: { x: 480, y: 220 },
+						size: { width: 120, height: 180 },
+						identity: "left",
+					},
+				},
+				{
+					id: "subject-right",
+					name: "Subject Right",
+					transform: {
+						position: { x: 140, y: -20 },
+						scale: 2.4,
+					},
+					subjectSeed: {
+						center: { x: 1440, y: 220 },
+						size: { width: 120, height: 180 },
+						identity: "right",
+					},
+				},
+			],
+			defaultReframePresetId: "subject-left",
+			reframeAvailabilitySections: [
+				{
+					id: "availability-1",
+					startTime: 0,
+					availablePresetIds: ["subject-right"],
+				},
+				{
+					id: "availability-2",
+					startTime: 4,
+					availablePresetIds: ["subject-left", "subject-right"],
+				},
+			],
+		};
+
+		expect(deriveVideoAngleSections({ element })).toEqual([
+			{
+				startTime: 0,
+				endTime: 10,
+				presetId: "subject-left",
+				switchId: null,
+				splitSectionId: null,
+				availabilitySectionId: "availability-2",
+				availablePresetIds: ["subject-left", "subject-right"],
+				isSplit: false,
+			},
+		]);
+	});
+
+	test("rebuild normalizes overlapping angle sections into adjacent non-overlapping ranges", () => {
+		const element: VideoElement = {
+			...baseElement,
+			duration: 12,
+			defaultReframePresetId: "wide",
+			reframeSwitches: [],
+		};
+
+		const rebuilt = rebuildVideoReframeStateFromAngleSections({
+			element,
+			sections: [
+				{
+					startTime: 0,
+					endTime: 7,
+					presetId: "wide",
+					switchId: null,
+					splitSectionId: null,
+					availabilitySectionId: null,
+					availablePresetIds: null,
+					isSplit: false,
+				},
+				{
+					startTime: 5,
+					endTime: 10,
+					presetId: "subject",
+					switchId: null,
+					splitSectionId: null,
+					availabilitySectionId: null,
+					availablePresetIds: null,
+					isSplit: false,
+				},
+				{
+					startTime: 10,
+					endTime: 12,
+					presetId: "wide",
+					switchId: null,
+					splitSectionId: null,
+					availabilitySectionId: null,
+					availablePresetIds: null,
+					isSplit: false,
+				},
+			],
+		});
+
+		expect(rebuilt.defaultReframePresetId).toBe("wide");
+		expect(rebuilt.reframeSwitches).toEqual([
+			{
+				id: expect.any(String),
+				time: 5,
+				presetId: "subject",
+			},
+			{
+				id: expect.any(String),
+				time: 10,
+				presetId: "wide",
+			},
+		]);
+
+		expect(
+			deriveVideoAngleSections({
+				element: {
+					...element,
+					...rebuilt,
+				},
+			}),
+		).toEqual([
+			{
+				startTime: 0,
+				endTime: 5,
+				presetId: "wide",
+				switchId: null,
+				splitSectionId: null,
+				availabilitySectionId: null,
+				availablePresetIds: null,
+				isSplit: false,
+			},
+			{
+				startTime: 5,
+				endTime: 10,
+				presetId: "subject",
+				switchId: expect.any(String),
+				splitSectionId: null,
+				availabilitySectionId: null,
+				availablePresetIds: null,
+				isSplit: false,
+			},
+			{
+				startTime: 10,
+				endTime: 12,
+				presetId: "wide",
+				switchId: expect.any(String),
+				splitSectionId: null,
+				availabilitySectionId: null,
+				availablePresetIds: null,
 				isSplit: false,
 			},
 		]);
@@ -1438,13 +1807,15 @@ test("uses the default preset before the first switch", () => {
 				},
 				mergeAdjacent: false,
 			}),
-		).toEqual([
+		).toMatchObject([
 			{
 				startTime: 0,
 				endTime: 4,
 				presetId: "wide",
 				switchId: null,
 				splitSectionId: null,
+				availabilitySectionId: null,
+				availablePresetIds: null,
 				isSplit: false,
 			},
 			{
@@ -1453,6 +1824,8 @@ test("uses the default preset before the first switch", () => {
 				presetId: "subject",
 				switchId: expect.any(String),
 				splitSectionId: null,
+				availabilitySectionId: null,
+				availablePresetIds: null,
 				isSplit: false,
 			},
 			{
@@ -1461,6 +1834,8 @@ test("uses the default preset before the first switch", () => {
 				presetId: "subject",
 				switchId: expect.any(String),
 				splitSectionId: null,
+				availabilitySectionId: null,
+				availablePresetIds: null,
 				isSplit: false,
 			},
 		]);
@@ -1523,6 +1898,8 @@ test("uses the default preset before the first switch", () => {
 			presetId: "wide",
 			switchId: null,
 			splitSectionId: null,
+			availabilitySectionId: null,
+			availablePresetIds: null,
 			isSplit: false,
 		});
 		expect(nextSections[1]?.startTime).toBe(5);

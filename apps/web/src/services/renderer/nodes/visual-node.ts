@@ -31,6 +31,10 @@ export interface VisualNodeParams {
 	timeOffset: number;
 	trimStart: number;
 	trimEnd: number;
+	suppressDuringRanges?: Array<{
+		startTime: number;
+		endTime: number;
+	}>;
 	transcriptCuts?: TranscriptEditCutRange[];
 	transform: Transform;
 	opacity: number;
@@ -271,7 +275,14 @@ export abstract class VisualNode<
 
 	protected isInRange(time: number): boolean {
 		const elapsed = time - this.params.timeOffset;
-		return elapsed >= -VISUAL_EPSILON && elapsed < this.params.duration;
+		if (!(elapsed >= -VISUAL_EPSILON && elapsed < this.params.duration)) {
+			return false;
+		}
+		return !(
+			this.params.suppressDuringRanges?.some(
+				(range) => time >= range.startTime && time < range.endTime,
+			) ?? false
+		);
 	}
 
 	protected renderVisual({

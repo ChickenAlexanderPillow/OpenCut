@@ -43,6 +43,7 @@ import {
 	buildDefaultVideoSplitScreenBindings,
 	deriveVideoReframeTransformFromSplitSlotTransform,
 	getEffectiveVideoSplitScreenSlotTransformOverride,
+	getAvailableReframePresetIdsAtTime,
 	getVideoAngleSectionAtTime,
 	getVideoAngleSectionByStartTime,
 	normalizeVideoReframeState,
@@ -372,13 +373,24 @@ function QuickReframeToolbarControl() {
 	};
 
 	const quickPresets = useMemo(
-		() =>
-			selectedVideo
-				? getQuickReframePresets({
-						presetSource: selectedVideo.element.reframePresets ?? [],
-					})
-				: [],
-		[selectedVideo],
+		() => {
+			if (!selectedVideo) return [];
+			const localTime = getSnappedLocalPlayheadTime();
+			const availabilityPresetIds = getAvailableReframePresetIdsAtTime({
+				element: selectedVideo.element,
+				localTime,
+			});
+			const allowedPresetIdSet = availabilityPresetIds
+				? new Set(availabilityPresetIds)
+				: null;
+			return getQuickReframePresets({
+				presetSource: (selectedVideo.element.reframePresets ?? []).filter(
+					(preset) =>
+						!allowedPresetIdSet || allowedPresetIdSet.has(preset.id),
+				),
+			});
+		},
+		[getSnappedLocalPlayheadTime, selectedVideo],
 	);
 	const activeSection = useMemo(() => {
 		if (!selectedVideo) return null;
@@ -414,6 +426,7 @@ function QuickReframeToolbarControl() {
 		if (!activeSection) return null;
 		return activeSection.isSplit ? activeSection : null;
 	}, [activeSection, selectedVideo]);
+	const canApplyHostSplitScreen = quickPresets.length >= 2;
 	const previewSelectedPresetId =
 		selectedVideo && !isPlaying
 			? (selectedPresetIdByElementId[selectedVideo.element.id] ?? null)
@@ -742,6 +755,7 @@ function QuickReframeToolbarControl() {
 			}
 
 			if (event.code === "Digit4") {
+				if (!canApplyHostSplitScreen) return;
 				event.preventDefault();
 				applySplitScreenToTargetSectionWithViewportBalance({
 					viewportBalance: "balanced",
@@ -750,6 +764,7 @@ function QuickReframeToolbarControl() {
 			}
 
 			if (event.code === "Digit5") {
+				if (!canApplyHostSplitScreen) return;
 				event.preventDefault();
 				applySplitScreenToTargetSectionWithViewportBalance({
 					viewportBalance: "unbalanced",
@@ -793,6 +808,7 @@ function QuickReframeToolbarControl() {
 		isPlaying,
 		playbackTime,
 		quickPresets,
+		canApplyHostSplitScreen,
 		selectedMediaAsset,
 		selectedVideo,
 		setSelectedSectionStartTime,
@@ -954,15 +970,18 @@ function QuickReframeToolbarControl() {
 											}
 											size="icon"
 											className="h-7 w-7 rounded-sm"
+											disabled={!canApplyHostSplitScreen}
 											onClick={applySplitScreenToTargetSection}
 										>
 											<QuickReframePresetIcon kind="split-screen" />
 										</Button>
 									</TooltipTrigger>
 									<TooltipContent>
-										{activeSplitSection
-											? "Apply split screen to selected section"
-											: "Split screen"}
+										{!canApplyHostSplitScreen
+											? "Split screen needs two available host subject angles in this section"
+											: activeSplitSection
+												? "Apply split screen to selected section"
+												: "Split screen"}
 									</TooltipContent>
 								</Tooltip>
 							</>

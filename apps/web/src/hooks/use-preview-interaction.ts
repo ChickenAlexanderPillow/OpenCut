@@ -28,6 +28,8 @@ import { resolveElementTransformAtTime } from "@/lib/animation";
 import { isGeneratedCaptionElement } from "@/lib/captions/caption-track";
 import {
 	applySelectedReframePresetPreviewToTracks,
+	getEffectiveVideoSplitScreenSlotTransformOverride,
+	isVideoSplitScreenExternalSourceSlot,
 	getSelectedOrActiveReframePresetId,
 	normalizeVideoReframeState,
 	resolveVideoSplitScreenSlotTransformFromState,
@@ -370,12 +372,46 @@ export function usePreviewInteraction({
 			slotId: string;
 			nextTransform: Pick<Transform, "position" | "scale">;
 		}) => {
+			const currentPreviewState =
+				useReframeStore.getState().selectedSplitPreviewByElementId[
+					element.id
+				] ?? null;
+			const editableSplitState = resolveEditableSplitSlotState({
+				element,
+				localTime: getLocalTimeForElement({ element }),
+				splitPreview: currentPreviewState,
+			});
+			if (!editableSplitState) return;
+			const activeBinding =
+				editableSplitState.slots.find((binding) => binding.slotId === slotId) ??
+				null;
+			const sourceElementId =
+				isVideoSplitScreenExternalSourceSlot({ slot: activeBinding ?? {} })
+					? (activeBinding?.sourceElementId?.trim() ?? "")
+					: "";
+			const sourceElement =
+				sourceElementId.length > 0
+					? editor.timeline
+							.getTracks()
+							.flatMap((track) => track.elements)
+							.find(
+								(candidate) =>
+									(candidate.type === "video" || candidate.type === "image") &&
+									candidate.id === sourceElementId,
+							) ?? null
+					: null;
 			const mediaAsset =
 				editor.media
 					.getAssets()
-					.find((asset) => asset.id === element.mediaId) ?? null;
+					.find(
+						(asset) =>
+							asset.id ===
+							(sourceElement?.type === "video" || sourceElement?.type === "image"
+								? sourceElement.mediaId
+								: element.mediaId),
+					) ?? null;
 			if (
-				mediaAsset?.type !== "video" ||
+				(mediaAsset?.type !== "video" && mediaAsset?.type !== "image") ||
 				!Number.isFinite(mediaAsset.width) ||
 				!Number.isFinite(mediaAsset.height)
 			) {
@@ -385,16 +421,6 @@ export function usePreviewInteraction({
 			const sourceHeight = mediaAsset.height as number;
 			const projectCanvas = editor.project.getActive().settings.canvasSize;
 			const localTime = getLocalTimeForElement({ element });
-			const currentPreviewState =
-				useReframeStore.getState().selectedSplitPreviewByElementId[
-					element.id
-				] ?? null;
-			const editableSplitState = resolveEditableSplitSlotState({
-				element,
-				localTime,
-				splitPreview: currentPreviewState,
-			});
-			if (!editableSplitState) return;
 			const nextSlots = updateSplitSlotBindingsWithTransform({
 				bindings: editableSplitState.slots,
 				slotId,
@@ -418,6 +444,7 @@ export function usePreviewInteraction({
 		[
 			editor.media,
 			editor.project,
+			editor.timeline,
 			getLocalTimeForElement,
 			setSelectedSplitPreviewSlots,
 		],
@@ -577,27 +604,49 @@ export function usePreviewInteraction({
 						slotId: slotIdAtPoint,
 					});
 				}
-				if (!splitEditSlotId || slotIdAtPoint !== splitEditSlotId) {
+				const activeSlotId = slotIdAtPoint ?? splitEditSlotId;
+				if (!activeSlotId) {
 					if (!slotIdAtPoint) {
 						clearSelectedSplitEditSlotId({ elementId: normalizedElement.id });
 					}
-					if (slotIdAtPoint) {
-						return;
-					}
+					return;
 				}
-				const activeSlotId = splitEditSlotId;
 				const activeBinding =
 					editableSplitState?.slots.find(
 						(binding) => binding.slotId === activeSlotId,
 					) ?? null;
+				const sourceElementId =
+					activeBinding &&
+					isVideoSplitScreenExternalSourceSlot({ slot: activeBinding })
+						? (activeBinding.sourceElementId?.trim() ?? "")
+						: "";
+				const sourceElement =
+					sourceElementId.length > 0
+						? editor.timeline
+								.getTracks()
+								.flatMap((candidateTrack) => candidateTrack.elements)
+								.find(
+									(candidate) =>
+										(candidate.type === "video" ||
+											candidate.type === "image") &&
+										candidate.id === sourceElementId,
+								) ?? null
+						: null;
 				const mediaAsset =
 					editor.media
 						.getAssets()
-						.find((asset) => asset.id === normalizedElement.mediaId) ?? null;
+						.find(
+							(asset) =>
+								asset.id ===
+								(sourceElement?.type === "video" ||
+								sourceElement?.type === "image"
+									? sourceElement.mediaId
+									: normalizedElement.mediaId),
+						) ?? null;
 				if (
 					editableSplitState &&
 					activeBinding &&
-					mediaAsset?.type === "video" &&
+					(mediaAsset?.type === "video" || mediaAsset?.type === "image") &&
 					Number.isFinite(mediaAsset.width) &&
 					Number.isFinite(mediaAsset.height)
 				) {
@@ -605,22 +654,38 @@ export function usePreviewInteraction({
 					const sourceHeight = mediaAsset.height as number;
 					if (activeSlotId && slotIdAtPoint === activeSlotId) {
 						const initialTransform =
-							resolveVideoSplitScreenSlotTransformFromState({
-								baseTransform: normalizedElement.transform,
-								duration: normalizedElement.duration,
-								reframePresets: normalizedElement.reframePresets,
-								reframeSwitches: normalizedElement.reframeSwitches,
-								defaultReframePresetId:
-									normalizedElement.defaultReframePresetId,
-								localTime,
-								slot: activeBinding,
-								canvasWidth: canvasSize.width,
-								canvasHeight: canvasSize.height,
-								sourceWidth,
-								sourceHeight,
-								layoutPreset: editableSplitState.layoutPreset,
-								viewportBalance: editableSplitState.viewportBalance,
-							});
+							isVideoSplitScreenExternalSourceSlot({ slot: activeBinding })
+								? {
+										position:
+									getEffectiveVideoSplitScreenSlotTransformOverride({
+												slot: activeBinding,
+												viewportBalance:
+													editableSplitState.viewportBalance,
+											})?.position ?? { x: 0, y: 0 },
+										scale:
+											getEffectiveVideoSplitScreenSlotTransformOverride({
+												slot: activeBinding,
+												viewportBalance:
+													editableSplitState.viewportBalance,
+											})?.scale ?? 1,
+										rotate: 0,
+								  }
+								: resolveVideoSplitScreenSlotTransformFromState({
+										baseTransform: normalizedElement.transform,
+										duration: normalizedElement.duration,
+										reframePresets: normalizedElement.reframePresets,
+										reframeSwitches: normalizedElement.reframeSwitches,
+										defaultReframePresetId:
+											normalizedElement.defaultReframePresetId,
+										localTime,
+										slot: activeBinding,
+										canvasWidth: canvasSize.width,
+										canvasHeight: canvasSize.height,
+										sourceWidth,
+										sourceHeight,
+										layoutPreset: editableSplitState.layoutPreset,
+										viewportBalance: editableSplitState.viewportBalance,
+								  });
 						const viewportBounds =
 							getEditableSplitSlotRegions({
 								editableState: editableSplitState,

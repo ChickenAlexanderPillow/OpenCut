@@ -92,7 +92,6 @@ export function TransformHandles({
 	const {
 		selectedWithBounds,
 		hasVisualSelection,
-		hasSelectedSplitSlot,
 		showRotationHandle,
 		splitSlotControls,
 		onSplitSlotScaleChange,
@@ -194,34 +193,31 @@ export function TransformHandles({
 				canvasRef={canvasRef}
 				containerRef={containerRef}
 			/>
-			{!hasSelectedSplitSlot && (
-				<BoundingBoxOutline
-					center={center}
-					outlineWidth={outlineWidth}
-					outlineHeight={outlineHeight}
-					rotation={bounds.rotation}
-				/>
-			)}
-			{!hasSelectedSplitSlot &&
-				CORNERS.map((corner) => {
-					const cornerPosition = getCornerPosition({ bounds, corner });
-					const screen = toOverlay({
-						canvasX: cornerPosition.x,
-						canvasY: cornerPosition.y,
-					});
-					return (
-						<CornerHandle
-							key={corner}
-							corner={corner}
-							screen={screen}
-							onPointerDown={(event) =>
-								handleCornerPointerDown({ event, corner })
-							}
-							onPointerMove={(event) => handlePointerMove({ event })}
-							onPointerUp={(event) => handlePointerUp({ event })}
-						/>
-					);
-				})}
+			<BoundingBoxOutline
+				center={center}
+				outlineWidth={outlineWidth}
+				outlineHeight={outlineHeight}
+				rotation={bounds.rotation}
+			/>
+			{CORNERS.map((corner) => {
+				const cornerPosition = getCornerPosition({ bounds, corner });
+				const screen = toOverlay({
+					canvasX: cornerPosition.x,
+					canvasY: cornerPosition.y,
+				});
+				return (
+					<CornerHandle
+						key={corner}
+						corner={corner}
+						screen={screen}
+						onPointerDown={(event) =>
+							handleCornerPointerDown({ event, corner })
+						}
+						onPointerMove={(event) => handlePointerMove({ event })}
+						onPointerUp={(event) => handlePointerUp({ event })}
+					/>
+				);
+			})}
 			{splitSlotControls && splitSlotControlPosition && (
 				/* biome-ignore lint/a11y/noStaticElementInteractions: wrapper only stops propagation for nested slider */
 				<div

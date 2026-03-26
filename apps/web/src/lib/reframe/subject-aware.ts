@@ -1,6 +1,7 @@
 import type { MediaAsset } from "@/types/assets";
 import type {
 	VideoElement,
+	VideoReframeAvailabilitySection,
 	VideoReframePreset,
 	VideoReframeSubjectSeed,
 	VideoReframePresetTransform,
@@ -36,6 +37,22 @@ type SubjectObservation = {
 	time: number;
 	boxes: SubjectBox[];
 };
+
+type IdentityObservationBox = {
+	time: number;
+	box: SubjectBox;
+};
+
+type IdentityPresetSegment = {
+	startTime: number;
+	box: SubjectBox;
+	observationCount: number;
+};
+
+function buildRepresentativeSegmentBox(boxes: SubjectBox[]): SubjectBox {
+	const sample = boxes.slice(0, Math.min(boxes.length, 3));
+	return buildSubjectBoxFromDetections(sample.length > 0 ? sample : boxes);
+}
 
 type SubjectTrackingObservation = {
 	time: number;
@@ -852,7 +869,7 @@ function derivePresetTransform({
 		Math.max(visibleHalfWidthInSource, sourceWidth - visibleHalfWidthInSource),
 	);
 	const desiredViewportCenterY = clamp(
-		box.centerY,
+		box.anchorY ?? box.centerY,
 		visibleHalfHeightInSource,
 		Math.max(
 			visibleHalfHeightInSource,
@@ -953,6 +970,41 @@ function getBoxIoU(left: SubjectBox, right: SubjectBox): number {
 	const intersectionArea = intersectionWidth * intersectionHeight;
 	const unionArea = getBoxArea(left) + getBoxArea(right) - intersectionArea;
 	return unionArea > 0 ? intersectionArea / unionArea : 0;
+}
+
+function mergeSubjectDetectionSources({
+	primary,
+	secondary,
+}: {
+	primary: SubjectBox[];
+	secondary: SubjectBox[];
+}): SubjectBox[] {
+	if (primary.length === 0) {
+		return secondary.map((box) => ({ ...box }));
+	}
+	if (secondary.length === 0) {
+		return primary.map((box) => ({ ...box }));
+	}
+	const merged = primary.map((box) => ({ ...box }));
+	for (const candidate of secondary) {
+		const overlapsExisting = merged.some((existing) => {
+			const comparableSize = Math.max(
+				1,
+				existing.fitWidth ?? existing.width,
+				existing.fitHeight ?? existing.height,
+				candidate.fitWidth ?? candidate.width,
+				candidate.fitHeight ?? candidate.height,
+			);
+			return (
+				getBoxIoU(existing, candidate) >= 0.22 ||
+				getBoxDistance(existing, candidate) <= comparableSize * 0.32
+			);
+		});
+		if (!overlapsExisting) {
+			merged.push({ ...candidate });
+		}
+	}
+	return merged;
 }
 
 function getBoxOverlapWithViewport(
@@ -1577,7 +1629,7 @@ function buildTwoSubjectClusters({
 		Math.floor(detections.length * 0.18),
 	);
 	if (
-		separation < Math.max(sourceWidth * 0.14, medianWidth * 1.35) ||
+		separation < Math.max(sourceWidth * 0.08, medianWidth * 0.8) ||
 		finalLeft.length < minObservationsPerCluster ||
 		finalRight.length < minObservationsPerCluster
 	) {
@@ -1589,6 +1641,46 @@ function buildTwoSubjectClusters({
 			buildSubjectBoxFromDetections(left).centerX -
 			buildSubjectBoxFromDetections(right).centerX,
 	);
+}
+
+function buildTwoSubjectClustersFromObservations({
+	observations,
+	sourceWidth,
+}: {
+	observations: SubjectObservation[];
+	sourceWidth: number;
+}): SubjectBox[][] {
+	const dualSubjectObservations = observations
+		.filter((observation) => observation.boxes.length >= 2)
+		.map((observation) =>
+			[...observation.boxes].sort((left, right) => left.centerX - right.centerX),
+		);
+	if (dualSubjectObservations.length < 2) {
+		return [];
+	}
+
+	const leftDetections = dualSubjectObservations
+		.map((boxes) => boxes[0] ?? null)
+		.filter((box): box is SubjectBox => Boolean(box));
+	const rightDetections = dualSubjectObservations
+		.map((boxes) => boxes[boxes.length - 1] ?? null)
+		.filter((box): box is SubjectBox => Boolean(box));
+	if (leftDetections.length < 2 || rightDetections.length < 2) {
+		return [];
+	}
+
+	const leftBox = buildSubjectBoxFromDetections(leftDetections);
+	const rightBox = buildSubjectBoxFromDetections(rightDetections);
+	const separation = Math.abs(rightBox.centerX - leftBox.centerX);
+	const medianWidth = median([
+		...leftDetections.map((entry) => entry.width),
+		...rightDetections.map((entry) => entry.width),
+	]);
+	if (separation < Math.max(sourceWidth * 0.06, medianWidth * 0.55)) {
+		return [];
+	}
+
+	return [leftDetections, rightDetections];
 }
 
 function filterCandidatesByIdentityCluster({
@@ -1655,33 +1747,202 @@ function getInitialSeedBoxForIdentity({
 	const sortedObservations = [...observations].sort(
 		(left, right) => left.time - right.time,
 	);
-	for (const observation of sortedObservations) {
-		if (observation.boxes.length === 0) continue;
-		if (targetIdentity === "subject") {
-			return observation.boxes.length === 1
-				? { ...observation.boxes[0]! }
-				: buildSubjectBoxFromDetections(observation.boxes);
+	if (targetIdentity === "subject") {
+		const singletonBoxes = sortedObservations
+			.filter((observation) => observation.boxes.length === 1)
+			.map((observation) => observation.boxes[0]!)
+			.filter((box): box is SubjectBox => Boolean(box));
+		if (singletonBoxes.length > 0) {
+			return buildSubjectBoxFromDetections(singletonBoxes);
 		}
-		const matches = observation.boxes.filter(
-			(box) => classifyBoxIdentity({ box, clusters }) === targetIdentity,
+		const multiSubjectBoxes = sortedObservations.flatMap((observation) =>
+			observation.boxes.length > 0 ? [buildSubjectBoxFromDetections(observation.boxes)] : [],
 		);
-		if (matches.length > 0) {
-			const clusterCenters = getClusterCenterXs(clusters);
+		if (multiSubjectBoxes.length > 0) {
+			return buildSubjectBoxFromDetections(multiSubjectBoxes);
+		}
+		return null;
+	}
+
+	const clusterCenters = getClusterCenterXs(clusters);
+	const matches = sortedObservations.flatMap((observation) =>
+		observation.boxes.filter(
+			(box) => classifyBoxIdentity({ box, clusters }) === targetIdentity,
+		),
+	);
+	if (matches.length > 0) {
+		if (!clusterCenters) {
+			return buildSubjectBoxFromDetections(matches);
+		}
+		const targetCenter =
+			targetIdentity === "left" ? clusterCenters.left : clusterCenters.right;
+		const rankedMatches = [...matches].sort(
+			(left, right) =>
+				Math.abs(left.centerX - targetCenter) -
+				Math.abs(right.centerX - targetCenter),
+		);
+		const representativeMatches = rankedMatches.slice(
+			0,
+			Math.max(1, Math.ceil(rankedMatches.length * 0.6)),
+		);
+		return buildSubjectBoxFromDetections(representativeMatches);
+	}
+	return null;
+}
+
+function getIdentityObservationBoxes({
+	observations,
+	clusters,
+	targetIdentity,
+}: {
+	observations: SubjectObservation[];
+	clusters: SubjectBox[][];
+	targetIdentity: "left" | "right";
+}): IdentityObservationBox[] {
+	const clusterCenters = getClusterCenterXs(clusters);
+	return [...observations]
+		.sort((left, right) => left.time - right.time)
+		.flatMap((observation) => {
+			if (observation.boxes.length >= 2) {
+				const orderedBoxes = [...observation.boxes].sort(
+					(left, right) => left.centerX - right.centerX,
+				);
+				const edgeBox =
+					targetIdentity === "left"
+						? orderedBoxes[0] ?? null
+						: orderedBoxes[orderedBoxes.length - 1] ?? null;
+				return edgeBox ? [{ time: observation.time, box: { ...edgeBox } }] : [];
+			}
+			const matches = observation.boxes.filter(
+				(box) => classifyBoxIdentity({ box, clusters }) === targetIdentity,
+			);
+			if (matches.length === 0) return [];
 			if (!clusterCenters) {
-				return { ...matches[0]! };
+				return [{ time: observation.time, box: { ...matches[0]! } }];
 			}
 			const targetCenter =
 				targetIdentity === "left" ? clusterCenters.left : clusterCenters.right;
-			return {
-				...[...matches].sort(
+			const bestMatch =
+				[...matches].sort(
 					(left, right) =>
 						Math.abs(left.centerX - targetCenter) -
 						Math.abs(right.centerX - targetCenter),
-				)[0]!,
-			};
+				)[0] ?? null;
+			return bestMatch ? [{ time: observation.time, box: { ...bestMatch } }] : [];
+		});
+}
+
+function buildIdentityPresetSegments({
+	observations,
+	clusters,
+	targetIdentity,
+	sourceWidth,
+}: {
+	observations: SubjectObservation[];
+	clusters: SubjectBox[][];
+	targetIdentity: "left" | "right";
+	sourceWidth: number;
+}): IdentityPresetSegment[] {
+	const identityBoxes = getIdentityObservationBoxes({
+		observations,
+		clusters,
+		targetIdentity,
+	});
+	if (identityBoxes.length === 0) return [];
+
+	const segments: Array<{
+		startTime: number;
+		boxes: SubjectBox[];
+	}> = [];
+	for (const entry of identityBoxes) {
+		const currentRepresentative =
+			segments.length > 0
+				? buildRepresentativeSegmentBox(segments[segments.length - 1]!.boxes)
+				: null;
+		const areaRatio = currentRepresentative
+			? Math.abs(
+					getBoxArea(entry.box) - getBoxArea(currentRepresentative),
+				) /
+				Math.max(getBoxArea(entry.box), getBoxArea(currentRepresentative), 1)
+			: 0;
+		const anchorDistance = currentRepresentative
+			? Math.hypot(
+					(entry.box.anchorX ?? entry.box.centerX) -
+						(currentRepresentative.anchorX ?? currentRepresentative.centerX),
+					(entry.box.anchorY ?? entry.box.centerY) -
+						(currentRepresentative.anchorY ?? currentRepresentative.centerY),
+				)
+			: 0;
+		const shouldStartNewSegment = Boolean(
+			currentRepresentative &&
+				(anchorDistance >
+					Math.max(
+						sourceWidth * 0.16,
+						(currentRepresentative.fitWidth ??
+							currentRepresentative.width) * 1.35,
+					) ||
+					areaRatio > 0.5),
+		);
+		if (!segments.length || shouldStartNewSegment) {
+			segments.push({
+				startTime: entry.time,
+				boxes: [{ ...entry.box }],
+			});
+			continue;
 		}
+		segments[segments.length - 1]!.boxes.push({ ...entry.box });
 	}
-	return null;
+
+	const mergedSegments: typeof segments = [];
+	for (const segment of segments) {
+		const previous = mergedSegments[mergedSegments.length - 1];
+		if (!previous) {
+			mergedSegments.push({
+				startTime: segment.startTime,
+				boxes: [...segment.boxes],
+			});
+			continue;
+		}
+		const previousRepresentative = buildRepresentativeSegmentBox(previous.boxes);
+		const nextRepresentative = buildRepresentativeSegmentBox(segment.boxes);
+		const areaRatio =
+			Math.abs(
+				getBoxArea(nextRepresentative) - getBoxArea(previousRepresentative),
+			) /
+			Math.max(
+				getBoxArea(nextRepresentative),
+				getBoxArea(previousRepresentative),
+				1,
+			);
+		const anchorDistance = Math.hypot(
+			(nextRepresentative.anchorX ?? nextRepresentative.centerX) -
+				(previousRepresentative.anchorX ?? previousRepresentative.centerX),
+			(nextRepresentative.anchorY ?? nextRepresentative.centerY) -
+				(previousRepresentative.anchorY ?? previousRepresentative.centerY),
+		);
+		const shouldMergeBack =
+			segment.boxes.length < 2 &&
+			anchorDistance <
+				Math.max(
+					sourceWidth * 0.22,
+					(previousRepresentative.fitWidth ?? previousRepresentative.width) * 1.6,
+				) &&
+			areaRatio < 0.6;
+		if (shouldMergeBack) {
+			previous.boxes.push(...segment.boxes.map((box) => ({ ...box })));
+			continue;
+		}
+		mergedSegments.push({
+			startTime: segment.startTime,
+			boxes: [...segment.boxes],
+		});
+	}
+
+	return mergedSegments.map((segment) => ({
+		startTime: segment.startTime,
+		box: buildRepresentativeSegmentBox(segment.boxes),
+		observationCount: segment.boxes.length,
+	}));
 }
 
 function classifyObservationPresetName({
@@ -1721,9 +1982,9 @@ function classifyObservationPresetName({
 	return "Subject";
 }
 
-function smoothObservationStates(
-	observations: Array<SubjectObservation & { presetName: AutoSectionKind }>,
-) {
+function smoothObservationStates<
+	T extends SubjectObservation & { presetName: AutoSectionKind },
+>(observations: T[]): T[] {
 	if (observations.length < 3) return observations;
 	const next = [...observations];
 	for (let index = 1; index < next.length - 1; index++) {
@@ -1840,6 +2101,287 @@ function buildAutoSectionSwitches({
 	return { defaultPresetId, switches };
 }
 
+function buildAutoAvailabilitySections({
+	observations,
+	clusters,
+	resolvePresetId,
+}: {
+	observations: SubjectObservation[];
+	clusters: SubjectBox[][];
+	resolvePresetId: (args: {
+		identity: "left" | "right";
+		time: number;
+	}) => string | null;
+}): VideoReframeAvailabilitySection[] {
+	if (clusters.length < 2) return [];
+
+	const classified = observations
+		.sort((left, right) => left.time - right.time)
+		.map((observation) => {
+			let hasLeft = false;
+			let hasRight = false;
+			for (const box of observation.boxes) {
+				if (classifyBoxIdentity({ box, clusters }) === "left") {
+					hasLeft = true;
+				} else {
+					hasRight = true;
+				}
+			}
+			return {
+				...observation,
+				presetName:
+					hasLeft && hasRight
+						? ("Subject" as const)
+						: hasLeft
+							? ("Subject Left" as const)
+							: ("Subject Right" as const),
+			};
+		});
+	if (classified.length === 0) return [];
+
+	const minSectionSeconds = 0.85;
+	const runs: Array<{
+		startTime: number;
+		endTime: number;
+		availablePresetIds: string[];
+	}> = [];
+	for (let index = 0; index < classified.length; index += 1) {
+		const observation = classified[index]!;
+		const nextObservationTime =
+			classified[index + 1]?.time ?? observation.time + minSectionSeconds;
+		const availablePresetIds =
+			observation.presetName === "Subject"
+				? [
+						resolvePresetId({ identity: "left", time: observation.time }),
+						resolvePresetId({ identity: "right", time: observation.time }),
+					].filter((presetId): presetId is string => Boolean(presetId))
+				: observation.presetName === "Subject Left"
+					? [resolvePresetId({ identity: "left", time: observation.time })].filter(
+							(presetId): presetId is string => Boolean(presetId),
+						)
+					: [resolvePresetId({ identity: "right", time: observation.time })].filter(
+							(presetId): presetId is string => Boolean(presetId),
+						);
+		if (availablePresetIds.length === 0) {
+			continue;
+		}
+		const lastRun = runs[runs.length - 1];
+		if (
+			lastRun &&
+			lastRun.availablePresetIds.join("|") === availablePresetIds.join("|")
+		) {
+			lastRun.endTime = nextObservationTime;
+			continue;
+		}
+		runs.push({
+			startTime: observation.time,
+			endTime: nextObservationTime,
+			availablePresetIds,
+		});
+	}
+
+	const mergedRuns: typeof runs = [];
+	for (const run of runs) {
+		const duration = Math.max(0, run.endTime - run.startTime);
+		const previous = mergedRuns[mergedRuns.length - 1];
+		if (
+			duration < minSectionSeconds &&
+			previous &&
+			previous.availablePresetIds.join("|") !== run.availablePresetIds.join("|")
+		) {
+			previous.endTime = run.endTime;
+			continue;
+		}
+		mergedRuns.push({
+			startTime: run.startTime,
+			endTime: run.endTime,
+			availablePresetIds: [...run.availablePresetIds],
+		});
+	}
+
+	return mergedRuns.map((run) => ({
+		id: generateUUID(),
+		startTime: run.startTime,
+		availablePresetIds: [...run.availablePresetIds],
+	}));
+}
+
+function constrainPresetTimelineToAvailability({
+	defaultPresetId,
+	switches,
+	availabilitySections,
+}: {
+	defaultPresetId: string | null;
+	switches: VideoReframeSwitch[];
+	availabilitySections: VideoReframeAvailabilitySection[];
+}): {
+	defaultPresetId: string | null;
+	switches: VideoReframeSwitch[];
+} {
+	if (availabilitySections.length === 0) {
+		return {
+			defaultPresetId,
+			switches,
+		};
+	}
+
+	const switchesByTime = new Map<number, VideoReframeSwitch>(
+		switches.map((entry) => [entry.time, entry] as const),
+	);
+	const boundaries = new Set<number>([0]);
+	for (const section of availabilitySections) {
+		boundaries.add(section.startTime);
+	}
+	for (const entry of switches) {
+		boundaries.add(entry.time);
+	}
+	const sortedTimes = [...boundaries].sort((left, right) => left - right);
+	const resolveAvailabilityAtTime = (
+		time: number,
+	): VideoReframeAvailabilitySection | null => {
+		let activeSection: VideoReframeAvailabilitySection | null = null;
+		for (const section of availabilitySections) {
+			if (section.startTime - time > 1e-6) {
+				break;
+			}
+			activeSection = section;
+		}
+		return activeSection;
+	};
+
+	let intendedPresetId = defaultPresetId;
+	let effectivePresetId = defaultPresetId;
+	let constrainedDefaultPresetId = defaultPresetId;
+	const constrainedSwitches: VideoReframeSwitch[] = [];
+
+	for (const time of sortedTimes) {
+		const explicitSwitch = switchesByTime.get(time) ?? null;
+		if (explicitSwitch) {
+			intendedPresetId = explicitSwitch.presetId;
+		}
+		const availablePresetIds =
+			resolveAvailabilityAtTime(time)?.availablePresetIds ?? null;
+		const nextEffectivePresetId =
+			availablePresetIds && availablePresetIds.length > 0
+				? availablePresetIds.includes(intendedPresetId ?? "")
+					? intendedPresetId
+					: availablePresetIds[0] ?? null
+				: intendedPresetId;
+		if (time <= 1e-6) {
+			constrainedDefaultPresetId = nextEffectivePresetId;
+			effectivePresetId = nextEffectivePresetId;
+			continue;
+		}
+		if (nextEffectivePresetId !== effectivePresetId && nextEffectivePresetId) {
+			constrainedSwitches.push({
+				id: explicitSwitch?.id ?? generateUUID(),
+				time,
+				presetId: nextEffectivePresetId,
+			});
+		}
+		effectivePresetId = nextEffectivePresetId;
+	}
+
+	return {
+		defaultPresetId: constrainedDefaultPresetId,
+		switches: constrainedSwitches,
+	};
+}
+
+function buildAutoPresetTimeline({
+	observations,
+	clusters,
+	resolvePresetId,
+}: {
+	observations: SubjectObservation[];
+	clusters: SubjectBox[][];
+	resolvePresetId: (args: {
+		kind: AutoSectionKind;
+		time: number;
+	}) => string | null;
+}): { defaultPresetId: string | null; switches: VideoReframeSwitch[] } {
+	const classifiedAssignments = observations
+		.sort((left, right) => left.time - right.time)
+		.map((observation) => {
+			const presetName = classifyObservationPresetName({
+				observation,
+				clusters,
+			});
+			if (!presetName) return null;
+			const resolvedPresetId = resolvePresetId({
+				kind: presetName,
+				time: observation.time,
+			});
+			if (!resolvedPresetId) return null;
+			return {
+				...observation,
+				presetName,
+				resolvedPresetId,
+			};
+		})
+		.filter(
+			(
+				observation,
+			): observation is SubjectObservation & {
+				presetName: AutoSectionKind;
+				resolvedPresetId: string;
+			} => Boolean(observation),
+		);
+	const classified = smoothObservationStates(classifiedAssignments);
+	if (classified.length === 0) {
+		return {
+			defaultPresetId: null,
+			switches: [],
+		};
+	}
+
+	const minSectionSeconds = 0.85;
+	const runs: Array<{
+		presetId: string;
+		startTime: number;
+		endTime: number;
+	}> = [];
+	for (let index = 0; index < classified.length; index += 1) {
+		const observation = classified[index]!;
+		const nextObservationTime =
+			classified[index + 1]?.time ?? observation.time + minSectionSeconds;
+		const lastRun = runs[runs.length - 1];
+		if (!lastRun || lastRun.presetId !== observation.resolvedPresetId) {
+			runs.push({
+				presetId: observation.resolvedPresetId,
+				startTime: observation.time,
+				endTime: nextObservationTime,
+			});
+			continue;
+		}
+		lastRun.endTime = nextObservationTime;
+	}
+
+	const mergedRuns: typeof runs = [];
+	for (const run of runs) {
+		const duration = Math.max(0, run.endTime - run.startTime);
+		const previous = mergedRuns[mergedRuns.length - 1];
+		if (
+			duration < minSectionSeconds &&
+			previous &&
+			previous.presetId !== run.presetId
+		) {
+			previous.endTime = run.endTime;
+			continue;
+		}
+		mergedRuns.push({ ...run });
+	}
+
+	return {
+		defaultPresetId: mergedRuns[0]?.presetId ?? null,
+		switches: mergedRuns.slice(1).map((run) => ({
+			id: generateUUID(),
+			time: run.startTime,
+			presetId: run.presetId,
+		})),
+	};
+}
+
 export function getVideoElementSourceRange({
 	element,
 	asset,
@@ -1882,6 +2424,7 @@ export function buildAutoReframePresetsFromDetections({
 }): {
 	presets: VideoReframePreset[];
 	switches: VideoReframeSwitch[];
+	availabilitySections: VideoReframeAvailabilitySection[];
 	defaultPresetId: string | null;
 	detectionCount: number;
 	subjectClusterCount: number;
@@ -1891,6 +2434,7 @@ export function buildAutoReframePresetsFromDetections({
 		return {
 			presets: [subjectPreset],
 			switches: [],
+			availabilitySections: [],
 			defaultPresetId: subjectPreset.id,
 			detectionCount: 0,
 			subjectClusterCount: 0,
@@ -1899,10 +2443,17 @@ export function buildAutoReframePresetsFromDetections({
 
 	const centerXs = detections.map((entry) => entry.centerX);
 	const centerBox = buildSubjectBoxFromDetections(detections);
-	const clusters = buildTwoSubjectClusters({
-		detections,
+	const observationClusters = buildTwoSubjectClustersFromObservations({
+		observations,
 		sourceWidth,
 	});
+	const clusters =
+		observationClusters.length >= 2
+			? observationClusters
+			: buildTwoSubjectClusters({
+					detections,
+					sourceWidth,
+				});
 	const initialSubjectBox =
 		getInitialSeedBoxForIdentity({
 			observations,
@@ -1914,71 +2465,123 @@ export function buildAutoReframePresetsFromDetections({
 	let defaultPresetId: string | null = null;
 
 	if (clusters.length >= 2) {
-		const edgeBias = Math.max(sourceWidth * 0.02, centerBox.width * 0.12);
-		const leftClusterBox = buildSubjectBoxFromDetections(clusters[0]!);
-		const rightClusterBox = buildSubjectBoxFromDetections(
-			clusters[clusters.length - 1]!,
-		);
-		const initialLeftBox =
-			getInitialSeedBoxForIdentity({
+		const leftSegments =
+			buildIdentityPresetSegments({
 				observations,
 				clusters,
 				targetIdentity: "left",
-			}) ?? leftClusterBox;
-		const initialRightBox =
-			getInitialSeedBoxForIdentity({
+				sourceWidth,
+			}) ||
+			[];
+		const rightSegments =
+			buildIdentityPresetSegments({
 				observations,
 				clusters,
 				targetIdentity: "right",
-			}) ?? rightClusterBox;
-		const leftBox: SubjectBox = {
-			...initialLeftBox,
-			centerX: clampSubjectCenterX({
-				centerX: initialLeftBox.centerX - edgeBias,
 				sourceWidth,
-				boxWidth: initialLeftBox.width,
-			}),
+			}) ||
+			[];
+		const normalizedLeftSegments =
+			leftSegments.length > 0
+				? leftSegments
+				: [
+						{
+							startTime: 0,
+							box: buildSubjectBoxFromDetections(clusters[0]!),
+							observationCount: clusters[0]!.length,
+						},
+					];
+		const normalizedRightSegments =
+			rightSegments.length > 0
+				? rightSegments
+				: [
+						{
+							startTime: 0,
+							box: buildSubjectBoxFromDetections(clusters[clusters.length - 1]!),
+							observationCount: clusters[clusters.length - 1]!.length,
+						},
+					];
+
+		const leftPrimarySegment =
+			normalizedLeftSegments.reduce((bestSegment, segment) =>
+				segment.observationCount > bestSegment.observationCount
+					? segment
+					: bestSegment,
+			);
+		const rightPrimarySegment =
+			normalizedRightSegments.reduce((bestSegment, segment) =>
+				segment.observationCount > bestSegment.observationCount
+					? segment
+					: bestSegment,
+			);
+		const buildAutoSegment = ({
+			identity,
+			segment,
+		}: {
+			identity: "left" | "right";
+			segment: IdentityPresetSegment;
+		}) => {
+			const clampedBox = {
+				...segment.box,
+				centerX: clampSubjectCenterX({
+					centerX: segment.box.centerX,
+					sourceWidth,
+					boxWidth: segment.box.width,
+				}),
+			};
+			return {
+				id: generateUUID(),
+				startTime: segment.startTime,
+				transform: derivePresetTransform({
+					box: clampedBox,
+					canvasSize,
+					sourceWidth,
+					sourceHeight,
+					baseScale,
+					tightness: 0.36,
+				}),
+				subjectSeed: buildSubjectSeed({
+					box: clampedBox,
+					identity,
+				}),
+			};
 		};
-		const rightBox: SubjectBox = {
-			...initialRightBox,
-			centerX: clampSubjectCenterX({
-				centerX: initialRightBox.centerX + edgeBias,
-				sourceWidth,
-				boxWidth: initialRightBox.width,
+		const leftAutoSegments = normalizedLeftSegments.map((segment) =>
+			buildAutoSegment({
+				identity: "left",
+				segment,
 			}),
-		};
+		);
+		const rightAutoSegments = normalizedRightSegments.map((segment) =>
+			buildAutoSegment({
+				identity: "right",
+				segment,
+			}),
+		);
+		const leftPrimaryAutoSegment =
+			leftAutoSegments[
+				normalizedLeftSegments.findIndex((segment) => segment === leftPrimarySegment)
+			] ?? leftAutoSegments[0]!;
+		const rightPrimaryAutoSegment =
+			rightAutoSegments[
+				normalizedRightSegments.findIndex(
+					(segment) => segment === rightPrimarySegment,
+				)
+			] ?? rightAutoSegments[0]!;
 		presets.push(
 			buildVideoReframePreset({
 				name: "Subject Left",
 				autoSeeded: true,
-				subjectSeed: buildSubjectSeed({
-					box: initialLeftBox,
-					identity: "left",
-				}),
-				transform: derivePresetTransform({
-					box: leftBox,
-					canvasSize,
-					sourceWidth,
-					sourceHeight,
-					baseScale,
-					tightness: 0.36,
-				}),
+				subjectSeed: leftPrimaryAutoSegment.subjectSeed,
+				transform: leftPrimaryAutoSegment.transform,
+				autoSegments: leftAutoSegments,
 			}),
 			buildVideoReframePreset({
 				name: "Subject Right",
 				autoSeeded: true,
-				subjectSeed: buildSubjectSeed({
-					box: initialRightBox,
-					identity: "right",
-				}),
-				transform: derivePresetTransform({
-					box: rightBox,
-					canvasSize,
-					sourceWidth,
-					sourceHeight,
-					baseScale,
-					tightness: 0.36,
-				}),
+				subjectSeed: rightPrimaryAutoSegment.subjectSeed,
+				transform: rightPrimaryAutoSegment.transform,
+				autoSegments: rightAutoSegments,
 			}),
 		);
 		defaultPresetId = presets[0]?.id ?? null;
@@ -2005,36 +2608,51 @@ export function buildAutoReframePresetsFromDetections({
 
 	const dedupedPresets = dedupePresetNames(presets);
 	const presetIdByName = Object.fromEntries(
-		dedupedPresets.map((preset) => [preset.name as AutoSectionKind, preset.id]),
+		dedupedPresets
+			.filter(
+				(preset) =>
+					preset.name === "Subject" ||
+					preset.name === "Subject Left" ||
+					preset.name === "Subject Right",
+			)
+			.map((preset) => [preset.name as AutoSectionKind, preset.id]),
 	) as Partial<Record<AutoSectionKind, string>>;
-	const classifiedObservations = observations
-		.map((observation) => {
-			const presetName = classifyObservationPresetName({
-				observation,
-				clusters,
-			});
-			return presetName ? { ...observation, presetName } : null;
-		})
-		.filter(
-			(
-				observation,
-			): observation is SubjectObservation & { presetName: AutoSectionKind } =>
-				Boolean(observation),
-		);
-	const autoSections = buildAutoSectionSwitches({
-		observations: classifiedObservations,
-		presetIdByName,
+	const autoSections = buildAutoPresetTimeline({
+		observations,
+		clusters,
+		resolvePresetId: ({ kind }) => {
+			if (kind === "Subject Left") {
+				return presetIdByName["Subject Left"] ?? null;
+			}
+			if (kind === "Subject Right") {
+				return presetIdByName["Subject Right"] ?? null;
+			}
+			return presetIdByName["Subject"] ?? null;
+		},
+	});
+	const availabilitySections = buildAutoAvailabilitySections({
+		observations,
+		clusters,
+		resolvePresetId: ({ identity }) =>
+			identity === "left"
+				? presetIdByName["Subject Left"] ?? null
+				: presetIdByName["Subject Right"] ?? null,
 	});
 	const resolvedDefaultPresetId =
 		autoSections.defaultPresetId ??
 		dedupedPresets.find((preset) => preset.id === defaultPresetId)?.id ??
 		dedupedPresets[0]?.id ??
 		null;
+	const constrainedTimeline = constrainPresetTimelineToAvailability({
+		defaultPresetId: resolvedDefaultPresetId,
+		switches: autoSections.switches.length > 0 ? autoSections.switches : switches,
+		availabilitySections,
+	});
 	return {
 		presets: dedupedPresets,
-		switches:
-			autoSections.switches.length > 0 ? autoSections.switches : switches,
-		defaultPresetId: resolvedDefaultPresetId,
+		switches: constrainedTimeline.switches,
+		availabilitySections,
+		defaultPresetId: constrainedTimeline.defaultPresetId,
 		detectionCount: detections.length,
 		subjectClusterCount: clusters.length,
 	};
@@ -2057,6 +2675,7 @@ export async function analyzeGeneratedClipReframes({
 }): Promise<{
 	presets: VideoReframePreset[];
 	switches: VideoReframeSwitch[];
+	availabilitySections: VideoReframeAvailabilitySection[];
 	defaultPresetId: string | null;
 	detectionCount: number;
 	subjectClusterCount: number;
@@ -2066,6 +2685,7 @@ export async function analyzeGeneratedClipReframes({
 		return {
 			presets: [subject],
 			switches: [],
+			availabilitySections: [],
 			defaultPresetId: subject.id,
 			detectionCount: 0,
 			subjectClusterCount: 0,
@@ -2079,6 +2699,7 @@ export async function analyzeGeneratedClipReframes({
 		return {
 			presets: [subject],
 			switches: [],
+			availabilitySections: [],
 			defaultPresetId: subject.id,
 			detectionCount: 0,
 			subjectClusterCount: 0,
@@ -2126,26 +2747,16 @@ export async function analyzeGeneratedClipReframes({
 					const faceDetections = (faceResult.detections ?? [])
 						.map((detection) => detection.boundingBox)
 						.filter((box): box is NonNullable<typeof box> => Boolean(box));
-					if (faceDetections.length > 0) {
-						const boxes: SubjectBox[] = [];
-						for (const faceBox of faceDetections) {
-							const nextBox = {
-								centerX: faceBox.originX + faceBox.width / 2,
-								centerY: faceBox.originY + faceBox.height / 2,
-								width: Math.max(1, faceBox.width * 2.4),
-								height: Math.max(1, faceBox.height * 3.4),
-								anchorX: faceBox.originX + faceBox.width / 2,
-								anchorY: faceBox.originY + faceBox.height * 0.42,
-								fitWidth: Math.max(1, faceBox.width * 1.35),
-								fitHeight: Math.max(1, faceBox.height * 1.75),
-							};
-							detections.push(nextBox);
-							boxes.push(nextBox);
-						}
-						observations.push({ time: Math.max(0, t - startTime), boxes });
-						continue;
-					}
-
+					const faceBoxes: SubjectBox[] = faceDetections.map((faceBox) => ({
+						centerX: faceBox.originX + faceBox.width / 2,
+						centerY: faceBox.originY + faceBox.height / 2,
+						width: Math.max(1, faceBox.width * 2.4),
+						height: Math.max(1, faceBox.height * 3.4),
+						anchorX: faceBox.originX + faceBox.width / 2,
+						anchorY: faceBox.originY + faceBox.height * 0.42,
+						fitWidth: Math.max(1, faceBox.width * 1.35),
+						fitHeight: Math.max(1, faceBox.height * 1.75),
+					}));
 					const poseResult = withSuppressedVisionConsoleErrors(() =>
 						poseLandmarker.detectForVideo(
 							video,
@@ -2155,7 +2766,7 @@ export async function analyzeGeneratedClipReframes({
 							}),
 						),
 					);
-					const boxes: SubjectBox[] = [];
+					const poseBoxes: SubjectBox[] = [];
 					for (const pose of poseResult.landmarks ?? []) {
 						const poseBox = extractPoseBox({
 							landmarks: pose,
@@ -2163,11 +2774,15 @@ export async function analyzeGeneratedClipReframes({
 							sourceHeight,
 						});
 						if (poseBox) {
-							detections.push(poseBox);
-							boxes.push(poseBox);
+							poseBoxes.push(poseBox);
 						}
 					}
+					const boxes = mergeSubjectDetectionSources({
+						primary: faceBoxes,
+						secondary: poseBoxes,
+					});
 					if (boxes.length > 0) {
+						detections.push(...boxes);
 						observations.push({ time: Math.max(0, t - startTime), boxes });
 					}
 				} catch (sampleError) {
@@ -2204,6 +2819,7 @@ export async function analyzeGeneratedClipReframes({
 		return {
 			presets: [subjectPreset],
 			switches: [],
+			availabilitySections: [],
 			defaultPresetId: subjectPreset.id,
 			detectionCount: 0,
 			subjectClusterCount: 0,
@@ -2355,31 +2971,32 @@ export async function analyzeGeneratedClipMotionTracking({
 							height: Math.max(1, faceBox.height * 3.4),
 							anchorX: faceBox.originX + faceBox.width / 2,
 							anchorY: faceBox.originY + faceBox.height * 0.42,
-							fitWidth: Math.max(1, faceBox.width * 1.35),
-							fitHeight: Math.max(1, faceBox.height * 1.75),
-						}));
-					if (faceCandidates.length > 0) {
-						identityDetections.push(...faceCandidates);
-					}
-					if (faceCandidates.length === 0) {
-						const poseResult = withSuppressedVisionConsoleErrors(() =>
-							poseLandmarker.detectForVideo(
-								video,
-								getMonotonicVisionTimestampMs({
-									kind: "pose",
-									candidateMs: frameTimestampMs,
-								}),
-							),
-						);
-						poseCandidates = (poseResult.landmarks ?? []).flatMap((pose) => {
-							const poseBox = extractPoseBox({
-								landmarks: pose,
-								sourceWidth,
-								sourceHeight,
-							});
-							return poseBox ? [poseBox] : [];
+								fitWidth: Math.max(1, faceBox.width * 1.35),
+								fitHeight: Math.max(1, faceBox.height * 1.75),
+							}));
+					const poseResult = withSuppressedVisionConsoleErrors(() =>
+						poseLandmarker.detectForVideo(
+							video,
+							getMonotonicVisionTimestampMs({
+								kind: "pose",
+								candidateMs: frameTimestampMs,
+							}),
+						),
+					);
+					poseCandidates = (poseResult.landmarks ?? []).flatMap((pose) => {
+						const poseBox = extractPoseBox({
+							landmarks: pose,
+							sourceWidth,
+							sourceHeight,
 						});
-					}
+						return poseBox ? [poseBox] : [];
+					});
+					identityDetections.push(
+						...mergeSubjectDetectionSources({
+							primary: faceCandidates,
+							secondary: poseCandidates,
+						}),
+					);
 				} catch (sampleError) {
 					if (!isIgnorableVisionRuntimeMessage(sampleError)) {
 						console.warn(
@@ -2438,14 +3055,27 @@ export async function analyzeGeneratedClipMotionTracking({
 								targetIdentity,
 							})
 						: frame.faceCandidates;
-				const candidates =
-					clusteredFaceCandidates.length > 0
-						? clusteredFaceCandidates
-						: previousTrackedBox
-							? []
-							: frame.poseCandidates;
+				const clusteredPoseCandidates =
+					targetIdentity && identityClusters.length >= 2
+						? filterCandidatesByIdentityCluster({
+								candidates: frame.poseCandidates,
+								clusters: identityClusters,
+								targetIdentity,
+							})
+						: frame.poseCandidates;
+				const clusteredCandidates = mergeSubjectDetectionSources({
+					primary: clusteredFaceCandidates,
+					secondary: clusteredPoseCandidates,
+				});
+				const fallbackCandidates = mergeSubjectDetectionSources({
+					primary: frame.faceCandidates,
+					secondary: frame.poseCandidates,
+				});
 				const trackedBox = choosePrimarySubjectBox({
-					candidates,
+					candidates:
+						clusteredCandidates.length > 0
+							? clusteredCandidates
+							: fallbackCandidates,
 					previousBox: previousTrackedBox,
 					sourceWidth,
 					sourceHeight,

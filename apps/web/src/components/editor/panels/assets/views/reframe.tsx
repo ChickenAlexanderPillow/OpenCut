@@ -41,17 +41,22 @@ import {
 	deriveVideoSplitScreenSlotAdjustmentFromTransform,
 	deriveVideoAngleSections,
 	getSourceCenterForTransform,
+	getAvailableReframePresetIdsAtTime,
+	getEffectiveVideoSplitScreenSlotTransformOverride,
+	getResolvedVideoReframePresetAtTime,
 	getVideoSplitScreenVariantKey,
 	getVideoAngleSectionAtTime,
 	getVideoAngleSectionByStartTime,
+	getVideoReframeAvailabilitySectionAtTime,
+	getVideoReframePresetAutoSegmentRangeAtTime,
 	getSelectedOrActiveReframePresetId,
 	getVideoReframeSectionAtTime,
 	getVideoReframeSectionByStartTime,
 	getVideoSplitScreenSectionAtTime,
 	getVideoSplitScreenViewports,
+	isVideoSplitScreenExternalSourceSlot,
 	normalizeVideoReframeState,
 	rebuildVideoReframeStateFromAngleSections,
-	replaceOrInsertReframeSwitch,
 	resolveVideoSplitScreenSlotTransformFromState,
 } from "@/lib/reframe/video-reframe";
 import {
@@ -65,17 +70,18 @@ import { ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS } from "@/lib/reframe/split-slot-c
 import {
 	CircleDot,
 	Ellipsis,
+	ImageIcon,
 	GripHorizontal,
 	Plus,
 	RefreshCw,
 	RotateCcw,
 	ScanFace,
+	ChevronDown,
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
 	VideoMotionTracking,
 	VideoReframePreset,
-	VideoReframeSwitch,
 	VideoSplitScreen,
 	VideoSplitScreenViewportBalance,
 	VideoSplitScreenSlotBinding,
@@ -213,14 +219,73 @@ export function ReframeView() {
 		selectedPresetIdByElementId,
 		isPlaying,
 	]);
-	const visibleReframePresets = useMemo(
-		() =>
-			(normalizedVideo?.element.reframePresets ?? []).filter(
-				(preset: VideoReframePreset) =>
-					preset.name.trim().toLowerCase() !== "subject",
-			),
+	const activeAvailabilityPresetIds = useMemo(
+		() => {
+			if (!normalizedVideo) return null;
+			return getAvailableReframePresetIdsAtTime({
+				element: normalizedVideo.element,
+				localTime,
+			});
+		},
+		[localTime, normalizedVideo],
+	);
+	const storedReframePresets = useMemo(
+		() => normalizedVideo?.element.reframePresets ?? [],
 		[normalizedVideo],
 	);
+	const availableHostReframePresets = useMemo(
+		() => {
+			const allowedPresetIdSet = activeAvailabilityPresetIds
+				? new Set(activeAvailabilityPresetIds)
+				: null;
+			return storedReframePresets.filter(
+				(preset: VideoReframePreset) => {
+					if (preset.name.trim().toLowerCase() === "subject") return false;
+					const identity = preset.subjectSeed?.identity;
+					if (
+						allowedPresetIdSet &&
+						(identity === "left" || identity === "right")
+					) {
+						return allowedPresetIdSet.has(preset.id);
+					}
+					return true;
+				},
+			);
+		},
+		[activeAvailabilityPresetIds, storedReframePresets],
+	);
+	const availableExternalSplitSources = useMemo(() => {
+		if (!normalizedVideo) return [];
+		const hostStartTime = normalizedVideo.element.startTime;
+		const hostEndTime =
+			normalizedVideo.element.startTime + normalizedVideo.element.duration;
+		return editor.timeline
+			.getTracks()
+			.flatMap((track) =>
+				track.elements.flatMap((element) => {
+					if (element.id === normalizedVideo.element.id) return [];
+					if (element.type !== "video" && element.type !== "image") return [];
+					const elementEndTime = element.startTime + element.duration;
+					const overlapsHost =
+						element.startTime < hostEndTime && elementEndTime > hostStartTime;
+					if (!overlapsHost) return [];
+					return [
+						{
+							elementId: element.id,
+							name: element.name,
+							trackName: track.name,
+							type: element.type,
+							startTime: element.startTime,
+						},
+					];
+				}),
+			)
+			.sort((left, right) =>
+				left.startTime !== right.startTime
+					? left.startTime - right.startTime
+					: left.name.localeCompare(right.name),
+			);
+	}, [editor.timeline, normalizedVideo]);
 
 	const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
 	const [editingName, setEditingName] = useState("");
@@ -285,18 +350,22 @@ export function ReframeView() {
 		preset: VideoReframePreset;
 	}) => {
 		if (!selectedMediaAsset || !normalizedVideo) return null;
-		const sourceRange = getVideoElementSourceRange({
-			element: normalizedVideo.element,
-			asset: selectedMediaAsset,
-		});
+		const desiredScope = getDesiredMotionTrackingScope({ preset });
+		const resolvedPreset = getResolvedTrackingPreset({ preset });
+		if (!desiredScope || !resolvedPreset) return null;
 		return [
-			selectedMediaAsset.id,
-			sourceRange.startTime.toFixed(3),
-			sourceRange.endTime.toFixed(3),
-			preset.name.trim().toLowerCase(),
-			preset.transform.position.x.toFixed(3),
-			preset.transform.position.y.toFixed(3),
-			preset.transform.scale.toFixed(4),
+			desiredScope.assetId,
+			desiredScope.startTime.toFixed(3),
+			desiredScope.endTime.toFixed(3),
+			resolvedPreset.name.trim().toLowerCase(),
+			resolvedPreset.transform.position.x.toFixed(3),
+			resolvedPreset.transform.position.y.toFixed(3),
+			resolvedPreset.transform.scale.toFixed(4),
+			resolvedPreset.subjectSeed?.identity ?? "identity:none",
+			`seedx:${resolvedPreset.subjectSeed?.center.x?.toFixed(2) ?? "none"}`,
+			`seedy:${resolvedPreset.subjectSeed?.center.y?.toFixed(2) ?? "none"}`,
+			`seedw:${resolvedPreset.subjectSeed?.size?.width?.toFixed(2) ?? "none"}`,
+			`seedh:${resolvedPreset.subjectSeed?.size?.height?.toFixed(2) ?? "none"}`,
 			(preset.motionTracking?.animateScale ?? false) ? "scale:1" : "scale:0",
 			`strength:${normalizeMotionTrackingStrength(
 				preset.motionTracking?.trackingStrength,
@@ -307,17 +376,37 @@ export function ReframeView() {
 		preset,
 	}: {
 		preset: VideoReframePreset;
-	}) =>
-		[
-			preset.name.trim().toLowerCase(),
-			preset.transform.position.x.toFixed(3),
-			preset.transform.position.y.toFixed(3),
-			preset.transform.scale.toFixed(4),
+	}) => {
+		const resolvedPreset = getResolvedTrackingPreset({ preset });
+		const targetPreset = resolvedPreset ?? preset;
+		return [
+			targetPreset.name.trim().toLowerCase(),
+			targetPreset.transform.position.x.toFixed(3),
+			targetPreset.transform.position.y.toFixed(3),
+			targetPreset.transform.scale.toFixed(4),
+			targetPreset.subjectSeed?.identity ?? "identity:none",
+			`seedx:${targetPreset.subjectSeed?.center.x?.toFixed(2) ?? "none"}`,
+			`seedy:${targetPreset.subjectSeed?.center.y?.toFixed(2) ?? "none"}`,
+			`seedw:${targetPreset.subjectSeed?.size?.width?.toFixed(2) ?? "none"}`,
+			`seedh:${targetPreset.subjectSeed?.size?.height?.toFixed(2) ?? "none"}`,
 			(preset.motionTracking?.animateScale ?? false) ? "scale:1" : "scale:0",
 			`strength:${normalizeMotionTrackingStrength(
 				preset.motionTracking?.trackingStrength,
 			).toFixed(2)}`,
 		].join("|");
+	};
+	const getResolvedTrackingPreset = ({
+		preset,
+	}: {
+		preset: VideoReframePreset;
+	}) =>
+		normalizedVideo
+			? getResolvedVideoReframePresetAtTime({
+					preset,
+					localTime,
+					duration: normalizedVideo.element.duration,
+				})
+			: null;
 	const getTrackingSubjectHint = ({
 		preset,
 	}: {
@@ -338,11 +427,52 @@ export function ReframeView() {
 			element: normalizedVideo.element,
 			asset: selectedMediaAsset,
 		});
+		const resolvedPreset = getResolvedTrackingPreset({ preset });
+		const activeSegmentRange =
+			getVideoReframePresetAutoSegmentRangeAtTime({
+				preset,
+				localTime,
+				duration: normalizedVideo.element.duration,
+			}) ?? {
+				startTime: 0,
+				endTime: normalizedVideo.element.duration,
+			};
+		const availabilitySection = getVideoReframeAvailabilitySectionAtTime({
+			element: normalizedVideo.element,
+			localTime,
+		});
+		const availabilitySectionIndex = (
+			normalizedVideo.element.reframeAvailabilitySections ?? []
+		).findIndex((section) => section.id === availabilitySection?.id);
+		const availabilityRange =
+			availabilitySection &&
+			availabilitySection.availablePresetIds.includes(preset.id)
+				? {
+						startTime: availabilitySection.startTime,
+						endTime:
+							normalizedVideo.element.reframeAvailabilitySections?.[
+								availabilitySectionIndex + 1
+							]?.startTime ?? normalizedVideo.element.duration,
+				  }
+				: null;
+		const scopedLocalStart = Math.max(
+			0,
+			availabilityRange
+				? Math.max(activeSegmentRange.startTime, availabilityRange.startTime)
+				: activeSegmentRange.startTime,
+		);
+		const scopedLocalEnd = Math.min(
+			normalizedVideo.element.duration,
+			availabilityRange
+				? Math.min(activeSegmentRange.endTime, availabilityRange.endTime)
+				: activeSegmentRange.endTime,
+		);
 		return {
 			assetId: selectedMediaAsset.id,
-			startTime: sourceRange.startTime,
-			endTime: sourceRange.endTime,
+			startTime: sourceRange.startTime + scopedLocalStart,
+			endTime: sourceRange.startTime + Math.max(scopedLocalStart, scopedLocalEnd),
 			presetSignature: buildMotionTrackingPresetSignature({ preset }),
+			resolvedPreset,
 		};
 	};
 	const findSharedMotionTrackingCache = ({
@@ -491,14 +621,6 @@ export function ReframeView() {
 			const manualPresets = (
 				normalizedVideo.element.reframePresets ?? []
 			).filter((preset: VideoReframePreset) => !preset.autoSeeded);
-			const preservedSwitches = (
-				normalizedVideo.element.reframeSwitches ?? []
-			).filter((entry: VideoReframeSwitch) => {
-				const matchingPreset = normalizedVideo.element.reframePresets?.find(
-					(preset: VideoReframePreset) => preset.id === entry.presetId,
-				);
-				return Boolean(matchingPreset && !matchingPreset.autoSeeded);
-			});
 			const nextPresets = [...manualPresets, ...result.presets];
 			const nextDefaultPresetId = manualPresets.some(
 				(preset: VideoReframePreset) =>
@@ -508,16 +630,6 @@ export function ReframeView() {
 					result.defaultPresetId)
 				: result.defaultPresetId;
 
-			const nextSwitches = result.switches.reduce(
-				(currentSwitches, entry) =>
-					replaceOrInsertReframeSwitch({
-						switches: currentSwitches,
-						nextSwitch: entry,
-						duration: normalizedVideo.element.duration,
-					}),
-				preservedSwitches,
-			);
-
 			editor.timeline.updateElements({
 				updates: [
 					{
@@ -525,7 +637,7 @@ export function ReframeView() {
 						elementId: normalizedVideo.element.id,
 						updates: {
 							reframePresets: nextPresets,
-							reframeSwitches: nextSwitches,
+							reframeAvailabilitySections: result.availabilitySections,
 							defaultReframePresetId: nextDefaultPresetId,
 							reframeSeededBy:
 								result.presets.length > 0 ? "subject-aware-v1" : undefined,
@@ -606,7 +718,7 @@ export function ReframeView() {
 				element: normalizedVideo.element,
 				asset: selectedMediaAsset,
 			});
-			let analysisPreset = preset;
+			let analysisPreset = getResolvedTrackingPreset({ preset }) ?? preset;
 			if (
 				analysisPreset.autoSeeded &&
 				!analysisPreset.subjectSeed &&
@@ -641,9 +753,7 @@ export function ReframeView() {
 				}
 			}
 			const cacheKey = buildMotionTrackingCacheKey({ preset: analysisPreset });
-			const desiredScope = getDesiredMotionTrackingScope({
-				preset: analysisPreset,
-			});
+			const desiredScope = getDesiredMotionTrackingScope({ preset });
 			const sharedCoveredMotionTracking = forceFresh
 				? undefined
 				: findSharedMotionTrackingCache({
@@ -732,7 +842,7 @@ export function ReframeView() {
 				canvasSize: projectCanvas,
 				baseScale: analysisPreset.transform.scale,
 				targetTransform: analysisPreset.transform,
-				targetSubjectHint: getTrackingSubjectHint({ preset: analysisPreset }),
+				targetSubjectHint: getTrackingSubjectHint({ preset }),
 				targetSubjectSeed: analysisPreset.subjectSeed,
 				animateScale: analysisPreset.motionTracking?.animateScale ?? false,
 				trackingStrength: normalizeMotionTrackingStrength(
@@ -977,8 +1087,9 @@ export function ReframeView() {
 				motionTracking: preset.motionTracking,
 			};
 		}
+		const resolvedPreset = getResolvedTrackingPreset({ preset }) ?? preset;
 		const frozenTrackedTransform = resolveMotionTrackedReframeTransform({
-			baseTransform: preset.transform,
+			baseTransform: resolvedPreset.transform,
 			motionTracking: preset.motionTracking,
 			localTime,
 		});
@@ -1212,12 +1323,17 @@ export function ReframeView() {
 		(bindings: VideoSplitScreenSlotBinding[]): VideoSplitScreenSlotBinding[] =>
 			bindings.map((binding) => ({
 				slotId: binding.slotId,
-				mode: "fixed-preset" as const,
+				mode: isVideoSplitScreenExternalSourceSlot({ slot: binding })
+					? (binding.mode ?? "follow-active")
+					: ("fixed-preset" as const),
 				presetId:
-					binding.presetId ??
-					selectedPreset?.id ??
-					normalizedVideo?.element.defaultReframePresetId ??
-					null,
+					isVideoSplitScreenExternalSourceSlot({ slot: binding })
+						? null
+						: (binding.presetId ??
+							selectedPreset?.id ??
+							normalizedVideo?.element.defaultReframePresetId ??
+							null),
+				sourceElementId: binding.sourceElementId ?? null,
 				transformOverride: binding.transformOverride ?? null,
 				transformOverridesBySlotId: binding.transformOverridesBySlotId
 					? { ...binding.transformOverridesBySlotId }
@@ -1257,12 +1373,34 @@ export function ReframeView() {
 			splitScreen?.slots ??
 			[],
 	);
+	const getExclusiveHostPresetSide = useCallback(
+		(presetId: string | null): "left" | "right" | null => {
+			if (!presetId) return null;
+			const preset = availableHostReframePresets.find(
+				(candidate) => candidate.id === presetId,
+			);
+			if (!preset) return null;
+			if (
+				preset.subjectSeed?.identity === "left" ||
+				preset.subjectSeed?.identity === "right"
+			) {
+				return preset.subjectSeed.identity;
+			}
+			const normalizedName = preset.name.trim().toLowerCase();
+			if (normalizedName === "subject left") return "left";
+			if (normalizedName === "subject right") return "right";
+			return null;
+		},
+		[availableHostReframePresets],
+	);
 	const updateBaseSplitBindings = ({
 		slots,
 		pushHistory = true,
+		preservePreview = false,
 	}: {
 		slots: VideoSplitScreenSlotBinding[];
 		pushHistory?: boolean;
+		preservePreview?: boolean;
 	}) => {
 		if (!normalizedVideo) return;
 		editor.timeline.updateVideoSplitScreen({
@@ -1282,7 +1420,7 @@ export function ReframeView() {
 			},
 			pushHistory,
 		});
-		if (pushHistory) {
+		if (pushHistory && !preservePreview) {
 			clearSelectedSplitPreviewSlots({
 				elementId: normalizedVideo.element.id,
 			});
@@ -1297,47 +1435,116 @@ export function ReframeView() {
 				"balanced",
 		});
 	};
+	const keepSplitPreviewActive = useCallback(
+		({
+			slots,
+			viewportBalance,
+		}: {
+			slots: VideoSplitScreenSlotBinding[];
+			viewportBalance?: VideoSplitScreenViewportBalance;
+		}) => {
+			if (!normalizedVideo) return;
+			setSelectedPresetId({
+				elementId: normalizedVideo.element.id,
+				presetId: null,
+			});
+			setSelectedSplitSectionId(null);
+			setSelectedSplitPreviewSlots({
+				elementId: normalizedVideo.element.id,
+				slots: resolveConcreteSplitBindings(slots),
+				viewportBalance:
+					viewportBalance ??
+					splitScreen?.viewportBalance ??
+					previewSplitViewportBalance ??
+					"balanced",
+			});
+			setSelectedSectionStartTime({
+				elementId: normalizedVideo.element.id,
+				startTime: focusedSectionStartTime,
+			});
+		},
+		[
+			focusedSectionStartTime,
+			normalizedVideo,
+			previewSplitViewportBalance,
+			resolveConcreteSplitBindings,
+			setSelectedPresetId,
+			setSelectedSectionStartTime,
+			setSelectedSplitPreviewSlots,
+			splitScreen?.viewportBalance,
+		],
+	);
 
 	const updateSplitBindings = ({
 		slotId,
 		presetId,
+		sourceElementId = null,
 	}: {
 		slotId: string;
 		presetId: string | null;
+		sourceElementId?: string | null;
 	}) => {
 		if (!normalizedVideo) return;
-		const availablePresetIds = visibleReframePresets.map((preset) => preset.id);
-		const nextBindings = (
-			splitScreen?.slots ?? buildInitialSplitScreen().slots
-		).map((binding) =>
+		const currentBindings =
+			editableSplitBindings.length > 0
+				? editableSplitBindings
+				: (splitScreen?.slots ?? buildInitialSplitScreen().slots);
+		if (sourceElementId) {
+			const nextBindings = currentBindings.map((binding) =>
+				binding.slotId === slotId
+					? {
+							...binding,
+							mode: "follow-active" as const,
+							presetId: null,
+							sourceElementId,
+							transformOverride: null,
+							transformOverridesBySlotId: undefined,
+							transformAdjustmentsBySlotId: undefined,
+					  }
+					: binding,
+			);
+			keepSplitPreviewActive({
+				slots: nextBindings,
+			});
+			updateBaseSplitBindings({
+				slots: nextBindings,
+				preservePreview: true,
+			});
+			return;
+		}
+		const availablePresetIds = availableHostReframePresets.map(
+			(preset) => preset.id,
+		);
+		const nextBindings = currentBindings.map((binding) =>
 			binding.slotId === slotId
 				? {
 						...binding,
 						mode: "fixed-preset" as const,
 						presetId,
+						sourceElementId: null,
 						transformOverride: null,
 						transformOverridesBySlotId: undefined,
 						transformAdjustmentsBySlotId: undefined,
 					}
 				: binding,
 		);
-		const conflictingBindingIndex = nextBindings.findIndex(
-			(binding) => binding.slotId !== slotId && binding.presetId === presetId,
-		);
+		const selectedExclusiveSide = getExclusiveHostPresetSide(presetId);
+		const conflictingBindingIndex =
+			selectedExclusiveSide === null
+				? -1
+				: nextBindings.findIndex(
+						(binding) =>
+							binding.slotId !== slotId &&
+							!isVideoSplitScreenExternalSourceSlot({ slot: binding }) &&
+							getExclusiveHostPresetSide(binding.presetId ?? null) ===
+								selectedExclusiveSide,
+					);
 		if (conflictingBindingIndex >= 0) {
-			const selectedPresetName =
-				visibleReframePresets.find((preset) => preset.id === presetId)?.name ??
-				"";
-			const preferredAlternatePresetId =
-				selectedPresetName === "Subject Left"
-					? visibleReframePresets.find(
-							(preset) => preset.name === "Subject Right",
-						)?.id
-					: selectedPresetName === "Subject Right"
-						? visibleReframePresets.find(
-								(preset) => preset.name === "Subject Left",
-							)?.id
-						: undefined;
+			const preferredAlternateSide =
+				selectedExclusiveSide === "left" ? "right" : "left";
+			const preferredAlternatePresetId = availableHostReframePresets.find(
+				(preset) => getExclusiveHostPresetSide(preset.id) === preferredAlternateSide,
+			)?.id;
 			const alternatePresetId =
 				(preferredAlternatePresetId &&
 				preferredAlternatePresetId !== presetId &&
@@ -1361,8 +1568,12 @@ export function ReframeView() {
 				};
 			}
 		}
+		keepSplitPreviewActive({
+			slots: nextBindings,
+		});
 		updateBaseSplitBindings({
 			slots: nextBindings,
+			preservePreview: true,
 		});
 	};
 
@@ -1394,8 +1605,9 @@ export function ReframeView() {
 				),
 			},
 		});
-		clearSelectedSplitPreviewSlots({
-			elementId: normalizedVideo.element.id,
+		keepSplitPreviewActive({
+			slots: editableSplitBindings,
+			viewportBalance,
 		});
 	};
 
@@ -1436,6 +1648,21 @@ export function ReframeView() {
 	};
 
 	const getSplitSlotTransform = (binding: VideoSplitScreenSlotBinding) => {
+		if (isVideoSplitScreenExternalSourceSlot({ slot: binding })) {
+			const externalOverride =
+				getEffectiveVideoSplitScreenSlotTransformOverride({
+					slot: binding,
+					viewportBalance: effectiveSplitViewportBalance,
+				}) ?? {
+					position: { x: 0, y: 0 },
+					scale: 1,
+				};
+			return {
+				position: { ...externalOverride.position },
+				scale: externalOverride.scale,
+				rotate: 0,
+			};
+		}
 		if (
 			!normalizedVideo ||
 			selectedMediaAsset?.type !== "video" ||
@@ -1473,6 +1700,13 @@ export function ReframeView() {
 	};
 
 	const getAutoSplitSlotTransform = (binding: VideoSplitScreenSlotBinding) => {
+		if (isVideoSplitScreenExternalSourceSlot({ slot: binding })) {
+			return {
+				position: { x: 0, y: 0 },
+				scale: 1,
+				rotate: 0,
+			};
+		}
 		if (
 			!normalizedVideo ||
 			selectedMediaAsset?.type !== "video" ||
@@ -1513,6 +1747,21 @@ export function ReframeView() {
 	};
 
 	const getSplitSlotManualDelta = (binding: VideoSplitScreenSlotBinding) => {
+		if (isVideoSplitScreenExternalSourceSlot({ slot: binding })) {
+			const externalOverride =
+				getEffectiveVideoSplitScreenSlotTransformOverride({
+					slot: binding,
+					viewportBalance: effectiveSplitViewportBalance,
+				}) ?? {
+					position: { x: 0, y: 0 },
+					scale: 1,
+				};
+			return {
+				x: externalOverride.position.x,
+				y: externalOverride.position.y,
+				scale: externalOverride.scale - 1,
+			};
+		}
 		const liveTransform = getSplitSlotTransform(binding);
 		const autoTransform = getAutoSplitSlotTransform(binding);
 		return {
@@ -1537,6 +1786,74 @@ export function ReframeView() {
 	}) => {
 		if (!ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS) return;
 		if (!normalizedVideo) return;
+		const targetBinding = editableSplitBindings.find(
+			(binding) => binding.slotId === slotId,
+		);
+		if (
+			targetBinding &&
+			isVideoSplitScreenExternalSourceSlot({ slot: targetBinding })
+		) {
+			const applyOverride = (bindings: VideoSplitScreenSlotBinding[]) =>
+				bindings.map((binding) => {
+					if (binding.slotId !== slotId) {
+						return binding;
+					}
+					const currentOverride =
+						getEffectiveVideoSplitScreenSlotTransformOverride({
+							slot: binding,
+							viewportBalance: effectiveSplitViewportBalance,
+						}) ?? {
+							position: { x: 0, y: 0 },
+							scale: 1,
+						};
+					const nextPosition = {
+						x: updates.x ?? currentOverride.position.x,
+						y: updates.y ?? currentOverride.position.y,
+					};
+					const nextScale = Math.max(
+						0.05,
+						1 + (updates.scale ?? currentOverride.scale - 1),
+					);
+					const nextOverride =
+						Math.abs(nextPosition.x) <= 1e-6 &&
+						Math.abs(nextPosition.y) <= 1e-6 &&
+						Math.abs(nextScale - 1) <= 1e-6
+							? null
+							: {
+									position: nextPosition,
+									scale: nextScale,
+							  };
+					const variantKey = getVideoSplitScreenVariantKey({
+						slotId,
+						viewportBalance: effectiveSplitViewportBalance,
+					});
+					const nextOverridesBySlotId = {
+						...(binding.transformOverridesBySlotId ?? {}),
+					};
+					if (nextOverride) {
+						nextOverridesBySlotId[variantKey] = nextOverride;
+					} else {
+						delete nextOverridesBySlotId[variantKey];
+					}
+					return {
+						...binding,
+						transformOverride: nextOverride,
+						transformOverridesBySlotId:
+							Object.keys(nextOverridesBySlotId).length > 0
+								? nextOverridesBySlotId
+								: undefined,
+					};
+				});
+
+			updateBaseSplitBindings({
+				slots: applyOverride(
+					splitScreen?.slots ?? buildInitialSplitScreen().slots,
+				),
+				pushHistory,
+				preservePreview: true,
+			});
+			return;
+		}
 		if (
 			selectedMediaAsset?.type !== "video" ||
 			!Number.isFinite(selectedMediaAsset.width) ||
@@ -1544,7 +1861,8 @@ export function ReframeView() {
 		) {
 			return;
 		}
-		const { width: sourceWidth, height: sourceHeight } = selectedMediaAsset;
+		const sourceWidth = selectedMediaAsset.width as number;
+		const sourceHeight = selectedMediaAsset.height as number;
 		const projectCanvas = editor.project.getActive().settings.canvasSize;
 		const applyAdjustment = (bindings: VideoSplitScreenSlotBinding[]) =>
 			bindings.map((binding) => {
@@ -1789,6 +2107,8 @@ export function ReframeView() {
 					presetId: section.presetId,
 					switchId: section.switchId,
 					splitSectionId: section.splitSectionId,
+					availabilitySectionId: section.availabilitySectionId,
+					availablePresetIds: section.availablePresetIds,
 					isSplit: section.isSplit,
 				}));
 			if (sections.length === 0) return;
@@ -2012,10 +2332,15 @@ export function ReframeView() {
 						</div>
 
 						<div className="grid grid-cols-1 gap-2">
-							{visibleReframePresets.map((preset: VideoReframePreset) => {
+							{storedReframePresets.map((preset: VideoReframePreset) => {
 								const isActive =
 									selectedAngleMode === "preset" &&
 									selectedPreset?.id === preset.id;
+								const isUnavailableInSection =
+									Boolean(activeAvailabilityPresetIds) &&
+									(preset.subjectSeed?.identity === "left" ||
+										preset.subjectSeed?.identity === "right") &&
+									!activeAvailabilityPresetIds?.includes(preset.id);
 								const isEditingName = editingPresetId === preset.id;
 								const trackingProgress =
 									trackingProgressByPresetId[preset.id] ?? null;
@@ -2027,6 +2352,7 @@ export function ReframeView() {
 										aria-selected={isActive}
 										className={cn(
 											"rounded-lg border p-2 transition-colors",
+											isUnavailableInSection && "opacity-70",
 											isActive && "border-primary bg-primary/5",
 										)}
 										onClick={() => {
@@ -2095,6 +2421,11 @@ export function ReframeView() {
 												{preset.autoSeeded && (
 													<span className="text-muted-foreground text-[10px] uppercase tracking-[0.14em]">
 														Auto
+													</span>
+												)}
+												{isUnavailableInSection && (
+													<span className="text-muted-foreground text-[10px] uppercase tracking-[0.14em]">
+														Unavailable Here
 													</span>
 												)}
 											</div>
@@ -2422,13 +2753,19 @@ export function ReframeView() {
 												</div>
 												<div className="flex items-center gap-2">
 													<div className="flex flex-1 flex-wrap gap-1.5">
-														{visibleReframePresets.map((preset) => {
+														{availableHostReframePresets.map((preset) => {
 															const isActive =
+																!isVideoSplitScreenExternalSourceSlot({
+																	slot: binding,
+																}) &&
 																(binding.presetId ?? null) === preset.id;
 															const isUsedByOtherSlot =
 																editableSplitBindings.some(
 																	(otherBinding) =>
 																		otherBinding.slotId !== binding.slotId &&
+																		!isVideoSplitScreenExternalSourceSlot({
+																			slot: otherBinding,
+																		}) &&
 																		(otherBinding.presetId ?? null) ===
 																			preset.id,
 																);
@@ -2465,9 +2802,227 @@ export function ReframeView() {
 																</button>
 															);
 														})}
+														{(() => {
+															const activeExternalSource =
+																availableExternalSplitSources.find(
+																	(source) =>
+																		source.elementId === binding.sourceElementId,
+																) ?? null;
+															const fallbackExternalSource =
+																activeExternalSource ??
+																availableExternalSplitSources[0] ??
+																null;
+															const externalButtonLabel = activeExternalSource
+																? `${activeExternalSource.type === "video" ? "Video" : "Image"}: ${activeExternalSource.name}`
+																: "External media";
+															const isExternalActive =
+																isVideoSplitScreenExternalSourceSlot({
+																	slot: binding,
+																});
+															return (
+																<div className="inline-flex items-center">
+																	<button
+																		type="button"
+																		disabled={!isExternalActive && !fallbackExternalSource}
+																		className={cn(
+																			"bg-background hover:bg-muted/70 inline-flex h-8 min-w-8 items-center justify-center rounded-l-md border px-2 transition-colors",
+																			"disabled:pointer-events-none disabled:opacity-40",
+																			isExternalActive &&
+																				"border-primary bg-primary/8 text-primary",
+																		)}
+																		title={
+																			isExternalActive
+																				? "Disable external media for this slot"
+																				: fallbackExternalSource
+																					? `Enable external media: ${fallbackExternalSource.name}`
+																					: "No overlapping external media available"
+																		}
+																		aria-pressed={isExternalActive}
+																		aria-label={externalButtonLabel}
+																		onClick={(event) => {
+																			event.stopPropagation();
+																			if (isExternalActive) {
+																				updateSplitBindings({
+																					slotId: binding.slotId,
+																					presetId:
+																						availableHostReframePresets[0]?.id ?? null,
+																					sourceElementId: null,
+																				});
+																				return;
+																			}
+																			if (!fallbackExternalSource) return;
+																			updateSplitBindings({
+																				slotId: binding.slotId,
+																				presetId: null,
+																				sourceElementId: fallbackExternalSource.elementId,
+																			});
+																		}}
+																	>
+																		<div className="bg-muted flex size-6 items-center justify-center rounded-sm border">
+																			<ImageIcon className="size-3.5" />
+																		</div>
+																	</button>
+																	<DropdownMenu>
+																		<DropdownMenuTrigger asChild>
+																			<button
+																				type="button"
+																				className={cn(
+																					"bg-background hover:bg-muted/70 inline-flex h-8 items-center justify-center rounded-r-md border border-l-0 px-1.5 transition-colors",
+																					isExternalActive &&
+																						"border-primary bg-primary/8 text-primary",
+																				)}
+																				title={externalButtonLabel}
+																				aria-label={`Select external media source for ${binding.slotId}`}
+																				onClick={(event) => {
+																					event.stopPropagation();
+																				}}
+																			>
+																				<ChevronDown className="text-muted-foreground size-3.5" />
+																			</button>
+																		</DropdownMenuTrigger>
+																		<DropdownMenuContent align="start" className="w-72">
+																			<DropdownMenuItem
+																				onClick={() => {
+																					updateSplitBindings({
+																						slotId: binding.slotId,
+																						presetId:
+																							availableHostReframePresets[0]?.id ?? null,
+																						sourceElementId: null,
+																					});
+																				}}
+																			>
+																				Use host angle
+																			</DropdownMenuItem>
+																			{availableExternalSplitSources.length === 0 ? (
+																				<DropdownMenuItem disabled>
+																					No overlapping image or video sources
+																				</DropdownMenuItem>
+																			) : (
+																				availableExternalSplitSources.map((source) => (
+																					<DropdownMenuItem
+																						key={`${binding.slotId}:${source.elementId}`}
+																						onClick={() => {
+																							updateSplitBindings({
+																								slotId: binding.slotId,
+																								presetId: null,
+																								sourceElementId: source.elementId,
+																							});
+																						}}
+																					>
+																						{`${source.type === "video" ? "Video" : "Image"} · ${source.name} · ${source.trackName}`}
+																					</DropdownMenuItem>
+																				))
+																			)}
+																		</DropdownMenuContent>
+																	</DropdownMenu>
+																</div>
+															);
+														})()}
 													</div>
 												</div>
 												{(() => {
+													if (isVideoSplitScreenExternalSourceSlot({ slot: binding })) {
+														const activeSource =
+															availableExternalSplitSources.find(
+																(source) =>
+																	source.elementId === binding.sourceElementId,
+															) ?? null;
+														const slotTransform = getSplitSlotTransform(binding);
+														const slotAdjustment =
+															getSplitSlotManualDelta(binding);
+														return (
+															<div className="col-span-2 mt-2">
+																<div className="mb-2 text-[11px] text-muted-foreground">
+																	{activeSource
+																		? `${activeSource.name} fills the ${binding.slotId} slot with cover-and-center framing by default.`
+																		: "This slot uses an external media source."}
+																</div>
+																<div className="mb-2 text-[11px] text-muted-foreground">
+																	{`x ${Math.round(slotTransform.position.x)}  y ${Math.round(slotTransform.position.y)}  scale ${slotTransform.scale.toFixed(2)}`}
+																</div>
+																<div className="grid grid-cols-3 gap-2">
+																	<ReframeScrubber
+																		label="X"
+																		value={slotAdjustment.x}
+																		min={-1200}
+																		max={1200}
+																		step={1}
+																		formatValue={(value) =>
+																			`${value >= 0 ? "+" : ""}${Math.round(value)}`
+																		}
+																		canReset={Math.abs(slotAdjustment.x) > 1e-6}
+																		onReset={() =>
+																			updateSplitSlotTransform({
+																				slotId: binding.slotId,
+																				updates: { x: 0 },
+																				pushHistory: true,
+																			})
+																		}
+																		onChange={(value, pushHistory) =>
+																			updateSplitSlotTransform({
+																				slotId: binding.slotId,
+																				updates: { x: value },
+																				pushHistory,
+																			})
+																		}
+																	/>
+																	<ReframeScrubber
+																		label="Y"
+																		value={slotAdjustment.y}
+																		min={-1200}
+																		max={1200}
+																		step={1}
+																		formatValue={(value) =>
+																			`${value >= 0 ? "+" : ""}${Math.round(value)}`
+																		}
+																		canReset={Math.abs(slotAdjustment.y) > 1e-6}
+																		onReset={() =>
+																			updateSplitSlotTransform({
+																				slotId: binding.slotId,
+																				updates: { y: 0 },
+																				pushHistory: true,
+																			})
+																		}
+																		onChange={(value, pushHistory) =>
+																			updateSplitSlotTransform({
+																				slotId: binding.slotId,
+																				updates: { y: value },
+																				pushHistory,
+																			})
+																		}
+																	/>
+																	<ReframeScrubber
+																		label="Scale"
+																		value={slotAdjustment.scale}
+																		min={-0.95}
+																		max={7}
+																		step={0.01}
+																		dragScale={0.01}
+																		formatValue={(value) =>
+																			`${value >= 0 ? "+" : ""}${value.toFixed(2)}`
+																		}
+																		canReset={
+																			Math.abs(slotAdjustment.scale) > 1e-6
+																		}
+																		onReset={() =>
+																			updateSplitSlotTransform({
+																				slotId: binding.slotId,
+																				updates: { scale: 0 },
+																				pushHistory: true,
+																			})
+																		}
+																		onChange={(value, pushHistory) =>
+																			updateSplitSlotTransform({
+																				slotId: binding.slotId,
+																				updates: { scale: value },
+																				pushHistory,
+																			})
+																		}
+																	/>
+																</div>
+															</div>
+														);
+													}
 													const slotTransform = getSplitSlotTransform(binding);
 													const slotAdjustment =
 														getSplitSlotManualDelta(binding);

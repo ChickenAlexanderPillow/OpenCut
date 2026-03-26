@@ -327,6 +327,9 @@ export function TimelineElement({
 	const setSelectedSectionStartTime = useReframeStore(
 		(state) => state.setSelectedSectionStartTime,
 	);
+	const clearSelectedSectionStartTime = useReframeStore(
+		(state) => state.clearSelectedSectionStartTime,
+	);
 	const { selectedElements } = useElementSelection();
 	const snappingEnabled = useTimelineStore((state) => state.snappingEnabled);
 	const requestRevealMedia = useAssetsPanelStore(
@@ -399,6 +402,12 @@ export function TimelineElement({
 	const isMuted = canElementHaveAudio(element) && element.muted === true;
 	const normalizedVideoElement =
 		element.type === "video" ? normalizeVideoReframeState({ element }) : null;
+	const displayedAngleSections = useMemo(() => {
+		if (!normalizedVideoElement) return [];
+		return deriveVideoAngleSections({
+			element: normalizedVideoElement,
+		});
+	}, [normalizedVideoElement]);
 	const waveformPeaksCache = activeProject.waveformPeaksCache ?? {};
 
 	const getPersistedWaveformPeaks = ({
@@ -605,19 +614,33 @@ export function TimelineElement({
 							</ContextMenuItem>
 							<ContextMenuItem
 								icon={<Clapperboard className="size-4" />}
-								disabled={
-									(normalizedVideoElement.reframeSwitches?.length ?? 0) === 0
-								}
+								disabled={displayedAngleSections.length <= 1}
 								onSelect={(event) => {
 									event.preventDefault();
 									event.stopPropagation();
-									editor.timeline.clearVideoReframeSwitches({
-										trackId: track.id,
+									editor.timeline.updateElements({
+										updates: [
+											{
+												trackId: track.id,
+												elementId: normalizedVideoElement.id,
+												updates: {
+													reframeSwitches: [],
+													splitScreen: normalizedVideoElement.splitScreen
+														? {
+																...normalizedVideoElement.splitScreen,
+																sections: [],
+														  }
+														: undefined,
+												},
+											},
+										],
+									});
+									clearSelectedSectionStartTime({
 										elementId: normalizedVideoElement.id,
 									});
 								}}
 							>
-								Clear angles
+								Clear angle sections
 							</ContextMenuItem>
 						</>
 					)}
@@ -1997,6 +2020,7 @@ function SectionThumbnailStrip({
 								slotId: slot.slotId,
 								mode: slot.mode,
 								presetId: slot.presetId ?? null,
+								sourceElementId: slot.sourceElementId ?? null,
 								transformOverride: slot.transformOverride ?? null,
 							})),
 						}

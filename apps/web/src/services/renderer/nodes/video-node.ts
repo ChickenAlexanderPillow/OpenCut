@@ -25,16 +25,16 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 		1 / 30,
 		0.1,
 	] as const;
-	private lastRenderedFrameTime = Number.NaN;
-	private lastFrame: Awaited<ReturnType<typeof videoCache.getFrameAt>> = null;
-	private frameCache: VideoCache;
+	protected lastRenderedFrameTime = Number.NaN;
+	protected lastFrame: Awaited<ReturnType<typeof videoCache.getFrameAt>> = null;
+	protected frameCache: VideoCache;
 
 	constructor(params: VideoNodeParams) {
 		super(params);
 		this.frameCache = params.videoCache ?? videoCache;
 	}
 
-	private async resolveCanvasFrame({
+	protected async resolveCanvasFrame({
 		videoTime,
 	}: {
 		videoTime: number;

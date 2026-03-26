@@ -1,6 +1,7 @@
 import type { VideoElement, VideoReframeSwitch } from "@/types/timeline";
 import type { TranscriptEditWord } from "@/types/transcription";
 import { generateUUID } from "@/utils/id";
+import { getAvailableReframePresetIdsAtTime } from "./video-reframe";
 
 type SpeakerTurn = {
 	speakerId: string;
@@ -89,12 +90,45 @@ export function buildSpeakerTurnReframeSwitches({
 		[primarySpeakerId, leftPresetId],
 		[secondarySpeakerId, rightPresetId],
 	]);
+	const resolveAvailablePresetId = ({
+		preferredPresetId,
+		time,
+	}: {
+		preferredPresetId: string | null;
+		time: number;
+	}): string | null => {
+		if (!preferredPresetId) return null;
+		const availablePresetIds = getAvailableReframePresetIdsAtTime({
+			element,
+			localTime: time,
+		});
+		if (!availablePresetIds || availablePresetIds.length === 0) {
+			return preferredPresetId;
+		}
+		if (availablePresetIds.includes(preferredPresetId)) {
+			return preferredPresetId;
+		}
+		if (availablePresetIds.includes(leftPresetId)) {
+			return leftPresetId;
+		}
+		if (availablePresetIds.includes(rightPresetId)) {
+			return rightPresetId;
+		}
+		return null;
+	};
 	const switches: VideoReframeSwitch[] = [];
-	let activePresetId = speakerToPresetId.get(firstTurn.speakerId) ?? null;
+	let activePresetId = resolveAvailablePresetId({
+		preferredPresetId: speakerToPresetId.get(firstTurn.speakerId) ?? null,
+		time: firstTurn.startTime,
+	});
+	if (!activePresetId) return null;
 	for (let index = 1; index < turns.length; index += 1) {
 		const turn = turns[index];
 		if (!turn) continue;
-		const nextPresetId = speakerToPresetId.get(turn.speakerId) ?? null;
+		const nextPresetId = resolveAvailablePresetId({
+			preferredPresetId: speakerToPresetId.get(turn.speakerId) ?? null,
+			time: turn.startTime,
+		});
 		if (!nextPresetId || nextPresetId === activePresetId) {
 			continue;
 		}
@@ -108,6 +142,6 @@ export function buildSpeakerTurnReframeSwitches({
 	return {
 		switches,
 		speakerOrder: speakerOrder.slice(0, 2),
-		defaultPresetId: speakerToPresetId.get(firstTurn.speakerId) ?? leftPresetId,
+		defaultPresetId: activePresetId,
 	};
 }

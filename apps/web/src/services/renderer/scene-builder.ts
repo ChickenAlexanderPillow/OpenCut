@@ -1,5 +1,6 @@
 import type {
 	AudioElement,
+	ImageElement,
 	TextElement,
 	TimelineTrack,
 	VideoElement,
@@ -8,6 +9,7 @@ import type { MediaAsset } from "@/types/assets";
 import { RootNode } from "./nodes/root-node";
 import { VideoNode } from "./nodes/video-node";
 import { ImageNode } from "./nodes/image-node";
+import { SplitScreenNode } from "./nodes/split-screen-node";
 import { TextNode } from "./nodes/text-node";
 import { StickerNode } from "./nodes/sticker-node";
 import { ColorNode } from "./nodes/color-node";
@@ -24,6 +26,8 @@ import {
 	getTranscriptDraft,
 } from "@/lib/transcript-editor/state";
 import { normalizeTimelineElementForInvariants } from "@/lib/timeline/element-timing";
+
+type VisualMediaElement = VideoElement | ImageElement;
 
 const PREVIEW_MAX_IMAGE_SIZE = 2048;
 
@@ -172,6 +176,78 @@ function resolveCaptionSourceMediaHeuristically({
 	return best;
 }
 
+function hasExternalSplitSource({
+	element,
+}: {
+	element: VideoElement;
+}): boolean {
+	const splitScreen = element.splitScreen;
+	if (!splitScreen) return false;
+	const slots = [
+		...(splitScreen.slots ?? []),
+		...(splitScreen.sections ?? []).flatMap((section) => section.slots ?? []),
+	];
+	return slots.some(
+		(slot) =>
+			typeof slot.sourceElementId === "string" &&
+			slot.sourceElementId.trim().length > 0 &&
+			slot.sourceElementId !== element.id,
+	);
+}
+
+function appendSuppressionRange({
+	map,
+	elementId,
+	startTime,
+	endTime,
+}: {
+	map: Map<string, Array<{ startTime: number; endTime: number }>>;
+	elementId: string;
+	startTime: number;
+	endTime: number;
+}): void {
+	if (endTime - startTime <= 0.001) return;
+	const existing = map.get(elementId) ?? [];
+	existing.push({ startTime, endTime });
+	map.set(elementId, existing);
+}
+
+function buildConsumedRangesByElementId({
+	visualElements,
+}: {
+	visualElements: VisualMediaElement[];
+}): Map<string, Array<{ startTime: number; endTime: number }>> {
+	const consumedRangesByElementId = new Map<
+		string,
+		Array<{ startTime: number; endTime: number }>
+	>();
+	for (const element of visualElements) {
+		if (element.type !== "video" || !element.splitScreen) continue;
+		const referencedElementIds = new Set(
+			[
+				...(element.splitScreen.slots ?? []),
+				...(element.splitScreen.sections ?? []).flatMap(
+					(section) => section.slots ?? [],
+				),
+			]
+				.map((slot) => slot.sourceElementId?.trim() ?? "")
+				.filter(
+					(sourceElementId) =>
+						sourceElementId.length > 0 && sourceElementId !== element.id,
+				),
+		);
+		for (const sourceElementId of referencedElementIds) {
+			appendSuppressionRange({
+				map: consumedRangesByElementId,
+				elementId: sourceElementId,
+				startTime: element.startTime,
+				endTime: element.startTime + element.duration,
+			});
+		}
+	}
+	return consumedRangesByElementId;
+}
+
 export function resolveLiveCaptionElementFromTranscriptSource({
 	element,
 	sourceMedia,
@@ -289,9 +365,19 @@ export function buildScene(params: BuildSceneParams) {
 
 	const contentNodes = [];
 	const mediaElementById = new Map<string, VideoElement | AudioElement>();
+	const visualElementById = new Map<string, VisualMediaElement>();
 	const transcriptMediaCandidates: Array<VideoElement | AudioElement> = [];
+	const visualElements: VisualMediaElement[] = [];
 	for (const track of tracks) {
 		for (const element of track.elements) {
+			if (element.type === "video" || element.type === "image") {
+				const normalizedVisualElement =
+					normalizeTimelineElementForInvariants({
+						element,
+					}) as VisualMediaElement;
+				visualElementById.set(normalizedVisualElement.id, normalizedVisualElement);
+				visualElements.push(normalizedVisualElement);
+			}
 			if (!isEditableMediaElement(element)) continue;
 			const normalizedElement = normalizeTimelineElementForInvariants({
 				element,
@@ -302,6 +388,132 @@ export function buildScene(params: BuildSceneParams) {
 			}
 		}
 	}
+	const consumedRangesByElementId = buildConsumedRangesByElementId({
+		visualElements,
+	});
+	const getSuppressDuringRanges = ({
+		elementId,
+	}: {
+		elementId: string;
+	}) => consumedRangesByElementId.get(elementId);
+	const buildVisualNodeForElement = ({
+		element,
+		suppressDuringRanges,
+		forceIgnoreSplitScreen = false,
+	}: {
+		element: VisualMediaElement;
+		suppressDuringRanges?: Array<{ startTime: number; endTime: number }>;
+		forceIgnoreSplitScreen?: boolean;
+	}) => {
+		const mediaAsset = mediaMap.get(element.mediaId);
+		if (!mediaAsset) return null;
+		const resolvedFile = mediaAsset.file;
+		const resolvedUrl = mediaAsset.url;
+		if (!resolvedFile || !resolvedUrl) {
+			return null;
+		}
+		if (mediaAsset.type === "video") {
+			if (element.type !== "video") return null;
+			if (!forceIgnoreSplitScreen && hasExternalSplitSource({ element })) {
+				const externalSlotNodesByElementId = new Map<string, ImageNode | VideoNode>();
+				const referencedElementIds = new Set(
+					[
+						...(element.splitScreen?.slots ?? []),
+						...(element.splitScreen?.sections ?? []).flatMap(
+							(section) => section.slots ?? [],
+						),
+					]
+						.map((slot) => slot.sourceElementId?.trim() ?? "")
+						.filter(
+							(sourceElementId) =>
+								sourceElementId.length > 0 && sourceElementId !== element.id,
+						),
+				);
+				for (const sourceElementId of referencedElementIds) {
+					const sourceElement = visualElementById.get(sourceElementId);
+					if (!sourceElement) continue;
+					const sourceNode = buildVisualNodeForElement({
+						element: sourceElement,
+						forceIgnoreSplitScreen: true,
+					});
+					if (
+						sourceNode instanceof VideoNode ||
+						sourceNode instanceof ImageNode
+					) {
+						externalSlotNodesByElementId.set(sourceElementId, sourceNode);
+					}
+				}
+				return new SplitScreenNode({
+					mediaId: mediaAsset.id,
+					url: resolvedUrl,
+					file: resolvedFile,
+					videoCache: params.videoCache,
+					duration: element.duration,
+					timeOffset: element.startTime,
+					trimStart: element.trimStart,
+					trimEnd: element.trimEnd,
+					transcriptCuts: getTranscriptApplied(element)?.removedRanges ?? [],
+					transform: element.transform,
+					reframePresets: element.reframePresets,
+					reframeSwitches: element.reframeSwitches,
+					defaultReframePresetId: element.defaultReframePresetId,
+					splitScreen: element.splitScreen,
+					opacity: element.opacity,
+					blendMode: element.blendMode,
+					animations: element.animations,
+					transitions: element.transitions,
+					suppressDuringRanges,
+					frameRateCap: params.previewFrameRateCap,
+					...(params.isPreview && {
+						previewProxyScale: params.previewProxyScale,
+					}),
+					externalSlotNodesByElementId,
+				});
+			}
+			return new VideoNode({
+				mediaId: mediaAsset.id,
+				url: resolvedUrl,
+				file: resolvedFile,
+				videoCache: params.videoCache,
+				duration: element.duration,
+				timeOffset: element.startTime,
+				trimStart: element.trimStart,
+				trimEnd: element.trimEnd,
+				transcriptCuts: getTranscriptApplied(element)?.removedRanges ?? [],
+				transform: element.transform,
+				reframePresets: element.reframePresets,
+				reframeSwitches: element.reframeSwitches,
+				defaultReframePresetId: element.defaultReframePresetId,
+				splitScreen: forceIgnoreSplitScreen ? undefined : element.splitScreen,
+				opacity: element.opacity,
+				blendMode: element.blendMode,
+				animations: element.animations,
+				transitions: element.transitions,
+				suppressDuringRanges,
+				frameRateCap: params.previewFrameRateCap,
+				...(params.isPreview && {
+					previewProxyScale: params.previewProxyScale,
+				}),
+			});
+		}
+		if (mediaAsset.type !== "image") return null;
+		return new ImageNode({
+			url: resolvedUrl,
+			duration: element.duration,
+			timeOffset: element.startTime,
+			trimStart: element.trimStart,
+			trimEnd: element.trimEnd,
+			transform: element.transform,
+			opacity: element.opacity,
+			blendMode: element.blendMode,
+			animations: element.animations,
+			transitions: element.transitions,
+			suppressDuringRanges,
+			...(params.isPreview && {
+				maxSourceSize: PREVIEW_MAX_IMAGE_SIZE,
+			}),
+		});
+	};
 
 	for (const track of orderedTracksBottomToTop) {
 		const elements = track.elements
@@ -315,69 +527,14 @@ export function buildScene(params: BuildSceneParams) {
 		for (const element of elements) {
 			const stableElement = normalizeTimelineElementForInvariants({ element });
 			if (stableElement.type === "video" || stableElement.type === "image") {
-				const mediaAsset = mediaMap.get(stableElement.mediaId);
-				if (!mediaAsset) {
-					continue;
-				}
-				const resolvedFile =
-					// Preview decode path uses original media with runtime downscale in video-cache.
-					// Some generated proxy encodes decode slower than source on certain systems.
-					mediaAsset.file;
-				const resolvedUrl = mediaAsset.url;
-				if (!resolvedFile || !resolvedUrl) {
-					continue;
-				}
-
-				if (mediaAsset.type === "video") {
-					if (stableElement.type !== "video") {
-						continue;
-					}
-					contentNodes.push(
-						new VideoNode({
-							mediaId: mediaAsset.id,
-							url: resolvedUrl,
-							file: resolvedFile,
-							videoCache: params.videoCache,
-							duration: stableElement.duration,
-							timeOffset: stableElement.startTime,
-							trimStart: stableElement.trimStart,
-							trimEnd: stableElement.trimEnd,
-							transcriptCuts:
-								getTranscriptApplied(stableElement)?.removedRanges ?? [],
-							transform: stableElement.transform,
-							reframePresets: stableElement.reframePresets,
-							reframeSwitches: stableElement.reframeSwitches,
-							defaultReframePresetId: stableElement.defaultReframePresetId,
-							splitScreen: stableElement.splitScreen,
-							opacity: stableElement.opacity,
-							blendMode: stableElement.blendMode,
-							animations: stableElement.animations,
-							transitions: stableElement.transitions,
-							frameRateCap: params.previewFrameRateCap,
-							...(params.isPreview && {
-								previewProxyScale: params.previewProxyScale,
-							}),
-						}),
-					);
-				}
-				if (mediaAsset.type === "image") {
-					contentNodes.push(
-						new ImageNode({
-							url: resolvedUrl,
-							duration: stableElement.duration,
-							timeOffset: stableElement.startTime,
-							trimStart: stableElement.trimStart,
-							trimEnd: stableElement.trimEnd,
-							transform: stableElement.transform,
-							opacity: stableElement.opacity,
-							blendMode: stableElement.blendMode,
-							animations: stableElement.animations,
-							transitions: stableElement.transitions,
-							...(params.isPreview && {
-								maxSourceSize: PREVIEW_MAX_IMAGE_SIZE,
-							}),
-						}),
-					);
+				const visualNode = buildVisualNodeForElement({
+					element: stableElement,
+					suppressDuringRanges: getSuppressDuringRanges({
+						elementId: stableElement.id,
+					}),
+				});
+				if (visualNode) {
+					contentNodes.push(visualNode);
 				}
 			}
 
