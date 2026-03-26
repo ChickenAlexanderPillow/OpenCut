@@ -70,10 +70,10 @@ import {
 	Check,
 	ChevronDown,
 	ChevronUp,
+	Feather,
 	Pencil,
 	RefreshCw,
 	RotateCcw,
-	WandSparkles,
 	X,
 } from "lucide-react";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
@@ -2221,7 +2221,7 @@ export function TranscriptView() {
 						aria-label="Remove fluff from transcript"
 						title="Remove fluff"
 					>
-						<WandSparkles className="size-4" />
+						<Feather className="size-4" />
 					</Button>
 					<Button
 						variant="outline"

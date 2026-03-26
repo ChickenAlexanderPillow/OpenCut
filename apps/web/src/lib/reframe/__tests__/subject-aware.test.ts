@@ -202,8 +202,14 @@ describe("subject-aware reframe preset generation", () => {
 		expect(subjectRight!.transform.position.x).toBeLessThan(0);
 		expect(subjectLeft!.transform.position.x - subjectRight!.transform.position.x).toBeGreaterThan(800);
 
-		const rightDetection = { centerX: 1185, width: 190 };
 		const containScale = Math.min(1080 / 1920, 1920 / 1080);
+		const leftScale = subjectLeft!.transform.scale;
+		const leftViewportCenterX =
+			1920 / 2 -
+			subjectLeft!.transform.position.x / (containScale * leftScale);
+		expect(Math.abs(leftViewportCenterX - 530)).toBeLessThan(8);
+
+		const rightDetection = { centerX: 1185, width: 190 };
 		const rightScale = subjectRight!.transform.scale;
 		const viewportCenterX =
 			1920 / 2 -
@@ -212,8 +218,60 @@ describe("subject-aware reframe preset generation", () => {
 		const viewportRight = viewportCenterX + visibleHalfWidth;
 		const subjectRightEdge = rightDetection.centerX + rightDetection.width / 2;
 		expect(subjectRightEdge).toBeLessThan(viewportRight - 10);
+		expect(Math.abs(viewportCenterX - 1172.5)).toBeLessThan(8);
 		expect(result.defaultPresetId).toBe(subjectLeft!.id);
 		expect(result.switches).toEqual([]);
+	});
+
+	test("builds side presets from representative subject clusters instead of the first visible side observation", () => {
+		const result = buildAutoReframePresetsFromDetections({
+			detections: [
+				{ centerX: 320, centerY: 300, width: 180, height: 320 },
+				{ centerX: 340, centerY: 304, width: 182, height: 324 },
+				{ centerX: 1180, centerY: 308, width: 184, height: 322 },
+				{ centerX: 1200, centerY: 312, width: 186, height: 326 },
+			],
+			observations: [
+				{
+					time: 0,
+					boxes: [{ centerX: 960, centerY: 300, width: 180, height: 320 }],
+				},
+				{
+					time: 1.2,
+					boxes: [
+						{ centerX: 330, centerY: 304, width: 182, height: 324 },
+						{ centerX: 1190, centerY: 312, width: 186, height: 326 },
+					],
+				},
+			],
+			canvasSize: { width: 1080, height: 1920 },
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			baseScale: 1.8,
+		});
+
+		const subjectLeft = result.presets.find(
+			(preset) => preset.name === "Subject Left",
+		);
+		const subjectRight = result.presets.find(
+			(preset) => preset.name === "Subject Right",
+		);
+		expect(subjectLeft).toBeDefined();
+		expect(subjectRight).toBeDefined();
+
+		const containScale = Math.min(1080 / 1920, 1920 / 1080);
+		const leftViewportCenterX =
+			1920 / 2 -
+			subjectLeft!.transform.position.x /
+				(containScale * subjectLeft!.transform.scale);
+		const rightViewportCenterX =
+			1920 / 2 -
+			subjectRight!.transform.position.x /
+				(containScale * subjectRight!.transform.scale);
+
+		expect(Math.abs(leftViewportCenterX - 330)).toBeLessThan(8);
+		expect(Math.abs(rightViewportCenterX - 1190)).toBeLessThan(8);
+		expect(Math.abs(leftViewportCenterX - 960)).toBeGreaterThan(500);
 	});
 
 	test("anchors single-subject framing horizontally to the face center", () => {

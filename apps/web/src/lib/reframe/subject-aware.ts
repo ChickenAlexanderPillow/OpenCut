@@ -757,23 +757,6 @@ function buildFallbackSubjectPreset({ baseScale }: { baseScale: number }) {
 	});
 }
 
-function clampSubjectCenterX({
-	centerX,
-	sourceWidth,
-	boxWidth,
-}: {
-	centerX: number;
-	sourceWidth: number;
-	boxWidth: number;
-}) {
-	const safeHalfWidth = Math.max(1, boxWidth / 2);
-	return clamp(
-		centerX,
-		safeHalfWidth,
-		Math.max(safeHalfWidth, sourceWidth - safeHalfWidth),
-	);
-}
-
 function derivePresetTransform({
 	box,
 	canvasSize,
@@ -1914,49 +1897,20 @@ export function buildAutoReframePresetsFromDetections({
 	let defaultPresetId: string | null = null;
 
 	if (clusters.length >= 2) {
-		const edgeBias = Math.max(sourceWidth * 0.02, centerBox.width * 0.12);
 		const leftClusterBox = buildSubjectBoxFromDetections(clusters[0]!);
 		const rightClusterBox = buildSubjectBoxFromDetections(
 			clusters[clusters.length - 1]!,
 		);
-		const initialLeftBox =
-			getInitialSeedBoxForIdentity({
-				observations,
-				clusters,
-				targetIdentity: "left",
-			}) ?? leftClusterBox;
-		const initialRightBox =
-			getInitialSeedBoxForIdentity({
-				observations,
-				clusters,
-				targetIdentity: "right",
-			}) ?? rightClusterBox;
-		const leftBox: SubjectBox = {
-			...initialLeftBox,
-			centerX: clampSubjectCenterX({
-				centerX: initialLeftBox.centerX - edgeBias,
-				sourceWidth,
-				boxWidth: initialLeftBox.width,
-			}),
-		};
-		const rightBox: SubjectBox = {
-			...initialRightBox,
-			centerX: clampSubjectCenterX({
-				centerX: initialRightBox.centerX + edgeBias,
-				sourceWidth,
-				boxWidth: initialRightBox.width,
-			}),
-		};
 		presets.push(
 			buildVideoReframePreset({
 				name: "Subject Left",
 				autoSeeded: true,
 				subjectSeed: buildSubjectSeed({
-					box: initialLeftBox,
+					box: leftClusterBox,
 					identity: "left",
 				}),
 				transform: derivePresetTransform({
-					box: leftBox,
+					box: leftClusterBox,
 					canvasSize,
 					sourceWidth,
 					sourceHeight,
@@ -1968,11 +1922,11 @@ export function buildAutoReframePresetsFromDetections({
 				name: "Subject Right",
 				autoSeeded: true,
 				subjectSeed: buildSubjectSeed({
-					box: initialRightBox,
+					box: rightClusterBox,
 					identity: "right",
 				}),
 				transform: derivePresetTransform({
-					box: rightBox,
+					box: rightClusterBox,
 					canvasSize,
 					sourceWidth,
 					sourceHeight,
