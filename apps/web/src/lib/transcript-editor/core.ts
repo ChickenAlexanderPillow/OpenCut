@@ -303,7 +303,7 @@ export function detectTranscriptFillerCandidates({
 			normalized.length > 0 &&
 			normalized === normalizedNext &&
 			!isPunctuationOnlyToken(current.text) &&
-			pauseAfter <= 0.25
+			pauseAfter <= 0.35
 		) {
 			claimedWordIds.add(current.id);
 			candidates.push({

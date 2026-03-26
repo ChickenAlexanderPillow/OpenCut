@@ -129,6 +129,69 @@ describe("transcript filler candidates", () => {
 		expect(candidates).toContainEqual(
 			expect.objectContaining({
 				id: "repeat:w1",
+				text: "I",
+				wordIds: ["w1"],
+				confidence: "high",
+			}),
+		);
+	});
+
+	test("surfaces the first word in repeated pairs as fluff", () => {
+		const candidates = detectTranscriptFillerCandidates({
+			words: [
+				{ id: "w1", text: "yeah", startTime: 0, endTime: 0.1, removed: false },
+				{
+					id: "w2",
+					text: "yeah",
+					startTime: 0.14,
+					endTime: 0.24,
+					removed: false,
+				},
+				{
+					id: "w3",
+					text: "that's",
+					startTime: 0.32,
+					endTime: 0.46,
+					removed: false,
+				},
+			],
+		});
+
+		expect(candidates).toContainEqual(
+			expect.objectContaining({
+				id: "repeat:w1",
+				text: "yeah",
+				wordIds: ["w1"],
+				confidence: "high",
+			}),
+		);
+	});
+
+	test("detects repeated words with a slightly longer natural pause", () => {
+		const candidates = detectTranscriptFillerCandidates({
+			words: [
+				{ id: "w1", text: "how", startTime: 0, endTime: 0.12, removed: false },
+				{
+					id: "w2",
+					text: "how",
+					startTime: 0.42,
+					endTime: 0.54,
+					removed: false,
+				},
+				{
+					id: "w3",
+					text: "do",
+					startTime: 0.62,
+					endTime: 0.7,
+					removed: false,
+				},
+			],
+		});
+
+		expect(candidates).toContainEqual(
+			expect.objectContaining({
+				id: "repeat:w1",
+				text: "how",
 				wordIds: ["w1"],
 				confidence: "high",
 			}),

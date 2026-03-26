@@ -91,7 +91,9 @@ import {
 	buildTranscriptCutsFromWords,
 	buildTranscriptGapId,
 	computeKeepDuration,
+	detectTranscriptFillerCandidates,
 	isFillerWordOrPhrase,
+	mapSourceTimeToCompressedTime,
 	mergeCutRanges,
 	normalizeTranscriptGapEdits,
 	normalizeTranscriptWords,
@@ -101,7 +103,10 @@ import {
 	buildTranscriptWordsFromTimedWords,
 } from "@/lib/media/transcript-import";
 import { buildTranscriptWordsFromCaptionTimings } from "@/lib/transcript-editor/caption-fallback";
-import { DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS } from "@/lib/transcript-editor/constants";
+import {
+	DEFAULT_PAUSE_REMOVAL_MIN_GAP_SECONDS,
+	MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS,
+} from "@/lib/transcript-editor/constants";
 import { clearTranscriptTimelineSnapshotCache } from "@/lib/transcript-editor/snapshot";
 import {
 	compileTranscriptDraft,
@@ -138,6 +143,58 @@ const VIRAL_CLIP_MIN_SECONDS = 18;
 const VIRAL_CLIP_TARGET_SECONDS = 36;
 const VIRAL_CLIP_MAX_SECONDS = 65;
 const CLIP_SCORING_TRANSCRIPT_MAX_CHARS = 20000;
+const MAX_DISFLUENCY_REPEAT_GAP_SECONDS = 0.35;
+
+function normalizeTranscriptDisplayToken(token: string): string {
+	return token
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}'\s]+/gu, "")
+		.trim();
+}
+
+function getPanelSurfacedGapIds({
+	words,
+	cuts,
+}: {
+	words: NonNullable<VideoElement["transcriptDraft"]>["words"];
+	cuts: TranscriptEditCutRange[];
+}): string[] {
+	const activeWords = words.filter((word) => !word.removed);
+	const gapIds: string[] = [];
+	for (let index = 0; index < activeWords.length - 1; index++) {
+		const current = activeWords[index];
+		const next = activeWords[index + 1];
+		if (!current || !next) continue;
+		const currentToken = normalizeTranscriptDisplayToken(current.text);
+		const nextToken = normalizeTranscriptDisplayToken(next.text);
+		const sourceDurationSeconds = Math.max(0, next.startTime - current.endTime);
+		const compressedDurationSeconds = Math.max(
+			0,
+			mapSourceTimeToCompressedTime({
+				sourceTime: next.startTime,
+				cuts,
+			}) -
+				mapSourceTimeToCompressedTime({
+					sourceTime: current.endTime,
+					cuts,
+				}),
+		);
+		const isImmediateRepeatedWord =
+			Boolean(currentToken) &&
+			currentToken === nextToken &&
+			current.speakerId === next.speakerId &&
+			sourceDurationSeconds <= MAX_DISFLUENCY_REPEAT_GAP_SECONDS &&
+			compressedDurationSeconds <= MAX_DISFLUENCY_REPEAT_GAP_SECONDS;
+		if (isImmediateRepeatedWord) {
+			continue;
+		}
+		if (compressedDurationSeconds < MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS) {
+			continue;
+		}
+		gapIds.push(buildTranscriptGapId(current.id, next.id));
+	}
+	return gapIds;
+}
 const CLIP_SCORING_TIMEOUT_MS = 120000;
 const CLIP_IMPORT_TRANSCRIPTION_MODEL = "medium";
 const CLIP_TRANSCRIPTION_TIMEOUT_MS = 60000;
@@ -1536,6 +1593,7 @@ function applyTranscriptEditMutation({
 	mutateGapEdits?: (
 		gapEdits: Record<string, { text?: string; removed?: boolean }>,
 		words: NonNullable<VideoElement["transcriptDraft"]>["words"],
+		cuts: TranscriptEditCutRange[],
 	) => Record<string, { text?: string; removed?: boolean }> | undefined;
 }): { changed: boolean; error?: string } {
 	const tracks = editor.timeline.getTracks();
@@ -1600,7 +1658,7 @@ function applyTranscriptEditMutation({
 		}) ?? {};
 	const nextGapEdits = mutateGapEdits
 		? normalizeTranscriptGapEdits({
-				gapEdits: mutateGapEdits(initialGapEdits, nextWords),
+				gapEdits: mutateGapEdits(initialGapEdits, nextWords, cuts),
 			})
 		: initialGapEdits;
 	const wordsChanged = !areTranscriptWordsEqual({
@@ -3262,19 +3320,35 @@ export function useEditorActions() {
 				editor,
 				trackId,
 				elementId,
-				mutateWords: (words) =>
-					words.map((word) =>
-						isFillerWordOrPhrase({ text: word.text })
+				mutateWords: (words) => {
+					const fillerWordIds = new Set(
+						detectTranscriptFillerCandidates({ words }).flatMap(
+							(candidate) => candidate.wordIds,
+						),
+					);
+					return words.map((word) =>
+						fillerWordIds.has(word.id) || isFillerWordOrPhrase({ text: word.text })
 							? { ...word, removed: true }
 							: word,
-					),
+					);
+				},
+				mutateGapEdits: (gapEdits, words, cuts) => {
+					const nextGapEdits = { ...gapEdits };
+					for (const gapId of getPanelSurfacedGapIds({ words, cuts })) {
+						nextGapEdits[gapId] = {
+							...(nextGapEdits[gapId] ?? {}),
+							removed: true,
+						};
+					}
+					return nextGapEdits;
+				},
 			});
 			if (result.error) {
 				toast.error(result.error);
 				return;
 			}
 			if (result.changed) {
-				toast.success("Filler words removed from transcript and captions");
+				toast.success("Fluff removed from transcript, captions, and surfaced gaps");
 			}
 		},
 		undefined,
@@ -3335,13 +3409,22 @@ export function useEditorActions() {
 				elementId,
 				mutateWords: (words) =>
 					words.map((word) => ({ ...word, removed: false, hidden: false })),
+				mutateGapEdits: (gapEdits) => {
+					const nextGapEdits = Object.fromEntries(
+						Object.entries(gapEdits).map(([gapId, gapEdit]) => [
+							gapId,
+							{ ...gapEdit, removed: false },
+						]),
+					);
+					return nextGapEdits;
+				},
 			});
 			if (result.error) {
 				toast.error(result.error);
 				return;
 			}
 			if (result.changed) {
-				toast.success("Restored all transcript words");
+				toast.success("Restored all transcript words and unmuted gaps");
 			}
 		},
 		undefined,

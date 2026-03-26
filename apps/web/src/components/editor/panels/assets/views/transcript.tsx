@@ -73,6 +73,7 @@ import {
 	Pencil,
 	RefreshCw,
 	RotateCcw,
+	WandSparkles,
 	X,
 } from "lucide-react";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
@@ -2206,6 +2207,22 @@ export function TranscriptView() {
 							)}
 						</Button>
 					)}
+					<Button
+						variant="outline"
+						size="icon"
+						className="shrink-0"
+						onClick={() =>
+							invokeAction("transcript-remove-fillers", {
+								trackId: activeMedia.trackId,
+								elementId: activeMedia.element.id,
+							})
+						}
+						disabled={fillerCandidates.length === 0}
+						aria-label="Remove fluff from transcript"
+						title="Remove fluff"
+					>
+						<WandSparkles className="size-4" />
+					</Button>
 					<Button
 						variant="outline"
 						size="icon"
