@@ -143,8 +143,8 @@ function ExportPopover({
 					quality,
 					fps: activeProject.settings.fps,
 					includeAudio,
-					startTime: hasRangeExport ? exportStartTime : 0,
-					endTime: hasRangeExport ? exportEndTime : timelineDuration,
+					startTime: hasRangeExport ? exportStartTime : undefined,
+					endTime: hasRangeExport ? exportEndTime : undefined,
 					onProgress: ({ progress }) => {
 						setProgress(progress);
 						if (processIdRef.current) {
@@ -304,13 +304,13 @@ function ExportPopover({
 									<Section collapsible defaultOpen={false}>
 										<SectionHeader title="Range" />
 										<SectionContent>
-											<p className="text-muted-foreground text-xs">
-												{hasRangeExport
-													? `In/Out region (${exportStartTime.toFixed(2)}s - ${exportEndTime.toFixed(2)}s)`
-													: "Full timeline"}
-											</p>
-										</SectionContent>
-									</Section>
+										<p className="text-muted-foreground text-xs">
+											{hasRangeExport
+												? `In/Out region (${exportStartTime.toFixed(2)}s - ${exportEndTime.toFixed(2)}s)`
+												: "Auto: end at last media on timeline"}
+										</p>
+									</SectionContent>
+								</Section>
 								</div>
 
 								<div className="p-3 pt-0">

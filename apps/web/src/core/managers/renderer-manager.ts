@@ -104,6 +104,30 @@ function filterTracksByExportRegion({
 	return filteredTracks;
 }
 
+export function getLastMediaEndTime({
+	tracks,
+}: {
+	tracks: TimelineTrack[];
+}): number {
+	let lastMediaEndTime = 0;
+	for (const track of tracks) {
+		for (const element of track.elements) {
+			if (
+				element.type !== "video" &&
+				element.type !== "audio" &&
+				element.type !== "image"
+			) {
+				continue;
+			}
+			lastMediaEndTime = Math.max(
+				lastMediaEndTime,
+				element.startTime + element.duration,
+			);
+		}
+	}
+	return lastMediaEndTime;
+}
+
 export class RendererManager {
 	private renderTree: RootNode | null = null;
 	private listeners = new Set<() => void>();
@@ -218,10 +242,22 @@ export class RendererManager {
 			if (timelineDuration === 0) {
 				return { success: false, error: "Project is empty" };
 			}
+			const hasExplicitStartTime = Number.isFinite(options.startTime);
+			const hasExplicitEndTime = Number.isFinite(options.endTime);
+			const defaultExportEndTime =
+				!hasExplicitStartTime && !hasExplicitEndTime
+					? Math.max(
+							0,
+							Math.min(
+								timelineDuration,
+								getLastMediaEndTime({ tracks: timelineTracks }) || timelineDuration,
+							),
+						)
+					: timelineDuration;
 			const requestedStart = Math.max(0, options.startTime ?? 0);
 			const requestedEnd = Math.min(
 				timelineDuration,
-				options.endTime ?? timelineDuration,
+				options.endTime ?? defaultExportEndTime,
 			);
 			const startTime = Math.min(requestedStart, requestedEnd);
 			const endTime = Math.max(startTime, requestedEnd);

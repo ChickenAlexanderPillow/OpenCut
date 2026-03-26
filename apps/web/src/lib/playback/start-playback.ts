@@ -1,4 +1,6 @@
 import type { EditorCore } from "@/core";
+import { buildCompressedCutBoundaryTimes, mapCompressedTimeToSourceTime } from "@/lib/transcript-editor/core";
+import { getTranscriptApplied } from "@/lib/transcript-editor/state";
 import { videoCache } from "@/services/video-cache/service";
 import { usePreviewStore } from "@/stores/preview-store";
 import type { TimelineTrack, VideoElement } from "@/types/timeline";
@@ -77,7 +79,58 @@ function resolveVideoFrameTime({
 	playhead: number;
 }): number {
 	const elapsed = Math.max(0, Math.min(element.duration, playhead - element.startTime));
-	return element.trimStart + elapsed;
+	const transcriptCuts = getTranscriptApplied(element)?.removedRanges ?? [];
+	const sourceElapsed =
+		transcriptCuts.length > 0
+			? mapCompressedTimeToSourceTime({
+					compressedTime: elapsed,
+					cuts: transcriptCuts,
+				})
+			: elapsed;
+	return element.trimStart + sourceElapsed;
+}
+
+function buildPrewarmVideoSampleTimes({
+	element,
+	playhead,
+	fps,
+}: {
+	element: VideoElement;
+	playhead: number;
+	fps: number;
+}): number[] {
+	const effectivePlayhead = Math.max(playhead, element.startTime);
+	const transcriptCuts = getTranscriptApplied(element)?.removedRanges ?? [];
+	const baseCompressedTimes = Array.from(
+		{ length: VIDEO_PREWARM_FRAME_COUNT },
+		(_, index) =>
+			Math.max(
+				0,
+				Math.min(element.duration, effectivePlayhead + index / fps - element.startTime),
+			),
+	);
+	const boundaryCompressedTimes =
+		transcriptCuts.length > 0
+			? buildCompressedCutBoundaryTimes({ cuts: transcriptCuts })
+					.filter(
+						(boundaryTime) =>
+							boundaryTime >= baseCompressedTimes[0]! - 1 / fps &&
+							boundaryTime <=
+								baseCompressedTimes[baseCompressedTimes.length - 1]! +
+									VIDEO_PREWARM_HORIZON_SECONDS,
+					)
+					.flatMap((boundaryTime) => [boundaryTime, boundaryTime + 1 / fps])
+			: [];
+	const sampleTimes = [...baseCompressedTimes, ...boundaryCompressedTimes].map(
+		(compressedElapsed) =>
+			resolveVideoFrameTime({
+				element,
+				playhead: element.startTime + compressedElapsed,
+			}),
+	);
+	return Array.from(
+		new Set(sampleTimes.map((time) => time.toFixed(4))),
+	).map((time) => Number.parseFloat(time));
 }
 
 export async function prewarmPlaybackVideoFrames({
@@ -103,15 +156,11 @@ export async function prewarmPlaybackVideoFrames({
 		activeVideos.map(async (element) => {
 			const mediaAsset = mediaById.get(element.mediaId);
 			if (!mediaAsset || mediaAsset.type !== "video") return;
-			const effectivePlayhead = Math.max(playhead, element.startTime);
-			const sampleTimes = Array.from(
-				{ length: VIDEO_PREWARM_FRAME_COUNT },
-				(_, index) =>
-					resolveVideoFrameTime({
-						element,
-						playhead: effectivePlayhead + index / fps,
-					}),
-			);
+			const sampleTimes = buildPrewarmVideoSampleTimes({
+				element,
+				playhead,
+				fps,
+			});
 			await Promise.allSettled(
 				sampleTimes.flatMap((time) => [
 					videoCache.getFrameAt({
