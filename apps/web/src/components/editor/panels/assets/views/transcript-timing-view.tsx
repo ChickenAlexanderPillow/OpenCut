@@ -569,6 +569,8 @@ export function TranscriptTimingView({
 		[currentSourceTime, localWords],
 	);
 	const focusedAnchorTime = focusedLayoutItem?.displayStartTime ?? null;
+	const shouldFollowTimelinePlayback =
+		isPlaying && heldWordPreview === null;
 
 	const localWindow = useMemo(() => {
 		if (localWords.length === 0) return null;
@@ -578,7 +580,7 @@ export function TranscriptTimingView({
 		const totalDuration = Math.max(0.01, trackEnd - trackStart);
 		const duration = Math.min(TIMING_VIEW_WINDOW_SECONDS, totalDuration);
 		const centerTime =
-			currentDisplayTime != null
+			shouldFollowTimelinePlayback && currentDisplayTime != null
 				? currentDisplayTime
 				: (focusedAnchorTime ?? trackStart);
 		const unclampedStart = centerTime - duration / 2;
@@ -590,7 +592,7 @@ export function TranscriptTimingView({
 			endTime,
 			duration: Math.max(0.01, duration),
 		};
-	}, [currentDisplayTime, focusedAnchorTime, localWords]);
+	}, [currentDisplayTime, focusedAnchorTime, localWords, shouldFollowTimelinePlayback]);
 	const visibleWords = useMemo(() => {
 		if (!localWindow) return [];
 		return localWords.filter(
@@ -1030,7 +1032,7 @@ export function TranscriptTimingView({
 								tokenWords.length > 0 &&
 								tokenWords.every((tokenWord) => tokenWord.hidden);
 							const emphasizeWordBoundary =
-								isFocused || (isCurrent && !isPlaying);
+								!isPlaying && (isFocused || isCurrent);
 							const showWordBoundary = !isPlaying;
 							const playbackProgress =
 								isCurrent && currentSourceTime != null
@@ -1063,11 +1065,15 @@ export function TranscriptTimingView({
 												: (tone?.border ?? "rgba(63,63,70,0.9)")
 											: "transparent",
 										backgroundColor: tone
-											? hexToRgba(
-													tone.accent,
-													emphasizeWordBoundary ? 0.2 : 0.08,
-												)
-											: "rgba(39,39,42,0.32)",
+											? isPlaying
+												? "transparent"
+												: hexToRgba(
+														tone.accent,
+														emphasizeWordBoundary ? 0.2 : 0.08,
+													)
+											: isPlaying
+												? "transparent"
+												: "rgba(39,39,42,0.32)",
 										color: tone?.mutedText ?? undefined,
 										boxShadow:
 											emphasizeWordBoundary
@@ -1143,7 +1149,7 @@ export function TranscriptTimingView({
 									) : isCurrent ? (
 										<span
 											aria-hidden="true"
-											className="pointer-events-none absolute inset-0 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)]"
+											className="pointer-events-none absolute inset-0"
 											style={{
 												width: `${playbackProgress}%`,
 												backgroundColor: hexToRgba(

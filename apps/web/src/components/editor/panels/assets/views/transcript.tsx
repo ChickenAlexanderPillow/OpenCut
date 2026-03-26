@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type CSSProperties,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { PanelView } from "@/components/editor/panels/assets/views/base-view";
 import { TranscriptTimingView } from "@/components/editor/panels/assets/views/transcript-timing-view";
 import { useEditor } from "@/hooks/use-editor";
@@ -70,7 +77,6 @@ import {
 } from "lucide-react";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
 import { useProjectProcessStore } from "@/stores/project-process-store";
-import { MIN_TRANSCRIPT_WORD_DURATION_SECONDS } from "@/lib/transcript-editor/timing";
 
 type MediaRef = {
 	trackId: string;
@@ -112,7 +118,6 @@ const MAX_DISFLUENCY_REPEAT_GAP_SECONDS = 0.35;
 const HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX = 5;
 const HOLD_TO_PREVIEW_CANCEL_DISTANCE_SQUARED_PX =
 	HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX * HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX;
-const MIN_HOLD_PREVIEW_DURATION_SECONDS = MIN_TRANSCRIPT_WORD_DURATION_SECONDS;
 const HOLD_PREVIEW_STOP_EPSILON_SECONDS = 0.001;
 
 function getWordPreviewStartTime({
@@ -776,24 +781,38 @@ export function TranscriptView() {
 		if (!activeMedia) return null;
 		return Math.max(0, previewCurrentTime - activeMedia.element.startTime);
 	}, [activeMedia, previewCurrentTime]);
+	const heldPreviewWordIds = heldWordPreview?.wordIds ?? [];
 
 	const currentWordId = useMemo(() => {
+		if (heldPreviewWordIds.length > 0) {
+			for (const wordId of heldPreviewWordIds) {
+				if (
+					visibleTranscriptWords.some((word) => word.id === wordId)
+				) {
+					return wordId;
+				}
+			}
+			return null;
+		}
 		if (currentSourceTime == null) return null;
 		return findActiveWordIdAtSourceTime({
 			words: visibleTranscriptWords,
 			time: currentSourceTime,
 			matchHidden: false,
 		});
-	}, [currentSourceTime, visibleTranscriptWords]);
+	}, [currentSourceTime, heldPreviewWordIds, visibleTranscriptWords]);
 
 	const currentHiddenWordId = useMemo(() => {
+		if (heldPreviewWordIds.length > 0) {
+			return null;
+		}
 		if (currentSourceTime == null) return null;
 		return findActiveWordIdAtSourceTime({
 			words: wordsWithCutState,
 			time: currentSourceTime,
 			matchHidden: true,
 		});
-	}, [currentSourceTime, wordsWithCutState]);
+	}, [currentSourceTime, heldPreviewWordIds, wordsWithCutState]);
 
 	const transcriptCompileState = activeMedia
 		? getTranscriptCompileState(activeMedia.element)
@@ -969,6 +988,12 @@ export function TranscriptView() {
 		return nextWordMap;
 	}, [cuts, gapEdits, orderedPanelWords]);
 	const currentGapId = useMemo(() => {
+		if (heldWordPreview?.gapId) {
+			return heldWordPreview.gapId;
+		}
+		if (heldPreviewWordIds.length > 0) {
+			return null;
+		}
 		if (currentCompressedTime == null) return null;
 		for (const gap of nextPanelWordById.values()) {
 			if (
@@ -979,7 +1004,7 @@ export function TranscriptView() {
 			}
 		}
 		return null;
-	}, [currentCompressedTime, nextPanelWordById]);
+	}, [currentCompressedTime, heldPreviewWordIds.length, heldWordPreview?.gapId, nextPanelWordById]);
 	const activeWordId = currentGapId ? null : currentWordId;
 	const activeHiddenWordId = currentGapId ? null : currentHiddenWordId;
 	const effectiveTimingWordId = currentWordId ?? focusedWordId;
@@ -1395,13 +1420,9 @@ export function TranscriptView() {
 					sourceTime: wordEndTime,
 					cuts,
 				});
-			const boundedEnd = Math.max(
-				timelineStart + MIN_HOLD_PREVIEW_DURATION_SECONDS,
-				timelineEnd,
-			);
 			const previewOutPoint = Math.max(
-				timelineStart + Math.min(0.01, MIN_HOLD_PREVIEW_DURATION_SECONDS),
-				boundedEnd - HOLD_PREVIEW_STOP_EPSILON_SECONDS,
+				timelineStart + HOLD_PREVIEW_STOP_EPSILON_SECONDS,
+				timelineEnd - HOLD_PREVIEW_STOP_EPSILON_SECONDS,
 			);
 			heldPreviewEnteredRangeRef.current = false;
 			suppressClickSeekRef.current = true;
@@ -2513,6 +2534,7 @@ export function TranscriptView() {
 													tokenWordIds.some((tokenWordId) =>
 														selectedWordIdsSet.has(tokenWordId),
 													);
+												const isEditingWord = editingWordId === displayWord.id;
 												const tone = group.tone;
 												const wordStyle = isCurrentWord
 													? {
@@ -2620,9 +2642,12 @@ export function TranscriptView() {
 																)}
 															{/* biome-ignore lint/a11y/noStaticElementInteractions: Transcript tokens need custom pointer handling for selection, preview, and editing. */}
 															<span
+																draggable={false}
 																className={[
-																	"cursor-pointer rounded-sm px-1 py-0.5 select-text whitespace-nowrap",
-																	editingWordId === word.id ? "invisible" : "",
+																	"rounded-sm px-1 py-0.5 select-text whitespace-nowrap",
+																	isEditingWord
+																		? "cursor-text"
+																		: "cursor-pointer",
 																	!editingWordId && !isSelectionActive
 																		? ""
 																		: "",
@@ -2651,6 +2676,12 @@ export function TranscriptView() {
 																	.join(" ")}
 																style={{
 																	...wordStyle,
+																	...(isEditingWord
+																		? {
+																				backgroundColor: "transparent",
+																				boxShadow: `inset 0 0 0 1px ${tone?.accent ?? "#71717a"}`,
+																			}
+																		: undefined),
 																	...removedWordDecorationStyle,
 																}}
 																onMouseEnter={(event) => {
@@ -2668,8 +2699,14 @@ export function TranscriptView() {
 																	) {
 																		return;
 																	}
-																	event.currentTarget.style.backgroundColor =
-																		"";
+																		event.currentTarget.style.backgroundColor =
+																			"";
+																	}}
+																onDragStart={(event) => {
+																	if (isEditingWord) {
+																		event.preventDefault();
+																		event.stopPropagation();
+																	}
 																}}
 																onDoubleClick={(event) => {
 																	event.preventDefault();
@@ -2765,46 +2802,64 @@ export function TranscriptView() {
 																	/>
 																) : null}
 																<span className="relative z-10">
-																	{displayText}
+																	{isEditingWord ? (
+																		<input
+																			ref={editingWordInputRef}
+																			draggable={false}
+																			value={editingWordText}
+																			onChange={(event) =>
+																				setEditingWordText(
+																					event.target.value,
+																				)
+																			}
+																			onKeyDown={(event) => {
+																				if (event.key === "Enter") {
+																					event.preventDefault();
+																					commitWordEdit();
+																				}
+																				if (event.key === "Escape") {
+																					event.preventDefault();
+																					clearEditingState();
+																				}
+																			}}
+																			onBlur={() => {
+																				commitWordEdit();
+																			}}
+																			onPointerDown={(event) => {
+																				event.stopPropagation();
+																			}}
+																			onPointerMove={(event) => {
+																				event.stopPropagation();
+																			}}
+																			onPointerUp={(event) => {
+																				event.stopPropagation();
+																			}}
+																			onDoubleClick={(event) => {
+																				event.stopPropagation();
+																			}}
+																			onDragStart={(event) => {
+																				event.preventDefault();
+																				event.stopPropagation();
+																			}}
+																			className="transcript-inline-word-input min-w-0 bg-transparent text-inherit font-inherit outline-none"
+																			style={
+																				{
+																					width: `${editingWidthCh}ch`,
+																					caretColor: tone?.accent ?? "#71717a",
+																					"--transcript-selection-bg": hexToRgba(
+																						tone?.accent ?? "#71717a",
+																						0.42,
+																					),
+																				} as CSSProperties &
+																					Record<"--transcript-selection-bg", string>
+																			}
+																			spellCheck={false}
+																		/>
+																	) : (
+																		displayText
+																	)}
 																</span>
 															</span>
-															{editingWordId === displayWord.id && (
-																<span className="absolute left-0 top-1/2 z-20 inline-flex -translate-y-1/2 items-center rounded-sm border border-zinc-500 bg-zinc-800 px-2 pr-1 align-middle shadow-sm">
-																	<input
-																		ref={editingWordInputRef}
-																		value={editingWordText}
-																		onChange={(event) =>
-																			setEditingWordText(event.target.value)
-																		}
-																		onKeyDown={(event) => {
-																			if (event.key === "Enter") {
-																				commitWordEdit();
-																			}
-																			if (event.key === "Escape") {
-																				clearEditingState();
-																			}
-																		}}
-																		className="min-w-0 bg-transparent text-sm font-medium text-zinc-100 outline-none"
-																		style={{ width: `${editingWidthCh}ch` }}
-																	/>
-																	<Button
-																		variant="ghost"
-																		size="icon"
-																		className="size-6 text-zinc-100 hover:bg-emerald-950/60"
-																		onClick={commitWordEdit}
-																	>
-																		<Check className="size-3.5" />
-																	</Button>
-																	<Button
-																		variant="ghost"
-																		size="icon"
-																		className="size-6 text-zinc-100 hover:bg-rose-950/60"
-																		onClick={clearEditingState}
-																	>
-																		<X className="size-3.5" />
-																	</Button>
-																</span>
-															)}
 														</span>
 														{nextWord ? (
 															<span
@@ -3147,6 +3202,17 @@ export function TranscriptView() {
 					Re-generating transcript from source media...
 				</div>
 			)}
+			<style jsx>{`
+				.transcript-inline-word-input::selection {
+					background: var(--transcript-selection-bg);
+					color: inherit;
+				}
+
+				.transcript-inline-word-input::-moz-selection {
+					background: var(--transcript-selection-bg);
+					color: inherit;
+				}
+			`}</style>
 		</PanelView>
 	);
 }
