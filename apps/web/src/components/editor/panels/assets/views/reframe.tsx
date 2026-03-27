@@ -55,7 +55,9 @@ import {
 	resolveVideoSplitScreenSlotTransformFromState,
 } from "@/lib/reframe/video-reframe";
 import {
+	buildMotionTrackingPresetSignature,
 	DEFAULT_MOTION_TRACKING_STRENGTH,
+	getTrackingSubjectHint,
 	mergeMotionTrackingKeyframes,
 	normalizeMotionTrackingStrength,
 	offsetMotionTrackingKeyframes,
@@ -293,41 +295,9 @@ export function ReframeView() {
 			selectedMediaAsset.id,
 			sourceRange.startTime.toFixed(3),
 			sourceRange.endTime.toFixed(3),
-			preset.name.trim().toLowerCase(),
-			preset.transform.position.x.toFixed(3),
-			preset.transform.position.y.toFixed(3),
-			preset.transform.scale.toFixed(4),
-			(preset.motionTracking?.animateScale ?? false) ? "scale:1" : "scale:0",
-			`strength:${normalizeMotionTrackingStrength(
-				preset.motionTracking?.trackingStrength,
-			).toFixed(2)}`,
+			buildMotionTrackingPresetSignature({ preset }),
 		].join("|");
 	};
-	const buildMotionTrackingPresetSignature = ({
-		preset,
-	}: {
-		preset: VideoReframePreset;
-	}) =>
-		[
-			preset.name.trim().toLowerCase(),
-			preset.transform.position.x.toFixed(3),
-			preset.transform.position.y.toFixed(3),
-			preset.transform.scale.toFixed(4),
-			(preset.motionTracking?.animateScale ?? false) ? "scale:1" : "scale:0",
-			`strength:${normalizeMotionTrackingStrength(
-				preset.motionTracking?.trackingStrength,
-			).toFixed(2)}`,
-		].join("|");
-	const getTrackingSubjectHint = ({
-		preset,
-	}: {
-		preset: VideoReframePreset;
-	}): "left" | "right" | "center" =>
-		preset.name === "Subject Left"
-			? "left"
-			: preset.name === "Subject Right"
-				? "right"
-				: "center";
 	const getDesiredMotionTrackingScope = ({
 		preset,
 	}: {
@@ -1544,7 +1514,8 @@ export function ReframeView() {
 		) {
 			return;
 		}
-		const { width: sourceWidth, height: sourceHeight } = selectedMediaAsset;
+		const sourceWidth = Number(selectedMediaAsset.width);
+		const sourceHeight = Number(selectedMediaAsset.height);
 		const projectCanvas = editor.project.getActive().settings.canvasSize;
 		const applyAdjustment = (bindings: VideoSplitScreenSlotBinding[]) =>
 			bindings.map((binding) => {
@@ -1552,13 +1523,23 @@ export function ReframeView() {
 					return binding;
 				}
 				const autoTransform = getAutoSplitSlotTransform(binding);
+				const currentTransform = getSplitSlotTransform(binding);
 				const currentManualDelta = getSplitSlotManualDelta(binding);
-				const translatedTransform = {
+				const nextScale =
+					autoTransform.scale *
+					Math.max(0.05, 1 + (updates.scale ?? currentManualDelta.scale));
+				const nextTransform = {
 					position: {
-						x: autoTransform.position.x + (updates.x ?? currentManualDelta.x),
-						y: autoTransform.position.y + (updates.y ?? currentManualDelta.y),
+						x:
+							updates.x !== undefined
+								? autoTransform.position.x + updates.x
+								: currentTransform.position.x,
+						y:
+							updates.y !== undefined
+								? autoTransform.position.y + updates.y
+								: currentTransform.position.y,
 					},
-					scale: autoTransform.scale,
+					scale: updates.scale !== undefined ? nextScale : currentTransform.scale,
 				};
 				const viewport = getVideoSplitScreenViewports({
 					layoutPreset: splitScreen?.layoutPreset ?? "top-bottom",
@@ -1566,33 +1547,26 @@ export function ReframeView() {
 					width: projectCanvas.width,
 					height: projectCanvas.height,
 				}).get(binding.slotId);
-				const nextScale =
-					autoTransform.scale *
-					Math.max(0.05, 1 + (updates.scale ?? currentManualDelta.scale));
-				const nextTransform = {
-					position: translatedTransform.position,
-					scale: nextScale,
-				};
-				if (viewport) {
-					const slotCoverScale = Math.max(
-						viewport.width / Math.max(1, sourceWidth),
-						viewport.height / Math.max(1, sourceHeight),
-					);
-					const sourceCenter = getSourceCenterForTransform({
-						transform: translatedTransform,
-						baseScale: slotCoverScale,
-						sourceWidth,
-						sourceHeight,
-					});
-					const centeredTransform = buildTransformForSourceCenter({
-						sourceCenter,
-						scale: nextScale,
-						baseScale: slotCoverScale,
-						sourceWidth,
-						sourceHeight,
-						rotate: normalizedVideo.element.transform.rotate,
-					});
-					nextTransform.position = centeredTransform.position;
+				if (viewport && updates.scale !== undefined) {
+					const viewportCenterOffset = {
+						x:
+							viewport.x + viewport.width / 2 - projectCanvas.width / 2,
+						y:
+							viewport.y + viewport.height / 2 - projectCanvas.height / 2,
+					};
+					const scaleMultiplier =
+						nextScale / Math.max(1e-6, currentTransform.scale);
+					nextTransform.position = {
+						x:
+							viewportCenterOffset.x +
+							(nextTransform.position.x - viewportCenterOffset.x) *
+								scaleMultiplier,
+						y:
+							viewportCenterOffset.y +
+							(nextTransform.position.y - viewportCenterOffset.y) *
+								scaleMultiplier,
+					};
+					nextTransform.scale = nextScale;
 				}
 				return withBindingSlotAdjustment({
 					binding,
@@ -2543,16 +2517,14 @@ export function ReframeView() {
 																	onReset={() =>
 																		updateSplitSlotTransform({
 																			slotId: binding.slotId,
-																			updates: { scale: 1 },
+																			updates: { scale: 0 },
 																			pushHistory: true,
 																		})
 																	}
 																	onChange={(value, pushHistory) =>
 																		updateSplitSlotTransform({
 																			slotId: binding.slotId,
-																			updates: {
-																				scale: Math.max(0.001, 1 + value),
-																			},
+																			updates: { scale: value },
 																			pushHistory,
 																		})
 																	}

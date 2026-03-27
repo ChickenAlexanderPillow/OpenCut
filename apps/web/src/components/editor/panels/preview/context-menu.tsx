@@ -34,6 +34,17 @@ export function PreviewContextMenu({
 			>
 				Show bookmarks
 			</ContextMenuCheckboxItem>
+			<ContextMenuCheckboxItem
+				checked={overlays.trackingDebug}
+				onCheckedChange={(checked) =>
+					setOverlayVisibility({
+						overlay: "trackingDebug",
+						isVisible: !!checked,
+					})
+				}
+			>
+				Show tracking debug
+			</ContextMenuCheckboxItem>
 			<ContextMenuItem inset>Show grid</ContextMenuItem>
 		</ContextMenuContent>
 	);

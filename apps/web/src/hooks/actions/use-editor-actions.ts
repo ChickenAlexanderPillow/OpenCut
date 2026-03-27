@@ -134,7 +134,11 @@ import {
 	getVideoElementSourceRange,
 } from "@/lib/reframe/subject-aware";
 import { buildSpeakerTurnReframeSwitches } from "@/lib/reframe/speaker-turns";
-import { normalizeMotionTrackingStrength } from "@/lib/reframe/motion-tracking";
+import {
+	buildMotionTrackingPresetSignature,
+	getTrackingSubjectHint,
+	normalizeMotionTrackingStrength,
+} from "@/lib/reframe/motion-tracking";
 import { buildDefaultVideoSplitScreenBindings } from "@/lib/reframe/video-reframe";
 import { didRevealNewSourceRange } from "@/lib/timeline/clip-expansion";
 const MIN_VIRAL_CLIP_SCORE = 56;
@@ -851,35 +855,6 @@ function hasMatchingSourceWindow({
 			Math.abs(element.trimStart - trimStart) <= 1e-6 &&
 			Math.abs(element.duration - duration) <= 1e-6,
 	);
-}
-
-function buildMotionTrackingPresetSignature({
-	preset,
-}: {
-	preset: VideoReframePreset;
-}): string {
-	return [
-		preset.name.trim().toLowerCase(),
-		preset.transform.position.x.toFixed(3),
-		preset.transform.position.y.toFixed(3),
-		preset.transform.scale.toFixed(4),
-		(preset.motionTracking?.animateScale ?? false) ? "scale:1" : "scale:0",
-		`strength:${normalizeMotionTrackingStrength(
-			preset.motionTracking?.trackingStrength,
-		).toFixed(2)}`,
-	].join("|");
-}
-
-function getTrackingSubjectHint({
-	preset,
-}: {
-	preset: VideoReframePreset;
-}): "left" | "right" | "center" {
-	return preset.name === "Subject Left"
-		? "left"
-		: preset.name === "Subject Right"
-			? "right"
-			: "center";
 }
 
 function getTranscriptCompanionElementIds({

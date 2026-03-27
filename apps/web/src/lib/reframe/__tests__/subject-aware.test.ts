@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
 	buildAutoReframePresetsFromDetections,
+	buildMotionTrackingObservationsFromSampledFrames,
 	choosePrimarySubjectBox,
+	filterCandidatesByIdentityCluster,
 	getVideoElementSourceRange,
 } from "../subject-aware";
 
@@ -169,6 +171,224 @@ describe("subject-aware reframe preset generation", () => {
 		});
 
 		expect(selection?.centerX).toBe(rightCandidate.centerX);
+	});
+
+	test("does not fall back to the opposite identity cluster when the requested side has no match", () => {
+		const filtered = filterCandidatesByIdentityCluster({
+			candidates: [
+				{
+					centerX: 1240,
+					centerY: 332,
+					width: 210,
+					height: 320,
+					anchorX: 1240,
+					anchorY: 252,
+					fitWidth: 140,
+					fitHeight: 210,
+				},
+			],
+			clusters: [
+				[
+					{
+						centerX: 760,
+						centerY: 330,
+						width: 210,
+						height: 320,
+						anchorX: 760,
+						anchorY: 250,
+						fitWidth: 140,
+						fitHeight: 210,
+					},
+				],
+				[
+					{
+						centerX: 1160,
+						centerY: 332,
+						width: 210,
+						height: 320,
+						anchorX: 1160,
+						anchorY: 252,
+						fitWidth: 140,
+						fitHeight: 210,
+					},
+				],
+			],
+			targetIdentity: "left",
+		});
+
+		expect(filtered).toEqual([]);
+	});
+
+	test("drops stale tracked state after a miss so pose fallback can resume on the next frame", () => {
+		const observations = buildMotionTrackingObservationsFromSampledFrames({
+			sampledFrames: [
+				{
+					time: 0,
+					faceCandidates: [
+						{
+							centerX: 960,
+							centerY: 320,
+							width: 180,
+							height: 280,
+							anchorX: 960,
+							anchorY: 250,
+							fitWidth: 120,
+							fitHeight: 180,
+						},
+					],
+					poseCandidates: [],
+				},
+				{
+					time: 0.2,
+					faceCandidates: [],
+					poseCandidates: [],
+				},
+				{
+					time: 0.4,
+					faceCandidates: [],
+					poseCandidates: [
+						{
+							centerX: 990,
+							centerY: 330,
+							width: 190,
+							height: 300,
+							anchorX: 990,
+							anchorY: 255,
+							fitWidth: 125,
+							fitHeight: 190,
+						},
+					],
+				},
+			],
+			identityDetections: [],
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			targetCenterHint: { x: 960, y: 540 },
+		});
+
+		expect(observations[0]?.box?.centerX).toBe(960);
+		expect(observations[1]?.box).toBeNull();
+		expect(observations[2]?.box?.centerX).toBe(990);
+	});
+
+	test("tracks a single centered face instead of averaging multiple visible faces", () => {
+		const observations = buildMotionTrackingObservationsFromSampledFrames({
+			sampledFrames: [
+				{
+					time: 0,
+					faceCandidates: [
+						{
+							centerX: 400,
+							centerY: 300,
+							width: 150,
+							height: 200,
+							anchorX: 400,
+							anchorY: 260,
+							fitWidth: 110,
+							fitHeight: 170,
+							trackingAnchorX: 404,
+							trackingAnchorY: 220,
+						},
+						{
+							centerX: 900,
+							centerY: 320,
+							width: 150,
+							height: 200,
+							anchorX: 900,
+							anchorY: 280,
+							fitWidth: 110,
+							fitHeight: 170,
+							trackingAnchorX: 904,
+							trackingAnchorY: 240,
+						},
+					],
+					poseCandidates: [],
+				},
+			],
+			identityDetections: [],
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			targetCenterHint: { x: 960, y: 540 },
+			targetSubjectHint: "center",
+		});
+
+		expect(observations).toHaveLength(1);
+		expect(observations[0]?.box?.centerX).toBe(900);
+		expect(observations[0]?.box?.trackingAnchorX).toBe(904);
+		expect(observations[0]?.box?.centerX).not.toBe(650);
+	});
+
+	test("keeps targeted tracking locked to face candidates instead of falling back to pose", () => {
+		const observations = buildMotionTrackingObservationsFromSampledFrames({
+			sampledFrames: [
+				{
+					time: 0,
+					faceCandidates: [
+						{
+							centerX: 1160,
+							centerY: 332,
+							width: 210,
+							height: 320,
+							anchorX: 1160,
+							anchorY: 252,
+							fitWidth: 140,
+							fitHeight: 210,
+						},
+					],
+					poseCandidates: [],
+				},
+				{
+					time: 0.2,
+					faceCandidates: [],
+					poseCandidates: [
+						{
+							centerX: 980,
+							centerY: 360,
+							width: 260,
+							height: 420,
+							anchorX: 980,
+							anchorY: 280,
+							fitWidth: 170,
+							fitHeight: 250,
+						},
+					],
+				},
+			],
+			identityDetections: [
+				{
+					centerX: 760,
+					centerY: 330,
+					width: 210,
+					height: 320,
+					anchorX: 760,
+					anchorY: 250,
+					fitWidth: 140,
+					fitHeight: 210,
+				},
+				{
+					centerX: 1160,
+					centerY: 332,
+					width: 210,
+					height: 320,
+					anchorX: 1160,
+					anchorY: 252,
+					fitWidth: 140,
+					fitHeight: 210,
+				},
+			],
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			targetCenterHint: { x: 1060, y: 540 },
+			targetSubjectHint: "right",
+			targetSubjectSeed: {
+				center: { x: 1160, y: 252 },
+				size: { width: 140, height: 210 },
+				identity: "right",
+			},
+		});
+
+		expect(observations[0]?.box?.centerX).toBe(1160);
+		expect(observations[1]?.box).toBeNull();
 	});
 
 	test("builds a right-biased preset when detections span across the frame", () => {

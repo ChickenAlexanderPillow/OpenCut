@@ -316,6 +316,80 @@ test("uses the default preset before the first switch", () => {
 		expect(resolved.scale).toBeCloseTo(scaledTransform.scale, 6);
 	});
 
+	test("tracked preset manual adjustments do not scale the tracked motion path", () => {
+		const trackedPreset = {
+			...baseElement.reframePresets![1]!,
+			motionTracking: {
+				enabled: true,
+				mode: "subject-single-v1" as const,
+				source: "baked-keyframes" as const,
+				animateScale: true,
+				keyframes: [
+					{
+						id: "mt-1",
+						time: 0,
+						position: { x: 120, y: -40 },
+						scale: 2.5,
+					},
+					{
+						id: "mt-2",
+						time: 4,
+						position: { x: -60, y: 20 },
+						scale: 2,
+					},
+				],
+			},
+		};
+		const trackedAtStart = resolveMotionTrackedReframeTransform({
+			baseTransform: trackedPreset.transform,
+			motionTracking: trackedPreset.motionTracking,
+			localTime: 0,
+		});
+		const adjustment = {
+			positionOffset: { x: 0, y: 0 },
+			scaleMultiplier: 1.25,
+			viewportPivot: true,
+		};
+
+		const resolvedStart = resolveVideoReframeTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: [
+				baseElement.reframePresets![0]!,
+				{
+					...trackedPreset,
+					transformAdjustment: adjustment,
+					manualTransformAdjustment: adjustment,
+				},
+			],
+			reframeSwitches: undefined,
+			defaultReframePresetId: "subject",
+			localTime: 0,
+		});
+		const resolvedLater = resolveVideoReframeTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: [
+				baseElement.reframePresets![0]!,
+				{
+					...trackedPreset,
+					transformAdjustment: adjustment,
+					manualTransformAdjustment: adjustment,
+				},
+			],
+			reframeSwitches: undefined,
+			defaultReframePresetId: "subject",
+			localTime: 4,
+		});
+
+		expect(resolvedStart.position.x).toBeCloseTo(trackedAtStart.position.x, 6);
+		expect(resolvedStart.position.y).toBeCloseTo(trackedAtStart.position.y, 6);
+		expect(resolvedStart.scale).toBeCloseTo(3.125, 6);
+		expect(resolvedLater.position.x).toBeCloseTo(-60, 6);
+		expect(resolvedLater.position.y).toBeCloseTo(20, 6);
+		expect(resolvedLater.scale).toBeCloseTo(2.5, 6);
+	});
+
 	test("replaces a switch when inserting at the same timestamp", () => {
 		const switches = replaceOrInsertReframeSwitch({
 			switches: baseElement.reframeSwitches,
@@ -973,24 +1047,22 @@ test("uses the default preset before the first switch", () => {
 			layoutPreset: "top-bottom",
 			viewportBalance: "balanced",
 		});
-		const slotCoverScale = Math.max(
-			viewport.width / 1920,
-			viewport.height / 1080,
-		);
-		const sourceCenter = getSourceCenterForTransform({
-			transform: autoTransform,
-			baseScale: slotCoverScale,
-			sourceWidth: 1920,
-			sourceHeight: 1080,
-		});
-		const scaledTransform = buildTransformForSourceCenter({
-			sourceCenter,
+		const viewportCenterOffset = {
+			x: viewport.x + viewport.width / 2 - 1080 / 2,
+			y: viewport.y + viewport.height / 2 - 1920 / 2,
+		};
+		const scaledTransform = {
+			position: {
+				x:
+					viewportCenterOffset.x +
+					(autoTransform.position.x - viewportCenterOffset.x) * 1.25,
+				y:
+					viewportCenterOffset.y +
+					(autoTransform.position.y - viewportCenterOffset.y) * 1.25,
+			},
 			scale: autoTransform.scale * 1.25,
-			baseScale: slotCoverScale,
-			sourceWidth: 1920,
-			sourceHeight: 1080,
 			rotate: autoTransform.rotate,
-		});
+		};
 		const adjustment = deriveVideoSplitScreenSlotAdjustmentFromTransform({
 			baseTransform: baseElement.transform,
 			adjustmentBaseTransform: autoTransform,
@@ -1024,21 +1096,8 @@ test("uses the default preset before the first switch", () => {
 			layoutPreset: "top-bottom",
 			viewportBalance: "balanced",
 		});
-		const autoCenter = getSourceCenterForTransform({
-			transform: autoTransform,
-			baseScale: slotCoverScale,
-			sourceWidth: 1920,
-			sourceHeight: 1080,
-		});
-		const resolvedCenter = getSourceCenterForTransform({
-			transform: resolved,
-			baseScale: slotCoverScale,
-			sourceWidth: 1920,
-			sourceHeight: 1080,
-		});
-
-		expect(resolvedCenter.x).toBeCloseTo(autoCenter.x, 5);
-		expect(resolvedCenter.y).toBeCloseTo(autoCenter.y, 5);
+		expect(resolved.position.x).toBeCloseTo(scaledTransform.position.x, 6);
+		expect(resolved.position.y).toBeCloseTo(scaledTransform.position.y, 6);
 		expect(resolved.scale).toBeCloseTo(scaledTransform.scale, 6);
 	});
 

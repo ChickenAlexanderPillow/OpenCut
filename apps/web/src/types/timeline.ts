@@ -76,6 +76,7 @@ export interface VideoReframePresetTransform {
 export interface VideoReframeTransformAdjustment {
 	positionOffset: Transform["position"];
 	scaleMultiplier: number;
+	viewportPivot?: boolean;
 }
 
 export interface VideoMotionTracking {
@@ -142,7 +143,8 @@ export interface VideoSplitScreenSlotTransformOverride {
 }
 
 export interface VideoSplitScreenSlotTransformAdjustment {
-	sourceCenterOffset: Transform["position"];
+	positionOffset?: Transform["position"];
+	sourceCenterOffset?: Transform["position"];
 	scaleMultiplier: number;
 }
 

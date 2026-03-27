@@ -18,8 +18,17 @@ const MEDIAPIPE_WASM_BASE =
 	"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm";
 const FACE_MODEL_PATH =
 	"https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
+const FACE_LANDMARKER_MODEL_PATH =
+	"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task";
 const POSE_MODEL_PATH =
 	"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+const FACE_DETECTION_ANCHOR_Y_RATIO = 0.42;
+const FACE_DETECTION_FIT_WIDTH_MULTIPLIER = 1.35;
+const FACE_DETECTION_FIT_HEIGHT_MULTIPLIER = 1.75;
+const MOTION_TRACKING_EYE_LINE_RATIO = 0.34;
+const MOTION_TRACKING_TARGET_EYE_LINE_VIEWPORT_RATIO = 0.36;
+const MOTION_TRACKING_TARGET_FACE_WIDTH_VIEWPORT_RATIO = 0.24;
+const MOTION_TRACKING_TARGET_FACE_HEIGHT_VIEWPORT_RATIO = 0.18;
 
 type SubjectBox = {
 	centerX: number;
@@ -30,6 +39,8 @@ type SubjectBox = {
 	anchorY?: number;
 	fitWidth?: number;
 	fitHeight?: number;
+	trackingAnchorX?: number;
+	trackingAnchorY?: number;
 };
 
 type SubjectObservation = {
@@ -42,6 +53,14 @@ type SubjectTrackingObservation = {
 	box: SubjectBox | null;
 };
 
+type MotionTrackingSample = {
+	time: number;
+	eyeX: number;
+	eyeY: number;
+	fitWidth: number;
+	fitHeight: number;
+};
+
 type AutoSectionKind = "Subject" | "Subject Left" | "Subject Right";
 type TrackingSubjectHint = "left" | "right" | "center";
 type SourceViewportBounds = {
@@ -49,6 +68,21 @@ type SourceViewportBounds = {
 	right: number;
 	top: number;
 	bottom: number;
+};
+
+type FaceDetectionLike = {
+	boundingBox?: {
+		originX: number;
+		originY: number;
+		width: number;
+		height: number;
+	};
+	keypoints?: Array<{
+		x: number;
+		y: number;
+		label?: string;
+		score?: number;
+	}>;
 };
 
 function buildSubjectSeed({
@@ -71,13 +105,31 @@ function buildSubjectSeed({
 	};
 }
 
+function getMedianOptional(values: Array<number | undefined>): number | undefined {
+	const resolvedValues = values.filter((value): value is number =>
+		Number.isFinite(value),
+	);
+	return resolvedValues.length > 0 ? median(resolvedValues) : undefined;
+}
+
 type VisionRuntime = Awaited<ReturnType<typeof loadVisionRuntime>>;
+type FaceLandmarkerRuntime = Awaited<ReturnType<typeof loadFaceLandmarkerRuntime>>;
 
 let runtimePromise: Promise<VisionRuntime> | null = null;
+let faceLandmarkerPromise: Promise<FaceLandmarkerRuntime> | null = null;
 let suppressedVisionConsoleErrorDepth = 0;
 let restoreVisionConsoleError: (() => void) | null = null;
 let lastFaceDetectorTimestampMs = 0;
+let lastFaceLandmarkerTimestampMs = 0;
 let lastPoseLandmarkerTimestampMs = 0;
+let faceLandmarkIndexGroups:
+	| {
+			leftIris: number[];
+			rightIris: number[];
+			leftEye: number[];
+			rightEye: number[];
+	  }
+	| null = null;
 
 function createAbortError(): Error {
 	const error = new Error("Analysis aborted");
@@ -114,7 +166,7 @@ function getMonotonicVisionTimestampMs({
 	kind,
 	candidateMs,
 }: {
-	kind: "face" | "pose";
+	kind: "face" | "face-landmarks" | "pose";
 	candidateMs: number;
 }): number {
 	if (kind === "face") {
@@ -123,6 +175,13 @@ function getMonotonicVisionTimestampMs({
 			Math.round(candidateMs),
 		);
 		return lastFaceDetectorTimestampMs;
+	}
+	if (kind === "face-landmarks") {
+		lastFaceLandmarkerTimestampMs = Math.max(
+			lastFaceLandmarkerTimestampMs + 1,
+			Math.round(candidateMs),
+		);
+		return lastFaceLandmarkerTimestampMs;
 	}
 	lastPoseLandmarkerTimestampMs = Math.max(
 		lastPoseLandmarkerTimestampMs + 1,
@@ -218,6 +277,56 @@ async function getVisionRuntime(): Promise<VisionRuntime> {
 		runtimePromise = loadVisionRuntime();
 	}
 	return runtimePromise;
+}
+
+async function loadFaceLandmarkerRuntime() {
+	return withSuppressedVisionConsoleErrorsAsync(async () => {
+		const { FaceLandmarker, FilesetResolver } = await import(
+			"@mediapipe/tasks-vision"
+		);
+		const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_BASE);
+		const uniqueConnectionIndices = (
+			connections: Array<{ start: number; end: number }>,
+		) =>
+			[
+				...new Set(connections.flatMap((connection) => [connection.start, connection.end])),
+			].sort((left, right) => left - right);
+		faceLandmarkIndexGroups = {
+			leftIris: uniqueConnectionIndices(FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS),
+			rightIris: uniqueConnectionIndices(
+				FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS,
+			),
+			leftEye: uniqueConnectionIndices(FaceLandmarker.FACE_LANDMARKS_LEFT_EYE),
+			rightEye: uniqueConnectionIndices(FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE),
+		};
+		const faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+			baseOptions: {
+				modelAssetPath: FACE_LANDMARKER_MODEL_PATH,
+			},
+			runningMode: "VIDEO",
+			numFaces: 4,
+			minFaceDetectionConfidence: 0.45,
+			minFacePresenceConfidence: 0.45,
+			minTrackingConfidence: 0.45,
+			outputFaceBlendshapes: false,
+			outputFacialTransformationMatrixes: false,
+		}).catch((error) => {
+			console.warn(
+				"Face landmarker failed to initialize; motion tracking will fall back to face detection.",
+				error,
+			);
+			faceLandmarkIndexGroups = null;
+			return null;
+		});
+		return { faceLandmarker };
+	});
+}
+
+async function getFaceLandmarkerRuntime(): Promise<FaceLandmarkerRuntime> {
+	if (!faceLandmarkerPromise) {
+		faceLandmarkerPromise = loadFaceLandmarkerRuntime();
+	}
+	return faceLandmarkerPromise;
 }
 
 async function loadVideo({
@@ -558,9 +667,9 @@ function buildMotionTrackingSampleTimes({
 	duration: number;
 }): number[] {
 	const endTime = startTime + duration;
-	const targetSamplesPerSecond = duration > 18 ? 5 : 6;
-	const maxSamples = duration > 18 ? 84 : 96;
-	const minSamples = 10;
+	const targetSamplesPerSecond = duration > 18 ? 6 : 8;
+	const maxSamples = duration > 18 ? 144 : 168;
+	const minSamples = 12;
 	const sampleCount = clamp(
 		Math.round(duration * targetSamplesPerSecond) + 1,
 		minSamples,
@@ -757,6 +866,379 @@ function buildFallbackSubjectPreset({ baseScale }: { baseScale: number }) {
 	});
 }
 
+function getMotionTrackingEyeLineAnchor(box: SubjectBox): { x: number; y: number } {
+	if (
+		Number.isFinite(box.trackingAnchorX) &&
+		Number.isFinite(box.trackingAnchorY)
+	) {
+		return {
+			x: box.trackingAnchorX!,
+			y: box.trackingAnchorY!,
+		};
+	}
+	const anchorX = box.anchorX ?? box.centerX;
+	const anchorY = box.anchorY ?? box.centerY;
+	const inferredFaceHeight = Math.max(
+		1,
+		(box.fitHeight ?? box.height) / FACE_DETECTION_FIT_HEIGHT_MULTIPLIER,
+	);
+	return {
+		x: anchorX,
+		y:
+			anchorY -
+			inferredFaceHeight *
+				(FACE_DETECTION_ANCHOR_Y_RATIO - MOTION_TRACKING_EYE_LINE_RATIO),
+	};
+}
+
+function getFaceDetectionEyeMidpoint({
+	detection,
+	sourceWidth,
+	sourceHeight,
+}: {
+	detection: FaceDetectionLike;
+	sourceWidth: number;
+	sourceHeight: number;
+}): { x: number; y: number } | null {
+	const keypoints = (detection.keypoints ?? []).filter(
+		(keypoint) =>
+			Number.isFinite(keypoint.x) &&
+			Number.isFinite(keypoint.y) &&
+			keypoint.x >= 0 &&
+			keypoint.x <= 1 &&
+			keypoint.y >= 0 &&
+			keypoint.y <= 1,
+	);
+	if (keypoints.length === 0) return null;
+	const findKeypoint = (pattern: RegExp) =>
+		keypoints.find((keypoint) => pattern.test(keypoint.label?.toLowerCase() ?? ""));
+	const leftEye =
+		findKeypoint(/left.*eye|eye.*left/) ??
+		findKeypoint(/^left$/) ??
+		keypoints[0];
+	const rightEye =
+		findKeypoint(/right.*eye|eye.*right/) ??
+		findKeypoint(/^right$/) ??
+		keypoints[1] ??
+		leftEye;
+	if (!leftEye || !rightEye) return null;
+	return {
+		x: ((leftEye.x + rightEye.x) / 2) * sourceWidth,
+		y: ((leftEye.y + rightEye.y) / 2) * sourceHeight,
+	};
+}
+
+function getAverageFaceLandmarkPoint({
+	landmarks,
+	indices,
+}: {
+	landmarks: Array<{ x: number; y: number }>;
+	indices: number[];
+}): { x: number; y: number } | null {
+	const points = indices
+		.map((index) => landmarks[index])
+		.filter(
+			(point): point is { x: number; y: number } =>
+				Boolean(point) &&
+				Number.isFinite(point.x) &&
+				Number.isFinite(point.y) &&
+				point.x >= 0 &&
+				point.x <= 1 &&
+				point.y >= 0 &&
+				point.y <= 1,
+		);
+	if (points.length === 0) return null;
+	return {
+		x: median(points.map((point) => point.x)),
+		y: median(points.map((point) => point.y)),
+	};
+}
+
+function getFaceLandmarkEyeMidpoint({
+	landmarks,
+	sourceWidth,
+	sourceHeight,
+}: {
+	landmarks: Array<{ x: number; y: number }>;
+	sourceWidth: number;
+	sourceHeight: number;
+}): { x: number; y: number } | null {
+	if (!faceLandmarkIndexGroups) return null;
+	const leftIris = getAverageFaceLandmarkPoint({
+		landmarks,
+		indices: faceLandmarkIndexGroups.leftIris,
+	});
+	const rightIris = getAverageFaceLandmarkPoint({
+		landmarks,
+		indices: faceLandmarkIndexGroups.rightIris,
+	});
+	const leftEye =
+		leftIris ??
+		getAverageFaceLandmarkPoint({
+			landmarks,
+			indices: faceLandmarkIndexGroups.leftEye,
+		});
+	const rightEye =
+		rightIris ??
+		getAverageFaceLandmarkPoint({
+			landmarks,
+			indices: faceLandmarkIndexGroups.rightEye,
+		});
+	if (!leftEye || !rightEye) return null;
+	return {
+		x: ((leftEye.x + rightEye.x) / 2) * sourceWidth,
+		y: ((leftEye.y + rightEye.y) / 2) * sourceHeight,
+	};
+}
+
+function buildFaceCandidateFromDetection({
+	detection,
+	sourceWidth,
+	sourceHeight,
+}: {
+	detection: FaceDetectionLike;
+	sourceWidth: number;
+	sourceHeight: number;
+}): SubjectBox | null {
+	const faceBox = detection.boundingBox;
+	if (!faceBox) return null;
+	const eyeMidpoint = getFaceDetectionEyeMidpoint({
+		detection,
+		sourceWidth,
+		sourceHeight,
+	});
+	return {
+		centerX: faceBox.originX + faceBox.width / 2,
+		centerY: faceBox.originY + faceBox.height / 2,
+		width: Math.max(1, faceBox.width * 2.4),
+		height: Math.max(1, faceBox.height * 3.4),
+		anchorX: faceBox.originX + faceBox.width / 2,
+		anchorY:
+			faceBox.originY + faceBox.height * FACE_DETECTION_ANCHOR_Y_RATIO,
+		fitWidth: Math.max(
+			1,
+			faceBox.width * FACE_DETECTION_FIT_WIDTH_MULTIPLIER,
+		),
+		fitHeight: Math.max(
+			1,
+			faceBox.height * FACE_DETECTION_FIT_HEIGHT_MULTIPLIER,
+		),
+		trackingAnchorX: eyeMidpoint?.x,
+		trackingAnchorY: eyeMidpoint?.y,
+	};
+}
+
+function buildFaceCandidateFromLandmarks({
+	landmarks,
+	sourceWidth,
+	sourceHeight,
+}: {
+	landmarks: Array<{ x: number; y: number }>;
+	sourceWidth: number;
+	sourceHeight: number;
+}): SubjectBox | null {
+	const validLandmarks = landmarks.filter(
+		(landmark) =>
+			Number.isFinite(landmark.x) &&
+			Number.isFinite(landmark.y) &&
+			landmark.x >= 0 &&
+			landmark.x <= 1 &&
+			landmark.y >= 0 &&
+			landmark.y <= 1,
+	);
+	if (validLandmarks.length === 0) return null;
+	const xs = validLandmarks.map((landmark) => landmark.x * sourceWidth);
+	const ys = validLandmarks.map((landmark) => landmark.y * sourceHeight);
+	const minX = Math.min(...xs);
+	const maxX = Math.max(...xs);
+	const minY = Math.min(...ys);
+	const maxY = Math.max(...ys);
+	const rawWidth = Math.max(1, maxX - minX);
+	const rawHeight = Math.max(1, maxY - minY);
+	const eyeMidpoint = getFaceLandmarkEyeMidpoint({
+		landmarks,
+		sourceWidth,
+		sourceHeight,
+	});
+	const anchorX = eyeMidpoint?.x ?? (minX + maxX) / 2;
+	const anchorY = eyeMidpoint?.y ?? minY + rawHeight * 0.42;
+	return {
+		centerX: (minX + maxX) / 2,
+		centerY: (minY + maxY) / 2,
+		width: rawWidth * 1.25,
+		height: rawHeight * 1.45,
+		anchorX,
+		anchorY,
+		fitWidth: rawWidth,
+		fitHeight: rawHeight,
+		trackingAnchorX: eyeMidpoint?.x,
+		trackingAnchorY: eyeMidpoint?.y,
+	};
+}
+
+function buildMotionTrackingSample(box: SubjectBox): MotionTrackingSample {
+	const eyeLineAnchor = getMotionTrackingEyeLineAnchor(box);
+	return {
+		time: 0,
+		eyeX: eyeLineAnchor.x,
+		eyeY: eyeLineAnchor.y,
+		fitWidth: Math.max(1, box.fitWidth ?? box.width),
+		fitHeight: Math.max(1, box.fitHeight ?? box.height),
+	};
+}
+
+function holdMotionTrackingSamples({
+	observations,
+	trackingStrength = DEFAULT_MOTION_TRACKING_STRENGTH,
+}: {
+	observations: SubjectTrackingObservation[];
+	trackingStrength?: number;
+}): MotionTrackingSample[] {
+	if (observations.length === 0) return [];
+	const normalizedStrength = normalizeMotionTrackingStrength(trackingStrength);
+	const maxHoldSeconds = lerpMotionTrackingSetting(
+		0.24,
+		0.08,
+		normalizedStrength,
+	);
+	const heldSamples: MotionTrackingSample[] = [];
+	let previousTracked: MotionTrackingSample | null = null;
+	for (const observation of observations) {
+		if (observation.box) {
+			const sample = {
+				...buildMotionTrackingSample(observation.box),
+				time: observation.time,
+			};
+			heldSamples.push(sample);
+			previousTracked = sample;
+			continue;
+		}
+		if (
+			previousTracked &&
+			observation.time - previousTracked.time <= maxHoldSeconds
+		) {
+			heldSamples.push({
+				...previousTracked,
+				time: observation.time,
+			});
+			continue;
+		}
+		previousTracked = null;
+	}
+	return heldSamples;
+}
+
+function medianFilterMotionTrackingSamples(
+	samples: MotionTrackingSample[],
+): MotionTrackingSample[] {
+	if (samples.length <= 2) {
+		return samples.map((sample) => ({
+			...sample,
+		}));
+	}
+	const getWindowValue = (
+		values: number[],
+		index: number,
+		offset: -1 | 0 | 1,
+	): number => {
+		const resolvedIndex = clamp(index + offset, 0, values.length - 1);
+		return values[resolvedIndex] ?? values[index] ?? 0;
+	};
+	const eyeXs = samples.map((entry) => entry.eyeX);
+	const eyeYs = samples.map((entry) => entry.eyeY);
+	const fitWidths = samples.map((entry) => entry.fitWidth);
+	const fitHeights = samples.map((entry) => entry.fitHeight);
+	return samples.map((sample, index) => {
+		return {
+			time: sample.time,
+			eyeX: median([
+				getWindowValue(eyeXs, index, -1),
+				getWindowValue(eyeXs, index, 0),
+				getWindowValue(eyeXs, index, 1),
+			]),
+			eyeY: median([
+				getWindowValue(eyeYs, index, -1),
+				getWindowValue(eyeYs, index, 0),
+				getWindowValue(eyeYs, index, 1),
+			]),
+			fitWidth: median([
+				getWindowValue(fitWidths, index, -1),
+				getWindowValue(fitWidths, index, 0),
+				getWindowValue(fitWidths, index, 1),
+			]),
+			fitHeight: median([
+				getWindowValue(fitHeights, index, -1),
+				getWindowValue(fitHeights, index, 0),
+				getWindowValue(fitHeights, index, 1),
+			]),
+		};
+	});
+}
+
+function buildMotionTrackingTransformFromSample({
+	sample,
+	canvasSize,
+	sourceWidth,
+	sourceHeight,
+	baseScale,
+	scaleOverride,
+}: {
+	sample: MotionTrackingSample;
+	canvasSize: { width: number; height: number };
+	sourceWidth: number;
+	sourceHeight: number;
+	baseScale: number;
+	scaleOverride?: number;
+}): VideoReframePresetTransform {
+	const containScale = Math.min(
+		canvasSize.width / sourceWidth,
+		canvasSize.height / sourceHeight,
+	);
+	const desiredFaceWidthPx =
+		canvasSize.width * MOTION_TRACKING_TARGET_FACE_WIDTH_VIEWPORT_RATIO;
+	const desiredFaceHeightPx =
+		canvasSize.height * MOTION_TRACKING_TARGET_FACE_HEIGHT_VIEWPORT_RATIO;
+	const resolvedScale =
+		scaleOverride ??
+		clamp(
+			Math.max(
+				baseScale,
+				desiredFaceWidthPx / Math.max(1, sample.fitWidth * containScale),
+				desiredFaceHeightPx / Math.max(1, sample.fitHeight * containScale),
+			),
+			baseScale,
+			baseScale * 3.2,
+		);
+	const visibleHalfWidthInSource =
+		canvasSize.width / Math.max(1, containScale * resolvedScale * 2);
+	const visibleHalfHeightInSource =
+		canvasSize.height / Math.max(1, containScale * resolvedScale * 2);
+	const eyeLineOffsetInSource =
+		((0.5 - MOTION_TRACKING_TARGET_EYE_LINE_VIEWPORT_RATIO) *
+			canvasSize.height) /
+		Math.max(1, containScale * resolvedScale);
+	const viewportCenterX = clamp(
+		sample.eyeX,
+		visibleHalfWidthInSource,
+		Math.max(visibleHalfWidthInSource, sourceWidth - visibleHalfWidthInSource),
+	);
+	const viewportCenterY = clamp(
+		sample.eyeY + eyeLineOffsetInSource,
+		visibleHalfHeightInSource,
+		Math.max(
+			visibleHalfHeightInSource,
+			sourceHeight - visibleHalfHeightInSource,
+		),
+	);
+	return {
+		position: {
+			x: -((viewportCenterX - sourceWidth / 2) * containScale * resolvedScale),
+			y: -((viewportCenterY - sourceHeight / 2) * containScale * resolvedScale),
+		},
+		scale: resolvedScale,
+	};
+}
+
 function derivePresetTransform({
 	box,
 	canvasSize,
@@ -908,8 +1390,17 @@ function getBoxArea(box: SubjectBox): number {
 	);
 }
 
+function getBoxReferencePoint(box: SubjectBox): { x: number; y: number } {
+	return {
+		x: box.trackingAnchorX ?? box.anchorX ?? box.centerX,
+		y: box.trackingAnchorY ?? box.anchorY ?? box.centerY,
+	};
+}
+
 function getBoxDistance(left: SubjectBox, right: SubjectBox): number {
-	return Math.hypot(left.centerX - right.centerX, left.centerY - right.centerY);
+	const leftPoint = getBoxReferencePoint(left);
+	const rightPoint = getBoxReferencePoint(right);
+	return Math.hypot(leftPoint.x - rightPoint.x, leftPoint.y - rightPoint.y);
 }
 
 function getBoxIoU(left: SubjectBox, right: SubjectBox): number {
@@ -969,6 +1460,7 @@ export function choosePrimarySubjectBox({
 	targetSubjectHint,
 	targetViewportBounds,
 	targetSubjectSeed,
+	allowCenterGrouping = true,
 }: {
 	candidates: SubjectBox[];
 	previousBox: SubjectBox | null;
@@ -978,9 +1470,10 @@ export function choosePrimarySubjectBox({
 	targetSubjectHint?: TrackingSubjectHint | null;
 	targetViewportBounds?: SourceViewportBounds | null;
 	targetSubjectSeed?: VideoReframeSubjectSeed | null;
+	allowCenterGrouping?: boolean;
 }): SubjectBox | null {
 	if (candidates.length === 0) return null;
-	if (targetSubjectHint === "center" && candidates.length > 1) {
+	if (allowCenterGrouping && targetSubjectHint === "center" && candidates.length > 1) {
 		const viewportMatchedCandidates = targetViewportBounds
 			? candidates.filter(
 					(candidate) =>
@@ -1009,20 +1502,19 @@ export function choosePrimarySubjectBox({
 				? viewportMatchedCandidates
 				: candidates;
 		const scoredInitialCandidates = initialCandidates.map((candidate) => {
+			const referencePoint = getBoxReferencePoint(candidate);
 			const centerPenalty =
 				Math.hypot(
-					candidate.centerX - frameCenterX,
-					candidate.centerY - frameCenterY,
+					referencePoint.x - frameCenterX,
+					referencePoint.y - frameCenterY,
 				) / Math.max(1, Math.hypot(frameCenterX, frameCenterY));
 			const viewportOverlap = targetViewportBounds
 				? getBoxOverlapWithViewport(candidate, targetViewportBounds)
 				: 0;
 			const seedDistancePenalty = targetSubjectSeed
 				? Math.hypot(
-						(candidate.anchorX ?? candidate.centerX) -
-							targetSubjectSeed.center.x,
-						(candidate.anchorY ?? candidate.centerY) -
-							targetSubjectSeed.center.y,
+						referencePoint.x - targetSubjectSeed.center.x,
+						referencePoint.y - targetSubjectSeed.center.y,
 					) / Math.max(1, Math.hypot(sourceWidth, sourceHeight))
 				: 0;
 			const seedAreaScore = targetSubjectSeed?.size
@@ -1039,9 +1531,9 @@ export function choosePrimarySubjectBox({
 				: 0;
 			const sidePreference =
 				targetSubjectHint === "left"
-					? 1 - candidate.centerX / Math.max(1, sourceWidth)
+					? 1 - referencePoint.x / Math.max(1, sourceWidth)
 					: targetSubjectHint === "right"
-						? candidate.centerX / Math.max(1, sourceWidth)
+						? referencePoint.x / Math.max(1, sourceWidth)
 						: 0;
 			const score =
 				getBoxArea(candidate) *
@@ -1066,10 +1558,12 @@ export function choosePrimarySubjectBox({
 		if (targetSubjectHint === "left") {
 			return (
 				[...viableInitialCandidates].sort((left, right) => {
+					const leftPoint = getBoxReferencePoint(left.candidate);
+					const rightPoint = getBoxReferencePoint(right.candidate);
 					if (
-						Math.abs(left.candidate.centerX - right.candidate.centerX) > 1e-3
+						Math.abs(leftPoint.x - rightPoint.x) > 1e-3
 					) {
-						return left.candidate.centerX - right.candidate.centerX;
+						return leftPoint.x - rightPoint.x;
 					}
 					return right.score - left.score;
 				})[0]?.candidate ?? null
@@ -1078,25 +1572,29 @@ export function choosePrimarySubjectBox({
 		if (targetSubjectHint === "right") {
 			return (
 				[...viableInitialCandidates].sort((left, right) => {
+					const leftPoint = getBoxReferencePoint(left.candidate);
+					const rightPoint = getBoxReferencePoint(right.candidate);
 					if (
-						Math.abs(left.candidate.centerX - right.candidate.centerX) > 1e-3
+						Math.abs(leftPoint.x - rightPoint.x) > 1e-3
 					) {
-						return right.candidate.centerX - left.candidate.centerX;
+						return rightPoint.x - leftPoint.x;
 					}
 					return right.score - left.score;
 				})[0]?.candidate ?? null
 			);
 		}
 		return [...scoredInitialCandidates].sort((left, right) => {
+			const leftPoint = getBoxReferencePoint(left.candidate);
+			const rightPoint = getBoxReferencePoint(right.candidate);
 			const leftCenterPenalty =
 				Math.hypot(
-					left.candidate.centerX - frameCenterX,
-					left.candidate.centerY - frameCenterY,
+					leftPoint.x - frameCenterX,
+					leftPoint.y - frameCenterY,
 				) / Math.max(1, Math.hypot(frameCenterX, frameCenterY));
 			const rightCenterPenalty =
 				Math.hypot(
-					right.candidate.centerX - frameCenterX,
-					right.candidate.centerY - frameCenterY,
+					rightPoint.x - frameCenterX,
+					rightPoint.y - frameCenterY,
 				) / Math.max(1, Math.hypot(frameCenterX, frameCenterY));
 			const leftScore =
 				getBoxArea(left.candidate) * (1 + left.viewportOverlap * 0.9) -
@@ -1137,11 +1635,13 @@ export function choosePrimarySubjectBox({
 		sourceHeight * 0.12,
 		(previousBox.fitHeight ?? previousBox.height) * 0.85,
 	);
+	const previousPoint = getBoxReferencePoint(previousBox);
+	const bestPoint = getBoxReferencePoint(bestMatch.candidate);
 	const bestHorizontalDistance = Math.abs(
-		bestMatch.candidate.centerX - previousBox.centerX,
+		bestPoint.x - previousPoint.x,
 	);
 	const bestVerticalDistance = Math.abs(
-		bestMatch.candidate.centerY - previousBox.centerY,
+		bestPoint.y - previousPoint.y,
 	);
 	const isWeakMatch =
 		bestMatch.overlap < 0.1 &&
@@ -1366,79 +1866,66 @@ export function buildMotionTrackingKeyframesFromObservations({
 	sampleCount: number;
 	trackedSampleCount: number;
 } {
-	const normalizedStrength = normalizeMotionTrackingStrength(trackingStrength);
-	const smoothedObservations = smoothTrackedObservations({
+	const heldSamples = holdMotionTrackingSamples({
 		observations,
-		trackingStrength: normalizedStrength,
+		trackingStrength,
 	});
-	const trackedTransforms = smoothedObservations.flatMap((observation) => {
-		if (!observation.box) return [];
-		return [
-			{
-				...observation,
-				transform: derivePresetTransform({
-					box: observation.box,
+	const smoothedSamples = medianFilterMotionTrackingSamples(heldSamples);
+	const lockedScale =
+		!animateScale && smoothedSamples.length > 0
+			? buildMotionTrackingTransformFromSample({
+					sample: smoothedSamples[0]!,
 					canvasSize,
 					sourceWidth,
 					sourceHeight,
 					baseScale,
-				}),
-			},
-		];
-	});
-	const smoothedTrackedTransforms = smoothTrackedTransformScales({
-		trackedTransforms,
-		animateScale,
-		trackingStrength: normalizedStrength,
-	});
-	const coalescedKeyframes = coalesceMotionTrackingKeyframes({
-		trackedTransforms: smoothedTrackedTransforms,
-		animateScale,
-		trackingStrength: normalizedStrength,
+				}).scale
+			: undefined;
+	const denseKeyframes = smoothedSamples.map((sample, observationIndex) => {
+		const transform = buildMotionTrackingTransformFromSample({
+			sample,
+			canvasSize,
+			sourceWidth,
+			sourceHeight,
+			baseScale,
+			scaleOverride: lockedScale,
+		});
+		return {
+		id: generateUUID(),
+		time: Math.max(0, sample.time + observationIndex * 1e-6),
+		position: {
+			x: transform.position.x,
+			y: transform.position.y,
+		},
+		scale: animateScale ? transform.scale : (lockedScale ?? baseScale),
+		subjectCenter: {
+			x: sample.eyeX,
+			y: sample.eyeY,
+		},
+		subjectSize: {
+			width: sample.fitWidth,
+			height: sample.fitHeight,
+		},
+	};
 	});
 	const anchoredKeyframes =
-		coalescedKeyframes.length > 0 && coalescedKeyframes[0]!.time > 1e-6
+		denseKeyframes.length > 0 && denseKeyframes[0]!.time > 1e-6
 			? [
 					{
-						...coalescedKeyframes[0]!,
-						id: `${coalescedKeyframes[0]!.id}:start`,
+						...denseKeyframes[0]!,
+						id: `${denseKeyframes[0]!.id}:start`,
 						time: 0,
 					},
-					...coalescedKeyframes,
+					...denseKeyframes,
 				]
-			: coalescedKeyframes;
+			: denseKeyframes;
 	return {
-		keyframes: anchoredKeyframes.map((keyframe) => {
-			const observation =
-				smoothedTrackedTransforms.find(
-					(entry) =>
-						Math.abs(
-							entry.time - (keyframe.time <= 1e-6 ? 0 : keyframe.time),
-						) <= 1e-3,
-				) ??
-				smoothedTrackedTransforms[0] ??
-				null;
-			return {
-				...keyframe,
-				scale: animateScale
-					? keyframe.scale
-					: (smoothedTrackedTransforms[0]?.transform.scale ?? baseScale),
-				subjectCenter: observation?.box
-					? {
-							x: observation.box.anchorX ?? observation.box.centerX,
-							y: observation.box.anchorY ?? observation.box.centerY,
-						}
-					: undefined,
-				subjectSize: observation?.box
-					? {
-							width: observation.box.fitWidth ?? observation.box.width,
-							height: observation.box.fitHeight ?? observation.box.height,
-						}
-					: undefined,
-			};
-		}),
+		keyframes: anchoredKeyframes.map((keyframe) => ({
+			...keyframe,
+			scale: animateScale ? keyframe.scale : (lockedScale ?? baseScale),
+		})),
 		sampleCount: observations.length,
-		trackedSampleCount: smoothedTrackedTransforms.length,
+		trackedSampleCount: smoothedSamples.length,
 	};
 }
 
@@ -1453,6 +1940,12 @@ function buildSubjectBoxFromDetections(detections: SubjectBox[]): SubjectBox {
 		fitWidth: median(detections.map((entry) => entry.fitWidth ?? entry.width)),
 		fitHeight: median(
 			detections.map((entry) => entry.fitHeight ?? entry.height),
+		),
+		trackingAnchorX: getMedianOptional(
+			detections.map((entry) => entry.trackingAnchorX),
+		),
+		trackingAnchorY: getMedianOptional(
+			detections.map((entry) => entry.trackingAnchorY),
 		),
 	};
 }
@@ -1574,7 +2067,7 @@ function buildTwoSubjectClusters({
 	);
 }
 
-function filterCandidatesByIdentityCluster({
+export function filterCandidatesByIdentityCluster({
 	candidates,
 	clusters,
 	targetIdentity,
@@ -1596,7 +2089,83 @@ function filterCandidatesByIdentityCluster({
 			Math.abs(candidate.centerX - rightCenter);
 		return targetIdentity === "left" ? isLeftCluster : !isLeftCluster;
 	});
-	return filtered.length > 0 ? filtered : candidates;
+	return filtered;
+}
+
+export function buildMotionTrackingObservationsFromSampledFrames({
+	sampledFrames,
+	identityDetections,
+	sourceWidth,
+	sourceHeight,
+	targetCenterHint,
+	targetSubjectHint,
+	targetViewportBounds,
+	targetSubjectSeed,
+}: {
+	sampledFrames: Array<{
+		time: number;
+		faceCandidates: SubjectBox[];
+		poseCandidates: SubjectBox[];
+	}>;
+	identityDetections: SubjectBox[];
+	sourceWidth: number;
+	sourceHeight: number;
+	targetCenterHint?: { x: number; y: number } | null;
+	targetSubjectHint?: TrackingSubjectHint | null;
+	targetViewportBounds?: SourceViewportBounds | null;
+	targetSubjectSeed?: VideoReframeSubjectSeed | null;
+}): SubjectTrackingObservation[] {
+	const observations: SubjectTrackingObservation[] = [];
+	let previousTrackedBox: SubjectBox | null = null;
+	const identityClusters =
+		identityDetections.length >= 2
+			? buildTwoSubjectClusters({
+					detections: identityDetections,
+					sourceWidth,
+				})
+			: [];
+	const targetIdentity =
+		targetSubjectSeed?.identity === "left" ||
+		targetSubjectSeed?.identity === "right"
+			? targetSubjectSeed.identity
+			: targetSubjectHint === "left" || targetSubjectHint === "right"
+				? targetSubjectHint
+				: null;
+	const requireFaceLockedTracking =
+		Boolean(targetSubjectSeed) || targetIdentity !== null;
+	for (const frame of sampledFrames) {
+		const clusteredFaceCandidates =
+			targetIdentity && identityClusters.length >= 2
+				? filterCandidatesByIdentityCluster({
+						candidates: frame.faceCandidates,
+						clusters: identityClusters,
+						targetIdentity,
+					})
+				: frame.faceCandidates;
+		const candidates =
+			clusteredFaceCandidates.length > 0
+				? clusteredFaceCandidates
+				: requireFaceLockedTracking || previousTrackedBox
+					? []
+					: frame.poseCandidates;
+		const trackedBox = choosePrimarySubjectBox({
+			candidates,
+			previousBox: previousTrackedBox,
+			sourceWidth,
+			sourceHeight,
+			targetCenterHint,
+			targetSubjectHint,
+			targetViewportBounds,
+			targetSubjectSeed,
+			allowCenterGrouping: false,
+		});
+		observations.push({
+			time: frame.time,
+			box: trackedBox ? { ...trackedBox } : null,
+		});
+		previousTrackedBox = trackedBox;
+	}
+	return observations;
 }
 
 function getClusterCenterXs(clusters: SubjectBox[][]): {
@@ -2043,8 +2612,15 @@ export async function analyzeGeneratedClipReframes({
 
 	try {
 		throwIfAborted(signal);
-		const [{ faceDetector, poseLandmarker }, { video, cleanup }] =
-			await Promise.all([getVisionRuntime(), loadVideo({ asset, signal })]);
+		const [
+			{ faceDetector, poseLandmarker },
+			{ faceLandmarker },
+			{ video, cleanup },
+		] = await Promise.all([
+			getVisionRuntime(),
+			getFaceLandmarkerRuntime(),
+			loadVideo({ asset, signal }),
+		]);
 		try {
 			const duration = Math.max(0.2, endTime - startTime);
 			const detections: SubjectBox[] = [];
@@ -2078,21 +2654,17 @@ export async function analyzeGeneratedClipReframes({
 						),
 					);
 					const faceDetections = (faceResult.detections ?? [])
-						.map((detection) => detection.boundingBox)
-						.filter((box): box is NonNullable<typeof box> => Boolean(box));
+						.map((detection) =>
+							buildFaceCandidateFromDetection({
+								detection,
+								sourceWidth,
+								sourceHeight,
+							}),
+						)
+						.filter((box): box is SubjectBox => Boolean(box));
 					if (faceDetections.length > 0) {
 						const boxes: SubjectBox[] = [];
-						for (const faceBox of faceDetections) {
-							const nextBox = {
-								centerX: faceBox.originX + faceBox.width / 2,
-								centerY: faceBox.originY + faceBox.height / 2,
-								width: Math.max(1, faceBox.width * 2.4),
-								height: Math.max(1, faceBox.height * 3.4),
-								anchorX: faceBox.originX + faceBox.width / 2,
-								anchorY: faceBox.originY + faceBox.height * 0.42,
-								fitWidth: Math.max(1, faceBox.width * 1.35),
-								fitHeight: Math.max(1, faceBox.height * 1.75),
-							};
+						for (const nextBox of faceDetections) {
 							detections.push(nextBox);
 							boxes.push(nextBox);
 						}
@@ -2242,7 +2814,7 @@ export async function analyzeGeneratedClipMotionTracking({
 
 	try {
 		throwIfAborted(signal);
-		const [{ faceDetector, poseLandmarker }, { video, cleanup }] =
+		const [{ faceDetector, faceLandmarker, poseLandmarker }, { video, cleanup }] =
 			await Promise.all([getVisionRuntime(), loadVideo({ asset, signal })]);
 		try {
 			const duration = Math.max(0.2, endTime - startTime);
@@ -2290,28 +2862,45 @@ export async function analyzeGeneratedClipMotionTracking({
 				let faceCandidates: SubjectBox[] = [];
 				let poseCandidates: SubjectBox[] = [];
 				try {
-					const faceResult = withSuppressedVisionConsoleErrors(() =>
-						faceDetector.detectForVideo(
-							video,
-							getMonotonicVisionTimestampMs({
-								kind: "face",
-								candidateMs: frameTimestampMs,
-							}),
-						),
-					);
-					faceCandidates = (faceResult.detections ?? [])
-						.map((detection) => detection.boundingBox)
-						.filter((box): box is NonNullable<typeof box> => Boolean(box))
-						.map((faceBox) => ({
-							centerX: faceBox.originX + faceBox.width / 2,
-							centerY: faceBox.originY + faceBox.height / 2,
-							width: Math.max(1, faceBox.width * 2.4),
-							height: Math.max(1, faceBox.height * 3.4),
-							anchorX: faceBox.originX + faceBox.width / 2,
-							anchorY: faceBox.originY + faceBox.height * 0.42,
-							fitWidth: Math.max(1, faceBox.width * 1.35),
-							fitHeight: Math.max(1, faceBox.height * 1.75),
-						}));
+					faceCandidates = faceLandmarker
+						? (withSuppressedVisionConsoleErrors(() =>
+								faceLandmarker.detectForVideo(
+									video,
+									getMonotonicVisionTimestampMs({
+										kind: "face-landmarks",
+										candidateMs: frameTimestampMs,
+									}),
+								),
+							).faceLandmarks ?? [])
+								.map((landmarks: Array<{ x: number; y: number }>) =>
+									buildFaceCandidateFromLandmarks({
+										landmarks,
+										sourceWidth,
+										sourceHeight,
+									}),
+								)
+								.filter((box: SubjectBox | null): box is SubjectBox => Boolean(box))
+						: [];
+					if (faceCandidates.length === 0) {
+						const faceResult = withSuppressedVisionConsoleErrors(() =>
+							faceDetector.detectForVideo(
+								video,
+								getMonotonicVisionTimestampMs({
+									kind: "face",
+									candidateMs: frameTimestampMs,
+								}),
+							),
+						);
+						faceCandidates = (faceResult.detections ?? [])
+							.map((detection) =>
+								buildFaceCandidateFromDetection({
+									detection,
+									sourceWidth,
+									sourceHeight,
+								}),
+							)
+							.filter((box): box is SubjectBox => Boolean(box));
+					}
 					if (faceCandidates.length > 0) {
 						identityDetections.push(...faceCandidates);
 					}
@@ -2367,53 +2956,16 @@ export async function analyzeGeneratedClipMotionTracking({
 				});
 			}
 
-			const observations: SubjectTrackingObservation[] = [];
-			let previousTrackedBox: SubjectBox | null = null;
-			const identityClusters =
-				identityDetections.length >= 2
-					? buildTwoSubjectClusters({
-							detections: identityDetections,
-							sourceWidth,
-						})
-					: [];
-			const targetIdentity =
-				targetSubjectSeed?.identity === "left" ||
-				targetSubjectSeed?.identity === "right"
-					? targetSubjectSeed.identity
-					: targetSubjectHint === "left" || targetSubjectHint === "right"
-						? targetSubjectHint
-						: null;
-			for (const frame of sampledFrames) {
-				const clusteredFaceCandidates =
-					targetIdentity && identityClusters.length >= 2
-						? filterCandidatesByIdentityCluster({
-								candidates: frame.faceCandidates,
-								clusters: identityClusters,
-								targetIdentity,
-							})
-						: frame.faceCandidates;
-				const candidates =
-					clusteredFaceCandidates.length > 0
-						? clusteredFaceCandidates
-						: previousTrackedBox
-							? []
-							: frame.poseCandidates;
-				const trackedBox = choosePrimarySubjectBox({
-					candidates,
-					previousBox: previousTrackedBox,
-					sourceWidth,
-					sourceHeight,
-					targetCenterHint,
-					targetSubjectHint,
-					targetViewportBounds,
-					targetSubjectSeed,
-				});
-				observations.push({
-					time: frame.time,
-					box: trackedBox ? { ...trackedBox } : null,
-				});
-				previousTrackedBox = trackedBox ?? previousTrackedBox;
-			}
+			const observations = buildMotionTrackingObservationsFromSampledFrames({
+				sampledFrames,
+				identityDetections,
+				sourceWidth,
+				sourceHeight,
+				targetCenterHint,
+				targetSubjectHint,
+				targetViewportBounds,
+				targetSubjectSeed,
+			});
 
 			const result = buildMotionTrackingKeyframesFromObservations({
 				observations,

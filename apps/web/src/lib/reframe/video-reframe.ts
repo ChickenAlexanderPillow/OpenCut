@@ -53,6 +53,25 @@ function normalizeVideoReframeTransformAdjustment(
 			y: adjustment.positionOffset.y,
 		},
 		scaleMultiplier: adjustment.scaleMultiplier,
+		viewportPivot: adjustment.viewportPivot === true ? true : undefined,
+	};
+}
+
+export function getEffectiveVideoReframeTransformAdjustment({
+	adjustment,
+	motionTrackingEnabled: _motionTrackingEnabled,
+}: {
+	adjustment: VideoReframeTransformAdjustment | null | undefined;
+	motionTrackingEnabled: boolean;
+}): VideoReframeTransformAdjustment | undefined {
+	const normalized = normalizeVideoReframeTransformAdjustment(adjustment);
+	if (!normalized) return undefined;
+	return {
+		positionOffset: {
+			x: normalized.positionOffset.x,
+			y: normalized.positionOffset.y,
+		},
+		scaleMultiplier: normalized.scaleMultiplier,
 	};
 }
 
@@ -70,6 +89,19 @@ export function applyVideoReframeTransformAdjustment({
 				y: transform.position.y,
 			},
 			scale: transform.scale,
+		};
+	}
+	if (adjustment.viewportPivot) {
+		return {
+			position: {
+				x:
+					transform.position.x * adjustment.scaleMultiplier +
+					adjustment.positionOffset.x,
+				y:
+					transform.position.y * adjustment.scaleMultiplier +
+					adjustment.positionOffset.y,
+			},
+			scale: transform.scale * adjustment.scaleMultiplier,
 		};
 	}
 	return {
@@ -186,21 +218,57 @@ function normalizeSplitSlotTransformOverridesBySlotId(
 function normalizeSplitSlotTransformAdjustment(
 	adjustment: VideoSplitScreenSlotTransformAdjustment | null | undefined,
 ): VideoSplitScreenSlotTransformAdjustment | null {
+	const hasPositionOffset =
+		adjustment &&
+		adjustment.positionOffset &&
+		Number.isFinite(adjustment.positionOffset.x) &&
+		Number.isFinite(adjustment.positionOffset.y);
+	const hasLegacySourceCenterOffset =
+		adjustment &&
+		adjustment.sourceCenterOffset &&
+		Number.isFinite(adjustment.sourceCenterOffset.x) &&
+		Number.isFinite(adjustment.sourceCenterOffset.y);
 	if (
 		!adjustment ||
-		!Number.isFinite(adjustment.sourceCenterOffset.x) ||
-		!Number.isFinite(adjustment.sourceCenterOffset.y) ||
+		(!hasPositionOffset && !hasLegacySourceCenterOffset) ||
 		!Number.isFinite(adjustment.scaleMultiplier) ||
 		adjustment.scaleMultiplier <= 0
 	) {
 		return null;
 	}
 	return {
-		sourceCenterOffset: {
-			x: adjustment.sourceCenterOffset.x,
-			y: adjustment.sourceCenterOffset.y,
-		},
+		positionOffset: hasPositionOffset
+			? {
+					x: adjustment.positionOffset!.x,
+					y: adjustment.positionOffset!.y,
+				}
+			: undefined,
+		sourceCenterOffset: hasLegacySourceCenterOffset
+			? {
+					x: adjustment.sourceCenterOffset!.x,
+					y: adjustment.sourceCenterOffset!.y,
+				}
+			: undefined,
 		scaleMultiplier: adjustment.scaleMultiplier,
+	};
+}
+
+export function deriveViewportPivotVideoReframeTransformAdjustment({
+	baseTransform,
+	finalTransform,
+}: {
+	baseTransform: VideoReframePreset["transform"];
+	finalTransform: Pick<Transform, "position" | "scale">;
+}): VideoReframeTransformAdjustment {
+	const scaleMultiplier =
+		finalTransform.scale / Math.max(1e-6, baseTransform.scale);
+	return {
+		positionOffset: {
+			x: finalTransform.position.x - baseTransform.position.x * scaleMultiplier,
+			y: finalTransform.position.y - baseTransform.position.y * scaleMultiplier,
+		},
+		scaleMultiplier,
+		viewportPivot: true,
 	};
 }
 
@@ -319,6 +387,49 @@ export function buildTransformForSourceCenter({
 		},
 		scale,
 		rotate,
+	};
+}
+
+function getViewportCenterOffset({
+	viewport,
+	canvasWidth,
+	canvasHeight,
+}: {
+	viewport: VideoSplitScreenViewport;
+	canvasWidth: number;
+	canvasHeight: number;
+}): { x: number; y: number } {
+	return {
+		x: viewport.x + viewport.width / 2 - canvasWidth / 2,
+		y: viewport.y + viewport.height / 2 - canvasHeight / 2,
+	};
+}
+
+function scalePositionAroundViewportCenter({
+	position,
+	viewport,
+	canvasWidth,
+	canvasHeight,
+	scaleMultiplier,
+}: {
+	position: Transform["position"];
+	viewport: VideoSplitScreenViewport;
+	canvasWidth: number;
+	canvasHeight: number;
+	scaleMultiplier: number;
+}): Transform["position"] {
+	const viewportCenterOffset = getViewportCenterOffset({
+		viewport,
+		canvasWidth,
+		canvasHeight,
+	});
+	return {
+		x:
+			viewportCenterOffset.x +
+			(position.x - viewportCenterOffset.x) * scaleMultiplier,
+		y:
+			viewportCenterOffset.y +
+			(position.y - viewportCenterOffset.y) * scaleMultiplier,
 	};
 }
 
@@ -1595,7 +1706,10 @@ export function resolveVideoReframeTransform({
 	});
 	const adjustedTransform = applyVideoReframeTransformAdjustment({
 		transform: trackedTransform,
-		adjustment: preset.transformAdjustment,
+		adjustment: getEffectiveVideoReframeTransformAdjustment({
+			adjustment: preset.transformAdjustment,
+			motionTrackingEnabled: preset.motionTracking?.enabled === true,
+		}),
 	});
 
 	return {
@@ -1639,7 +1753,10 @@ export function resolveVideoReframeTransformFromState({
 	});
 	const adjustedTransform = applyVideoReframeTransformAdjustment({
 		transform: trackedTransform,
-		adjustment: preset.transformAdjustment,
+		adjustment: getEffectiveVideoReframeTransformAdjustment({
+			adjustment: preset.transformAdjustment,
+			motionTrackingEnabled: preset.motionTracking?.enabled === true,
+		}),
 	});
 	return {
 		position: adjustedTransform.position,
@@ -1809,7 +1926,7 @@ export function deriveVideoSplitScreenSlotAdjustmentFromTransform({
 	}).get(slotId);
 	if (!viewport) {
 		return {
-			sourceCenterOffset: { x: 0, y: 0 },
+			positionOffset: { x: 0, y: 0 },
 			scaleMultiplier: 1,
 		};
 	}
@@ -1823,33 +1940,22 @@ export function deriveVideoSplitScreenSlotAdjustmentFromTransform({
 		sourceWidth,
 		sourceHeight,
 	});
-	const slotCoverScale = getFitBaseScale({
-		rendererWidth: viewport.width,
-		rendererHeight: viewport.height,
-		sourceWidth,
-		sourceHeight,
-		fitMode: "cover",
-	});
 	const referenceTransform = adjustmentBaseTransform ?? seedTransform;
-	const seedCenter = getSourceCenterForTransform({
-		transform: referenceTransform,
-		baseScale: slotCoverScale,
-		sourceWidth,
-		sourceHeight,
-	});
-	const finalCenter = getSourceCenterForTransform({
-		transform: finalTransform,
-		baseScale: slotCoverScale,
-		sourceWidth,
-		sourceHeight,
+	const scaleMultiplier =
+		finalTransform.scale / Math.max(1e-6, referenceTransform.scale);
+	const scaledReferencePosition = scalePositionAroundViewportCenter({
+		position: referenceTransform.position,
+		viewport,
+		canvasWidth,
+		canvasHeight,
+		scaleMultiplier,
 	});
 	return {
-		sourceCenterOffset: {
-			x: finalCenter.x - seedCenter.x,
-			y: finalCenter.y - seedCenter.y,
+		positionOffset: {
+			x: finalTransform.position.x - scaledReferencePosition.x,
+			y: finalTransform.position.y - scaledReferencePosition.y,
 		},
-		scaleMultiplier:
-			finalTransform.scale / Math.max(1e-6, referenceTransform.scale),
+		scaleMultiplier,
 	};
 }
 
@@ -1965,6 +2071,24 @@ function resolveVideoSplitScreenSlotTransformWithViewport({
 				rotate: baseResolvedTransform.rotate,
 			})
 		: seedTransform;
+	if (appliedAdjustment.positionOffset) {
+		const scaledBasePosition = scalePositionAroundViewportCenter({
+			position: adjustmentBaseTransform.position,
+			viewport,
+			canvasWidth,
+			canvasHeight,
+			scaleMultiplier: appliedAdjustment.scaleMultiplier,
+		});
+		return {
+			position: {
+				x: scaledBasePosition.x + appliedAdjustment.positionOffset.x,
+				y: scaledBasePosition.y + appliedAdjustment.positionOffset.y,
+			},
+			scale:
+				adjustmentBaseTransform.scale * appliedAdjustment.scaleMultiplier,
+			rotate: baseResolvedTransform.rotate,
+		};
+	}
 	const seedCenter = getSourceCenterForTransform({
 		transform: adjustmentBaseTransform,
 		baseScale: slotCoverScale,
@@ -1973,8 +2097,8 @@ function resolveVideoSplitScreenSlotTransformWithViewport({
 	});
 	return buildTransformForSourceCenter({
 		sourceCenter: {
-			x: seedCenter.x + appliedAdjustment.sourceCenterOffset.x,
-			y: seedCenter.y + appliedAdjustment.sourceCenterOffset.y,
+			x: seedCenter.x + (appliedAdjustment.sourceCenterOffset?.x ?? 0),
+			y: seedCenter.y + (appliedAdjustment.sourceCenterOffset?.y ?? 0),
 		},
 		scale: adjustmentBaseTransform.scale * appliedAdjustment.scaleMultiplier,
 		baseScale: slotCoverScale,

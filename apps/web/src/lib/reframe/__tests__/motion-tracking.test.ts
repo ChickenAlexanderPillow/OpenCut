@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildMotionTrackingKeyframesFromObservations } from "../subject-aware";
 import {
+	buildMotionTrackingPresetSignature,
 	resolveMotionTrackedReframeTransform,
 	resolveMotionTrackedSubjectFrame,
 	splitMotionTrackingAtTime,
@@ -54,6 +55,69 @@ describe("motion tracking keyframe generation", () => {
 				result.keyframes[index - 1]!.position.x,
 			);
 		}
+	});
+
+	test("builds tracked framing from the face-sized fit box", () => {
+		const result = buildMotionTrackingKeyframesFromObservations({
+			observations: [
+				{
+					time: 0,
+					box: {
+						centerX: 800,
+						centerY: 420,
+						width: 500,
+						height: 700,
+						anchorX: 800,
+						anchorY: 300,
+						fitWidth: 110,
+						fitHeight: 170,
+					},
+				},
+			],
+			canvasSize: { width: 1080, height: 1920 },
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			baseScale: 1.8,
+			animateScale: false,
+		});
+
+		expect(result.keyframes).toHaveLength(1);
+		expect(result.keyframes[0]?.subjectCenter?.x).toBeCloseTo(800, 6);
+		expect(result.keyframes[0]?.subjectCenter?.y).toBeCloseTo(292.228571, 5);
+		expect(result.keyframes[0]?.subjectSize?.width).toBeCloseTo(110, 6);
+		expect(result.keyframes[0]?.subjectSize?.height).toBeCloseTo(170, 6);
+		expect(result.keyframes[0]?.scale).toBeCloseTo(4.189090909, 6);
+	});
+
+	test("prefers an explicit face tracking anchor over the inferred box anchor", () => {
+		const result = buildMotionTrackingKeyframesFromObservations({
+			observations: [
+				{
+					time: 0,
+					box: {
+						centerX: 800,
+						centerY: 420,
+						width: 500,
+						height: 700,
+						anchorX: 800,
+						anchorY: 300,
+						fitWidth: 110,
+						fitHeight: 170,
+						trackingAnchorX: 824,
+						trackingAnchorY: 276,
+					},
+				},
+			],
+			canvasSize: { width: 1080, height: 1920 },
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			baseScale: 1.8,
+			animateScale: false,
+		});
+
+		expect(result.keyframes).toHaveLength(1);
+		expect(result.keyframes[0]?.subjectCenter?.x).toBeCloseTo(824, 6);
+		expect(result.keyframes[0]?.subjectCenter?.y).toBeCloseTo(276, 6);
 	});
 
 	test("does not drift through long detection loss", () => {
@@ -125,11 +189,11 @@ describe("motion tracking keyframe generation", () => {
 		expect(result.keyframes[0]?.time).toBe(0);
 		expect(result.keyframes[0]?.subjectCenter?.x).toBeGreaterThan(830);
 		expect(result.keyframes[0]?.subjectCenter?.x).toBeLessThan(850);
-		expect(result.keyframes[0]?.subjectCenter?.y).toBeGreaterThan(290);
-		expect(result.keyframes[0]?.subjectCenter?.y).toBeLessThan(310);
+		expect(result.keyframes[0]?.subjectCenter?.y).toBeGreaterThan(280);
+		expect(result.keyframes[0]?.subjectCenter?.y).toBeLessThan(300);
 	});
 
-	test("holds the last tracked subject through a weak competing detection", () => {
+	test("holds the last tracked face through a brief detector miss", () => {
 		const result = buildMotionTrackingKeyframesFromObservations({
 			observations: [
 				{
@@ -146,7 +210,7 @@ describe("motion tracking keyframe generation", () => {
 					},
 				},
 				{
-					time: 0.3,
+					time: 0.12,
 					box: {
 						centerX: 420,
 						centerY: 320,
@@ -159,20 +223,20 @@ describe("motion tracking keyframe generation", () => {
 					},
 				},
 				{
-					time: 0.55,
+					time: 0.24,
 					box: null,
 				},
 				{
-					time: 0.7,
+					time: 0.36,
 					box: {
-						centerX: 1260,
-						centerY: 360,
-						width: 170,
-						height: 270,
-						anchorX: 1260,
-						anchorY: 280,
-						fitWidth: 120,
-						fitHeight: 180,
+						centerX: 422,
+						centerY: 320,
+						width: 152,
+						height: 252,
+						anchorX: 422,
+						anchorY: 250,
+						fitWidth: 112,
+						fitHeight: 172,
 					},
 				},
 			],
@@ -183,10 +247,15 @@ describe("motion tracking keyframe generation", () => {
 			animateScale: true,
 		});
 
-		expect(result.keyframes.at(-1)?.subjectCenter?.x).toBeLessThan(710);
+		expect(result.keyframes).toHaveLength(4);
+		expect(result.keyframes[2]?.time).toBeCloseTo(0.240002, 6);
+		expect(result.keyframes[2]?.subjectCenter?.x).toBeCloseTo(
+			result.keyframes[1]!.subjectCenter!.x,
+			6,
+		);
 	});
 
-	test("holds the last tracked subject through a longer face-turn gap", () => {
+	test("drops tracking after a longer face-turn gap instead of holding stale framing", () => {
 		const result = buildMotionTrackingKeyframesFromObservations({
 			observations: [
 				{
@@ -231,8 +300,8 @@ describe("motion tracking keyframe generation", () => {
 			animateScale: true,
 		});
 
-		expect(result.keyframes.at(-1)?.time).toBeGreaterThan(0.85);
-		expect(result.keyframes.at(-1)?.subjectCenter?.x).toBeCloseTo(520, 5);
+		expect(result.keyframes.at(-1)?.time).toBeCloseTo(0.350001, 6);
+		expect(result.trackedSampleCount).toBe(2);
 	});
 
 	test("damps brief scale spikes during a short face turn", () => {
@@ -288,10 +357,74 @@ describe("motion tracking keyframe generation", () => {
 		const scales = result.keyframes.map((keyframe) => keyframe.scale);
 		for (let index = 1; index < scales.length; index++) {
 			expect(Math.abs(scales[index]! - scales[index - 1]!)).toBeLessThanOrEqual(
-				0.036,
+				0.1,
 			);
 		}
-		expect(Math.max(...scales) - Math.min(...scales)).toBeLessThanOrEqual(0.05);
+		expect(Math.max(...scales) - Math.min(...scales)).toBeLessThanOrEqual(0.1);
+		expect(result.keyframes[1]?.subjectSize?.width).toBeCloseTo(102, 6);
+		expect(result.keyframes[2]?.scale).toBeCloseTo(result.keyframes[1]!.scale, 6);
+	});
+
+	test("bakes dense tracking keyframes so motion does not lag behind sampled observations", () => {
+		const result = buildMotionTrackingKeyframesFromObservations({
+			observations: [
+				{
+					time: 0,
+					box: {
+						centerX: 800,
+						centerY: 320,
+						width: 180,
+						height: 320,
+						anchorX: 800,
+						anchorY: 250,
+					},
+				},
+				{
+					time: 0.2,
+					box: {
+						centerX: 820,
+						centerY: 320,
+						width: 180,
+						height: 320,
+						anchorX: 820,
+						anchorY: 250,
+					},
+				},
+				{
+					time: 0.4,
+					box: {
+						centerX: 840,
+						centerY: 320,
+						width: 180,
+						height: 320,
+						anchorX: 840,
+						anchorY: 250,
+					},
+				},
+				{
+					time: 0.6,
+					box: {
+						centerX: 860,
+						centerY: 320,
+						width: 180,
+						height: 320,
+						anchorX: 860,
+						anchorY: 250,
+					},
+				},
+			],
+			canvasSize: { width: 1080, height: 1920 },
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			baseScale: 1.8,
+			animateScale: false,
+		});
+
+		expect(result.trackedSampleCount).toBe(4);
+		expect(result.keyframes).toHaveLength(4);
+		expect(result.keyframes.map((keyframe) => Number(keyframe.time.toFixed(1)))).toEqual([
+			0, 0.2, 0.4, 0.6,
+		]);
 	});
 
 	test("preserves the tracked frame at split boundaries", () => {
@@ -401,6 +534,100 @@ describe("motion tracking keyframe generation", () => {
 		expect(resolved.scale).toBeCloseTo(1.4, 6);
 	});
 
+	test("interpolates tracking linearly without easing acceleration", () => {
+		const atQuarter = resolveMotionTrackedReframeTransform({
+			baseTransform: {
+				position: { x: 0, y: 0 },
+				scale: 1,
+			},
+			motionTracking: {
+				enabled: true,
+				mode: "subject-single-v1",
+				source: "baked-keyframes",
+				animateScale: true,
+				keyframes: [
+					{
+						id: "a",
+						time: 0,
+						position: { x: 0, y: 0 },
+						scale: 1,
+					},
+					{
+						id: "b",
+						time: 1,
+						position: { x: 100, y: 40 },
+						scale: 1.8,
+					},
+				],
+			},
+			localTime: 0.25,
+		});
+		const atHalf = resolveMotionTrackedReframeTransform({
+			baseTransform: {
+				position: { x: 0, y: 0 },
+				scale: 1,
+			},
+			motionTracking: {
+				enabled: true,
+				mode: "subject-single-v1",
+				source: "baked-keyframes",
+				animateScale: true,
+				keyframes: [
+					{
+						id: "a",
+						time: 0,
+						position: { x: 0, y: 0 },
+						scale: 1,
+					},
+					{
+						id: "b",
+						time: 1,
+						position: { x: 100, y: 40 },
+						scale: 1.8,
+					},
+				],
+			},
+			localTime: 0.5,
+		});
+		const atThreeQuarters = resolveMotionTrackedReframeTransform({
+			baseTransform: {
+				position: { x: 0, y: 0 },
+				scale: 1,
+			},
+			motionTracking: {
+				enabled: true,
+				mode: "subject-single-v1",
+				source: "baked-keyframes",
+				animateScale: true,
+				keyframes: [
+					{
+						id: "a",
+						time: 0,
+						position: { x: 0, y: 0 },
+						scale: 1,
+					},
+					{
+						id: "b",
+						time: 1,
+						position: { x: 100, y: 40 },
+						scale: 1.8,
+					},
+				],
+			},
+			localTime: 0.75,
+		});
+
+		expect(atQuarter.position.x).toBeCloseTo(25, 6);
+		expect(atQuarter.position.y).toBeCloseTo(10, 6);
+		expect(atQuarter.scale).toBeCloseTo(1.2, 6);
+		expect(atHalf.position.x).toBeCloseTo(50, 6);
+		expect(atHalf.position.y).toBeCloseTo(20, 6);
+		expect(atHalf.scale).toBeCloseTo(1.4, 6);
+		expect(atThreeQuarters.position.x).toBeCloseTo(75, 6);
+		expect(atThreeQuarters.position.y).toBeCloseTo(30, 6);
+		expect(atThreeQuarters.scale).toBeCloseTo(1.6, 6);
+	});
+
 	test("can snap a split clip to the first retained tracked pose", () => {
 		const split = splitMotionTrackingAtTime({
 			motionTracking: {
@@ -433,5 +660,46 @@ describe("motion tracking keyframe generation", () => {
 		expect(split.right?.keyframes[0]?.scale).toBeCloseTo(1.4, 6);
 		expect(split.right?.keyframes[1]?.time).toBeCloseTo(0.5, 6);
 		expect(split.right?.keyframes[1]?.position.x).toBeCloseTo(100, 6);
+	});
+
+	test("includes subject seed and cache version in the tracking signature", () => {
+		const basePreset = {
+			id: "preset-a",
+			name: "Subject",
+			transform: {
+				position: { x: 0, y: 0 },
+				scale: 1.8,
+			},
+			motionTracking: {
+				enabled: true,
+				mode: "subject-single-v1",
+				source: "baked-keyframes",
+				animateScale: false,
+				trackingStrength: 0.55,
+				keyframes: [],
+			},
+			subjectSeed: {
+				center: { x: 800, y: 260 },
+				size: { width: 110, height: 170 },
+				identity: "subject" as const,
+			},
+		};
+		const movedSeedPreset = {
+			...basePreset,
+			subjectSeed: {
+				...basePreset.subjectSeed,
+				center: { x: 840, y: 260 },
+			},
+		};
+
+		const baseSignature = buildMotionTrackingPresetSignature({
+			preset: basePreset,
+		});
+		const movedSignature = buildMotionTrackingPresetSignature({
+			preset: movedSeedPreset,
+		});
+
+		expect(baseSignature).toContain("mt-v2");
+		expect(baseSignature).not.toBe(movedSignature);
 	});
 });

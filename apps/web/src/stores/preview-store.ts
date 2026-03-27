@@ -10,6 +10,7 @@ interface LayoutGuideSettings {
 interface PreviewOverlaysState {
 	bookmarks: boolean;
 	safeAreas: boolean;
+	trackingDebug: boolean;
 }
 
 export type PreviewPlaybackQuality = "performance" | "balanced" | "full";
@@ -62,6 +63,7 @@ interface PreviewState {
 const DEFAULT_PREVIEW_OVERLAYS: PreviewOverlaysState = {
 	bookmarks: true,
 	safeAreas: false,
+	trackingDebug: false,
 };
 
 export const usePreviewStore = create<PreviewState>()(
@@ -127,7 +129,7 @@ export const usePreviewStore = create<PreviewState>()(
 		}),
 		{
 			name: "preview-settings",
-			version: 7,
+			version: 8,
 			migrate: (persistedState, version) => {
 				const state = persistedState as
 					| {

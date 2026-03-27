@@ -1,10 +1,15 @@
-import type { VideoMotionTracking, VideoReframePresetTransform } from "@/types/timeline";
+import type {
+	VideoMotionTracking,
+	VideoReframePreset,
+	VideoReframePresetTransform,
+} from "@/types/timeline";
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, value));
 }
 
 export const DEFAULT_MOTION_TRACKING_STRENGTH = 0.55;
+export const MOTION_TRACKING_CACHE_VERSION = "mt-v2";
 
 export function normalizeMotionTrackingStrength(
 	trackingStrength: number | null | undefined,
@@ -13,6 +18,51 @@ export function normalizeMotionTrackingStrength(
 		return DEFAULT_MOTION_TRACKING_STRENGTH;
 	}
 	return clamp(trackingStrength ?? DEFAULT_MOTION_TRACKING_STRENGTH, 0, 1);
+}
+
+export function getTrackingSubjectHint({
+	preset,
+}: {
+	preset: Pick<VideoReframePreset, "name">;
+}): "left" | "right" | "center" {
+	return preset.name === "Subject Left"
+		? "left"
+		: preset.name === "Subject Right"
+			? "right"
+			: "center";
+}
+
+export function buildMotionTrackingPresetSignature({
+	preset,
+}: {
+	preset: Pick<
+		VideoReframePreset,
+		"name" | "transform" | "motionTracking" | "subjectSeed"
+	>;
+}): string {
+	return [
+		MOTION_TRACKING_CACHE_VERSION,
+		preset.name.trim().toLowerCase(),
+		`hint:${getTrackingSubjectHint({ preset })}`,
+		preset.transform.position.x.toFixed(3),
+		preset.transform.position.y.toFixed(3),
+		preset.transform.scale.toFixed(4),
+		(preset.motionTracking?.animateScale ?? false) ? "scale:1" : "scale:0",
+		`strength:${normalizeMotionTrackingStrength(
+			preset.motionTracking?.trackingStrength,
+		).toFixed(2)}`,
+		`seed:${
+			preset.subjectSeed
+				? [
+						preset.subjectSeed.identity,
+						preset.subjectSeed.center.x.toFixed(2),
+						preset.subjectSeed.center.y.toFixed(2),
+						preset.subjectSeed.size?.width?.toFixed(2) ?? "na",
+						preset.subjectSeed.size?.height?.toFixed(2) ?? "na",
+					].join(",")
+				: "none"
+		}`,
+	].join("|");
 }
 
 export interface MotionTrackingTransformKeyframe {
