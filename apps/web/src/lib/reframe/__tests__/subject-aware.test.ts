@@ -424,6 +424,60 @@ describe("subject-aware reframe preset generation", () => {
 		expect(observations[1]?.box?.trackingAnchorKind).toBe("head");
 	});
 
+	test("prefers an eye-tracked face over coarse head detection during initial lock", () => {
+		const observations = buildMotionTrackingObservationsFromSampledFrames({
+			sampledFrames: [
+				{
+					time: 0,
+					faceCandidates: [
+						{
+							centerX: 1160,
+							centerY: 332,
+							width: 210,
+							height: 320,
+							anchorX: 1160,
+							anchorY: 252,
+							fitWidth: 140,
+							fitHeight: 210,
+							trackingAnchorX: 1160,
+							trackingAnchorY: 252,
+							trackingAnchorKind: "head",
+							trackingSource: "head-detection",
+						},
+						{
+							centerX: 1164,
+							centerY: 330,
+							width: 208,
+							height: 318,
+							anchorX: 1164,
+							anchorY: 236,
+							fitWidth: 138,
+							fitHeight: 208,
+							trackingAnchorX: 1164,
+							trackingAnchorY: 236,
+							trackingAnchorKind: "eye",
+							trackingSource: "eye",
+						},
+					],
+					poseCandidates: [],
+				},
+			],
+			identityDetections: [],
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			targetCenterHint: { x: 1060, y: 540 },
+			targetSubjectHint: "right",
+			targetSubjectSeed: {
+				center: { x: 1160, y: 252 },
+				size: { width: 140, height: 210 },
+				identity: "right",
+			},
+		});
+
+		expect(observations[0]?.box?.trackingSource).toBe("eye");
+		expect(observations[0]?.box?.trackingAnchorY).toBe(236);
+	});
+
 	test("uses short head continuity fallback for brief full detector gaps", () => {
 		const observations = buildMotionTrackingObservationsFromSampledFrames({
 			sampledFrames: [

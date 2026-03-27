@@ -255,6 +255,56 @@ describe("motion tracking keyframe generation", () => {
 		expect(result.keyframes[0]?.subjectCenter?.y).toBeLessThan(300);
 	});
 
+	test("skips a coarse startup head fallback when eye tracking appears immediately after", () => {
+		const result = buildMotionTrackingKeyframesFromObservations({
+			observations: [
+				{
+					time: 0,
+					box: {
+						centerX: 760,
+						centerY: 360,
+						width: 180,
+						height: 260,
+						anchorX: 760,
+						anchorY: 250,
+						fitWidth: 120,
+						fitHeight: 180,
+						trackingAnchorX: 760,
+						trackingAnchorY: 250,
+						trackingAnchorKind: "head",
+						trackingSource: "head-detection",
+					},
+				},
+				{
+					time: 0.2,
+					box: {
+						centerX: 860,
+						centerY: 360,
+						width: 180,
+						height: 260,
+						anchorX: 860,
+						anchorY: 230,
+						fitWidth: 120,
+						fitHeight: 180,
+						trackingAnchorX: 860,
+						trackingAnchorY: 230,
+						trackingAnchorKind: "eye",
+						trackingSource: "eye",
+					},
+				},
+			],
+			canvasSize: { width: 1080, height: 1920 },
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			baseScale: 1.8,
+			animateScale: true,
+		});
+
+		expect(result.keyframes[0]?.time).toBe(0);
+		expect(result.keyframes[0]?.trackingSource).toBe("eye");
+		expect(result.keyframes[0]?.subjectCenter?.x).toBeGreaterThan(830);
+	});
+
 	test("holds the last tracked face through a brief detector miss", () => {
 		const result = buildMotionTrackingKeyframesFromObservations({
 			observations: [
@@ -761,7 +811,7 @@ describe("motion tracking keyframe generation", () => {
 			preset: movedSeedPreset,
 		});
 
-		expect(baseSignature).toContain("mt-v4");
+		expect(baseSignature).toContain("mt-v7");
 		expect(baseSignature).not.toBe(movedSignature);
 	});
 });
