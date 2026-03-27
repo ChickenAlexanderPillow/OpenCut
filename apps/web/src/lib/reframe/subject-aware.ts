@@ -1682,7 +1682,26 @@ function chooseMotionTrackingSubjectBox({
 	targetSubjectSeed?: VideoReframeSubjectSeed | null;
 }): SubjectBox | null {
 	if (candidates.length === 0) return null;
-	if (!previousBox) {
+	const shouldResetPreviousLock =
+		Boolean(previousBox) &&
+		!doesBoxMatchTrackingWindow({
+			box: previousBox!,
+			targetViewportBounds,
+			targetSubjectSeed,
+			sourceWidth,
+			sourceHeight,
+		}) &&
+		candidates.some((candidate) =>
+			doesBoxMatchTrackingWindow({
+				box: candidate,
+				targetViewportBounds,
+				targetSubjectSeed,
+				sourceWidth,
+				sourceHeight,
+			}),
+		);
+	const effectivePreviousBox = shouldResetPreviousLock ? null : previousBox;
+	if (!effectivePreviousBox) {
 		const maxSourcePriority = Math.max(
 			...candidates.map((candidate) =>
 				getMotionTrackingSourcePriority(candidate.trackingSource),
@@ -1706,15 +1725,15 @@ function chooseMotionTrackingSubjectBox({
 			allowCenterGrouping: false,
 		});
 	}
-	const previousPoint = getBoxReferencePoint(previousBox);
+	const previousPoint = getBoxReferencePoint(effectivePreviousBox);
 	const frameDiagonal = Math.max(1, Math.hypot(sourceWidth, sourceHeight));
 	const maxHorizontalDistancePx = Math.max(
 		sourceWidth * 0.18,
-		(previousBox.fitWidth ?? previousBox.width) * 2.4,
+		(effectivePreviousBox.fitWidth ?? effectivePreviousBox.width) * 2.4,
 	);
 	const maxVerticalDistancePx = Math.max(
 		sourceHeight * 0.22,
-		(previousBox.fitHeight ?? previousBox.height) * 2.1,
+		(effectivePreviousBox.fitHeight ?? effectivePreviousBox.height) * 2.1,
 	);
 	const plausibleCandidates = candidates.filter((candidate) => {
 		const point = getBoxReferencePoint(candidate);
@@ -1732,11 +1751,11 @@ function chooseMotionTrackingSubjectBox({
 				point.x - previousPoint.x,
 				point.y - previousPoint.y,
 			);
-			const overlap = getBoxIoU(candidate, previousBox);
+			const overlap = getBoxIoU(candidate, effectivePreviousBox);
 			const areaScore =
 				1 -
-				Math.abs(getBoxArea(candidate) - getBoxArea(previousBox)) /
-					Math.max(getBoxArea(candidate), getBoxArea(previousBox), 1);
+				Math.abs(getBoxArea(candidate) - getBoxArea(effectivePreviousBox)) /
+					Math.max(getBoxArea(candidate), getBoxArea(effectivePreviousBox), 1);
 			const sourcePriority = getMotionTrackingSourcePriority(
 				candidate.trackingSource,
 			);
@@ -1754,7 +1773,7 @@ function chooseMotionTrackingSubjectBox({
 	if (!bestMatch) return null;
 	const allowFallbackDistancePx = Math.max(
 		sourceWidth * 0.28,
-		(previousBox.fitWidth ?? previousBox.width) * 4,
+		(effectivePreviousBox.fitWidth ?? effectivePreviousBox.width) * 4,
 	);
 	return bestMatch.distance <= allowFallbackDistancePx
 		? bestMatch.candidate
@@ -1838,6 +1857,90 @@ function getBoxOverlapWithViewport(
 	);
 	const intersectionArea = intersectionWidth * intersectionHeight;
 	return intersectionArea / Math.max(1, comparableWidth * comparableHeight);
+}
+
+function isPointInsideViewportBounds({
+	point,
+	viewportBounds,
+	marginX = 0,
+	marginY = 0,
+}: {
+	point: { x: number; y: number };
+	viewportBounds: SourceViewportBounds;
+	marginX?: number;
+	marginY?: number;
+}): boolean {
+	return (
+		point.x >= viewportBounds.left - marginX &&
+		point.x <= viewportBounds.right + marginX &&
+		point.y >= viewportBounds.top - marginY &&
+		point.y <= viewportBounds.bottom + marginY
+	);
+}
+
+function doesBoxMatchTrackingWindow({
+	box,
+	targetViewportBounds,
+	targetSubjectSeed,
+	sourceWidth,
+	sourceHeight,
+}: {
+	box: SubjectBox;
+	targetViewportBounds?: SourceViewportBounds | null;
+	targetSubjectSeed?: VideoReframeSubjectSeed | null;
+	sourceWidth: number;
+	sourceHeight: number;
+}): boolean {
+	const referencePoint = getBoxReferencePoint(box);
+	const matchesViewport = targetViewportBounds
+		? (() => {
+				const viewportWidth = Math.max(
+					1,
+					targetViewportBounds.right - targetViewportBounds.left,
+				);
+				const viewportHeight = Math.max(
+					1,
+					targetViewportBounds.bottom - targetViewportBounds.top,
+				);
+				return (
+					getBoxOverlapWithViewport(box, targetViewportBounds) >= 0.08 ||
+					isPointInsideViewportBounds({
+						point: referencePoint,
+						viewportBounds: targetViewportBounds,
+						marginX: viewportWidth * 0.06,
+						marginY: viewportHeight * 0.08,
+					})
+				);
+		  })()
+		: false;
+	const matchesSeed = targetSubjectSeed
+		? (() => {
+				const comparableWidth = box.fitWidth ?? box.width;
+				const comparableHeight = box.fitHeight ?? box.height;
+				const maxSeedDistanceX = Math.max(
+					sourceWidth * 0.09,
+					targetSubjectSeed.size?.width ?? 0,
+					comparableWidth * 0.9,
+				);
+				const maxSeedDistanceY = Math.max(
+					sourceHeight * 0.12,
+					targetSubjectSeed.size?.height ?? 0,
+					comparableHeight * 0.9,
+				);
+				return (
+					Math.abs(referencePoint.x - targetSubjectSeed.center.x) <=
+						maxSeedDistanceX &&
+					Math.abs(referencePoint.y - targetSubjectSeed.center.y) <=
+						maxSeedDistanceY
+				);
+		  })()
+		: false;
+	if (targetViewportBounds && targetSubjectSeed) {
+		return matchesViewport || matchesSeed;
+	}
+	if (targetViewportBounds) return matchesViewport;
+	if (targetSubjectSeed) return matchesSeed;
+	return true;
 }
 
 export function choosePrimarySubjectBox({

@@ -216,11 +216,22 @@ export function ReframeView() {
 		isPlaying,
 	]);
 	const visibleReframePresets = useMemo(
-		() =>
-			(normalizedVideo?.element.reframePresets ?? []).filter(
-				(preset: VideoReframePreset) =>
-					preset.name.trim().toLowerCase() !== "subject",
-			),
+		() => {
+			const presets = normalizedVideo?.element.reframePresets ?? [];
+			const hasSplitSubjectAngles = presets.some((preset: VideoReframePreset) => {
+				const normalizedName = preset.name.trim().toLowerCase();
+				return (
+					normalizedName === "subject left" || normalizedName === "subject right"
+				);
+			});
+			return presets.filter((preset: VideoReframePreset) => {
+				const normalizedName = preset.name.trim().toLowerCase();
+				if (normalizedName !== "subject") {
+					return true;
+				}
+				return !hasSplitSubjectAngles;
+			});
+		},
 		[normalizedVideo],
 	);
 

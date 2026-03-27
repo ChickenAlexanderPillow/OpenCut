@@ -320,6 +320,108 @@ describe("subject-aware reframe preset generation", () => {
 		expect(observations[0]?.box?.centerX).not.toBe(650);
 	});
 
+	test("reacquires immediately when a carried track falls outside the target framing window", () => {
+		const observations = buildMotionTrackingObservationsFromSampledFrames({
+			sampledFrames: [
+				{
+					time: 0,
+					faceCandidates: [
+						{
+							centerX: 1080,
+							centerY: 320,
+							width: 180,
+							height: 260,
+							anchorX: 1080,
+							anchorY: 250,
+							fitWidth: 120,
+							fitHeight: 180,
+							trackingAnchorX: 1080,
+							trackingAnchorY: 250,
+							trackingAnchorKind: "eye",
+							trackingSource: "eye",
+						},
+					],
+					poseCandidates: [],
+				},
+				{
+					time: 0.12,
+					faceCandidates: [
+						{
+							centerX: 420,
+							centerY: 330,
+							width: 190,
+							height: 280,
+							anchorX: 420,
+							anchorY: 252,
+							fitWidth: 124,
+							fitHeight: 186,
+							trackingAnchorX: 420,
+							trackingAnchorY: 252,
+							trackingAnchorKind: "eye",
+							trackingSource: "eye",
+						},
+						{
+							centerX: 1220,
+							centerY: 330,
+							width: 190,
+							height: 280,
+							anchorX: 1220,
+							anchorY: 252,
+							fitWidth: 124,
+							fitHeight: 186,
+							trackingAnchorX: 1220,
+							trackingAnchorY: 252,
+							trackingAnchorKind: "eye",
+							trackingSource: "eye",
+						},
+					],
+					poseCandidates: [],
+				},
+			],
+			identityDetections: [
+				{
+					centerX: 420,
+					centerY: 330,
+					width: 190,
+					height: 280,
+					anchorX: 420,
+					anchorY: 252,
+					fitWidth: 124,
+					fitHeight: 186,
+				},
+				{
+					centerX: 1220,
+					centerY: 330,
+					width: 190,
+					height: 280,
+					anchorX: 1220,
+					anchorY: 252,
+					fitWidth: 124,
+					fitHeight: 186,
+				},
+			],
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			targetCenterHint: { x: 420, y: 540 },
+			targetSubjectHint: "left",
+			targetViewportBounds: {
+				left: 0,
+				right: 760,
+				top: 0,
+				bottom: 1080,
+			},
+			targetSubjectSeed: {
+				center: { x: 420, y: 252 },
+				size: { width: 124, height: 186 },
+				identity: "left",
+			},
+		});
+
+		expect(observations[0]?.box).toBeNull();
+		expect(observations[1]?.box?.centerX).toBe(420);
+		expect(observations[1]?.box?.trackingSource).toBe("eye");
+	});
+
 	test("falls back to a head anchor when the landmark eye midpoint is unavailable", () => {
 		const landmarks = Array.from({ length: 478 }, () => ({
 			x: Number.NaN,
