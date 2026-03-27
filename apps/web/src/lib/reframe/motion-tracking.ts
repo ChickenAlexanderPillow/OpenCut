@@ -9,7 +9,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 export const DEFAULT_MOTION_TRACKING_STRENGTH = 0.55;
-export const MOTION_TRACKING_CACHE_VERSION = "mt-v2";
+export const MOTION_TRACKING_CACHE_VERSION = "mt-v3";
 
 export function normalizeMotionTrackingStrength(
 	trackingStrength: number | null | undefined,

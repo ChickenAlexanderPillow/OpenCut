@@ -27,6 +27,7 @@ const FACE_DETECTION_FIT_WIDTH_MULTIPLIER = 1.35;
 const FACE_DETECTION_FIT_HEIGHT_MULTIPLIER = 1.75;
 const MOTION_TRACKING_EYE_LINE_RATIO = 0.34;
 const MOTION_TRACKING_TARGET_EYE_LINE_VIEWPORT_RATIO = 0.36;
+const MOTION_TRACKING_TARGET_HEAD_VIEWPORT_RATIO = 0.4;
 const MOTION_TRACKING_TARGET_FACE_WIDTH_VIEWPORT_RATIO = 0.24;
 const MOTION_TRACKING_TARGET_FACE_HEIGHT_VIEWPORT_RATIO = 0.18;
 
@@ -41,6 +42,7 @@ type SubjectBox = {
 	fitHeight?: number;
 	trackingAnchorX?: number;
 	trackingAnchorY?: number;
+	trackingAnchorKind?: "eye" | "head";
 };
 
 type SubjectObservation = {
@@ -57,6 +59,7 @@ type MotionTrackingSample = {
 	time: number;
 	eyeX: number;
 	eyeY: number;
+	anchorKind: "eye" | "head";
 	fitWidth: number;
 	fitHeight: number;
 };
@@ -130,6 +133,12 @@ let faceLandmarkIndexGroups:
 			rightEye: number[];
 	  }
 	| null = null;
+const DEFAULT_FACE_LANDMARK_INDEX_GROUPS = {
+	leftIris: [468, 469, 470, 471, 472],
+	rightIris: [473, 474, 475, 476, 477],
+	leftEye: [] as number[],
+	rightEye: [] as number[],
+};
 
 function createAbortError(): Error {
 	const error = new Error("Analysis aborted");
@@ -866,7 +875,29 @@ function buildFallbackSubjectPreset({ baseScale }: { baseScale: number }) {
 	});
 }
 
-function getMotionTrackingEyeLineAnchor(box: SubjectBox): { x: number; y: number } {
+async function waitForAnalyzableVideoFrame({
+	video,
+	signal,
+	maxAttempts = 4,
+}: {
+	video: HTMLVideoElement;
+	signal?: AbortSignal;
+	maxAttempts?: number;
+}): Promise<boolean> {
+	for (let attempt = 0; attempt < maxAttempts; attempt++) {
+		await waitForVideoFrameReady({ video, signal });
+		if (canAnalyzeCurrentVideoFrame({ video })) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function getMotionTrackingAnchor(box: SubjectBox): {
+	x: number;
+	y: number;
+	kind: "eye" | "head";
+} {
 	if (
 		Number.isFinite(box.trackingAnchorX) &&
 		Number.isFinite(box.trackingAnchorY)
@@ -874,6 +905,7 @@ function getMotionTrackingEyeLineAnchor(box: SubjectBox): { x: number; y: number
 		return {
 			x: box.trackingAnchorX!,
 			y: box.trackingAnchorY!,
+			kind: box.trackingAnchorKind ?? "eye",
 		};
 	}
 	const anchorX = box.anchorX ?? box.centerX;
@@ -888,6 +920,7 @@ function getMotionTrackingEyeLineAnchor(box: SubjectBox): { x: number; y: number
 			anchorY -
 			inferredFaceHeight *
 				(FACE_DETECTION_ANCHOR_Y_RATIO - MOTION_TRACKING_EYE_LINE_RATIO),
+		kind: "eye",
 	};
 }
 
@@ -954,7 +987,7 @@ function getAverageFaceLandmarkPoint({
 	};
 }
 
-function getFaceLandmarkEyeMidpoint({
+export function getFaceLandmarkEyeMidpoint({
 	landmarks,
 	sourceWidth,
 	sourceHeight,
@@ -963,31 +996,76 @@ function getFaceLandmarkEyeMidpoint({
 	sourceWidth: number;
 	sourceHeight: number;
 }): { x: number; y: number } | null {
-	if (!faceLandmarkIndexGroups) return null;
+	const indexGroups =
+		faceLandmarkIndexGroups ?? DEFAULT_FACE_LANDMARK_INDEX_GROUPS;
 	const leftIris = getAverageFaceLandmarkPoint({
 		landmarks,
-		indices: faceLandmarkIndexGroups.leftIris,
+		indices: indexGroups.leftIris,
 	});
 	const rightIris = getAverageFaceLandmarkPoint({
 		landmarks,
-		indices: faceLandmarkIndexGroups.rightIris,
+		indices: indexGroups.rightIris,
 	});
 	const leftEye =
 		leftIris ??
 		getAverageFaceLandmarkPoint({
 			landmarks,
-			indices: faceLandmarkIndexGroups.leftEye,
+			indices: indexGroups.leftEye,
 		});
 	const rightEye =
 		rightIris ??
 		getAverageFaceLandmarkPoint({
 			landmarks,
-			indices: faceLandmarkIndexGroups.rightEye,
+			indices: indexGroups.rightEye,
 		});
 	if (!leftEye || !rightEye) return null;
 	return {
 		x: ((leftEye.x + rightEye.x) / 2) * sourceWidth,
 		y: ((leftEye.y + rightEye.y) / 2) * sourceHeight,
+	};
+}
+
+export function getFaceLandmarkTrackingAnchor({
+	landmarks,
+	sourceWidth,
+	sourceHeight,
+}: {
+	landmarks: Array<{ x: number; y: number }>;
+	sourceWidth: number;
+	sourceHeight: number;
+}): { x: number; y: number; kind: "eye" | "head" } | null {
+	const eyeMidpoint = getFaceLandmarkEyeMidpoint({
+		landmarks,
+		sourceWidth,
+		sourceHeight,
+	});
+	if (eyeMidpoint) {
+		return {
+			...eyeMidpoint,
+			kind: "eye",
+		};
+	}
+	const validLandmarks = landmarks.filter(
+		(landmark) =>
+			Number.isFinite(landmark.x) &&
+			Number.isFinite(landmark.y) &&
+			landmark.x >= 0 &&
+			landmark.x <= 1 &&
+			landmark.y >= 0 &&
+			landmark.y <= 1,
+	);
+	if (validLandmarks.length === 0) return null;
+	const xs = validLandmarks.map((landmark) => landmark.x * sourceWidth);
+	const ys = validLandmarks.map((landmark) => landmark.y * sourceHeight);
+	const minX = Math.min(...xs);
+	const maxX = Math.max(...xs);
+	const minY = Math.min(...ys);
+	const maxY = Math.max(...ys);
+	const rawHeight = Math.max(1, maxY - minY);
+	return {
+		x: (minX + maxX) / 2,
+		y: minY + rawHeight * FACE_DETECTION_ANCHOR_Y_RATIO,
+		kind: "head",
 	};
 }
 
@@ -1025,6 +1103,7 @@ function buildFaceCandidateFromDetection({
 		),
 		trackingAnchorX: eyeMidpoint?.x,
 		trackingAnchorY: eyeMidpoint?.y,
+		trackingAnchorKind: eyeMidpoint ? "eye" : undefined,
 	};
 }
 
@@ -1055,13 +1134,13 @@ function buildFaceCandidateFromLandmarks({
 	const maxY = Math.max(...ys);
 	const rawWidth = Math.max(1, maxX - minX);
 	const rawHeight = Math.max(1, maxY - minY);
-	const eyeMidpoint = getFaceLandmarkEyeMidpoint({
+	const trackingAnchor = getFaceLandmarkTrackingAnchor({
 		landmarks,
 		sourceWidth,
 		sourceHeight,
 	});
-	const anchorX = eyeMidpoint?.x ?? (minX + maxX) / 2;
-	const anchorY = eyeMidpoint?.y ?? minY + rawHeight * 0.42;
+	const anchorX = trackingAnchor?.x ?? (minX + maxX) / 2;
+	const anchorY = trackingAnchor?.y ?? minY + rawHeight * 0.42;
 	return {
 		centerX: (minX + maxX) / 2,
 		centerY: (minY + maxY) / 2,
@@ -1071,17 +1150,19 @@ function buildFaceCandidateFromLandmarks({
 		anchorY,
 		fitWidth: rawWidth,
 		fitHeight: rawHeight,
-		trackingAnchorX: eyeMidpoint?.x,
-		trackingAnchorY: eyeMidpoint?.y,
+		trackingAnchorX: trackingAnchor?.x,
+		trackingAnchorY: trackingAnchor?.y,
+		trackingAnchorKind: trackingAnchor?.kind,
 	};
 }
 
 function buildMotionTrackingSample(box: SubjectBox): MotionTrackingSample {
-	const eyeLineAnchor = getMotionTrackingEyeLineAnchor(box);
+	const trackingAnchor = getMotionTrackingAnchor(box);
 	return {
 		time: 0,
-		eyeX: eyeLineAnchor.x,
-		eyeY: eyeLineAnchor.y,
+		eyeX: trackingAnchor.x,
+		eyeY: trackingAnchor.y,
+		anchorKind: trackingAnchor.kind,
 		fitWidth: Math.max(1, box.fitWidth ?? box.width),
 		fitHeight: Math.max(1, box.fitHeight ?? box.height),
 	};
@@ -1213,9 +1294,12 @@ function buildMotionTrackingTransformFromSample({
 		canvasSize.width / Math.max(1, containScale * resolvedScale * 2);
 	const visibleHalfHeightInSource =
 		canvasSize.height / Math.max(1, containScale * resolvedScale * 2);
-	const eyeLineOffsetInSource =
-		((0.5 - MOTION_TRACKING_TARGET_EYE_LINE_VIEWPORT_RATIO) *
-			canvasSize.height) /
+	const targetAnchorViewportRatio =
+		sample.anchorKind === "head"
+			? MOTION_TRACKING_TARGET_HEAD_VIEWPORT_RATIO
+			: MOTION_TRACKING_TARGET_EYE_LINE_VIEWPORT_RATIO;
+	const anchorOffsetInSource =
+		((0.5 - targetAnchorViewportRatio) * canvasSize.height) /
 		Math.max(1, containScale * resolvedScale);
 	const viewportCenterX = clamp(
 		sample.eyeX,
@@ -1223,7 +1307,7 @@ function buildMotionTrackingTransformFromSample({
 		Math.max(visibleHalfWidthInSource, sourceWidth - visibleHalfWidthInSource),
 	);
 	const viewportCenterY = clamp(
-		sample.eyeY + eyeLineOffsetInSource,
+		sample.eyeY + anchorOffsetInSource,
 		visibleHalfHeightInSource,
 		Math.max(
 			visibleHalfHeightInSource,
@@ -1360,16 +1444,91 @@ function extractPoseBox({
 	const maxX = Math.max(...xs);
 	const minY = Math.min(...ys);
 	const maxY = Math.max(...ys);
+	const poseHeadPoints = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+		.map((index) => landmarks[index])
+		.filter(
+			(entry): entry is { x: number; y: number } =>
+				Boolean(entry) &&
+				Number.isFinite(entry.x) &&
+				Number.isFinite(entry.y),
+		);
+	const headAnchorX =
+		poseHeadPoints.length > 0
+			? median(poseHeadPoints.map((entry) => entry.x * sourceWidth))
+			: (minX + maxX) / 2;
+	const headAnchorY =
+		poseHeadPoints.length > 0
+			? median(poseHeadPoints.map((entry) => entry.y * sourceHeight))
+			: minY + (maxY - minY) * 0.28;
 	return {
 		centerX: (minX + maxX) / 2,
 		centerY: (minY + maxY) / 2,
 		width: Math.max(1, (maxX - minX) * 1.2),
 		height: Math.max(1, (maxY - minY) * 1.25),
-		anchorX: (minX + maxX) / 2,
-		anchorY: minY + (maxY - minY) * 0.28,
+		anchorX: headAnchorX,
+		anchorY: headAnchorY,
 		fitWidth: Math.max(1, (maxX - minX) * 0.78),
 		fitHeight: Math.max(1, (maxY - minY) * 0.5),
+		trackingAnchorX: headAnchorX,
+		trackingAnchorY: headAnchorY,
+		trackingAnchorKind: "head",
 	};
+}
+
+function isPlausiblePoseTrackingFallback({
+	poseBox,
+	previousBox,
+	sourceWidth,
+	sourceHeight,
+}: {
+	poseBox: SubjectBox;
+	previousBox: SubjectBox;
+	sourceWidth: number;
+	sourceHeight: number;
+}): boolean {
+	const posePoint = getBoxReferencePoint(poseBox);
+	const previousPoint = getBoxReferencePoint(previousBox);
+	const maxHorizontalDistancePx = Math.max(
+		sourceWidth * 0.08,
+		(previousBox.fitWidth ?? previousBox.width) * 1.1,
+	);
+	const maxVerticalDistancePx = Math.max(
+		sourceHeight * 0.1,
+		(previousBox.fitHeight ?? previousBox.height) * 1.15,
+	);
+	return (
+		Math.abs(posePoint.x - previousPoint.x) <= maxHorizontalDistancePx &&
+		Math.abs(posePoint.y - previousPoint.y) <= maxVerticalDistancePx
+	);
+}
+
+function buildPoseTrackingFallbackBox({
+	poseBox,
+	previousBox,
+}: {
+	poseBox: SubjectBox;
+	previousBox: SubjectBox;
+}): SubjectBox {
+	const posePoint = getBoxReferencePoint(poseBox);
+	const previousPoint = getBoxReferencePoint(previousBox);
+	return {
+		...previousBox,
+		centerX: posePoint.x + (previousBox.centerX - previousPoint.x),
+		centerY: posePoint.y + (previousBox.centerY - previousPoint.y),
+		anchorX: posePoint.x,
+		anchorY: posePoint.y,
+		trackingAnchorX: posePoint.x,
+		trackingAnchorY: posePoint.y,
+		trackingAnchorKind: "head",
+	};
+}
+
+function hasExplicitTrackingAnchor(box: SubjectBox): boolean {
+	return (
+		Number.isFinite(box.trackingAnchorX) &&
+		Number.isFinite(box.trackingAnchorY) &&
+		Boolean(box.trackingAnchorKind)
+	);
 }
 
 function dedupePresetNames(
@@ -2142,9 +2301,42 @@ export function buildMotionTrackingObservationsFromSampledFrames({
 						targetIdentity,
 					})
 				: frame.faceCandidates;
+		const clusteredPoseCandidates =
+			targetIdentity && identityClusters.length >= 2
+				? filterCandidatesByIdentityCluster({
+						candidates: frame.poseCandidates,
+						clusters: identityClusters,
+						targetIdentity,
+					})
+				: frame.poseCandidates;
+		const shouldPreferPoseFallback =
+			clusteredFaceCandidates.length === 0 ||
+			clusteredFaceCandidates.every(
+				(candidate) => !hasExplicitTrackingAnchor(candidate),
+			);
+		const poseFallbackCandidates =
+			shouldPreferPoseFallback && previousTrackedBox
+				? clusteredPoseCandidates
+						.filter((candidate) =>
+							isPlausiblePoseTrackingFallback({
+								poseBox: candidate,
+								previousBox: previousTrackedBox,
+								sourceWidth,
+								sourceHeight,
+							}),
+						)
+						.map((candidate) =>
+							buildPoseTrackingFallbackBox({
+								poseBox: candidate,
+								previousBox: previousTrackedBox,
+							}),
+						)
+				: [];
 		const candidates =
-			clusteredFaceCandidates.length > 0
-				? clusteredFaceCandidates
+			poseFallbackCandidates.length > 0
+				? poseFallbackCandidates
+				: clusteredFaceCandidates.length > 0
+					? clusteredFaceCandidates
 				: requireFaceLockedTracking || previousTrackedBox
 					? []
 					: frame.poseCandidates;
@@ -2854,9 +3046,12 @@ export async function analyzeGeneratedClipMotionTracking({
 					),
 					signal,
 				});
-				await waitForVideoFrameReady({ video, signal });
+				const canAnalyzeFrame = await waitForAnalyzableVideoFrame({
+					video,
+					signal,
+				});
 				throwIfAborted(signal);
-				if (!canAnalyzeCurrentVideoFrame({ video })) {
+				if (!canAnalyzeFrame) {
 					sampledFrames.push({
 						time: Math.max(0, sampledTime - startTime),
 						faceCandidates: [],
@@ -2911,7 +3106,12 @@ export async function analyzeGeneratedClipMotionTracking({
 					if (faceCandidates.length > 0) {
 						identityDetections.push(...faceCandidates);
 					}
-					if (faceCandidates.length === 0) {
+					const shouldSamplePose =
+						faceCandidates.length === 0 ||
+						faceCandidates.every(
+							(candidate) => !hasExplicitTrackingAnchor(candidate),
+						);
+					if (shouldSamplePose) {
 						const poseResult = withSuppressedVisionConsoleErrors(() =>
 							poseLandmarker.detectForVideo(
 								video,

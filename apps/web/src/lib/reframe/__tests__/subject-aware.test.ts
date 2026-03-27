@@ -4,6 +4,7 @@ import {
 	buildMotionTrackingObservationsFromSampledFrames,
 	choosePrimarySubjectBox,
 	filterCandidatesByIdentityCluster,
+	getFaceLandmarkTrackingAnchor,
 	getVideoElementSourceRange,
 } from "../subject-aware";
 
@@ -318,6 +319,37 @@ describe("subject-aware reframe preset generation", () => {
 		expect(observations[0]?.box?.centerX).not.toBe(650);
 	});
 
+	test("falls back to a head anchor when the landmark eye midpoint is unavailable", () => {
+		const landmarks = Array.from({ length: 478 }, () => ({
+			x: Number.NaN,
+			y: Number.NaN,
+		}));
+		landmarks[10] = { x: 0.25, y: 0.2 };
+		landmarks[152] = { x: 0.45, y: 0.6 };
+		landmarks[468] = { x: 0.32, y: 0.36 };
+		landmarks[469] = { x: 0.33, y: 0.36 };
+		landmarks[470] = { x: 0.33, y: 0.37 };
+		landmarks[471] = { x: 0.32, y: 0.37 };
+		landmarks[472] = { x: Number.NaN, y: Number.NaN };
+		landmarks[473] = { x: Number.NaN, y: Number.NaN };
+		landmarks[474] = { x: Number.NaN, y: Number.NaN };
+		landmarks[475] = { x: Number.NaN, y: Number.NaN };
+		landmarks[476] = { x: Number.NaN, y: Number.NaN };
+		landmarks[477] = { x: Number.NaN, y: Number.NaN };
+
+		const trackingAnchor = getFaceLandmarkTrackingAnchor({
+			landmarks,
+			sourceWidth: 1000,
+			sourceHeight: 500,
+		});
+
+		expect(trackingAnchor).toEqual({
+			x: 350,
+			y: 184,
+			kind: "head",
+		});
+	});
+
 	test("keeps targeted tracking locked to face candidates instead of falling back to pose", () => {
 		const observations = buildMotionTrackingObservationsFromSampledFrames({
 			sampledFrames: [
@@ -389,6 +421,137 @@ describe("subject-aware reframe preset generation", () => {
 
 		expect(observations[0]?.box?.centerX).toBe(1160);
 		expect(observations[1]?.box).toBeNull();
+	});
+
+	test("uses a continuity-safe pose head fallback during a brief face miss", () => {
+		const observations = buildMotionTrackingObservationsFromSampledFrames({
+			sampledFrames: [
+				{
+					time: 0,
+					faceCandidates: [
+						{
+							centerX: 1160,
+							centerY: 332,
+							width: 210,
+							height: 320,
+							anchorX: 1160,
+							anchorY: 252,
+							fitWidth: 140,
+							fitHeight: 210,
+							trackingAnchorX: 1160,
+							trackingAnchorY: 252,
+							trackingAnchorKind: "eye",
+						},
+					],
+					poseCandidates: [],
+				},
+				{
+					time: 0.2,
+					faceCandidates: [],
+					poseCandidates: [
+						{
+							centerX: 1180,
+							centerY: 430,
+							width: 260,
+							height: 420,
+							anchorX: 1168,
+							anchorY: 262,
+							fitWidth: 170,
+							fitHeight: 250,
+							trackingAnchorX: 1168,
+							trackingAnchorY: 262,
+							trackingAnchorKind: "head",
+						},
+					],
+				},
+			],
+			identityDetections: [],
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			targetCenterHint: { x: 1060, y: 540 },
+			targetSubjectHint: "right",
+			targetSubjectSeed: {
+				center: { x: 1160, y: 252 },
+				size: { width: 140, height: 210 },
+				identity: "right",
+			},
+		});
+
+		expect(observations[1]?.box).toBeTruthy();
+		expect(observations[1]?.box?.trackingAnchorKind).toBe("head");
+		expect(observations[1]?.box?.trackingAnchorX).toBe(1168);
+		expect(observations[1]?.box?.fitWidth).toBe(140);
+		expect(observations[1]?.box?.fitHeight).toBe(210);
+	});
+
+	test("prefers pose head fallback over a coarse face box without an explicit anchor", () => {
+		const observations = buildMotionTrackingObservationsFromSampledFrames({
+			sampledFrames: [
+				{
+					time: 0,
+					faceCandidates: [
+						{
+							centerX: 1160,
+							centerY: 332,
+							width: 210,
+							height: 320,
+							anchorX: 1160,
+							anchorY: 252,
+							fitWidth: 140,
+							fitHeight: 210,
+							trackingAnchorX: 1160,
+							trackingAnchorY: 252,
+							trackingAnchorKind: "eye",
+						},
+					],
+					poseCandidates: [],
+				},
+				{
+					time: 0.2,
+					faceCandidates: [
+						{
+							centerX: 1188,
+							centerY: 320,
+							width: 168,
+							height: 240,
+							anchorX: 1188,
+							anchorY: 282,
+							fitWidth: 130,
+							fitHeight: 190,
+						},
+					],
+					poseCandidates: [
+						{
+							centerX: 1180,
+							centerY: 430,
+							width: 260,
+							height: 420,
+							anchorX: 1168,
+							anchorY: 262,
+							fitWidth: 170,
+							fitHeight: 250,
+							trackingAnchorX: 1168,
+							trackingAnchorY: 262,
+							trackingAnchorKind: "head",
+						},
+					],
+				},
+			],
+			identityDetections: [],
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			targetCenterHint: { x: 1060, y: 540 },
+			targetSubjectHint: "right",
+			targetSubjectSeed: {
+				center: { x: 1160, y: 252 },
+				size: { width: 140, height: 210 },
+				identity: "right",
+			},
+		});
+
+		expect(observations[1]?.box?.trackingAnchorKind).toBe("head");
+		expect(observations[1]?.box?.trackingAnchorX).toBe(1168);
+		expect(observations[1]?.box?.fitWidth).toBe(140);
 	});
 
 	test("builds a right-biased preset when detections span across the frame", () => {

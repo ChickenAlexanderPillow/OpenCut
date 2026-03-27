@@ -120,6 +120,68 @@ describe("motion tracking keyframe generation", () => {
 		expect(result.keyframes[0]?.subjectCenter?.y).toBeCloseTo(276, 6);
 	});
 
+	test("treats head-anchor fallback differently from eye-line tracking", () => {
+		const eyeTracked = buildMotionTrackingKeyframesFromObservations({
+			observations: [
+				{
+					time: 0,
+					box: {
+						centerX: 800,
+						centerY: 420,
+						width: 500,
+						height: 700,
+						anchorX: 800,
+						anchorY: 300,
+						fitWidth: 110,
+						fitHeight: 170,
+						trackingAnchorX: 824,
+						trackingAnchorY: 500,
+						trackingAnchorKind: "eye",
+					},
+				},
+			],
+			canvasSize: { width: 1080, height: 1920 },
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			baseScale: 1.8,
+			animateScale: false,
+		});
+		const headTracked = buildMotionTrackingKeyframesFromObservations({
+			observations: [
+				{
+					time: 0,
+					box: {
+						centerX: 800,
+						centerY: 420,
+						width: 500,
+						height: 700,
+						anchorX: 800,
+						anchorY: 300,
+						fitWidth: 110,
+						fitHeight: 170,
+						trackingAnchorX: 824,
+						trackingAnchorY: 500,
+						trackingAnchorKind: "head",
+					},
+				},
+			],
+			canvasSize: { width: 1080, height: 1920 },
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			baseScale: 1.8,
+			animateScale: false,
+		});
+
+		expect(eyeTracked.keyframes).toHaveLength(1);
+		expect(headTracked.keyframes).toHaveLength(1);
+		expect(headTracked.keyframes[0]?.subjectCenter?.x).toBeCloseTo(824, 6);
+		expect(headTracked.keyframes[0]?.subjectCenter?.y).toBeCloseTo(500, 6);
+		expect(headTracked.keyframes[0]!.position.y).not.toBeCloseTo(
+			eyeTracked.keyframes[0]!.position.y,
+			6,
+		);
+	});
+
 	test("does not drift through long detection loss", () => {
 		const result = buildMotionTrackingKeyframesFromObservations({
 			observations: [
@@ -699,7 +761,7 @@ describe("motion tracking keyframe generation", () => {
 			preset: movedSeedPreset,
 		});
 
-		expect(baseSignature).toContain("mt-v2");
+		expect(baseSignature).toContain("mt-v3");
 		expect(baseSignature).not.toBe(movedSignature);
 	});
 });
