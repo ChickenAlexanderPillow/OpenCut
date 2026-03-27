@@ -2814,8 +2814,15 @@ export async function analyzeGeneratedClipMotionTracking({
 
 	try {
 		throwIfAborted(signal);
-		const [{ faceDetector, faceLandmarker, poseLandmarker }, { video, cleanup }] =
-			await Promise.all([getVisionRuntime(), loadVideo({ asset, signal })]);
+		const [
+			{ faceDetector, poseLandmarker },
+			{ faceLandmarker },
+			{ video, cleanup },
+		] = await Promise.all([
+			getVisionRuntime(),
+			getFaceLandmarkerRuntime(),
+			loadVideo({ asset, signal }),
+		]);
 		try {
 			const duration = Math.max(0.2, endTime - startTime);
 			const sampleTimes = buildMotionTrackingSampleTimes({
