@@ -93,6 +93,21 @@ export interface VideoMotionTracking {
 	presetSignature?: string;
 	sampleCount?: number;
 	trackedSampleCount?: number;
+	debugSamples?: Array<{
+		time: number;
+		source:
+			| "eye"
+			| "head-landmarks"
+			| "head-detection"
+			| "head-continuity"
+			| "pose-head"
+			| "miss";
+		subjectCenter?: Transform["position"];
+		subjectSize?: {
+			width: number;
+			height: number;
+		};
+	}>;
 	keyframes: Array<{
 		id: string;
 		time: number;
@@ -103,6 +118,12 @@ export interface VideoMotionTracking {
 			width: number;
 			height: number;
 		};
+		trackingSource?:
+			| "eye"
+			| "head-landmarks"
+			| "head-detection"
+			| "head-continuity"
+			| "pose-head";
 	}>;
 }
 

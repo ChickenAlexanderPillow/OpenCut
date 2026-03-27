@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	buildAutoReframePresetsFromDetections,
+	getFaceDetectionEyeMidpoint,
 	buildMotionTrackingObservationsFromSampledFrames,
 	choosePrimarySubjectBox,
 	filterCandidatesByIdentityCluster,
@@ -268,7 +269,7 @@ describe("subject-aware reframe preset generation", () => {
 		});
 
 		expect(observations[0]?.box?.centerX).toBe(960);
-		expect(observations[1]?.box).toBeNull();
+		expect(observations[1]?.box?.trackingSource).toBe("head-continuity");
 		expect(observations[2]?.box?.centerX).toBe(990);
 	});
 
@@ -347,7 +348,126 @@ describe("subject-aware reframe preset generation", () => {
 			x: 350,
 			y: 184,
 			kind: "head",
+			source: "head-landmarks",
 		});
+	});
+
+	test("does not invent an eye midpoint from a single face-detector keypoint", () => {
+		const eyeMidpoint = getFaceDetectionEyeMidpoint({
+			detection: {
+				keypoints: [{ x: 0.62, y: 0.31, label: "leftEye" }],
+			},
+			sourceWidth: 1000,
+			sourceHeight: 500,
+		});
+
+		expect(eyeMidpoint).toBeNull();
+	});
+
+	test("treats coarse face detection as a head-tracking source when eyes are unavailable", () => {
+		const observations = buildMotionTrackingObservationsFromSampledFrames({
+			sampledFrames: [
+				{
+					time: 0,
+					faceCandidates: [
+						{
+							centerX: 1160,
+							centerY: 332,
+							width: 210,
+							height: 320,
+							anchorX: 1160,
+							anchorY: 252,
+							fitWidth: 140,
+							fitHeight: 210,
+							trackingAnchorX: 1160,
+							trackingAnchorY: 252,
+							trackingAnchorKind: "eye",
+							trackingSource: "eye",
+						},
+					],
+					poseCandidates: [],
+				},
+				{
+					time: 0.2,
+					faceCandidates: [
+						{
+							centerX: 1188,
+							centerY: 320,
+							width: 168,
+							height: 240,
+							anchorX: 1188,
+							anchorY: 282,
+							fitWidth: 130,
+							fitHeight: 190,
+							trackingAnchorX: 1188,
+							trackingAnchorY: 282,
+							trackingAnchorKind: "head",
+							trackingSource: "head-detection",
+						},
+					],
+					poseCandidates: [],
+				},
+			],
+			identityDetections: [],
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			targetCenterHint: { x: 1060, y: 540 },
+			targetSubjectHint: "right",
+			targetSubjectSeed: {
+				center: { x: 1160, y: 252 },
+				size: { width: 140, height: 210 },
+				identity: "right",
+			},
+		});
+
+		expect(observations[1]?.box?.trackingSource).toBe("head-detection");
+		expect(observations[1]?.box?.trackingAnchorKind).toBe("head");
+	});
+
+	test("uses short head continuity fallback for brief full detector gaps", () => {
+		const observations = buildMotionTrackingObservationsFromSampledFrames({
+			sampledFrames: [
+				{
+					time: 0,
+					faceCandidates: [
+						{
+							centerX: 1160,
+							centerY: 332,
+							width: 210,
+							height: 320,
+							anchorX: 1160,
+							anchorY: 252,
+							fitWidth: 140,
+							fitHeight: 210,
+							trackingAnchorX: 1160,
+							trackingAnchorY: 252,
+							trackingAnchorKind: "eye",
+							trackingSource: "eye",
+						},
+					],
+					poseCandidates: [],
+				},
+				{
+					time: 0.25,
+					faceCandidates: [],
+					poseCandidates: [],
+				},
+			],
+			identityDetections: [],
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			targetCenterHint: { x: 1060, y: 540 },
+			targetSubjectHint: "right",
+			targetSubjectSeed: {
+				center: { x: 1160, y: 252 },
+				size: { width: 140, height: 210 },
+				identity: "right",
+			},
+		});
+
+		expect(observations[1]?.box?.trackingSource).toBe("head-continuity");
+		expect(observations[1]?.box?.trackingAnchorKind).toBe("head");
+		expect(observations[1]?.box?.trackingAnchorX).toBe(1160);
 	});
 
 	test("keeps targeted tracking locked to face candidates instead of falling back to pose", () => {
@@ -420,7 +540,7 @@ describe("subject-aware reframe preset generation", () => {
 		});
 
 		expect(observations[0]?.box?.centerX).toBe(1160);
-		expect(observations[1]?.box).toBeNull();
+		expect(observations[1]?.box?.trackingSource).toBe("head-continuity");
 	});
 
 	test("uses a continuity-safe pose head fallback during a brief face miss", () => {
@@ -552,6 +672,57 @@ describe("subject-aware reframe preset generation", () => {
 		expect(observations[1]?.box?.trackingAnchorKind).toBe("head");
 		expect(observations[1]?.box?.trackingAnchorX).toBe(1168);
 		expect(observations[1]?.box?.fitWidth).toBe(140);
+	});
+
+	test("matches pose fallback identity by head anchor instead of body-box center", () => {
+		const filtered = filterCandidatesByIdentityCluster({
+			candidates: [
+				{
+					centerX: 980,
+					centerY: 430,
+					width: 360,
+					height: 520,
+					anchorX: 1168,
+					anchorY: 262,
+					fitWidth: 170,
+					fitHeight: 250,
+					trackingAnchorX: 1168,
+					trackingAnchorY: 262,
+					trackingAnchorKind: "head",
+					trackingSource: "pose-head",
+				},
+			],
+			clusters: [
+				[
+					{
+						centerX: 760,
+						centerY: 330,
+						width: 210,
+						height: 320,
+						anchorX: 760,
+						anchorY: 250,
+						fitWidth: 140,
+						fitHeight: 210,
+					},
+				],
+				[
+					{
+						centerX: 1160,
+						centerY: 332,
+						width: 210,
+						height: 320,
+						anchorX: 1160,
+						anchorY: 252,
+						fitWidth: 140,
+						fitHeight: 210,
+					},
+				],
+			],
+			targetIdentity: "right",
+		});
+
+		expect(filtered).toHaveLength(1);
+		expect(filtered[0]?.trackingAnchorX).toBe(1168);
 	});
 
 	test("builds a right-biased preset when detections span across the frame", () => {

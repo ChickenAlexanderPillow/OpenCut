@@ -9,7 +9,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 export const DEFAULT_MOTION_TRACKING_STRENGTH = 0.55;
-export const MOTION_TRACKING_CACHE_VERSION = "mt-v3";
+export const MOTION_TRACKING_CACHE_VERSION = "mt-v4";
 
 export function normalizeMotionTrackingStrength(
 	trackingStrength: number | null | undefined,
@@ -75,6 +75,12 @@ export interface MotionTrackingTransformKeyframe {
 		width: number;
 		height: number;
 	};
+	trackingSource?:
+		| "eye"
+		| "head-landmarks"
+		| "head-detection"
+		| "head-continuity"
+		| "pose-head";
 }
 
 function resolveTrackedKeyframeAtTime({
@@ -144,6 +150,10 @@ function resolveTrackedKeyframeAtTime({
 								height: pair.right.subjectSize.height,
 						  }
 						: undefined,
+		trackingSource:
+			pair.right.time > pair.left.time && pair.progress >= 0.5
+				? pair.right.trackingSource
+				: pair.left.trackingSource ?? pair.right.trackingSource,
 	};
 }
 

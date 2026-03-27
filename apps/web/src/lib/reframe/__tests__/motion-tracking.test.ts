@@ -761,7 +761,7 @@ describe("motion tracking keyframe generation", () => {
 			preset: movedSeedPreset,
 		});
 
-		expect(baseSignature).toContain("mt-v3");
+		expect(baseSignature).toContain("mt-v4");
 		expect(baseSignature).not.toBe(movedSignature);
 	});
 });

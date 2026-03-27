@@ -3827,14 +3827,15 @@ export function useEditorActions() {
 									sourceAssetId: mediaAsset.id,
 									sourceStartTime: sourceRange.startTime,
 									sourceEndTime: sourceRange.endTime,
-									presetSignature: buildMotionTrackingPresetSignature({
-										preset,
-									}),
-									sampleCount: result.sampleCount,
-									trackedSampleCount: result.trackedSampleCount,
-									keyframes: result.keyframes,
-								},
-							});
+								presetSignature: buildMotionTrackingPresetSignature({
+									preset,
+								}),
+								sampleCount: result.sampleCount,
+								trackedSampleCount: result.trackedSampleCount,
+								debugSamples: result.debugSamples,
+								keyframes: result.keyframes,
+							},
+						});
 						} catch (error) {
 							console.warn(
 								"Failed to refresh motion tracking after clip expansion:",

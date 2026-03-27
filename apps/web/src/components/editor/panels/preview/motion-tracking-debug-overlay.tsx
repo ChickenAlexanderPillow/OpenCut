@@ -19,8 +19,30 @@ type RawDebugSeries = {
 	id: string;
 	label: string;
 	color: string;
-	path: Array<{ x: number; y: number }>;
-	current: { x: number; y: number } | null;
+	path: Array<{
+		x: number;
+		y: number;
+		source:
+			| "eye"
+			| "head-landmarks"
+			| "head-detection"
+			| "head-continuity"
+			| "pose-head"
+			| "miss";
+	}>;
+	current:
+		| {
+				x: number;
+				y: number;
+				source?:
+					| "eye"
+					| "head-landmarks"
+					| "head-detection"
+					| "head-continuity"
+					| "pose-head"
+					| "miss";
+		  }
+		| null;
 };
 
 function sampleKeyframes<T>(values: T[]): T[] {
@@ -58,32 +80,114 @@ function buildRawPresetDebugSeries({
 	localTime: number;
 	slotId?: string;
 }): RawDebugSeries | null {
-	const keyframes = sampleKeyframes(
+	const debugSamples = sampleKeyframes(preset.motionTracking?.debugSamples ?? []);
+	const fallbackPath = sampleKeyframes(
 		(preset.motionTracking?.keyframes ?? []).filter(
 			(keyframe) => keyframe.subjectCenter !== undefined,
 		),
 	);
-	if (keyframes.length === 0) return null;
+	if (debugSamples.length === 0 && fallbackPath.length === 0) return null;
 	const style = getSeriesStyle({ preset, slotId });
 	const currentSubjectFrame = resolveMotionTrackedSubjectFrame({
 		motionTracking: preset.motionTracking,
 		localTime,
 	});
+	const currentSampleSource =
+		(preset.motionTracking?.debugSamples ?? [])
+			.reduce<{
+				timeDelta: number;
+				source:
+					| "eye"
+					| "head-landmarks"
+					| "head-detection"
+					| "head-continuity"
+					| "pose-head"
+					| "miss";
+			} | null>((closest, sample) => {
+				const timeDelta = Math.abs(sample.time - localTime);
+				if (!closest || timeDelta < closest.timeDelta) {
+					return {
+						timeDelta,
+						source: sample.source,
+					};
+				}
+				return closest;
+			}, null)
+			?.source ?? undefined;
 	return {
 		id: slotId ? `${preset.id}:${slotId}` : preset.id,
 		label: style.label,
 		color: style.color,
-		path: keyframes.map((keyframe) => ({
-			x: keyframe.subjectCenter!.x,
-			y: keyframe.subjectCenter!.y,
-		})),
+		path:
+			debugSamples.length > 0
+				? debugSamples.map((sample) => ({
+						x: sample.subjectCenter?.x ?? Number.NaN,
+						y: sample.subjectCenter?.y ?? Number.NaN,
+						source: sample.source,
+					}))
+				: fallbackPath.map((keyframe) => ({
+						x: keyframe.subjectCenter!.x,
+						y: keyframe.subjectCenter!.y,
+						source: keyframe.trackingSource ?? "eye",
+					})),
 		current: currentSubjectFrame?.center
 			? {
 					x: currentSubjectFrame.center.x,
 					y: currentSubjectFrame.center.y,
+					source: currentSampleSource,
 				}
 			: null,
 	};
+}
+
+function getSampleSourceColor(
+	source:
+		| "eye"
+		| "head-landmarks"
+		| "head-detection"
+		| "head-continuity"
+		| "pose-head"
+		| "miss",
+): string {
+	switch (source) {
+		case "eye":
+			return "#38bdf8";
+		case "head-landmarks":
+			return "#fbbf24";
+		case "head-detection":
+			return "#c084fc";
+		case "head-continuity":
+			return "#ffffff";
+		case "pose-head":
+			return "#34d399";
+		case "miss":
+			return "#f87171";
+	}
+}
+
+function getSampleSourceLabel(
+	source:
+		| "eye"
+		| "head-landmarks"
+		| "head-detection"
+		| "head-continuity"
+		| "pose-head"
+		| "miss",
+): string {
+	switch (source) {
+		case "eye":
+			return "Eye";
+		case "head-landmarks":
+			return "Head LM";
+		case "head-detection":
+			return "Head Det";
+		case "head-continuity":
+			return "Head Hold";
+		case "pose-head":
+			return "Pose Head";
+		case "miss":
+			return "Miss";
+	}
 }
 
 export function MotionTrackingDebugOverlay() {
@@ -199,7 +303,7 @@ export function MotionTrackingDebugOverlay() {
 				Tracking Source Map
 			</div>
 			<div className="mt-1 text-[11px] text-white/55">
-				Raw baked face points before reframe transform
+				Raw sampled tracking points before reframe transform
 			</div>
 			<div
 				className="mt-2 overflow-hidden rounded border border-white/10 bg-black/60"
@@ -223,16 +327,34 @@ export function MotionTrackingDebugOverlay() {
 					/>
 					{debugData.series.map((entry) => (
 						<g key={entry.id}>
-							{entry.path.map((point, index) => (
-								<circle
-									key={`${entry.id}:path:${index}`}
-									cx={point.x}
-									cy={point.y}
-									r={10}
-									fill={entry.color}
-									opacity={0.26}
-								/>
-							))}
+							{entry.path.map((point, index) => {
+								const isValidPoint =
+									Number.isFinite(point.x) && Number.isFinite(point.y);
+								if (!isValidPoint) {
+									return (
+										<rect
+											key={`${entry.id}:path:${index}`}
+											x={8 + ((index * 14) % (debugData.sourceWidth - 16))}
+											y={debugData.sourceHeight - 18}
+											width={6}
+											height={6}
+											fill={getSampleSourceColor(point.source)}
+											opacity={0.85}
+											rx={2}
+										/>
+									);
+								}
+								return (
+									<circle
+										key={`${entry.id}:path:${index}`}
+										cx={point.x}
+										cy={point.y}
+										r={10}
+										fill={getSampleSourceColor(point.source)}
+										opacity={0.3}
+									/>
+								);
+							})}
 							{entry.current && (
 								<>
 									<circle
@@ -241,14 +363,14 @@ export function MotionTrackingDebugOverlay() {
 										r={24}
 										fill={entry.color}
 										fillOpacity={0.12}
-										stroke={entry.color}
+										stroke={getSampleSourceColor(entry.current.source ?? "eye")}
 										strokeWidth={4}
 									/>
 									<circle
 										cx={entry.current.x}
 										cy={entry.current.y}
 										r={10}
-										fill={entry.color}
+										fill={getSampleSourceColor(entry.current.source ?? "eye")}
 									/>
 								</>
 							)}
@@ -266,6 +388,26 @@ export function MotionTrackingDebugOverlay() {
 						<span>{entry.label}</span>
 					</div>
 				))}
+				<div className="mt-2 flex flex-wrap gap-3 text-[10px] text-white/65">
+					{(
+						[
+							"eye",
+							"head-landmarks",
+							"head-detection",
+							"head-continuity",
+							"pose-head",
+							"miss",
+						] as const
+					).map((source) => (
+						<div key={source} className="flex items-center gap-1.5">
+							<div
+								className="size-2 rounded-full"
+								style={{ backgroundColor: getSampleSourceColor(source) }}
+							/>
+							<span>{getSampleSourceLabel(source)}</span>
+						</div>
+					))}
+				</div>
 			</div>
 		</div>
 	);

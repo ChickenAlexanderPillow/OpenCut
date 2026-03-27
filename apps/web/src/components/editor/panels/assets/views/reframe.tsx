@@ -736,6 +736,24 @@ export function ReframeView() {
 							),
 						})
 					: result.keyframes;
+			const mergedDebugSamples =
+				analysisBaseTracking && desiredScope
+					? [
+							...(analysisBaseTracking.debugSamples ?? []),
+							...result.debugSamples
+								.map((sample) => ({
+									...sample,
+									time: sample.time + (analysisStartTime - desiredScope.startTime),
+								}))
+								.filter(
+									(sample) =>
+										sample.time >
+										(
+											analysisBaseTracking.debugSamples?.at(-1)?.time ?? -1
+										) + 1e-6,
+								),
+						]
+					: result.debugSamples;
 			const nextMotionTracking: VideoMotionTracking | undefined =
 				mergedKeyframes.length > 0 && desiredScope
 					? {
@@ -759,6 +777,7 @@ export function ReframeView() {
 							trackedSampleCount:
 								(result.trackedSampleCount ?? 0) +
 								(analysisBaseTracking?.trackedSampleCount ?? 0),
+							debugSamples: mergedDebugSamples,
 							keyframes: mergedKeyframes,
 						}
 					: undefined;
