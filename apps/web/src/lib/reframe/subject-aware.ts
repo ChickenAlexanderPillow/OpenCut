@@ -30,6 +30,10 @@ const MOTION_TRACKING_TARGET_EYE_LINE_VIEWPORT_RATIO = 0.36;
 const MOTION_TRACKING_TARGET_HEAD_VIEWPORT_RATIO = 0.4;
 const MOTION_TRACKING_TARGET_FACE_WIDTH_VIEWPORT_RATIO = 0.24;
 const MOTION_TRACKING_TARGET_FACE_HEIGHT_VIEWPORT_RATIO = 0.18;
+const MIN_CONFIDENT_TRACKING_SCORE = 0.58;
+const MIN_REACQUIRE_TRACKING_SCORE = 0.68;
+const MIN_STRONG_TRACKING_SCORE = 0.8;
+const REACQUIRE_STABLE_MATCH_COUNT = 2;
 
 type SubjectBox = {
 	centerX: number;
@@ -49,6 +53,7 @@ type SubjectBox = {
 		| "head-detection"
 		| "head-continuity"
 		| "pose-head";
+	trackingConfidence?: number;
 };
 
 type SubjectObservation = {
@@ -59,6 +64,7 @@ type SubjectObservation = {
 type SubjectTrackingObservation = {
 	time: number;
 	box: SubjectBox | null;
+	lowConfidenceBox?: SubjectBox | null;
 };
 
 type MotionTrackingSample = {
@@ -74,6 +80,11 @@ type MotionTrackingSample = {
 		| "pose-head";
 	fitWidth: number;
 	fitHeight: number;
+};
+
+type TrackingSelectionResult = {
+	box: SubjectBox | null;
+	lowConfidenceBox?: SubjectBox | null;
 };
 
 type AutoSectionKind = "Subject" | "Subject Left" | "Subject Right";
@@ -599,6 +610,17 @@ function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, value));
 }
 
+function getTrackingConfidence(box: SubjectBox | null | undefined): number {
+	return clamp(box?.trackingConfidence ?? 1, 0, 1);
+}
+
+function isLowConfidenceTrackingBox(
+	box: SubjectBox | null | undefined,
+	threshold = MIN_CONFIDENT_TRACKING_SCORE,
+): boolean {
+	return Boolean(box) && getTrackingConfidence(box) < threshold;
+}
+
 function getSourceCenterForTransform({
 	transform,
 	canvasSize,
@@ -688,9 +710,9 @@ function buildMotionTrackingSampleTimes({
 	duration: number;
 }): number[] {
 	const endTime = startTime + duration;
-	const targetSamplesPerSecond = duration > 18 ? 6 : 8;
-	const maxSamples = duration > 18 ? 144 : 168;
-	const minSamples = 12;
+	const targetSamplesPerSecond = duration > 18 ? 4 : 5;
+	const maxSamples = duration > 18 ? 108 : 120;
+	const minSamples = 10;
 	const sampleCount = clamp(
 		Math.round(duration * targetSamplesPerSecond) + 1,
 		minSamples,
@@ -703,6 +725,92 @@ function buildMotionTrackingSampleTimes({
 		if (time < startTime || time > endTime) return false;
 		return index === 0 || Math.abs(time - (values[index - 1] ?? 0)) > 1 / 240;
 	});
+}
+
+function getRepresentativeTrackingBox({
+	faceCandidates,
+	poseCandidates,
+}: {
+	faceCandidates: SubjectBox[];
+	poseCandidates: SubjectBox[];
+}): SubjectBox | null {
+	if (faceCandidates.length > 0) {
+		const confidentFaces = faceCandidates.filter(
+			(candidate) => getTrackingConfidence(candidate) >= MIN_CONFIDENT_TRACKING_SCORE,
+		);
+		return buildSubjectBoxFromDetections(
+			confidentFaces.length > 0 ? confidentFaces : faceCandidates,
+		);
+	}
+	if (poseCandidates.length > 0) {
+		return buildSubjectBoxFromDetections(poseCandidates);
+	}
+	return null;
+}
+
+function buildAdaptiveMotionTrackingRefinementTimes({
+	sampledFrames,
+	startTime,
+	sourceWidth,
+	sourceHeight,
+}: {
+	sampledFrames: Array<{
+		time: number;
+		faceCandidates: SubjectBox[];
+		poseCandidates: SubjectBox[];
+	}>;
+	startTime: number;
+	sourceWidth: number;
+	sourceHeight: number;
+}): number[] {
+	const refinementTimes = new Set<number>();
+	for (let index = 0; index < sampledFrames.length - 1; index++) {
+		const left = sampledFrames[index];
+		const right = sampledFrames[index + 1];
+		if (!left || !right) continue;
+		const gapSeconds = right.time - left.time;
+		if (gapSeconds <= 0.14) continue;
+		const leftBox = getRepresentativeTrackingBox(left);
+		const rightBox = getRepresentativeTrackingBox(right);
+		const leftConfidentFace = left.faceCandidates.some(
+			(candidate) => getTrackingConfidence(candidate) >= MIN_STRONG_TRACKING_SCORE,
+		);
+		const rightConfidentFace = right.faceCandidates.some(
+			(candidate) => getTrackingConfidence(candidate) >= MIN_STRONG_TRACKING_SCORE,
+		);
+		const countShift =
+			left.faceCandidates.length !== right.faceCandidates.length ||
+			left.poseCandidates.length !== right.poseCandidates.length;
+		const missingOrWeak =
+			!leftConfidentFace ||
+			!rightConfidentFace ||
+			!leftBox ||
+			!rightBox ||
+			isLowConfidenceTrackingBox(leftBox) ||
+			isLowConfidenceTrackingBox(rightBox);
+		const movementDistance =
+			leftBox && rightBox ? getBoxDistance(leftBox, rightBox) : 0;
+		const movementThreshold = Math.max(
+			sourceWidth * 0.08,
+			sourceHeight * 0.08,
+			Math.max(
+				leftBox?.fitWidth ?? leftBox?.width ?? 0,
+				rightBox?.fitWidth ?? rightBox?.width ?? 0,
+			) * 0.8,
+		);
+		const shouldRefine = missingOrWeak || countShift || movementDistance >= movementThreshold;
+		if (!shouldRefine) continue;
+		refinementTimes.add(startTime + left.time + gapSeconds / 2);
+		if (gapSeconds >= 0.32 && (missingOrWeak || movementDistance >= movementThreshold * 1.4)) {
+			refinementTimes.add(startTime + left.time + gapSeconds * 0.25);
+			refinementTimes.add(startTime + left.time + gapSeconds * 0.75);
+		}
+	}
+	return [...refinementTimes]
+		.sort((left, right) => left - right)
+		.filter((time, index, values) =>
+			index === 0 || Math.abs(time - (values[index - 1] ?? 0)) > 1 / 240,
+		);
 }
 
 function lerpMotionTrackingSetting(
@@ -1022,7 +1130,7 @@ export function getFaceDetectionEyeMidpoint({
 	detection: FaceDetectionLike;
 	sourceWidth: number;
 	sourceHeight: number;
-}): { x: number; y: number } | null {
+}): { x: number; y: number; confidence: number } | null {
 	const keypoints = (detection.keypoints ?? []).filter(
 		(keypoint) =>
 			Number.isFinite(keypoint.x) &&
@@ -1044,9 +1152,14 @@ export function getFaceDetectionEyeMidpoint({
 		findKeypoint(/^right$/) ??
 		keypoints[1];
 	if (!leftEye || !rightEye || leftEye === rightEye) return null;
+	const averageScore =
+		((leftEye.score ?? 0.55) + (rightEye.score ?? 0.55)) / 2;
+	const eyeDistance = Math.hypot(leftEye.x - rightEye.x, leftEye.y - rightEye.y);
+	const eyeSeparationConfidence = clamp((eyeDistance - 0.02) / 0.12, 0, 1);
 	return {
 		x: ((leftEye.x + rightEye.x) / 2) * sourceWidth,
 		y: ((leftEye.y + rightEye.y) / 2) * sourceHeight,
+		confidence: clamp(averageScore * 0.7 + eyeSeparationConfidence * 0.3, 0, 1),
 	};
 }
 
@@ -1127,6 +1240,7 @@ export function getFaceLandmarkTrackingAnchor({
 	y: number;
 	kind: "eye" | "head";
 	source: "eye" | "head-landmarks";
+	confidence: number;
 } | null {
 	const eyeMidpoint = getFaceLandmarkEyeMidpoint({
 		landmarks,
@@ -1138,6 +1252,7 @@ export function getFaceLandmarkTrackingAnchor({
 			...eyeMidpoint,
 			kind: "eye",
 			source: "eye",
+			confidence: 0.9,
 		};
 	}
 	const validLandmarks = landmarks.filter(
@@ -1162,6 +1277,7 @@ export function getFaceLandmarkTrackingAnchor({
 		y: minY + rawHeight * FACE_DETECTION_ANCHOR_Y_RATIO,
 		kind: "head",
 		source: "head-landmarks",
+		confidence: clamp(validLandmarks.length / Math.max(1, landmarks.length, 200), 0.45, 0.82),
 	};
 }
 
@@ -1182,7 +1298,18 @@ function buildFaceCandidateFromDetection({
 		sourceHeight,
 	});
 	const headAnchor = getFaceDetectionHeadAnchor({ faceBox });
-	const trackingAnchor = eyeMidpoint ?? headAnchor;
+	const faceAspectRatioConfidence = clamp(faceBox.width / Math.max(1, faceBox.height), 0.35, 1.25);
+	const normalizedAspectConfidence =
+		faceAspectRatioConfidence <= 0.8
+			? clamp((faceAspectRatioConfidence - 0.35) / 0.45, 0, 1)
+			: clamp((1.25 - faceAspectRatioConfidence) / 0.45, 0, 1);
+	const trackingConfidence = clamp(
+		(eyeMidpoint?.confidence ?? 0.58) * 0.78 + normalizedAspectConfidence * 0.22,
+		0,
+		1,
+	);
+	const useEyeAnchor = Boolean(eyeMidpoint && trackingConfidence >= MIN_REACQUIRE_TRACKING_SCORE);
+	const trackingAnchor = useEyeAnchor ? eyeMidpoint! : headAnchor;
 	return {
 		centerX: faceBox.originX + faceBox.width / 2,
 		centerY: faceBox.originY + faceBox.height / 2,
@@ -1201,8 +1328,9 @@ function buildFaceCandidateFromDetection({
 		),
 		trackingAnchorX: trackingAnchor.x,
 		trackingAnchorY: trackingAnchor.y,
-		trackingAnchorKind: eyeMidpoint ? "eye" : "head",
-		trackingSource: eyeMidpoint ? "eye" : "head-detection",
+		trackingAnchorKind: useEyeAnchor ? "eye" : "head",
+		trackingSource: useEyeAnchor ? "eye" : "head-detection",
+		trackingConfidence,
 	};
 }
 
@@ -1238,8 +1366,23 @@ function buildFaceCandidateFromLandmarks({
 		sourceWidth,
 		sourceHeight,
 	});
-	const anchorX = trackingAnchor?.x ?? (minX + maxX) / 2;
-	const anchorY = trackingAnchor?.y ?? minY + rawHeight * 0.42;
+	const validCoverage = clamp(validLandmarks.length / Math.max(1, landmarks.length), 0, 1);
+	const aspectRatio = rawWidth / Math.max(1, rawHeight);
+	const aspectConfidence =
+		aspectRatio <= 0.9
+			? clamp((aspectRatio - 0.3) / 0.6, 0, 1)
+			: clamp((1.5 - aspectRatio) / 0.6, 0, 1);
+	const trackingConfidence = clamp(
+		(trackingAnchor?.confidence ?? 0.52) * 0.75 +
+			validCoverage * 0.15 +
+			aspectConfidence * 0.1,
+		0,
+		1,
+	);
+	const useTrackingAnchor =
+		trackingAnchor && trackingConfidence >= MIN_CONFIDENT_TRACKING_SCORE;
+	const anchorX = useTrackingAnchor ? trackingAnchor.x : (minX + maxX) / 2;
+	const anchorY = useTrackingAnchor ? trackingAnchor.y : minY + rawHeight * 0.42;
 	return {
 		centerX: (minX + maxX) / 2,
 		centerY: (minY + maxY) / 2,
@@ -1249,10 +1392,14 @@ function buildFaceCandidateFromLandmarks({
 		anchorY,
 		fitWidth: rawWidth,
 		fitHeight: rawHeight,
-		trackingAnchorX: trackingAnchor?.x,
-		trackingAnchorY: trackingAnchor?.y,
-		trackingAnchorKind: trackingAnchor?.kind,
-		trackingSource: trackingAnchor?.source,
+		trackingAnchorX: useTrackingAnchor ? trackingAnchor.x : anchorX,
+		trackingAnchorY: useTrackingAnchor ? trackingAnchor.y : anchorY,
+		trackingAnchorKind: useTrackingAnchor ? trackingAnchor.kind : "head",
+		trackingSource:
+			useTrackingAnchor && trackingAnchor.source === "eye"
+				? "eye"
+				: "head-landmarks",
+		trackingConfidence,
 	};
 }
 
@@ -1267,6 +1414,111 @@ function buildMotionTrackingSample(box: SubjectBox): MotionTrackingSample {
 		fitWidth: Math.max(1, box.fitWidth ?? box.width),
 		fitHeight: Math.max(1, box.fitHeight ?? box.height),
 	};
+}
+
+function buildEffectiveMotionTrackingObservations({
+	observations,
+}: {
+	observations: SubjectTrackingObservation[];
+}): SubjectTrackingObservation[] {
+	const effectiveObservations: SubjectTrackingObservation[] = [];
+	let previousEffectiveBox: SubjectBox | null = null;
+	for (const observation of observations) {
+		if (observation.box) {
+			const nextBox = {
+				...observation.box,
+			};
+			effectiveObservations.push({
+				time: observation.time,
+				box: nextBox,
+				lowConfidenceBox: observation.lowConfidenceBox ?? null,
+			});
+			previousEffectiveBox = nextBox;
+			continue;
+		}
+		if (observation.lowConfidenceBox && previousEffectiveBox) {
+			const lowConfidenceBox = observation.lowConfidenceBox;
+			const confidence = getTrackingConfidence(lowConfidenceBox);
+			const blend = clamp(0.18 + confidence * 0.34, 0.2, 0.44);
+			const nextBox: SubjectBox = {
+				...previousEffectiveBox,
+				centerX:
+					previousEffectiveBox.centerX +
+					(lowConfidenceBox.centerX - previousEffectiveBox.centerX) * blend,
+				centerY:
+					previousEffectiveBox.centerY +
+					(lowConfidenceBox.centerY - previousEffectiveBox.centerY) * blend,
+				width:
+					previousEffectiveBox.width +
+					(lowConfidenceBox.width - previousEffectiveBox.width) * blend,
+				height:
+					previousEffectiveBox.height +
+					(lowConfidenceBox.height - previousEffectiveBox.height) * blend,
+				anchorX:
+					(previousEffectiveBox.anchorX ?? previousEffectiveBox.centerX) +
+					((lowConfidenceBox.anchorX ?? lowConfidenceBox.centerX) -
+						(previousEffectiveBox.anchorX ?? previousEffectiveBox.centerX)) *
+						blend,
+				anchorY:
+					(previousEffectiveBox.anchorY ?? previousEffectiveBox.centerY) +
+					((lowConfidenceBox.anchorY ?? lowConfidenceBox.centerY) -
+						(previousEffectiveBox.anchorY ?? previousEffectiveBox.centerY)) *
+						blend,
+				fitWidth:
+					(previousEffectiveBox.fitWidth ?? previousEffectiveBox.width) +
+					((lowConfidenceBox.fitWidth ?? lowConfidenceBox.width) -
+						(previousEffectiveBox.fitWidth ?? previousEffectiveBox.width)) *
+						blend,
+				fitHeight:
+					(previousEffectiveBox.fitHeight ?? previousEffectiveBox.height) +
+					((lowConfidenceBox.fitHeight ?? lowConfidenceBox.height) -
+						(previousEffectiveBox.fitHeight ?? previousEffectiveBox.height)) *
+						blend,
+				trackingAnchorX:
+					(previousEffectiveBox.trackingAnchorX ??
+						previousEffectiveBox.anchorX ??
+						previousEffectiveBox.centerX) +
+					((lowConfidenceBox.trackingAnchorX ??
+						lowConfidenceBox.anchorX ??
+						lowConfidenceBox.centerX) -
+						(previousEffectiveBox.trackingAnchorX ??
+							previousEffectiveBox.anchorX ??
+							previousEffectiveBox.centerX)) *
+						blend,
+				trackingAnchorY:
+					(previousEffectiveBox.trackingAnchorY ??
+						previousEffectiveBox.anchorY ??
+						previousEffectiveBox.centerY) +
+					((lowConfidenceBox.trackingAnchorY ??
+						lowConfidenceBox.anchorY ??
+						lowConfidenceBox.centerY) -
+						(previousEffectiveBox.trackingAnchorY ??
+							previousEffectiveBox.anchorY ??
+							previousEffectiveBox.centerY)) *
+						blend,
+				trackingAnchorKind:
+					lowConfidenceBox.trackingAnchorKind ??
+					previousEffectiveBox.trackingAnchorKind,
+				trackingSource:
+					previousEffectiveBox.trackingSource ?? lowConfidenceBox.trackingSource,
+				trackingConfidence: Math.max(0.3, confidence),
+			};
+			effectiveObservations.push({
+				time: observation.time,
+				box: nextBox,
+				lowConfidenceBox: lowConfidenceBox,
+			});
+			previousEffectiveBox = nextBox;
+			continue;
+		}
+		effectiveObservations.push({
+			time: observation.time,
+			box: null,
+			lowConfidenceBox: observation.lowConfidenceBox ?? null,
+		});
+		previousEffectiveBox = null;
+	}
+	return effectiveObservations;
 }
 
 function holdMotionTrackingSamples({
@@ -1576,6 +1828,7 @@ function extractPoseBox({
 		trackingAnchorY: headAnchorY,
 		trackingAnchorKind: "head",
 		trackingSource: "pose-head",
+		trackingConfidence: 0.64,
 	};
 }
 
@@ -1625,6 +1878,10 @@ function buildPoseTrackingFallbackBox({
 		trackingAnchorY: posePoint.y,
 		trackingAnchorKind: "head",
 		trackingSource: "pose-head",
+		trackingConfidence: Math.min(
+			getTrackingConfidence(previousBox),
+			getTrackingConfidence(poseBox),
+		),
 	};
 }
 
@@ -1642,6 +1899,7 @@ function buildContinuityTrackingFallbackBox({
 		trackingAnchorY: previousPoint.y,
 		trackingAnchorKind: "head",
 		trackingSource: "head-continuity",
+		trackingConfidence: Math.max(0.3, getTrackingConfidence(previousBox) * 0.7),
 	};
 }
 
@@ -1680,8 +1938,8 @@ function chooseMotionTrackingSubjectBox({
 	targetSubjectHint?: TrackingSubjectHint | null;
 	targetViewportBounds?: SourceViewportBounds | null;
 	targetSubjectSeed?: VideoReframeSubjectSeed | null;
-}): SubjectBox | null {
-	if (candidates.length === 0) return null;
+}): TrackingSelectionResult {
+	if (candidates.length === 0) return { box: null };
 	const shouldResetPreviousLock =
 		Boolean(previousBox) &&
 		!doesBoxMatchTrackingWindow({
@@ -1704,15 +1962,17 @@ function chooseMotionTrackingSubjectBox({
 	if (!effectivePreviousBox) {
 		const maxSourcePriority = Math.max(
 			...candidates.map((candidate) =>
-				getMotionTrackingSourcePriority(candidate.trackingSource),
+				getMotionTrackingSourcePriority(candidate.trackingSource) *
+					(0.35 + getTrackingConfidence(candidate) * 0.65),
 			),
 		);
 		const prioritizedCandidates = candidates.filter(
 			(candidate) =>
-				getMotionTrackingSourcePriority(candidate.trackingSource) >=
+				getMotionTrackingSourcePriority(candidate.trackingSource) *
+					(0.35 + getTrackingConfidence(candidate) * 0.65) >=
 				maxSourcePriority,
 		);
-		return choosePrimarySubjectBox({
+		const selectedBox = choosePrimarySubjectBox({
 			candidates:
 				prioritizedCandidates.length > 0 ? prioritizedCandidates : candidates,
 			previousBox: null,
@@ -1724,6 +1984,9 @@ function chooseMotionTrackingSubjectBox({
 			targetSubjectSeed,
 			allowCenterGrouping: false,
 		});
+		return isLowConfidenceTrackingBox(selectedBox)
+			? { box: null, lowConfidenceBox: selectedBox }
+			: { box: selectedBox };
 	}
 	const previousPoint = getBoxReferencePoint(effectivePreviousBox);
 	const frameDiagonal = Math.max(1, Math.hypot(sourceWidth, sourceHeight));
@@ -1759,10 +2022,12 @@ function chooseMotionTrackingSubjectBox({
 			const sourcePriority = getMotionTrackingSourcePriority(
 				candidate.trackingSource,
 			);
+			const confidence = getTrackingConfidence(candidate);
 			return {
 				candidate,
 				score:
-					sourcePriority * 4 +
+					sourcePriority * (2.2 + confidence * 1.8) +
+					confidence * 2 +
 					(1 - distance / frameDiagonal) * 3 +
 					overlap * 1.5 +
 					areaScore * 0.5,
@@ -1770,14 +2035,21 @@ function chooseMotionTrackingSubjectBox({
 			};
 		})
 		.sort((left, right) => right.score - left.score)[0];
-	if (!bestMatch) return null;
+	if (!bestMatch) return { box: null };
 	const allowFallbackDistancePx = Math.max(
 		sourceWidth * 0.28,
 		(effectivePreviousBox.fitWidth ?? effectivePreviousBox.width) * 4,
 	);
-	return bestMatch.distance <= allowFallbackDistancePx
-		? bestMatch.candidate
-		: null;
+	if (bestMatch.distance > allowFallbackDistancePx) {
+		return { box: null };
+	}
+	if (isLowConfidenceTrackingBox(bestMatch.candidate)) {
+		return {
+			box: null,
+			lowConfidenceBox: bestMatch.candidate,
+		};
+	}
+	return { box: bestMatch.candidate };
 }
 
 function dedupePresetNames(
@@ -1995,6 +2267,7 @@ export function choosePrimarySubjectBox({
 				: candidates;
 		const scoredInitialCandidates = initialCandidates.map((candidate) => {
 			const referencePoint = getBoxReferencePoint(candidate);
+			const confidence = getTrackingConfidence(candidate);
 			const centerPenalty =
 				Math.hypot(
 					referencePoint.x - frameCenterX,
@@ -2030,6 +2303,7 @@ export function choosePrimarySubjectBox({
 			const score =
 				getBoxArea(candidate) *
 					(1 +
+						confidence * 0.55 +
 						sidePreference * sideWeight +
 						viewportOverlap * 0.9 +
 						(targetSubjectSeed ? seedAreaScore * 0.45 : 0)) -
@@ -2103,13 +2377,14 @@ export function choosePrimarySubjectBox({
 		const overlapScore = getBoxIoU(candidate, previousBox) * 5;
 		const distanceScore =
 			(1 - getBoxDistance(candidate, previousBox) / frameDiagonal) * 2.5;
+		const confidenceScore = getTrackingConfidence(candidate) * 2;
 		const areaScore =
 			1 -
 			Math.abs(getBoxArea(candidate) - getBoxArea(previousBox)) /
 				Math.max(getBoxArea(candidate), getBoxArea(previousBox), 1);
 		return {
 			candidate,
-			score: overlapScore + distanceScore + areaScore,
+			score: overlapScore + distanceScore + areaScore + confidenceScore,
 			distanceRatio: getBoxDistance(candidate, previousBox) / frameDiagonal,
 			overlap: getBoxIoU(candidate, previousBox),
 			areaScore,
@@ -2365,34 +2640,17 @@ export function buildMotionTrackingKeyframesFromObservations({
 			| "head-detection"
 			| "head-continuity"
 			| "pose-head"
+			| "low-confidence"
 			| "miss";
 		subjectCenter?: { x: number; y: number };
 		subjectSize?: { width: number; height: number };
 	}>;
 } {
-	const debugSamples = observations.map((observation) => {
-		if (!observation.box) {
-			return {
-				time: observation.time,
-				source: "miss" as const,
-			};
-		}
-		const sample = buildMotionTrackingSample(observation.box);
-		return {
-			time: observation.time,
-			source: sample.source,
-			subjectCenter: {
-				x: sample.eyeX,
-				y: sample.eyeY,
-			},
-			subjectSize: {
-				width: sample.fitWidth,
-				height: sample.fitHeight,
-			},
-		};
+	const effectiveObservations = buildEffectiveMotionTrackingObservations({
+		observations,
 	});
 	const heldSamples = holdMotionTrackingSamples({
-		observations,
+		observations: effectiveObservations,
 		trackingStrength,
 	});
 	const smoothedSamples = medianFilterMotionTrackingSamples(heldSamples);
@@ -2414,6 +2672,56 @@ export function buildMotionTrackingKeyframesFromObservations({
 		};
 		return [upgradedStart, ...smoothedSamples.slice(warmupUpgradeIndex)];
 	})();
+	const debugSamples =
+		startupSettledSamples.length > 0
+			? startupSettledSamples.map((sample) => ({
+					time: sample.time,
+					source: sample.source,
+					subjectCenter: {
+						x: sample.eyeX,
+						y: sample.eyeY,
+					},
+					subjectSize: {
+						width: sample.fitWidth,
+						height: sample.fitHeight,
+					},
+			  }))
+			: observations.map((observation) => {
+					if (!observation.box && observation.lowConfidenceBox) {
+						const sample = buildMotionTrackingSample(observation.lowConfidenceBox);
+						return {
+							time: observation.time,
+							source: "low-confidence" as const,
+							subjectCenter: {
+								x: sample.eyeX,
+								y: sample.eyeY,
+							},
+							subjectSize: {
+								width: sample.fitWidth,
+								height: sample.fitHeight,
+							},
+						};
+					}
+					if (!observation.box) {
+						return {
+							time: observation.time,
+							source: "miss" as const,
+						};
+					}
+					const sample = buildMotionTrackingSample(observation.box);
+					return {
+						time: observation.time,
+						source: sample.source,
+						subjectCenter: {
+							x: sample.eyeX,
+							y: sample.eyeY,
+						},
+						subjectSize: {
+							width: sample.fitWidth,
+							height: sample.fitHeight,
+						},
+					};
+			  });
 	const lockedScale =
 		!animateScale && startupSettledSamples.length > 0
 			? buildMotionTrackingTransformFromSample({
@@ -2491,6 +2799,9 @@ function buildSubjectBoxFromDetections(detections: SubjectBox[]): SubjectBox {
 		),
 		trackingAnchorY: getMedianOptional(
 			detections.map((entry) => entry.trackingAnchorY),
+		),
+		trackingConfidence: median(
+			detections.map((entry) => getTrackingConfidence(entry)),
 		),
 	};
 }
@@ -2664,6 +2975,8 @@ export function buildMotionTrackingObservationsFromSampledFrames({
 	const observations: SubjectTrackingObservation[] = [];
 	let previousTrackedBox: SubjectBox | null = null;
 	let lastConcreteTrackedTime: number | null = null;
+	let reacquireCandidateBox: SubjectBox | null = null;
+	let reacquireCandidateCount = 0;
 	const identityClusters =
 		identityDetections.length >= 2
 			? buildTwoSubjectClusters({
@@ -2723,7 +3036,7 @@ export function buildMotionTrackingObservationsFromSampledFrames({
 				: requireFaceLockedTracking || previousTrackedBox
 					? []
 					: frame.poseCandidates;
-		let trackedBox = chooseMotionTrackingSubjectBox({
+		const selection = chooseMotionTrackingSubjectBox({
 			candidates,
 			previousBox: previousTrackedBox,
 			sourceWidth,
@@ -2733,6 +3046,52 @@ export function buildMotionTrackingObservationsFromSampledFrames({
 			targetViewportBounds,
 			targetSubjectSeed,
 		});
+		let trackedBox = selection.box;
+		let lowConfidenceBox = selection.lowConfidenceBox ?? null;
+		const requiresReacquireHysteresis =
+			previousTrackedBox &&
+			lastConcreteTrackedTime !== null &&
+			frame.time - lastConcreteTrackedTime > 1 / 120;
+		const shouldUseReacquireHysteresis =
+			requiresReacquireHysteresis &&
+			trackedBox?.trackingSource !== "pose-head" &&
+			trackedBox?.trackingSource !== "head-detection";
+		if (trackedBox) {
+			if (
+				shouldUseReacquireHysteresis &&
+				getTrackingConfidence(trackedBox) < MIN_REACQUIRE_TRACKING_SCORE
+			) {
+				lowConfidenceBox = trackedBox;
+				trackedBox = null;
+			} else if (shouldUseReacquireHysteresis) {
+				const matchesPendingCandidate: boolean = Boolean(
+					reacquireCandidateBox &&
+						getBoxDistance(reacquireCandidateBox, trackedBox) <=
+						Math.max(
+							sourceWidth * 0.04,
+							sourceHeight * 0.04,
+							(trackedBox.fitWidth ?? trackedBox.width) * 0.45,
+						),
+				);
+				reacquireCandidateBox = matchesPendingCandidate ? trackedBox : trackedBox;
+				reacquireCandidateCount = matchesPendingCandidate
+					? reacquireCandidateCount + 1
+					: 1;
+				if (reacquireCandidateCount < REACQUIRE_STABLE_MATCH_COUNT) {
+					lowConfidenceBox = trackedBox;
+					trackedBox = null;
+				}
+			} else {
+				reacquireCandidateBox = null;
+				reacquireCandidateCount = 0;
+			}
+		} else if (lowConfidenceBox) {
+			reacquireCandidateBox = null;
+			reacquireCandidateCount = 0;
+		} else if (!trackedBox) {
+			reacquireCandidateBox = null;
+			reacquireCandidateCount = 0;
+		}
 		if (
 			!trackedBox &&
 			previousTrackedBox &&
@@ -2746,10 +3105,13 @@ export function buildMotionTrackingObservationsFromSampledFrames({
 		observations.push({
 			time: frame.time,
 			box: trackedBox ? { ...trackedBox } : null,
+			lowConfidenceBox: lowConfidenceBox ? { ...lowConfidenceBox } : null,
 		});
 		previousTrackedBox = trackedBox;
 		if (trackedBox && trackedBox.trackingSource !== "head-continuity") {
 			lastConcreteTrackedTime = frame.time;
+			reacquireCandidateBox = null;
+			reacquireCandidateCount = 0;
 		}
 	}
 	return observations;
@@ -3369,6 +3731,7 @@ export async function analyzeGeneratedClipMotionTracking({
 			| "head-detection"
 			| "head-continuity"
 			| "pose-head"
+			| "low-confidence"
 			| "miss";
 		subjectCenter?: { x: number; y: number };
 		subjectSize?: { width: number; height: number };
@@ -3431,12 +3794,6 @@ export async function analyzeGeneratedClipMotionTracking({
 				startTime,
 				duration,
 			});
-			onProgress?.({
-				completedSamples: 0,
-				totalSamples: sampleTimes.length,
-				progress: sampleTimes.length === 0 ? 100 : 0,
-				message: "Sampling motion tracking frames...",
-			});
 			const sampledFrames: Array<{
 				time: number;
 				faceCandidates: SubjectBox[];
@@ -3444,8 +3801,49 @@ export async function analyzeGeneratedClipMotionTracking({
 			}> = [];
 			const identityDetections: SubjectBox[] = [];
 			let detectionCount = 0;
-
-			for (const sampledTime of sampleTimes) {
+			let completedSamples = 0;
+			let totalSamples = sampleTimes.length;
+			let consecutiveStableFaceFrames = 0;
+			const analyzedTimes = new Set<string>();
+			const pushProgress = ({
+				message,
+			}: {
+				message: string;
+			}) => {
+				onProgress?.({
+					completedSamples,
+					totalSamples,
+					progress: totalSamples === 0 ? 100 : (completedSamples / totalSamples) * 100,
+					message,
+				});
+			};
+			const recordSampledFrame = ({
+				time,
+				faceCandidates,
+				poseCandidates,
+			}: {
+				time: number;
+				faceCandidates: SubjectBox[];
+				poseCandidates: SubjectBox[];
+			}) => {
+				sampledFrames.push({ time, faceCandidates, poseCandidates });
+				detectionCount += faceCandidates.length + poseCandidates.length;
+				if (faceCandidates.length > 0) {
+					identityDetections.push(...faceCandidates);
+				}
+			};
+			const analyzeSampleAtTime = async ({
+				sampledTime,
+				message,
+			}: {
+				sampledTime: number;
+				message: string;
+			}) => {
+				const dedupeKey = sampledTime.toFixed(4);
+				if (analyzedTimes.has(dedupeKey)) {
+					return;
+				}
+				analyzedTimes.add(dedupeKey);
 				throwIfAborted(signal);
 				await seekVideo({
 					video,
@@ -3462,12 +3860,15 @@ export async function analyzeGeneratedClipMotionTracking({
 				});
 				throwIfAborted(signal);
 				if (!canAnalyzeFrame) {
-					sampledFrames.push({
+					consecutiveStableFaceFrames = 0;
+					recordSampledFrame({
 						time: Math.max(0, sampledTime - startTime),
 						faceCandidates: [],
 						poseCandidates: [],
 					});
-					continue;
+					completedSamples += 1;
+					pushProgress({ message });
+					return;
 				}
 
 				const frameTimestampMs = Math.round(video.currentTime * 1000);
@@ -3493,7 +3894,11 @@ export async function analyzeGeneratedClipMotionTracking({
 								)
 								.filter((box: SubjectBox | null): box is SubjectBox => Boolean(box))
 						: [];
-					if (faceCandidates.length === 0) {
+					const hasConfidentLandmarkCandidate = faceCandidates.some(
+						(candidate) =>
+							getTrackingConfidence(candidate) >= MIN_CONFIDENT_TRACKING_SCORE,
+					);
+					if (!hasConfidentLandmarkCandidate) {
 						const faceResult = withSuppressedVisionConsoleErrors(() =>
 							faceDetector.detectForVideo(
 								video,
@@ -3503,7 +3908,7 @@ export async function analyzeGeneratedClipMotionTracking({
 								}),
 							),
 						);
-						faceCandidates = (faceResult.detections ?? [])
+						const detectorFaceCandidates = (faceResult.detections ?? [])
 							.map((detection) =>
 								buildFaceCandidateFromDetection({
 									detection,
@@ -3512,11 +3917,14 @@ export async function analyzeGeneratedClipMotionTracking({
 								}),
 							)
 							.filter((box): box is SubjectBox => Boolean(box));
+						faceCandidates = [...faceCandidates, ...detectorFaceCandidates];
 					}
-					if (faceCandidates.length > 0) {
-						identityDetections.push(...faceCandidates);
-					}
-					const shouldSamplePose = true;
+					const hasStrongFaceCandidate = faceCandidates.some(
+						(candidate) =>
+							getTrackingConfidence(candidate) >= MIN_STRONG_TRACKING_SCORE,
+					);
+					const shouldSamplePose =
+						!hasStrongFaceCandidate || consecutiveStableFaceFrames < 2;
 					if (shouldSamplePose) {
 						const poseResult = withSuppressedVisionConsoleErrors(() =>
 							poseLandmarker.detectForVideo(
@@ -3536,7 +3944,12 @@ export async function analyzeGeneratedClipMotionTracking({
 							return poseBox ? [poseBox] : [];
 						});
 					}
+					consecutiveStableFaceFrames =
+						hasStrongFaceCandidate && poseCandidates.length === 0
+							? consecutiveStableFaceFrames + 1
+							: 0;
 				} catch (sampleError) {
+					consecutiveStableFaceFrames = 0;
 					if (!isIgnorableVisionRuntimeMessage(sampleError)) {
 						console.warn(
 							"Subject motion tracking skipped a sampled frame after detector failure.",
@@ -3545,29 +3958,43 @@ export async function analyzeGeneratedClipMotionTracking({
 					}
 				}
 
-				detectionCount += faceCandidates.length + poseCandidates.length;
-				sampledFrames.push({
+				recordSampledFrame({
 					time: Math.max(0, sampledTime - startTime),
 					faceCandidates,
 					poseCandidates,
 				});
-				onProgress?.({
-					completedSamples: sampledFrames.length,
-					totalSamples: sampleTimes.length,
-					progress:
-						sampleTimes.length === 0
-							? 100
-							: (sampledFrames.length / sampleTimes.length) * 100,
+				completedSamples += 1;
+				pushProgress({ message });
+			};
+
+			pushProgress({ message: "Sampling motion tracking frames..." });
+			for (const sampledTime of sampleTimes) {
+				await analyzeSampleAtTime({
+					sampledTime,
 					message: `Tracking subject motion ${Math.min(
 						100,
-						Math.round(
-							sampleTimes.length === 0
-								? 100
-								: (sampledFrames.length / sampleTimes.length) * 100,
-						),
+						Math.round(totalSamples === 0 ? 100 : (completedSamples / totalSamples) * 100),
 					)}%`,
 				});
 			}
+
+			const refinementTimes = buildAdaptiveMotionTrackingRefinementTimes({
+				sampledFrames,
+				startTime,
+				sourceWidth,
+				sourceHeight,
+			}).filter((time) => !analyzedTimes.has(time.toFixed(4)));
+			if (refinementTimes.length > 0) {
+				totalSamples += refinementTimes.length;
+				pushProgress({ message: "Refining unstable tracking intervals..." });
+				for (const sampledTime of refinementTimes) {
+					await analyzeSampleAtTime({
+						sampledTime,
+						message: "Refining unstable tracking intervals...",
+					});
+				}
+			}
+			sampledFrames.sort((left, right) => left.time - right.time);
 
 			const observations = buildMotionTrackingObservationsFromSampledFrames({
 				sampledFrames,
@@ -3590,8 +4017,8 @@ export async function analyzeGeneratedClipMotionTracking({
 				trackingStrength,
 			});
 			onProgress?.({
-				completedSamples: sampleTimes.length,
-				totalSamples: sampleTimes.length,
+				completedSamples: totalSamples,
+				totalSamples,
 				progress: 100,
 				message: "Baking tracking keyframes...",
 			});

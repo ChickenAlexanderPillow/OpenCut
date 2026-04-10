@@ -47,7 +47,7 @@ ENV FREESOUND_CLIENT_ID=$FREESOUND_CLIENT_ID
 ENV FREESOUND_API_KEY=$FREESOUND_API_KEY
 
 WORKDIR /app/apps/web
-RUN bun run build
+RUN bun run build:docker
 
 # Production image
 FROM node:20-alpine AS runner

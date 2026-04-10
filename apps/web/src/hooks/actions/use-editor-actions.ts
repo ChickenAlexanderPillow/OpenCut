@@ -97,6 +97,7 @@ import {
 	mergeCutRanges,
 	normalizeTranscriptGapEdits,
 	normalizeTranscriptWords,
+	projectTranscriptEditToWindow,
 } from "@/lib/transcript-editor/core";
 import {
 	buildTranscriptWordsFromSegments,
@@ -146,7 +147,8 @@ const MAX_VIRAL_CLIP_COUNT = 5;
 const VIRAL_CLIP_MIN_SECONDS = 18;
 const VIRAL_CLIP_TARGET_SECONDS = 36;
 const VIRAL_CLIP_MAX_SECONDS = 65;
-const CLIP_SCORING_TRANSCRIPT_MAX_CHARS = 20000;
+const CLIP_SCORING_CONTEXT_PADDING_SECONDS = 10;
+const CLIP_SCORING_CONTEXT_MAX_CHARS = 1600;
 const MAX_DISFLUENCY_REPEAT_GAP_SECONDS = 0.35;
 
 function normalizeTranscriptDisplayToken(token: string): string {
@@ -259,15 +261,57 @@ function withProjectClipGenerationCache({
 	};
 }
 
-function truncateTranscriptForScoring({
-	transcript,
+function formatSecondsForScoringContext(value: number): string {
+	const totalSeconds = Math.max(0, value);
+	const minutes = Math.floor(totalSeconds / 60);
+	const seconds = totalSeconds - minutes * 60;
+	return `${minutes.toString().padStart(2, "0")}:${seconds.toFixed(1).padStart(4, "0")}`;
+}
+
+function truncateScoringContext({
+	context,
 }: {
-	transcript: string;
+	context: string;
 }): string {
-	if (transcript.length <= CLIP_SCORING_TRANSCRIPT_MAX_CHARS) {
-		return transcript;
+	if (context.length <= CLIP_SCORING_CONTEXT_MAX_CHARS) {
+		return context;
 	}
-	return `${transcript.slice(0, CLIP_SCORING_TRANSCRIPT_MAX_CHARS)}\n[Transcript truncated for scoring request]`;
+	return `${context.slice(0, CLIP_SCORING_CONTEXT_MAX_CHARS)}\n[Context truncated]`;
+}
+
+function buildCandidateScoringContext({
+	segments,
+	candidate,
+}: {
+	segments: TranscriptionSegment[];
+	candidate: Pick<ClipCandidate, "startTime" | "endTime" | "transcriptSnippet">;
+}): string {
+	const windowStart = Math.max(
+		0,
+		candidate.startTime - CLIP_SCORING_CONTEXT_PADDING_SECONDS,
+	);
+	const windowEnd =
+		candidate.endTime + CLIP_SCORING_CONTEXT_PADDING_SECONDS;
+	const relevantSegments = segments.filter(
+		(segment) => segment.end > windowStart && segment.start < windowEnd,
+	);
+	if (relevantSegments.length === 0) {
+		return truncateScoringContext({
+			context: candidate.transcriptSnippet,
+		});
+	}
+
+	const context = relevantSegments
+		.map((segment) => {
+			const timestamp = `[${formatSecondsForScoringContext(
+				segment.start,
+			)}-${formatSecondsForScoringContext(segment.end)}]`;
+			const speakerLabel = segment.speakerId ? `${segment.speakerId}: ` : "";
+			return `${timestamp} ${speakerLabel}${segment.text.trim()}`;
+		})
+		.join("\n");
+
+	return truncateScoringContext({ context });
 }
 
 function buildClipWordTranscriptionCacheKey({
@@ -672,10 +716,8 @@ type ClipScoringResponse = {
 };
 
 async function fetchScoredCandidates({
-	transcript,
 	candidates,
 }: {
-	transcript: string;
 	candidates: Array<{
 		id: string;
 		startTime: number;
@@ -683,6 +725,7 @@ async function fetchScoredCandidates({
 		duration: number;
 		transcriptSnippet: string;
 		localScore: number;
+		scoringContext?: string;
 	}>;
 }): Promise<ClipScoringResponse> {
 	const endpoints = resolveClipScoringApiCandidates();
@@ -702,7 +745,6 @@ async function fetchScoredCandidates({
 					"Content-Type": "application/json",
 				},
 				body: JSON.stringify({
-					transcript: truncateTranscriptForScoring({ transcript }),
 					candidates,
 				}),
 				signal: controller.signal,
@@ -914,6 +956,151 @@ function getTranscriptCompanionElementIds({
 		}
 	}
 	return ids;
+}
+
+function resolveTranscriptUnitSourceRefIdForElement({
+	element,
+}: {
+	element: VideoElement | AudioElement;
+}): string {
+	const firstWordId = getTranscriptDraft(element)?.words[0]?.id ?? "";
+	const markerIndex = firstWordId.indexOf(":word:");
+	if (markerIndex > 0) {
+		return firstWordId.slice(0, markerIndex);
+	}
+	return element.id;
+}
+
+function buildProjectionBackedSourceTranscript({
+	element,
+	transcriptDraft,
+	nextDraft,
+}: {
+	element: VideoElement | AudioElement;
+	transcriptDraft: NonNullable<VideoElement["transcriptDraft"]>;
+	nextDraft: NonNullable<VideoElement["transcriptDraft"]>;
+}):
+	| {
+			sourceRefId: string;
+			sourceDraft: NonNullable<VideoElement["transcriptDraft"]>;
+	  }
+	| null {
+	const projectionSource = transcriptDraft.projectionSource;
+	if (!projectionSource || projectionSource.words.length === 0) {
+		return null;
+	}
+
+	const sourceRefId = resolveTranscriptUnitSourceRefIdForElement({ element });
+	const windowStart = Math.max(
+		0,
+		element.trimStart - projectionSource.baseTrimStart,
+	);
+	const windowEnd = windowStart + (getTranscriptApplied(element)?.timeMap.sourceDuration ?? element.duration);
+	const sourceWordsById = new Map(
+		projectionSource.words.map((word) => [word.id, { ...word }]),
+	);
+	for (const projectedWord of nextDraft.words) {
+		const sourceWord = sourceWordsById.get(projectedWord.id);
+		if (!sourceWord) continue;
+		sourceWordsById.set(projectedWord.id, {
+			...sourceWord,
+			text: projectedWord.text,
+			startTime: projectedWord.startTime + windowStart,
+			endTime: projectedWord.endTime + windowStart,
+			removed: projectedWord.removed,
+			hidden: projectedWord.hidden,
+			speakerId: projectedWord.speakerId,
+			segmentId: projectedWord.segmentId,
+		});
+	}
+	const sourceWords = projectionSource.words.map((word) => {
+		const updatedWord = sourceWordsById.get(word.id);
+		return updatedWord ?? word;
+	});
+	const translatedPauseCuts = nextDraft.cuts
+		.filter((cut) => cut.reason === "pause")
+		.map((cut) => ({
+			...cut,
+			start: cut.start + windowStart,
+			end: cut.end + windowStart,
+		}));
+	const preservedPauseCutsOutsideWindow = projectionSource.cuts.filter(
+		(cut) =>
+			cut.reason === "pause" &&
+			(cut.end <= windowStart || cut.start >= windowEnd),
+	);
+	const sourceCuts = mergeCutRanges({
+		cuts: [
+			...buildTranscriptCutsFromWords({ words: sourceWords }),
+			...preservedPauseCutsOutsideWindow,
+			...translatedPauseCuts,
+		],
+	});
+
+	return {
+		sourceRefId,
+		sourceDraft: {
+			...transcriptDraft,
+			words: sourceWords,
+			cuts: sourceCuts,
+			cutTimeDomain: "clip-local-source",
+			updatedAt: nextDraft.updatedAt,
+		},
+	};
+}
+
+function projectSourceTranscriptDraftToElement({
+	element,
+	sourceDraft,
+}: {
+	element: VideoElement | AudioElement;
+	sourceDraft: NonNullable<VideoElement["transcriptDraft"]>;
+}): {
+	draft: NonNullable<VideoElement["transcriptDraft"]>;
+	applied: ReturnType<typeof compileTranscriptDraft>;
+	duration: number;
+	trimEnd: number;
+} {
+	const baseTrimStart =
+		sourceDraft.projectionSource?.baseTrimStart ?? element.trimStart;
+	const currentSourceDuration =
+		getTranscriptApplied(element)?.timeMap.sourceDuration ?? element.duration;
+	const sourceWindowStart = Math.max(0, element.trimStart - baseTrimStart);
+	const projectedDraft = {
+		...projectTranscriptEditToWindow({
+			transcriptEdit: sourceDraft,
+			elementId: element.id,
+			sourceStart: sourceWindowStart,
+			sourceEnd: sourceWindowStart + currentSourceDuration,
+		}),
+		projectionSource: {
+			words: sourceDraft.words,
+			cuts: sourceDraft.cuts,
+			updatedAt: sourceDraft.updatedAt,
+			baseTrimStart,
+		},
+		updatedAt: sourceDraft.updatedAt,
+	};
+	const applied = compileTranscriptDraft({
+		mediaElementId: element.id,
+		draft: projectedDraft,
+		mediaStartTime: element.startTime,
+		mediaDuration: currentSourceDuration,
+	});
+	const removedDuration = Math.max(
+		0,
+		applied.timeMap.sourceDuration - applied.timeMap.playableDuration,
+	);
+	const baseTrimEnd = Math.max(
+		0,
+		element.trimEnd - Math.max(0, currentSourceDuration - element.duration),
+	);
+	return {
+		draft: projectedDraft,
+		applied,
+		duration: applied.timeMap.playableDuration,
+		trimEnd: baseTrimEnd + removedDuration,
+	};
 }
 
 function initializeTranscriptEditFromExistingCaption({
@@ -1672,6 +1859,7 @@ function applyTranscriptEditMutation({
 		words: nextWords,
 		cuts,
 		cutTimeDomain: "clip-local-source" as const,
+		projectionSource: transcriptDraft.projectionSource,
 		segmentsUi: nextSegmentsUi,
 		speakerLabels: nextSpeakerLabels,
 		gapEdits: nextGapEdits,
@@ -1681,13 +1869,58 @@ function applyTranscriptEditMutation({
 		tracks,
 		target,
 	});
+	const projectionBackedSource = buildProjectionBackedSourceTranscript({
+		element: target,
+		transcriptDraft,
+		nextDraft,
+	});
+	const sourceLinkedElementIds = projectionBackedSource
+		? new Set(
+				tracks.flatMap((track) =>
+					(track.type === "video" || track.type === "audio"
+						? track.elements.filter((element) => {
+								if (!isTranscriptEditableMediaElement(element)) return false;
+								return (
+									resolveTranscriptUnitSourceRefIdForElement({ element }) ===
+									projectionBackedSource.sourceRefId
+								);
+						  })
+						: []
+					).map((element) => element.id),
+				),
+		  )
+		: new Set<string>();
 
 	const updatedTracks = tracks.map((track) => {
 		if (track.type === "video") {
 			const nextElements = track.elements.map((element) =>
-				relatedElementIds.has(element.id) &&
 				isTranscriptEditableMediaElement(element)
 					? (() => {
+							if (
+								projectionBackedSource &&
+								sourceLinkedElementIds.has(element.id)
+							) {
+								const projected = projectSourceTranscriptDraftToElement({
+									element,
+									sourceDraft: projectionBackedSource.sourceDraft,
+								});
+								return withTranscriptState({
+									element: {
+										...element,
+										duration: projected.duration,
+										trimEnd: projected.trimEnd,
+									},
+									draft: projected.draft,
+									applied: projected.applied,
+									compileState: {
+										status: "compiling",
+										updatedAt: projected.draft.updatedAt,
+									},
+								});
+							}
+							if (!relatedElementIds.has(element.id)) {
+								return element;
+							}
 							const projected = resolveTranscriptProjectedTiming({
 								element,
 								nextDraft,
@@ -1712,9 +1945,33 @@ function applyTranscriptEditMutation({
 		}
 		if (track.type === "audio") {
 			const nextElements = track.elements.map((element) =>
-				relatedElementIds.has(element.id) &&
 				isTranscriptEditableMediaElement(element)
 					? (() => {
+							if (
+								projectionBackedSource &&
+								sourceLinkedElementIds.has(element.id)
+							) {
+								const projected = projectSourceTranscriptDraftToElement({
+									element,
+									sourceDraft: projectionBackedSource.sourceDraft,
+								});
+								return withTranscriptState({
+									element: {
+										...element,
+										duration: projected.duration,
+										trimEnd: projected.trimEnd,
+									},
+									draft: projected.draft,
+									applied: projected.applied,
+									compileState: {
+										status: "compiling",
+										updatedAt: projected.draft.updatedAt,
+									},
+								});
+							}
+							if (!relatedElementIds.has(element.id)) {
+								return element;
+							}
 							const projected = resolveTranscriptProjectedTiming({
 								element,
 								nextDraft,
@@ -1762,7 +2019,12 @@ function applyTranscriptEditMutation({
 	});
 	scheduleTranscriptDraftCompile({
 		editor,
-		mediaElementIds: Array.from(relatedElementIds),
+		mediaElementIds: Array.from(
+			new Set([
+				...relatedElementIds,
+				...sourceLinkedElementIds,
+			]),
+		),
 	});
 	clearTranscriptTimelineSnapshotCache();
 	editor.save.markDirty();
@@ -4309,8 +4571,15 @@ export function useEditorActions() {
 						candidateDrafts.length > 0
 							? candidateDrafts
 							: fallbackCandidateDrafts;
+					const scoringCandidates = candidateDraftsResolved.map((candidate) => ({
+						...candidate,
+						scoringContext: buildCandidateScoringContext({
+							segments: transcriptResult.transcript.segments,
+							candidate,
+						}),
+					}));
 
-					if (candidateDraftsResolved.length === 0) {
+					if (scoringCandidates.length === 0) {
 						console.warn("Clip candidate derivation failed", {
 							sourceMediaId: mediaAsset.id,
 							transcriptSource: transcriptResult.source,
@@ -4335,24 +4604,23 @@ export function useEditorActions() {
 					if (projectProcessId) {
 						updateProcessLabel({
 							id: projectProcessId,
-							label: `Scoring clip virality (0/${candidateDraftsResolved.length})...`,
+							label: `Scoring clip virality (0/${scoringCandidates.length})...`,
 						});
 					}
 					const scoredResponse = await fetchScoredCandidates({
-						transcript: transcriptResult.transcript.text,
-						candidates: candidateDraftsResolved,
+						candidates: scoringCandidates,
 					});
 					const scoredCandidates = scoredResponse.candidates ?? [];
 					if (projectProcessId) {
 						updateProcessLabel({
 							id: projectProcessId,
-							label: `Scoring clip virality (${scoredCandidates.length}/${candidateDraftsResolved.length})...`,
+							label: `Scoring clip virality (${scoredCandidates.length}/${scoringCandidates.length})...`,
 						});
 					}
 					setProgress({
 						sourceMediaId: mediaAsset.id,
 						progress: 99,
-						progressMessage: `Scoring clip candidates (${scoredCandidates.length}/${candidateDraftsResolved.length})...`,
+						progressMessage: `Scoring clip candidates (${scoredCandidates.length}/${scoringCandidates.length})...`,
 					});
 					const minDesiredClipCount = Math.min(3, MAX_VIRAL_CLIP_COUNT);
 					const strictCandidates = selectTopCandidatesWithQualityGate({

@@ -23,6 +23,7 @@ import {
 	mapCompressedTimeToSourceTime,
 	mapSourceTimeToCompressedTime,
 	normalizeTranscriptWords,
+	projectTranscriptEditToWindow,
 } from "@/lib/transcript-editor/core";
 import { buildTranscriptWordsFromCaptionTimings } from "@/lib/transcript-editor/caption-fallback";
 import { MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS } from "@/lib/transcript-editor/constants";
@@ -250,6 +251,76 @@ function isMediaElement(
 	return element.type === "video" || element.type === "audio";
 }
 
+function resolveTranscriptSourceRefIdForElement(
+	element: VideoElement | AudioElement,
+): string {
+	const firstWordId = getTranscriptDraft(element)?.words[0]?.id ?? "";
+	const markerIndex = firstWordId.indexOf(":word:");
+	if (markerIndex > 0) {
+		return firstWordId.slice(0, markerIndex);
+	}
+	return element.id;
+}
+
+function buildProjectedTranscriptDraftForMedia({
+	element,
+	words,
+	updatedAt,
+	existingDraft,
+}: {
+	element: VideoElement | AudioElement;
+	words: TranscriptionWord[];
+	updatedAt: string;
+	existingDraft?: ReturnType<typeof getTranscriptDraft>;
+}) {
+	const sourceRefId =
+		existingDraft?.projectionSource?.words[0]?.id?.split(":word:")[0] ??
+		resolveTranscriptSourceRefIdForElement(element);
+	const sourceWords = buildTranscriptWordsFromTimedWords({
+		mediaElementId: sourceRefId,
+		words,
+	});
+	const sourceDraft = {
+		version: 1 as const,
+		source: "word-level" as const,
+		words: sourceWords,
+		cuts: buildTranscriptCutsFromWords({ words: sourceWords }),
+		segmentsUi: buildDefaultTranscriptSegmentsUi({
+			elementId: sourceRefId,
+			words: sourceWords,
+		}),
+		speakerLabels: buildSpeakerLabels({
+			words: sourceWords,
+			existingLabels: existingDraft?.speakerLabels,
+		}),
+		gapEdits: existingDraft?.gapEdits,
+		updatedAt,
+	};
+	const sourceWindowStart = existingDraft?.projectionSource
+		? Math.max(0, element.trimStart - existingDraft.projectionSource.baseTrimStart)
+		: 0;
+	const sourceWindowEnd = sourceWindowStart + element.duration;
+	const projectedDraft = {
+		...projectTranscriptEditToWindow({
+			transcriptEdit: sourceDraft,
+			elementId: element.id,
+			sourceStart: sourceWindowStart,
+			sourceEnd: sourceWindowEnd,
+		}),
+		speakerLabels: sourceDraft.speakerLabels,
+		gapEdits: sourceDraft.gapEdits,
+		projectionSource: {
+			words: sourceDraft.words,
+			cuts: sourceDraft.cuts,
+			updatedAt,
+			baseTrimStart:
+				existingDraft?.projectionSource?.baseTrimStart ?? element.trimStart,
+		},
+		updatedAt,
+	};
+	return projectedDraft;
+}
+
 function getFallbackWordsFromCaptions({
 	tracks,
 	mediaElementId,
@@ -257,21 +328,43 @@ function getFallbackWordsFromCaptions({
 	tracks: ReturnType<ReturnType<typeof useEditor>["timeline"]["getTracks"]>;
 	mediaElementId: string;
 }): TranscriptEditWord[] {
-	const matched = tracks
+	const targetMedia = getMediaRefById({ tracks, mediaElementId })?.element ?? null;
+	const sourceRefId = targetMedia
+		? resolveTranscriptSourceRefIdForElement(targetMedia)
+		: mediaElementId;
+	const linkedMediaIds = new Set(
+		tracks.flatMap((track) =>
+			(track.type === "video" || track.type === "audio"
+				? track.elements.filter((element) => {
+						if (!isMediaElement(element)) return false;
+						return (
+							resolveTranscriptSourceRefIdForElement(element) === sourceRefId ||
+							element.id === mediaElementId
+						);
+				  })
+				: []
+			).map((element) => element.id),
+		),
+	);
+	if (linkedMediaIds.size === 0) {
+		linkedMediaIds.add(mediaElementId);
+	}
+	const timings = tracks
 		.flatMap((track) => (track.type === "text" ? track.elements : []))
-		.find((element) => {
+		.filter((element) => {
 			if (element.type !== "text") return false;
 			if ((element.captionWordTimings?.length ?? 0) === 0) return false;
-			if (element.captionSourceRef?.mediaElementId) {
-				return element.captionSourceRef.mediaElementId === mediaElementId;
-			}
-			return true;
-		});
-	if (!matched || (matched.captionWordTimings?.length ?? 0) === 0) return [];
+			const sourceMediaId = element.captionSourceRef?.mediaElementId;
+			return !sourceMediaId || linkedMediaIds.has(sourceMediaId);
+		})
+		.sort((a, b) => a.startTime - b.startTime)
+		.flatMap((element) => element.captionWordTimings ?? []);
+	if (timings.length === 0) return [];
+	const mediaStartTime = Math.min(...timings.map((timing) => timing.startTime));
 	return buildTranscriptWordsFromCaptionTimings({
-		mediaElementId,
-		mediaStartTime: 0,
-		timings: matched.captionWordTimings ?? [],
+		mediaElementId: sourceRefId,
+		mediaStartTime,
+		timings,
 		idPrefix: "fallback",
 	});
 }
@@ -673,7 +766,11 @@ export function TranscriptView() {
 
 	const words = useMemo(() => {
 		if (!activeMedia) return [];
-		const fromElement = getTranscriptDraft(activeMedia.element)?.words ?? [];
+		const transcriptDraft = getTranscriptDraft(activeMedia.element);
+		const fromElement =
+			transcriptDraft?.projectionSource?.words?.length
+				? transcriptDraft.projectionSource.words
+				: (transcriptDraft?.words ?? []);
 		if (fromElement.length > 0)
 			return normalizeTranscriptWords({ words: fromElement });
 		return getFallbackWordsFromCaptions({
@@ -737,7 +834,13 @@ export function TranscriptView() {
 		: !activeTranscriptDraft
 			? buildTranscriptCutsFromWords({ words })
 			: getEffectiveTranscriptCutsFromTranscriptEdit({
-					transcriptEdit: activeTranscriptDraft,
+					transcriptEdit: activeTranscriptDraft.projectionSource
+						? {
+								words: activeTranscriptDraft.projectionSource.words,
+								cuts: activeTranscriptDraft.projectionSource.cuts,
+								gapEdits: activeTranscriptDraft.gapEdits,
+						  }
+						: activeTranscriptDraft,
 				});
 	const wordsWithCutState = applyCutRangesToWords({
 		words,
@@ -745,13 +848,27 @@ export function TranscriptView() {
 	});
 	const hasLinkedCaptions = useMemo(() => {
 		if (!activeMedia) return false;
+		const sourceRefId = resolveTranscriptSourceRefIdForElement(activeMedia.element);
+		const linkedMediaIds = new Set(
+			tracks.flatMap((track) =>
+				(track.type === "video" || track.type === "audio"
+					? track.elements.filter((element) => {
+							if (!isMediaElement(element)) return false;
+							return (
+								resolveTranscriptSourceRefIdForElement(element) === sourceRefId
+							);
+					  })
+					: []
+				).map((element) => element.id),
+			),
+		);
 		return tracks.some((track) => {
 			if (track.type !== "text") return false;
 			return track.elements.some(
 				(element) =>
 					element.type === "text" &&
 					(element.captionWordTimings?.length ?? 0) > 0 &&
-					element.captionSourceRef?.mediaElementId === activeMedia.element.id,
+					linkedMediaIds.has(element.captionSourceRef?.mediaElementId ?? ""),
 			);
 		});
 	}, [activeMedia, tracks]);
@@ -1786,7 +1903,7 @@ export function TranscriptView() {
 				if (progress.status === "loading-model") {
 					setGenerateStep(`Loading model ${Math.round(progress.progress)}%`);
 				} else if (progress.status === "transcribing") {
-					setGenerateStep("Transcribing...");
+					setGenerateStep(progress.message ?? "Transcribing...");
 				}
 				transcriptionStatus.update({
 					operationId: transcriptionOperationId,
@@ -1832,27 +1949,12 @@ export function TranscriptView() {
 					"Word-level alignment failed for this clip. Re-generate after fixing the local WhisperX alignment error to avoid inaccurate caption timing.",
 				);
 			}
-			const wordsForEdit = buildTranscriptWordsFromTimedWords({
-				mediaElementId: activeMedia.element.id,
-				words: sourceWindowWords,
-			});
-			const transcriptVersion = 1 as const;
-			const transcriptDraft = {
-				version: transcriptVersion,
-				source: "word-level" as const,
-				words: wordsForEdit,
-				cuts: buildTranscriptCutsFromWords({ words: wordsForEdit }),
-				segmentsUi: buildDefaultTranscriptSegmentsUi({
-					elementId: activeMedia.element.id,
-					words: wordsForEdit,
-				}),
-				speakerLabels: buildSpeakerLabels({
-					words: wordsForEdit,
-					existingLabels: activeTranscriptDraft?.speakerLabels,
-				}),
-				gapEdits: activeTranscriptDraft?.gapEdits,
+			const transcriptDraft = buildProjectedTranscriptDraftForMedia({
+				element: activeMedia.element,
+				words: transcriptResult.transcript.words ?? [],
 				updatedAt: new Date().toISOString(),
-			};
+				existingDraft: activeTranscriptDraft,
+			});
 			editor.timeline.updateElements({
 				updates: [
 					{
@@ -1974,26 +2076,12 @@ export function TranscriptView() {
 				);
 			}
 
-			const wordsForEdit = buildTranscriptWordsFromTimedWords({
-				mediaElementId: activeMedia.element.id,
-				words: sourceWindowWords,
-			});
-			const transcriptDraft = {
-				version: 1 as const,
-				source: "word-level" as const,
-				words: wordsForEdit,
-				cuts: buildTranscriptCutsFromWords({ words: wordsForEdit }),
-				segmentsUi: buildDefaultTranscriptSegmentsUi({
-					elementId: activeMedia.element.id,
-					words: wordsForEdit,
-				}),
-				speakerLabels: buildSpeakerLabels({
-					words: wordsForEdit,
-					existingLabels: activeTranscriptDraft?.speakerLabels,
-				}),
-				gapEdits: activeTranscriptDraft?.gapEdits,
+			const transcriptDraft = buildProjectedTranscriptDraftForMedia({
+				element: activeMedia.element,
+				words: normalizedTimedWords,
 				updatedAt,
-			};
+				existingDraft: activeTranscriptDraft,
+			});
 			editor.timeline.updateElements({
 				updates: [
 					{
@@ -2077,7 +2165,7 @@ export function TranscriptView() {
 				if (progress.status === "loading-model") {
 					setGenerateStep(`Loading model ${Math.round(progress.progress)}%`);
 				} else if (progress.status === "transcribing") {
-					setGenerateStep("Re-transcribing...");
+					setGenerateStep(progress.message ?? "Re-transcribing...");
 				}
 				transcriptionStatus.update({
 					operationId: transcriptionOperationId,

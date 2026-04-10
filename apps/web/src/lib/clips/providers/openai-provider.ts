@@ -5,6 +5,57 @@ import type {
 import { buildScoringPrompt } from "@/lib/clips/scoring";
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
+const CLIP_SCORING_RESPONSE_SCHEMA = {
+	type: "object",
+	additionalProperties: false,
+	properties: {
+		candidates: {
+			type: "array",
+			items: {
+				type: "object",
+				additionalProperties: false,
+				properties: {
+					id: { type: "string" },
+					title: { type: "string" },
+					rationale: { type: "string" },
+					scoreOverall: { type: "number" },
+					confidence: { type: "number" },
+					failureFlags: {
+						type: "array",
+						items: { type: "string" },
+					},
+					scoreBreakdown: {
+						type: "object",
+						additionalProperties: false,
+						properties: {
+							hook: { type: "number" },
+							emotion: { type: "number" },
+							shareability: { type: "number" },
+							clarity: { type: "number" },
+							momentum: { type: "number" },
+						},
+						required: [
+							"hook",
+							"emotion",
+							"shareability",
+							"clarity",
+							"momentum",
+						],
+					},
+				},
+				required: [
+					"id",
+					"title",
+					"rationale",
+					"scoreOverall",
+					"scoreBreakdown",
+					"failureFlags",
+				],
+			},
+		},
+	},
+	required: ["candidates"],
+} as const;
 
 function extractTextFromResponsesPayload({ payload }: { payload: unknown }): string {
 	if (typeof payload !== "object" || payload === null) {
@@ -46,13 +97,9 @@ export class OpenAIViralityScoringProvider implements ViralityScoringProvider {
 	) {}
 
 	async scoreCandidates({
-		transcript,
 		candidates,
 	}: ScoreCandidatesParams): Promise<string> {
-		const prompt = buildScoringPrompt({
-			transcript,
-			candidates,
-		});
+		const prompt = buildScoringPrompt({ candidates });
 		const response = await fetch(OPENAI_RESPONSES_URL, {
 			method: "POST",
 			headers: {
@@ -62,6 +109,14 @@ export class OpenAIViralityScoringProvider implements ViralityScoringProvider {
 			body: JSON.stringify({
 				model: this.params.model ?? "gpt-5-mini",
 				input: prompt,
+				text: {
+					format: {
+						type: "json_schema",
+						name: "clip_scores",
+						strict: true,
+						schema: CLIP_SCORING_RESPONSE_SCHEMA,
+					},
+				},
 			}),
 		});
 

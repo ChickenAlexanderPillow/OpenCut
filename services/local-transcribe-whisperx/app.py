@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import subprocess
 import tempfile
 import time
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -66,6 +68,7 @@ IMPORT_AUDIO_BITRATE = 192_000
 IMPORT_VIDEO_MAX_FPS = 30
 
 app = FastAPI(title="local-whisperx-transcribe", version="1.0.0")
+logger = logging.getLogger("local_transcribe")
 cors_origins = [
 	origin.strip()
 	for origin in (
@@ -483,6 +486,7 @@ async def transcribe_word_timestamps(
 	compute_type: Optional[str] = Form(default=None),
 	vad_filter: Optional[str] = Form(default=None),
 	language: Optional[str] = Form(default=None),
+	initial_prompt: Optional[str] = Form(default=None),
 	diarize: Optional[str] = Form(default=None),
 	min_speakers: Optional[str] = Form(default=None),
 	max_speakers: Optional[str] = Form(default=None),
@@ -509,6 +513,8 @@ async def transcribe_word_timestamps(
 			_parse_bool(os.getenv("LOCAL_TRANSCRIBE_VAD_FILTER"), False),
 		),
 		language=effective_language,
+		initial_prompt=(initial_prompt or os.getenv("LOCAL_TRANSCRIBE_INITIAL_PROMPT", "")).strip()
+		or None,
 		diarize=_parse_bool(
 			diarize,
 			_parse_bool(os.getenv("LOCAL_TRANSCRIBE_DIARIZATION"), True),
@@ -542,6 +548,19 @@ async def transcribe_word_timestamps(
 			else:
 				result["timings_ms"] = {"queue_wait": max(0.0, queue_wait_ms)}
 	except Exception as error:
+		logger.exception("Local transcription request failed")
+		print(
+			"Local transcription request failed",
+			{
+				"file": file.filename,
+				"model": config.model,
+				"device": config.device,
+				"language": config.language,
+				"diarize": config.diarize,
+				"traceback": traceback.format_exc(),
+			},
+			flush=True,
+		)
 		raise HTTPException(status_code=500, detail=str(error)) from error
 	finally:
 		try:

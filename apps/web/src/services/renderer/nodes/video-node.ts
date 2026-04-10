@@ -212,7 +212,10 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 			rendererHeight,
 		});
 
-		const slotDraws = splitScreen.slots.flatMap((slot) => {
+		const visibleSlots = splitScreen.slots.filter(
+			(slot) => slot.isTransparent !== true,
+		);
+		const slotDraws = visibleSlots.flatMap((slot) => {
 			const viewport = viewports.get(slot.slotId);
 			if (!viewport) return [];
 			const slotTransform = resolveVideoSplitScreenSlotTransformFromState({
@@ -263,21 +266,24 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 				},
 			];
 		});
-		const dividerDraws = getVideoSplitScreenDividers({
-			layoutPreset: splitScreen.layoutPreset,
-			viewportBalance: splitScreen.viewportBalance,
-			width: rendererWidth,
-			height: rendererHeight,
-		}).map((divider) => ({
-			solidColor: "#000000",
-			x: divider.x,
-			y: divider.y,
-			width: divider.width,
-			height: divider.height,
-			rotation: 0,
-			opacity: 1,
-			blendMode: "normal" as const,
-		}));
+		const dividerDraws =
+			visibleSlots.length > 1
+				? getVideoSplitScreenDividers({
+						layoutPreset: splitScreen.layoutPreset,
+						viewportBalance: splitScreen.viewportBalance,
+						width: rendererWidth,
+						height: rendererHeight,
+					}).map((divider) => ({
+						solidColor: "#000000",
+						x: divider.x,
+						y: divider.y,
+						width: divider.width,
+						height: divider.height,
+						rotation: 0,
+						opacity: 1,
+						blendMode: "normal" as const,
+					}))
+				: [];
 
 		return [...slotDraws, ...dividerDraws];
 	}

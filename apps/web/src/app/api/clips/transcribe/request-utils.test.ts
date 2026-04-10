@@ -28,10 +28,12 @@ describe("clip transcription request utils", () => {
 			device: "cuda",
 			computeType: "int8_float16",
 			vadFilter: "false",
+			initialPrompt: "Preserve numerals like 25%",
 		});
 
 		expect(form.get("language")).toBe("en");
 		expect(form.get("model")).toBe("medium");
+		expect(form.get("initial_prompt")).toBe("Preserve numerals like 25%");
 	});
 
 	test("includes explicit language in openai transcription form data", () => {

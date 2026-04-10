@@ -37,7 +37,10 @@ import {
 	getVideoReframeSectionByStartTime,
 	normalizeVideoReframeState,
 } from "@/lib/reframe/video-reframe";
-import { validateAndHealCaptionDriftInTracks } from "@/lib/transcript-editor/sync-captions";
+import {
+	dedupeTranscriptEditsInTracks,
+	validateAndHealCaptionDriftInTracks,
+} from "@/lib/transcript-editor/sync-captions";
 import { healLegacyPortraitVideoCoverFitInTracks } from "@/lib/timeline/video-cover-fit";
 import {
 	Tooltip,
@@ -426,7 +429,12 @@ function RenderTreeController() {
 			projectId: activeProject.metadata.id,
 		});
 		if (driftHeal.changed) {
-			editor.timeline.updateTracks(driftHeal.tracks);
+			const deduped = dedupeTranscriptEditsInTracks({
+				tracks: driftHeal.tracks,
+			});
+			editor.timeline.updateTracks(
+				deduped.changed ? deduped.tracks : driftHeal.tracks,
+			);
 		}
 	}, [activeProject, editor.timeline, tracks]);
 

@@ -700,6 +700,45 @@ test("uses the default preset before the first switch", () => {
 		]);
 	});
 
+	test("preserves transparent split-screen slots in resolved state", () => {
+		const element: VideoElement = {
+			...baseElement,
+			splitScreen: {
+				enabled: true,
+				layoutPreset: "top-bottom",
+				slots: [
+					{
+						slotId: "top",
+						mode: "fixed-preset",
+						presetId: "wide",
+						isTransparent: true,
+					},
+					{ slotId: "bottom", mode: "follow-active", presetId: null },
+				],
+				sections: [],
+			},
+		};
+
+		const resolved = resolveVideoSplitScreenAtTime({
+			element,
+			localTime: 5,
+		});
+
+		expect(resolved?.slots[0]).toEqual({
+			slotId: "top",
+			mode: "fixed-preset",
+			presetId: "wide",
+			isTransparent: true,
+			transformOverride: null,
+		});
+		expect(resolved?.slots[1]).toEqual({
+			slotId: "bottom",
+			mode: "follow-active",
+			presetId: "subject",
+			transformOverride: null,
+		});
+	});
+
 	test("split-screen slot transform overrides are honored when manual slot adjustments are enabled", () => {
 		const resolved = resolveVideoSplitScreenSlotTransform({
 			baseTransform: baseElement.transform,
@@ -907,7 +946,89 @@ test("uses the default preset before the first switch", () => {
 		};
 
 		expect(sourceCenter.x).toBeCloseTo(300, 5);
-		expect(sourceCenter.y).toBeCloseTo(213.80009144947405, 5);
+		expect(sourceCenter.y).toBeCloseTo(175.40009144947413, 5);
+		expect(resolved.scale).toBeLessThan(2.5);
+	});
+
+	test("split-screen follow-active slots keep tracked subjects centered inside slots", () => {
+		const resolved = resolveVideoSplitScreenSlotTransformFromState({
+			baseTransform: baseElement.transform,
+			duration: baseElement.duration,
+			reframePresets: [
+				baseElement.reframePresets![0]!,
+				{
+					...baseElement.reframePresets![1]!,
+					motionTracking: {
+						enabled: true,
+						mode: "subject-single-v1",
+						source: "baked-keyframes",
+						animateScale: true,
+						keyframes: [
+							{
+								id: "track-1",
+								time: 0,
+								position: { x: 120, y: -40 },
+								scale: 2.5,
+								subjectCenter: { x: 300, y: 240 },
+								subjectSize: { width: 240, height: 420 },
+							},
+						],
+					},
+				},
+			],
+			reframeSwitches: [
+				{
+					id: "switch-subject",
+					time: 0,
+					presetId: "subject",
+				},
+			],
+			defaultReframePresetId: "wide",
+			localTime: 5,
+			slot: {
+				slotId: "bottom",
+				presetId: null,
+			},
+			canvasWidth: 1080,
+			canvasHeight: 1920,
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+		});
+
+		const viewport = getVideoSplitScreenViewports({
+			layoutPreset: "top-bottom",
+			viewportBalance: "balanced",
+			width: 1080,
+			height: 1920,
+		}).get("bottom");
+		expect(viewport).toBeDefined();
+		if (!viewport) return;
+		const slotCoverScale = Math.max(
+			viewport.width / 1920,
+			viewport.height / 1080,
+		);
+		const viewportAdjustedPosition = {
+			x: resolved.position.x + 1080 / 2 - (viewport.x + viewport.width / 2),
+			y: resolved.position.y + 1920 / 2 - (viewport.y + viewport.height / 2),
+		};
+		const totalScale = slotCoverScale * resolved.scale;
+		const viewportAnchor = {
+			x: viewport.width / 2,
+			y: viewport.height * 0.4,
+		};
+		const sourceCenter = {
+			x: 1920 / 2 - viewportAdjustedPosition.x / totalScale,
+			y:
+				1080 / 2 -
+				(viewportAdjustedPosition.y -
+					(viewportAnchor.y - viewport.height / 2)) /
+					totalScale,
+		};
+
+		expect(sourceCenter.x).toBeCloseTo(300, 5);
+		expect(sourceCenter.y).toBeCloseTo(175.40009144947413, 5);
 		expect(resolved.scale).toBeLessThan(2.5);
 	});
 

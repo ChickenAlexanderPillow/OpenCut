@@ -446,12 +446,13 @@ describe("subject-aware reframe preset generation", () => {
 			sourceHeight: 500,
 		});
 
-		expect(trackingAnchor).toEqual({
+		expect(trackingAnchor).toMatchObject({
 			x: 350,
 			y: 184,
 			kind: "head",
 			source: "head-landmarks",
 		});
+		expect(trackingAnchor?.confidence).toBeGreaterThan(0);
 	});
 
 	test("does not invent an eye midpoint from a single face-detector keypoint", () => {

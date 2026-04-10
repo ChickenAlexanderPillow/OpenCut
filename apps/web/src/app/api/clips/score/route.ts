@@ -3,7 +3,6 @@ import { z } from "zod";
 import { OpenAIViralityScoringProvider } from "@/lib/clips/providers/openai-provider";
 import { mergeScoredCandidates } from "@/lib/clips/scoring";
 
-const MAX_TRANSCRIPT_CHARS = 20000;
 let rateLimitUnavailableLogged = false;
 
 function isRateLimitDisabled(): boolean {
@@ -11,7 +10,6 @@ function isRateLimitDisabled(): boolean {
 }
 
 const requestSchema = z.object({
-	transcript: z.string().min(1),
 	candidates: z.array(
 		z.object({
 			id: z.string().min(1),
@@ -20,16 +18,10 @@ const requestSchema = z.object({
 			duration: z.number(),
 			transcriptSnippet: z.string(),
 			localScore: z.number(),
+			scoringContext: z.string().optional(),
 		}),
 	),
 });
-
-function truncateTranscript({ transcript }: { transcript: string }): string {
-	if (transcript.length <= MAX_TRANSCRIPT_CHARS) {
-		return transcript;
-	}
-	return `${transcript.slice(0, MAX_TRANSCRIPT_CHARS)}\n[Transcript truncated for scoring context length]`;
-}
 
 async function runRateLimitIfAvailable({
 	request,
@@ -90,7 +82,6 @@ export async function POST(request: NextRequest) {
 			model: "gpt-5-mini",
 		});
 		const scoredText = await provider.scoreCandidates({
-			transcript: truncateTranscript({ transcript: validation.data.transcript }),
 			candidates: validation.data.candidates,
 		});
 		const candidates = mergeScoredCandidates({

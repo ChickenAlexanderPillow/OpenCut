@@ -1997,6 +1997,7 @@ function SectionThumbnailStrip({
 								slotId: slot.slotId,
 								mode: slot.mode,
 								presetId: slot.presetId ?? null,
+								isTransparent: slot.isTransparent === true ? true : undefined,
 								transformOverride: slot.transformOverride ?? null,
 							})),
 						}
@@ -2175,7 +2176,10 @@ function SectionThumbnailStrip({
 									width: canvas.width,
 									height: canvas.height,
 								});
-								for (const slot of split.slots) {
+								const visibleSlots = split.slots.filter(
+									(slot) => slot.isTransparent !== true,
+								);
+								for (const slot of visibleSlots) {
 									const logicalViewport = logicalViewports.get(slot.slotId);
 									const viewport = viewports.get(slot.slotId);
 									if (!viewport || !logicalViewport) {
@@ -2233,20 +2237,22 @@ function SectionThumbnailStrip({
 									});
 									context.restore();
 								}
-								const dividerRects = getVideoSplitScreenDividers({
-									layoutPreset: split.layoutPreset,
-									viewportBalance: split.viewportBalance,
-									width: canvas.width,
-									height: canvas.height,
-								});
-								context.fillStyle = "#000000";
-								for (const divider of dividerRects) {
-									context.fillRect(
-										divider.x,
-										divider.y,
-										divider.width,
-										divider.height,
-									);
+								if (visibleSlots.length > 1) {
+									const dividerRects = getVideoSplitScreenDividers({
+										layoutPreset: split.layoutPreset,
+										viewportBalance: split.viewportBalance,
+										width: canvas.width,
+										height: canvas.height,
+									});
+									context.fillStyle = "#000000";
+									for (const divider of dividerRects) {
+										context.fillRect(
+											divider.x,
+											divider.y,
+											divider.width,
+											divider.height,
+										);
+									}
 								}
 							}
 						} else {

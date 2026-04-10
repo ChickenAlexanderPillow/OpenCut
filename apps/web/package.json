@@ -6,9 +6,11 @@
 	"scripts": {
 		"dev": "next dev",
 		"build": "next build",
+		"build:docker": "next build --webpack",
 		"start": "next start",
 		"test:clips:e2e": "bun run tsx scripts/clip-e2e-smoke.ts",
 		"test:clips:aga": "bun scripts/clip-aga-e2e.ts",
+		"test:clips:eval": "bun run tsx scripts/clip-scoring-eval.ts",
 		"test:clips:transcript": "bun run tsx scripts/clip-transcript-e2e.ts",
 		"lint": "biome check src/",
 		"lint:fix": "biome check src/ --write",

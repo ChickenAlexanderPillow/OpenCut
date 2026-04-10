@@ -101,6 +101,7 @@ export interface VideoMotionTracking {
 			| "head-detection"
 			| "head-continuity"
 			| "pose-head"
+			| "low-confidence"
 			| "miss";
 		subjectCenter?: Transform["position"];
 		subjectSize?: {
@@ -173,6 +174,7 @@ export interface VideoSplitScreenSlotBinding {
 	slotId: string;
 	mode: VideoSplitScreenSlotMode;
 	presetId?: string | null;
+	isTransparent?: boolean;
 	transformOverride?: VideoSplitScreenSlotTransformOverride | null;
 	transformOverridesBySlotId?: Record<
 		string,

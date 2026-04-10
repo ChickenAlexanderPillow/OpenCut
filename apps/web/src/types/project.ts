@@ -102,6 +102,7 @@ export interface TProject {
 }
 
 export interface TMediaTranscriptLinkEntry {
+	speakerAnnotationVersion?: number;
 	modelId: string;
 	language: string;
 	text: string;

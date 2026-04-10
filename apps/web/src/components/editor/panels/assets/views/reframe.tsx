@@ -1218,6 +1218,7 @@ export function ReframeView() {
 					selectedPreset?.id ??
 					normalizedVideo?.element.defaultReframePresetId ??
 					null,
+				isTransparent: binding.isTransparent === true ? true : undefined,
 				transformOverride: binding.transformOverride ?? null,
 				transformOverridesBySlotId: binding.transformOverridesBySlotId
 					? { ...binding.transformOverridesBySlotId }
@@ -1363,6 +1364,25 @@ export function ReframeView() {
 		}
 		updateBaseSplitBindings({
 			slots: nextBindings,
+		});
+	};
+
+	const updateSplitSlotTransparency = ({
+		slotId,
+		isTransparent,
+	}: {
+		slotId: string;
+		isTransparent: boolean;
+	}) => {
+		updateBaseSplitBindings({
+			slots: (splitScreen?.slots ?? buildInitialSplitScreen().slots).map((binding) =>
+				binding.slotId === slotId
+					? {
+							...binding,
+							isTransparent: isTransparent ? true : undefined,
+					  }
+					: binding,
+			),
 		});
 	};
 
@@ -2470,6 +2490,20 @@ export function ReframeView() {
 															);
 														})}
 													</div>
+													<label className="flex items-center gap-2 text-xs text-muted-foreground">
+														<input
+															type="checkbox"
+															checked={binding.isTransparent === true}
+															onChange={(event) => {
+																event.stopPropagation();
+																updateSplitSlotTransparency({
+																	slotId: binding.slotId,
+																	isTransparent: event.target.checked,
+																});
+															}}
+														/>
+														Transparent
+													</label>
 												</div>
 												{(() => {
 													const slotTransform = getSplitSlotTransform(binding);

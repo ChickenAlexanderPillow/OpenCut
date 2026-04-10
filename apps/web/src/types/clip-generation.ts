@@ -41,6 +41,7 @@ export interface ClipCandidateDraft {
 	duration: number;
 	transcriptSnippet: string;
 	localScore: number;
+	scoringContext?: string;
 }
 
 export interface ClipCandidate {
@@ -96,6 +97,7 @@ export interface ClipGenerationProjectCacheEntry {
 
 export interface ClipTranscriptCacheEntry {
 	cacheVersion?: number;
+	speakerAnnotationVersion?: number;
 	mediaId: string;
 	fingerprint: string;
 	language: string;

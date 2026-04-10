@@ -230,12 +230,15 @@ export function parseScoredCandidatesFromText({
 }
 
 export function buildScoringPrompt({
-	transcript,
 	candidates,
 }: {
-	transcript: string;
 	candidates: ClipCandidateDraft[];
 }): string {
+	const compactExamples = VIRALITY_PROMPT_EXAMPLES.slice(0, 3).map(
+		(example) =>
+			`${example.label} ${example.expectedOverallRange}: ${example.title} | ${example.why} | ${example.snippet}`,
+	);
+
 	return [
 		"You are a social video clipping analyst.",
 		"Score each candidate for short-form virality potential from 0 to 100.",
@@ -279,12 +282,11 @@ export function buildScoringPrompt({
 		"- 60-69: usable but average; limited viral upside or low novelty",
 		"- <60: weak viral potential or quality issues",
 		"Set failureFlags from: ['cutoff_start','cutoff_end','context_missing','low_density','repetitive','weak_payoff','duration_mismatch']. Use [] when none.",
-		`Reference examples (style anchors, not exact matches):\n${JSON.stringify(VIRALITY_PROMPT_EXAMPLES)}`,
+		`Reference examples (style anchors, not exact matches):\n${compactExamples.join("\n")}`,
 		"Generalization rule: do not reward candidates for matching specific domains (e.g. B2B/sales/payroll/SEO). Score only on transferable virality patterns: hook strength, clarity, emotional charge, shareability, and payoff.",
 		"Do not invent timings or IDs. Use the given candidate IDs.",
 		"Prefer distinct moments over semantically duplicate moments.",
 		"If two candidates are similar quality, choose the one with higher novelty and stronger social-comment potential.",
-		`Transcript:\n${transcript}`,
 		`Candidates:\n${JSON.stringify(
 			candidates.map((candidate) => ({
 				id: candidate.id,
@@ -292,6 +294,7 @@ export function buildScoringPrompt({
 				endTime: candidate.endTime,
 				duration: candidate.duration,
 				transcriptSnippet: candidate.transcriptSnippet,
+				scoringContext: candidate.scoringContext ?? candidate.transcriptSnippet,
 			})),
 		)}`,
 	].join("\n");

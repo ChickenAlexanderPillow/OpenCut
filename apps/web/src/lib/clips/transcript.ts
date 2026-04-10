@@ -21,19 +21,20 @@ import {
 import type { ExternalProjectTranscriptCacheEntry } from "@/types/external-projects";
 
 export const CLIP_TRANSCRIPT_CACHE_VERSION = 2;
+export const TRANSCRIPT_SPEAKER_ANNOTATION_VERSION = 1;
 export const PROJECT_MEDIA_TRANSCRIPT_MODEL: TranscriptionModelId =
 	DEFAULT_TRANSCRIPTION_MODEL;
 export const PROJECT_MEDIA_TRANSCRIPT_LANGUAGE: TranscriptionLanguage = "en";
 const CHUNKED_TRANSCRIPTION_DURATION_THRESHOLD_SECONDS = 4 * 60;
 const CHUNKED_TRANSCRIPTION_FILE_SIZE_THRESHOLD_BYTES = 180 * 1024 * 1024;
-const CHUNKED_TRANSCRIPTION_MIN_WINDOW_SECONDS = 60;
-const CHUNKED_TRANSCRIPTION_MAX_WINDOW_SECONDS = 180;
-const CHUNKED_TRANSCRIPTION_TARGET_CHUNK_COUNT = 8;
-const CHUNKED_TRANSCRIPTION_TARGET_UPLOAD_BYTES = 8 * 1024 * 1024;
+const CHUNKED_TRANSCRIPTION_MIN_WINDOW_SECONDS = 15;
+const CHUNKED_TRANSCRIPTION_MAX_WINDOW_SECONDS = 20;
+const CHUNKED_TRANSCRIPTION_TARGET_CHUNK_COUNT = 24;
+const CHUNKED_TRANSCRIPTION_TARGET_UPLOAD_BYTES = 2 * 1024 * 1024;
 const CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS = 1.5;
 const CHUNK_PROGRESS_HEARTBEAT_MS = 1200;
-const CHUNK_TRANSCRIPTION_CONCURRENCY = 2;
-const CLIP_TRANSCRIPTION_API_TIMEOUT_MS = 120000;
+const CHUNK_TRANSCRIPTION_CONCURRENCY = 1;
+const CLIP_TRANSCRIPTION_API_TIMEOUT_MS = 900000;
 const CLIP_TRANSCRIPTION_TARGET_SAMPLE_RATE = 16000;
 
 function nowMs(): number {
@@ -160,6 +161,7 @@ export function buildClipTranscriptCacheEntryForAsset({
 	});
 	const transcript: ClipTranscriptCacheEntry = {
 		cacheVersion: CLIP_TRANSCRIPT_CACHE_VERSION,
+		speakerAnnotationVersion: TRANSCRIPT_SPEAKER_ANNOTATION_VERSION,
 		mediaId: asset.id,
 		fingerprint,
 		language: resolvedLanguage,
@@ -313,6 +315,15 @@ function isRetryableClipTranscriptionError(error: Error): boolean {
 	);
 }
 
+function isSilentChunkTranscriptionError(error: Error): boolean {
+	const message = error.message.toLowerCase();
+	return (
+		message.includes("asr produced no speech segments") ||
+		message.includes("no active speech found in audio") ||
+		message.includes("no word-level timestamps were produced")
+	);
+}
+
 async function transcribeWithClipApi({
 	samples,
 	sampleRate,
@@ -359,6 +370,7 @@ async function transcribeWavBlobWithClipApi({
 	cacheKey,
 	bypassCache = false,
 	endpointPath = "/api/clips/transcribe",
+	diarize = true,
 }: {
 	wavBlob: Blob;
 	language: TranscriptionLanguage;
@@ -366,6 +378,7 @@ async function transcribeWavBlobWithClipApi({
 	cacheKey: string;
 	bypassCache?: boolean;
 	endpointPath?: string;
+	diarize?: boolean;
 }): Promise<{
 	text: string;
 	segments: TranscriptionSegment[];
@@ -387,6 +400,7 @@ async function transcribeWavBlobWithClipApi({
 
 	const endpoints = resolveClipTranscriptionApiCandidates({ endpointPath });
 	let lastError: Error | null = null;
+	const effectiveCacheKey = `${cacheKey}:diarize:${diarize ? "1" : "0"}`;
 
 	for (const endpoint of endpoints) {
 		const controller = new AbortController();
@@ -403,13 +417,14 @@ async function transcribeWavBlobWithClipApi({
 					modelId,
 				}),
 			);
-			if (!bypassCache && cacheKey.trim().length > 0) {
-				form.append("cacheKey", cacheKey);
+			if (!bypassCache && effectiveCacheKey.trim().length > 0) {
+				form.append("cacheKey", effectiveCacheKey);
 			}
 			if (language !== "auto") {
 				form.append("language", language);
 			}
 			form.append("sourceModel", modelId);
+			form.append("diarize", diarize ? "true" : "false");
 
 			const response = await fetch(endpoint, {
 				method: "POST",
@@ -1011,16 +1026,38 @@ async function transcribeAssetInChunks({
 					activeChunks += 1;
 					try {
 						const prepared = preparedByIndex.get(plan.chunkIndex);
-						const chunkResult =
-							!prepared || prepared.wavBlob.size <= 0
-								? { text: "", segments: [], words: [] }
-								: await transcribeWavBlobWithClipApi({
-										wavBlob: prepared.wavBlob,
-										language,
-										modelId,
-										cacheKey: `${asset.id}:${modelId}:${language}:chunk:${plan.chunkIndex}:${plan.decodeStart.toFixed(3)}:${plan.decodeEnd.toFixed(3)}`,
-										bypassCache,
-									});
+						let chunkResult = { text: "", segments: [], words: [] } as {
+							text: string;
+							segments: TranscriptionSegment[];
+							words: TranscriptionWord[];
+						};
+						if (prepared && prepared.wavBlob.size > 0) {
+							try {
+								chunkResult = await transcribeWavBlobWithClipApi({
+									wavBlob: prepared.wavBlob,
+									language,
+									modelId,
+									cacheKey: `${asset.id}:${modelId}:${language}:chunk:${plan.chunkIndex}:${plan.decodeStart.toFixed(3)}:${plan.decodeEnd.toFixed(3)}`,
+									bypassCache,
+									diarize: true,
+								});
+							} catch (error) {
+								const resolvedError =
+									error instanceof Error
+										? error
+										: new Error("Chunk transcription failed");
+								if (!isSilentChunkTranscriptionError(resolvedError)) {
+									throw resolvedError;
+								}
+								console.warn("Skipping silent transcript chunk", {
+									assetId: asset.id,
+									chunkIndex: plan.chunkIndex,
+									decodeStart: plan.decodeStart,
+									decodeEnd: plan.decodeEnd,
+									error: resolvedError.message,
+								});
+							}
+						}
 
 						const adjustedSegments = chunkResult.segments
 							.map((segment) => ({
@@ -1116,6 +1153,15 @@ async function transcribeAssetInChunks({
 	const normalizedWords = normalizeTranscriptionWords({
 		words: mergedWords,
 	});
+	if (
+		normalizedWords.length === 0 &&
+		normalizedSegments.length === 0 &&
+		mergedTextParts.join(" ").trim().length === 0
+	) {
+		throw new Error(
+			"Clip transcription produced no speech across all prepared chunks",
+		);
+	}
 	const totalDurationMs = Math.round(nowMs() - totalStartedAt);
 	console.info("Chunked transcript pipeline metrics", {
 		assetId: asset.id,
@@ -1162,6 +1208,12 @@ function getValidClipTranscriptCacheEntry({
 	const entry = project.clipTranscriptCache?.[key];
 	if (!entry) return null;
 	if ((entry.cacheVersion ?? 0) !== CLIP_TRANSCRIPT_CACHE_VERSION) return null;
+	if (
+		(entry.speakerAnnotationVersion ?? 0) <
+		TRANSCRIPT_SPEAKER_ANNOTATION_VERSION
+	) {
+		return null;
+	}
 	const expectedFingerprint = buildClipTranscriptFingerprint({
 		asset,
 		modelId,
@@ -1238,6 +1290,12 @@ function getLinkedProjectTranscriptForMedia({
 	if (!entry) return null;
 	if (entry.modelId !== modelId) return null;
 	if ((entry.language ?? "auto") !== (language ?? "auto")) return null;
+	if (
+		(entry.speakerAnnotationVersion ?? 0) <
+		TRANSCRIPT_SPEAKER_ANNOTATION_VERSION
+	) {
+		return null;
+	}
 	return { linkKey, entry };
 }
 
@@ -1294,6 +1352,7 @@ export function buildClipTranscriptEntryFromLinkedExternalTranscript({
 		cacheKey,
 		transcript: {
 			cacheVersion: CLIP_TRANSCRIPT_CACHE_VERSION,
+			speakerAnnotationVersion: TRANSCRIPT_SPEAKER_ANNOTATION_VERSION,
 			mediaId: asset.id,
 			fingerprint,
 			language: resolvedLanguage,

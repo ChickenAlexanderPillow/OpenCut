@@ -10,6 +10,7 @@ import {
 	resolveVideoSplitScreenAtTime,
 } from "@/lib/reframe/video-reframe";
 import { resolveMotionTrackedSubjectFrame } from "@/lib/reframe/motion-tracking";
+import { snapTimeToFrame } from "@/lib/time";
 import { useReframeStore } from "@/stores/reframe-store";
 import type { VideoElement, VideoReframePreset } from "@/types/timeline";
 
@@ -28,6 +29,7 @@ type RawDebugSeries = {
 			| "head-detection"
 			| "head-continuity"
 			| "pose-head"
+			| "low-confidence"
 			| "miss";
 	}>;
 	current:
@@ -40,6 +42,7 @@ type RawDebugSeries = {
 					| "head-detection"
 					| "head-continuity"
 					| "pose-head"
+					| "low-confidence"
 					| "miss";
 		  }
 		| null;
@@ -102,6 +105,7 @@ function buildRawPresetDebugSeries({
 					| "head-detection"
 					| "head-continuity"
 					| "pose-head"
+					| "low-confidence"
 					| "miss";
 			} | null>((closest, sample) => {
 				const timeDelta = Math.abs(sample.time - localTime);
@@ -126,8 +130,8 @@ function buildRawPresetDebugSeries({
 						source: sample.source,
 					}))
 				: fallbackPath.map((keyframe) => ({
-						x: keyframe.subjectCenter!.x,
-						y: keyframe.subjectCenter!.y,
+						x: keyframe.subjectCenter?.x ?? Number.NaN,
+						y: keyframe.subjectCenter?.y ?? Number.NaN,
 						source: keyframe.trackingSource ?? "eye",
 					})),
 		current: currentSubjectFrame?.center
@@ -147,6 +151,7 @@ function getSampleSourceColor(
 		| "head-detection"
 		| "head-continuity"
 		| "pose-head"
+		| "low-confidence"
 		| "miss",
 ): string {
 	switch (source) {
@@ -160,6 +165,8 @@ function getSampleSourceColor(
 			return "#ffffff";
 		case "pose-head":
 			return "#34d399";
+		case "low-confidence":
+			return "#fb7185";
 		case "miss":
 			return "#f87171";
 	}
@@ -172,6 +179,7 @@ function getSampleSourceLabel(
 		| "head-detection"
 		| "head-continuity"
 		| "pose-head"
+		| "low-confidence"
 		| "miss",
 ): string {
 	switch (source) {
@@ -185,6 +193,8 @@ function getSampleSourceLabel(
 			return "Head Hold";
 		case "pose-head":
 			return "Pose Head";
+		case "low-confidence":
+			return "Low Conf";
 		case "miss":
 			return "Miss";
 	}
@@ -205,6 +215,7 @@ export function MotionTrackingDebugOverlay() {
 	const tracks = editor.timeline.getTracks();
 	const selectedElements = editor.selection.getSelectedElements();
 	const mediaAssets = editor.media.getAssets();
+	const projectFps = Math.max(1, editor.project.getActive().settings.fps);
 
 	const debugData = useMemo(() => {
 		const selectedElementIds = new Set(
@@ -238,10 +249,16 @@ export function MotionTrackingDebugOverlay() {
 		const sourceHeight = sourceAsset?.height ?? 0;
 		if (sourceWidth <= 0 || sourceHeight <= 0) return null;
 
-		const localTime = Math.max(
-			0,
-			Math.min(normalizedElement.duration, playbackTime - normalizedElement.startTime),
-		);
+		const localTime = snapTimeToFrame({
+			time: Math.max(
+				0,
+				Math.min(
+					normalizedElement.duration,
+					playbackTime - normalizedElement.startTime,
+				),
+			),
+			fps: projectFps,
+		});
 		const activeSplitScreen = resolveVideoSplitScreenAtTime({
 			element: normalizedElement,
 			localTime,
@@ -293,6 +310,7 @@ export function MotionTrackingDebugOverlay() {
 		selectedPresetIdByElementId,
 		selectedSplitPreviewByElementId,
 		tracks,
+		projectFps,
 	]);
 
 	if (!debugData) return null;
@@ -396,6 +414,7 @@ export function MotionTrackingDebugOverlay() {
 							"head-detection",
 							"head-continuity",
 							"pose-head",
+							"low-confidence",
 							"miss",
 						] as const
 					).map((source) => (

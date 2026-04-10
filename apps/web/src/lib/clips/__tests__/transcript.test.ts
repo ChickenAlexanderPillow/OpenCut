@@ -165,4 +165,63 @@ describe("clipTranscriptSegmentsForWindow", () => {
 		expect(result.source).toBe("cache");
 		expect(result.transcript.segments).toEqual(cached.transcript.segments);
 	});
+
+	test("ignores legacy project media transcript links without speaker annotation version", async () => {
+		const asset = buildTestAsset();
+		const cached = buildClipTranscriptCacheEntryForAsset({
+			asset,
+			modelId: "whisper-large-v3",
+			language: "en",
+			text: "Fresh diarized transcript.",
+			segments: [
+				{
+					text: "Fresh diarized transcript.",
+					start: 0,
+					end: 3,
+					speakerId: "SPEAKER_00",
+				},
+			],
+			words: [
+				{
+					word: "Fresh",
+					start: 0,
+					end: 1,
+					speakerId: "SPEAKER_00",
+				},
+				{
+					word: "diarized",
+					start: 1,
+					end: 2,
+					speakerId: "SPEAKER_00",
+				},
+			],
+		});
+		const project: TProject = {
+			...buildTestProject(),
+			mediaTranscriptLinks: {
+				legacy: {
+					modelId: "whisper-large-v3",
+					language: "en",
+					text: "Old transcript without speakers.",
+					segments: [{ text: "Old transcript without speakers.", start: 0, end: 3 }],
+					words: [{ word: "Old", start: 0, end: 1 }],
+					updatedAt: new Date("2026-01-01T00:00:00.000Z").toISOString(),
+				},
+			},
+			clipTranscriptCache: {
+				[cached.cacheKey]: cached.transcript,
+			},
+		};
+		asset.transcriptLinkKey = "legacy";
+
+		const result = await getOrCreateClipTranscriptForAsset({
+			project,
+			asset,
+			modelId: "whisper-large-v3",
+			language: "en",
+		});
+
+		expect(result.source).toBe("cache");
+		expect(result.transcript.words?.[0]?.speakerId).toBe("SPEAKER_00");
+	});
 });

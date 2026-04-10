@@ -7,6 +7,7 @@ import {
 	getOrCreateClipTranscriptForAsset,
 	PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
 	PROJECT_MEDIA_TRANSCRIPT_MODEL,
+	TRANSCRIPT_SPEAKER_ANNOTATION_VERSION,
 	transcribeClipTranscriptLocallyForAsset,
 } from "@/lib/clips/transcript";
 import {
@@ -78,6 +79,7 @@ export function buildTranscriptWordsFromSegments({
 				text: token,
 				startTime,
 				endTime,
+				speakerId: segment.speakerId,
 				removed: false,
 			};
 		});
@@ -226,6 +228,7 @@ export async function prepareImportedAssetWithTranscript({
 			mediaTranscriptLinks: {
 				...(project.mediaTranscriptLinks ?? {}),
 				[linkKey]: {
+					speakerAnnotationVersion: TRANSCRIPT_SPEAKER_ANNOTATION_VERSION,
 					modelId: PROJECT_MEDIA_TRANSCRIPT_MODEL,
 					language: PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
 					text,
@@ -282,6 +285,7 @@ export async function autoLinkTranscriptAndCaptionsForMediaElement({
 		mediaTranscriptLinks: {
 			...(activeProject.mediaTranscriptLinks ?? {}),
 			[linkKey]: {
+				speakerAnnotationVersion: TRANSCRIPT_SPEAKER_ANNOTATION_VERSION,
 				modelId: PROJECT_MEDIA_TRANSCRIPT_MODEL,
 				language: PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
 				text: transcriptResult.transcript.text,

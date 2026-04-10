@@ -97,6 +97,8 @@ export function TimelineRuler({
 		inPoint: number;
 		outPoint: number;
 	} | null>(null);
+	const dragPointerIdRef = useRef<number | null>(null);
+	const dragPointerTargetRef = useRef<HTMLElement | null>(null);
 	const contextMenuRef = useRef<HTMLDivElement | null>(null);
 	const [contextMenu, setContextMenu] = useState<{
 		open: boolean;
@@ -224,6 +226,11 @@ export function TimelineRuler({
 		event.preventDefault();
 		event.stopPropagation();
 		dragTypeRef.current = type;
+		dragPointerIdRef.current = event.pointerId;
+		dragPointerTargetRef.current = event.currentTarget as HTMLElement;
+		try {
+			event.currentTarget.setPointerCapture?.(event.pointerId);
+		} catch {}
 	};
 
 	const handleRangeMouseDown = (event: React.PointerEvent) => {
@@ -234,6 +241,11 @@ export function TimelineRuler({
 		event.preventDefault();
 		event.stopPropagation();
 		dragTypeRef.current = "range";
+		dragPointerIdRef.current = event.pointerId;
+		dragPointerTargetRef.current = event.currentTarget as HTMLElement;
+		try {
+			event.currentTarget.setPointerCapture?.(event.pointerId);
+		} catch {}
 		rangeDragStartRef.current = {
 			mouseTime,
 			inPoint,
@@ -280,9 +292,15 @@ export function TimelineRuler({
 	);
 
 	useEffect(() => {
-		const onMouseMove = (event: MouseEvent) => {
+		const onPointerMove = (event: PointerEvent) => {
 			const dragType = dragTypeRef.current;
 			if (!dragType) return;
+			if (
+				dragPointerIdRef.current !== null &&
+				event.pointerId !== dragPointerIdRef.current
+			) {
+				return;
+			}
 			const time = getTimeFromClientX({ clientX: event.clientX });
 			if (time === null) return;
 			if (dragType === "range") {
@@ -324,17 +342,42 @@ export function TimelineRuler({
 			onSnapPointChange?.(snapPoint);
 		};
 
-		const onMouseUp = () => {
+		const finishDrag = (event?: PointerEvent) => {
+			if (
+				event &&
+				dragPointerIdRef.current !== null &&
+				event.pointerId !== dragPointerIdRef.current
+			) {
+				return;
+			}
+			const pointerTarget = dragPointerTargetRef.current;
+			const pointerId = dragPointerIdRef.current;
+			if (
+				pointerTarget &&
+				pointerId !== null &&
+				pointerTarget.hasPointerCapture?.(pointerId)
+			) {
+				pointerTarget.releasePointerCapture?.(pointerId);
+			}
+			dragPointerIdRef.current = null;
+			dragPointerTargetRef.current = null;
 			dragTypeRef.current = null;
 			rangeDragStartRef.current = null;
 			onSnapPointChange?.(null);
 		};
 
-		window.addEventListener("mousemove", onMouseMove);
-		window.addEventListener("mouseup", onMouseUp);
+		window.addEventListener("pointermove", onPointerMove);
+		const onPointerUp = (event: PointerEvent) => finishDrag(event);
+		const onPointerCancel = (event: PointerEvent) => finishDrag(event);
+		const onWindowBlur = () => finishDrag();
+		window.addEventListener("pointerup", onPointerUp);
+		window.addEventListener("pointercancel", onPointerCancel);
+		window.addEventListener("blur", onWindowBlur);
 		return () => {
-			window.removeEventListener("mousemove", onMouseMove);
-			window.removeEventListener("mouseup", onMouseUp);
+			window.removeEventListener("pointermove", onPointerMove);
+			window.removeEventListener("pointerup", onPointerUp);
+			window.removeEventListener("pointercancel", onPointerCancel);
+			window.removeEventListener("blur", onWindowBlur);
 		};
 	}, [
 		duration,
@@ -415,6 +458,7 @@ export function TimelineRuler({
 							left: `${startPx}px`,
 							width: `${Math.max(0, endPx - startPx)}px`,
 						}}
+						onMouseDown={handleRulerTrackingMouseDown}
 						onPointerDown={handleRangeMouseDown}
 						onContextMenu={handleRangeContextMenu}
 					>
@@ -436,6 +480,7 @@ export function TimelineRuler({
 							"hover:bg-emerald-500/15",
 						)}
 						style={{ left: `${startPx}px` }}
+						onMouseDown={handleRulerTrackingMouseDown}
 						onPointerDown={(event) =>
 							handleMarkerMouseDown({ event, type: "in" })
 						}
@@ -452,6 +497,7 @@ export function TimelineRuler({
 							"hover:bg-rose-500/15",
 						)}
 						style={{ left: `${endPx}px` }}
+						onMouseDown={handleRulerTrackingMouseDown}
 						onPointerDown={(event) =>
 							handleMarkerMouseDown({ event, type: "out" })
 						}

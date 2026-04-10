@@ -1,7 +1,7 @@
 import type { ClipCandidateDraft } from "@/types/clip-generation";
 
 export interface ScoreCandidatesParams {
-	transcript: string;
+	transcript?: string;
 	candidates: ClipCandidateDraft[];
 }
 

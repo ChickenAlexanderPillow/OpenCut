@@ -324,7 +324,10 @@ export abstract class VisualNode<
 				rendererWidth: renderer.width,
 				rendererHeight: renderer.height,
 			});
-			for (const slot of splitScreen.slots) {
+			const visibleSlots = splitScreen.slots.filter(
+				(slot) => slot.isTransparent !== true,
+			);
+			for (const slot of visibleSlots) {
 				const viewport = viewports.get(slot.slotId);
 				if (!viewport) continue;
 				const slotTransform = resolveVideoSplitScreenSlotTransformFromState({
@@ -383,25 +386,27 @@ export abstract class VisualNode<
 				);
 				renderer.context.restore();
 			}
-			const dividerRects = getVideoSplitScreenDividers({
-				layoutPreset: splitScreen.layoutPreset,
-				viewportBalance: splitScreen.viewportBalance,
-				width: renderer.width,
-				height: renderer.height,
-			});
-			renderer.context.save();
-			renderer.context.globalCompositeOperation = "source-over";
-			renderer.context.globalAlpha = 1;
-			renderer.context.fillStyle = "#000000";
-			for (const divider of dividerRects) {
-				renderer.context.fillRect(
-					divider.x,
-					divider.y,
-					divider.width,
-					divider.height,
-				);
+			if (visibleSlots.length > 1) {
+				const dividerRects = getVideoSplitScreenDividers({
+					layoutPreset: splitScreen.layoutPreset,
+					viewportBalance: splitScreen.viewportBalance,
+					width: renderer.width,
+					height: renderer.height,
+				});
+				renderer.context.save();
+				renderer.context.globalCompositeOperation = "source-over";
+				renderer.context.globalAlpha = 1;
+				renderer.context.fillStyle = "#000000";
+				for (const divider of dividerRects) {
+					renderer.context.fillRect(
+						divider.x,
+						divider.y,
+						divider.width,
+						divider.height,
+					);
+				}
+				renderer.context.restore();
 			}
-			renderer.context.restore();
 			renderer.context.restore();
 			return;
 		}

@@ -216,6 +216,7 @@ function ToolbarLeftSection() {
 }
 
 type QuickReframePresetKind =
+	| "subject"
 	| "subject-left"
 	| "subject-right"
 	| "split-screen";
@@ -226,6 +227,9 @@ function getQuickReframePresetKind({
 	name: string;
 }): QuickReframePresetKind | null {
 	const normalized = name.trim().toLowerCase();
+	if (normalized === "subject") {
+		return "subject";
+	}
 	if (normalized === "subject left" || normalized.includes("left")) {
 		return "subject-left";
 	}
@@ -245,6 +249,7 @@ function getQuickReframePresets({
 	kind: QuickReframePresetKind;
 }> {
 	const kindOrder: QuickReframePresetKind[] = [
+		"subject",
 		"subject-left",
 		"subject-right",
 	];
@@ -432,6 +437,9 @@ function QuickReframeToolbarControl() {
 			: activeSplitSection
 				? "__split__"
 				: (activeSection?.presetId ?? null);
+	const hasDetectedAngles =
+		(selectedVideo?.element.reframePresets?.length ?? 0) > 0 ||
+		Boolean(selectedVideo?.element.splitScreen);
 	const expanded = isPinnedOpen || (isHovered && !hoverSuppressed);
 
 	const clearPreviewOverrides = ({ elementId }: { elementId: string }) => {
@@ -862,7 +870,7 @@ function QuickReframeToolbarControl() {
 								<TooltipContent>Collapse reframe tray</TooltipContent>
 							</Tooltip>
 						)}
-						{quickPresets.length === 0 ? (
+						{!hasDetectedAngles ? (
 							<div className="text-muted-foreground px-2 text-xs">
 								No detected angles
 							</div>
@@ -993,6 +1001,9 @@ function ReframeTrayIcon({ className }: { className?: string }) {
 }
 
 function QuickReframePresetIcon({ kind }: { kind: QuickReframePresetKind }) {
+	if (kind === "subject") {
+		return <PersonCameraGlyph className="h-4 w-4" />;
+	}
 	if (kind === "split-screen") {
 		return <SplitScreenGlyph className="h-4 w-4" />;
 	}

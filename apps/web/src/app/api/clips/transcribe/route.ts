@@ -9,6 +9,8 @@ const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 const MAX_WORDS = 20000;
 const CLIP_TRANSCRIPTION_CACHE_TTL_MS = 15 * 60 * 1000;
 const CLIP_TRANSCRIPTION_CACHE_MAX_ENTRIES = 500;
+const DEFAULT_TRANSCRIPTION_INITIAL_PROMPT =
+	"Preserve numerals in digit form when clearly spoken, including percentages like 25%, dates like 2024, and amounts like $5.";
 let rateLimitUnavailableLogged = false;
 
 type ClipTranscriptionSuccessPayload = {
@@ -225,10 +227,12 @@ async function callLocalWhisperX({
 	file,
 	requestedModel,
 	language,
+	diarize,
 }: {
 	file: File;
 	requestedModel: string;
 	language?: string | null;
+	diarize?: boolean;
 }): Promise<{
 	segments: Array<{
 		text: string;
@@ -266,11 +270,14 @@ async function callLocalWhisperX({
 		computeType: webEnv.LOCAL_TRANSCRIBE_COMPUTE_TYPE || "float16",
 		vadFilter:
 			(process.env.LOCAL_TRANSCRIBE_VAD_FILTER ?? "false").trim() || "false",
-		diarize: webEnv.LOCAL_TRANSCRIBE_DIARIZATION_ENABLED,
+		diarize,
+		initialPrompt:
+			process.env.LOCAL_TRANSCRIBE_INITIAL_PROMPT?.trim() ||
+			DEFAULT_TRANSCRIPTION_INITIAL_PROMPT,
 	});
 
 	const controller = new AbortController();
-	const timeout = webEnv.LOCAL_TRANSCRIBE_TIMEOUT_MS ?? 120000;
+	const timeout = webEnv.LOCAL_TRANSCRIBE_TIMEOUT_MS ?? 900000;
 	const timeoutId = setTimeout(
 		() => controller.abort("Local transcription timed out"),
 		timeout,
@@ -382,6 +389,11 @@ export async function POST(request: NextRequest) {
 		const language = resolveRequestedClipTranscriptionLanguage({
 			language: form.get("language"),
 		});
+		const diarizeValue = form.get("diarize");
+		const diarize =
+			typeof diarizeValue === "string"
+				? diarizeValue.trim().toLowerCase() === "true"
+				: webEnv.LOCAL_TRANSCRIBE_DIARIZATION_ENABLED;
 		if (!(file instanceof File)) {
 			return NextResponse.json({ error: "file is required" }, { status: 400 });
 		}
@@ -406,6 +418,7 @@ export async function POST(request: NextRequest) {
 						file,
 						requestedModel: model,
 						language,
+						diarize,
 					});
 					console.info("Clip transcription metrics", {
 						engine: result.engine,

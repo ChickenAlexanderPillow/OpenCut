@@ -284,6 +284,27 @@ export function getEarliestMainTrackElement({
 	);
 }
 
+function hasVisualCoverageAtTimelineStart({
+	tracks,
+	excludeElementId,
+}: {
+	tracks: TimelineTrack[];
+	excludeElementId?: string;
+}): boolean {
+	return tracks.some((track) => {
+		if (track.type !== "video" || track.hidden === true) {
+			return false;
+		}
+		return track.elements.some((element) => {
+			if (element.id === excludeElementId) {
+				return false;
+			}
+			const endTime = element.startTime + Math.max(0, element.duration);
+			return element.startTime <= 0.000001 && endTime > 0.000001;
+		});
+	});
+}
+
 export function enforceMainTrackStart({
 	tracks,
 	targetTrackId,
@@ -306,12 +327,28 @@ export function enforceMainTrackStart({
 	});
 
 	if (!earliestElement) {
+		if (
+			hasVisualCoverageAtTimelineStart({
+				tracks,
+				excludeElementId,
+			})
+		) {
+			return requestedStartTime;
+		}
 		return 0;
 	}
 
 	// main track must always start at time 0; if this element would
 	// become the earliest, pin it to the start
 	if (requestedStartTime <= earliestElement.startTime) {
+		if (
+			hasVisualCoverageAtTimelineStart({
+				tracks,
+				excludeElementId,
+			})
+		) {
+			return requestedStartTime;
+		}
 		return 0;
 	}
 

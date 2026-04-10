@@ -162,6 +162,7 @@ export interface VideoSplitScreenResolvedSlot {
 	slotId: string;
 	mode: VideoSplitScreenSlotBinding["mode"];
 	presetId: string | null;
+	isTransparent?: boolean;
 	transformOverride: VideoSplitScreenSlotBinding["transformOverride"] | null;
 	transformOverridesBySlotId?: VideoSplitScreenSlotBinding["transformOverridesBySlotId"];
 	transformAdjustmentsBySlotId?: VideoSplitScreenSlotBinding["transformAdjustmentsBySlotId"];
@@ -250,6 +251,27 @@ function normalizeSplitSlotTransformAdjustment(
 				}
 			: undefined,
 		scaleMultiplier: adjustment.scaleMultiplier,
+	};
+}
+
+function normalizeVideoSplitScreenSlotBinding({
+	binding,
+}: {
+	binding: VideoSplitScreenSlotBinding;
+}): VideoSplitScreenSlotBinding {
+	return {
+		...binding,
+		...(binding.isTransparent === true ? { isTransparent: true } : {}),
+		transformOverride: normalizeSplitSlotTransformOverride(
+			binding.transformOverride,
+		),
+		transformOverridesBySlotId: normalizeSplitSlotTransformOverridesBySlotId(
+			binding.transformOverridesBySlotId,
+		),
+		transformAdjustmentsBySlotId:
+			normalizeSplitSlotTransformAdjustmentsBySlotId(
+				binding.transformAdjustmentsBySlotId,
+			),
 	};
 }
 
@@ -540,15 +562,21 @@ function deriveAutoSplitSlotTransformFromTrackedSubject({
 		8,
 	);
 	const totalScale = slotCoverScale * scale;
+	const trackedFaceCenter = {
+		x: trackedSubjectCenter.x,
+		y:
+			trackedSubjectCenter.y -
+			Math.max(1, trackedSubjectSize?.height ?? effectiveSubjectHeight) * 0.18,
+	};
 	const estimatedHeadTop =
-		trackedSubjectCenter.y -
+		trackedFaceCenter.y -
 		Math.max(1, trackedSubjectSize?.height ?? effectiveSubjectHeight) * 0.34;
 	const minimumHeadroomInSource = Math.max(
 		Math.max(1, trackedSubjectSize?.height ?? effectiveSubjectHeight) * 0.14,
 		sourceHeight * 0.02,
 	);
 	const minViewportAnchorForHeadroom =
-		(trackedSubjectCenter.y - (estimatedHeadTop - minimumHeadroomInSource)) *
+		(trackedFaceCenter.y - (estimatedHeadTop - minimumHeadroomInSource)) *
 		totalScale;
 	const guardedViewportAnchor = {
 		x: desiredViewportAnchor.x,
@@ -559,7 +587,7 @@ function deriveAutoSplitSlotTransformFromTrackedSubject({
 		),
 	};
 	return buildTransformForSourcePointInViewport({
-		sourcePoint: trackedSubjectCenter,
+		sourcePoint: trackedFaceCenter,
 		viewportPoint: guardedViewportAnchor,
 		viewport,
 		canvasWidth,
@@ -1277,16 +1305,16 @@ function normalizeVideoSplitScreenState({
 				candidate?.mode === "fixed-preset" && normalizedPresetId
 					? "fixed-preset"
 					: "follow-active";
-			return {
-				slotId,
-				mode,
-				presetId: mode === "fixed-preset" ? normalizedPresetId : null,
-				transformOverride: normalizeSplitSlotTransformOverride(
-					candidate?.transformOverride,
-				),
-				transformOverridesBySlotId: (() => {
-					const normalizedOverrides =
-						normalizeSplitSlotTransformOverridesBySlotId(
+			return normalizeVideoSplitScreenSlotBinding({
+				binding: {
+					slotId,
+					mode,
+					presetId: mode === "fixed-preset" ? normalizedPresetId : null,
+					isTransparent: candidate?.isTransparent === true ? true : undefined,
+					transformOverride: candidate?.transformOverride,
+					transformOverridesBySlotId: (() => {
+						const normalizedOverrides =
+							normalizeSplitSlotTransformOverridesBySlotId(
 							candidate?.transformOverridesBySlotId,
 						) ?? {};
 					const currentOverride = normalizeSplitSlotTransformOverride(
@@ -1299,11 +1327,12 @@ function normalizeVideoSplitScreenState({
 						? normalizedOverrides
 						: undefined;
 				})(),
-				transformAdjustmentsBySlotId:
-					normalizeSplitSlotTransformAdjustmentsBySlotId(
-						candidate?.transformAdjustmentsBySlotId,
-					),
-			};
+					transformAdjustmentsBySlotId:
+						normalizeSplitSlotTransformAdjustmentsBySlotId(
+							candidate?.transformAdjustmentsBySlotId,
+						),
+				},
+			});
 		});
 
 	const sections = (splitScreen.sections ?? [])
@@ -1835,6 +1864,38 @@ function resolveVideoSplitScreenSlotBaseTransformFromState({
 	});
 }
 
+function resolveEffectiveVideoSplitScreenSlotPreset({
+	slot,
+	duration,
+	reframePresets,
+	reframeSwitches,
+	defaultReframePresetId,
+	localTime,
+}: {
+	slot: Pick<VideoSplitScreenSlotBinding, "presetId">;
+	duration: number;
+	reframePresets?: VideoElement["reframePresets"];
+	reframeSwitches?: VideoElement["reframeSwitches"];
+	defaultReframePresetId?: string | null;
+	localTime: number;
+}): VideoReframePreset | null {
+	const effectivePresetId =
+		slot.presetId ??
+		getActiveReframePresetIdFromState({
+			defaultReframePresetId,
+			reframeSwitches,
+			duration,
+			localTime,
+		});
+	if (!effectivePresetId) {
+		return null;
+	}
+	return (
+		reframePresets?.find((candidate) => candidate.id === effectivePresetId) ??
+		null
+	);
+}
+
 function deriveSplitSlotSeedTransformFromBase({
 	baseTransform,
 	slotId,
@@ -2152,9 +2213,14 @@ export function resolveVideoSplitScreenSlotTransform({
 		localTime,
 		slot,
 	});
-	const preset = slot.presetId
-		? (reframePresets?.find((candidate) => candidate.id === slot.presetId) ?? null)
-		: null;
+	const preset = resolveEffectiveVideoSplitScreenSlotPreset({
+		slot,
+		duration,
+		reframePresets,
+		reframeSwitches,
+		defaultReframePresetId,
+		localTime,
+	});
 	const trackedSubjectFrame = resolveMotionTrackedSubjectFrame({
 		motionTracking: preset?.motionTracking,
 		localTime,
@@ -2244,9 +2310,14 @@ export function resolveVideoSplitScreenSlotTransformFromState({
 		localTime,
 		slot,
 	});
-	const preset = slot.presetId
-		? (reframePresets?.find((candidate) => candidate.id === slot.presetId) ?? null)
-		: null;
+	const preset = resolveEffectiveVideoSplitScreenSlotPreset({
+		slot,
+		duration,
+		reframePresets,
+		reframeSwitches,
+		defaultReframePresetId,
+		localTime,
+	});
 	const trackedSubjectFrame = resolveMotionTrackedSubjectFrame({
 		motionTracking: preset?.motionTracking,
 		localTime,
@@ -2536,6 +2607,7 @@ export function resolveVideoSplitScreenAtTime({
 				slotId: slot.slotId,
 				mode: binding.mode,
 				presetId,
+				...(binding.isTransparent === true ? { isTransparent: true } : {}),
 				transformOverride:
 					getEffectiveVideoSplitScreenSlotTransformOverride({
 						slot: binding,
@@ -2610,6 +2682,7 @@ export function resolveVideoSplitScreenAtTimeFromState({
 				slotId: slot.slotId,
 				mode: slot.mode,
 				presetId,
+				...(slot.isTransparent === true ? { isTransparent: true } : {}),
 				transformOverride:
 					getEffectiveVideoSplitScreenSlotTransformOverride({
 						slot,

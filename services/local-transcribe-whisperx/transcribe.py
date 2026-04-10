@@ -6,7 +6,7 @@ import os
 import re
 import time
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +30,69 @@ MIN_WORD_DURATION_SECONDS = 0.01
 WORD_MATCH_LOOKAHEAD = 6
 WHISPERX_BATCH_SIZE = 16
 WHISPERX_BEAM_SIZE = 5
+DEFAULT_ASR_VAD_METHOD = "pyannote"
+DEFAULT_ASR_VAD_CHUNK_SIZE = 20
+DEFAULT_ASR_VAD_ONSET = 0.35
+DEFAULT_ASR_VAD_OFFSET = 0.2
+
+
+def _get_env_float(name: str, default: float) -> float:
+	raw = os.getenv(name)
+	if raw is None:
+		return default
+	try:
+		value = float(raw)
+	except Exception:
+		return default
+	return value if value >= 0 else default
+
+
+def _get_env_int(name: str, default: int) -> int:
+	raw = os.getenv(name)
+	if raw is None:
+		return default
+	try:
+		value = int(raw)
+	except Exception:
+		return default
+	return value if value > 0 else default
+
+
+def _resolve_word_speaker_from_segments(
+	*,
+	word_start: float,
+	word_end: float,
+	segments: list[dict[str, Any]],
+) -> str | None:
+	best_speaker: str | None = None
+	best_overlap = 0.0
+	for segment in segments:
+		speaker_id = str(segment.get("speakerId") or "").strip()
+		start = segment.get("start")
+		end = segment.get("end")
+		if not speaker_id or start is None or end is None:
+			continue
+		segment_start = max(0.0, float(start))
+		segment_end = max(segment_start, float(end))
+		overlap = min(word_end, segment_end) - max(word_start, segment_start)
+		if overlap <= 0:
+			continue
+		if overlap > best_overlap:
+			best_overlap = overlap
+			best_speaker = speaker_id
+	if best_speaker:
+		return best_speaker
+	for segment in segments:
+		speaker_id = str(segment.get("speakerId") or "").strip()
+		start = segment.get("start")
+		end = segment.get("end")
+		if not speaker_id or start is None or end is None:
+			continue
+		segment_start = max(0.0, float(start))
+		segment_end = max(segment_start, float(end))
+		if word_start >= segment_start and word_start <= segment_end:
+			return speaker_id
+	return None
 
 
 @dataclass
@@ -39,6 +102,7 @@ class TranscribeConfig:
 	compute_type: str = "float16"
 	vad_filter: bool = False
 	language: str | None = None
+	initial_prompt: str | None = None
 	diarize: bool = False
 	min_speakers: int | None = None
 	max_speakers: int | None = None
@@ -53,7 +117,7 @@ class LocalWhisperXEngine:
 			in {"1", "true", "yes", "on"}
 		)
 		self._hf_token = (os.getenv("LOCAL_TRANSCRIBE_HF_TOKEN") or "").strip() or None
-		self._model_cache: "OrderedDict[tuple[str, str, str, str], Any]" = OrderedDict()
+		self._model_cache: "OrderedDict[tuple[str, str, str, str, str], Any]" = OrderedDict()
 		self._align_cache: "OrderedDict[tuple[str, str], tuple[Any, Any]]" = OrderedDict()
 		self._diarize_cache: "OrderedDict[str, Any]" = OrderedDict()
 		warnings.filterwarnings(
@@ -106,9 +170,10 @@ class LocalWhisperXEngine:
 		device: str,
 		compute_type: str,
 		language: str | None,
+		vad_method: str,
 	) -> Any:
 		effective_language = (language or "").strip().lower() or None
-		key = (model, device, compute_type, effective_language or "auto")
+		key = (model, device, compute_type, effective_language or "auto", vad_method)
 		existing = self._model_cache.get(key)
 		if existing:
 			self._model_cache.move_to_end(key)
@@ -121,7 +186,21 @@ class LocalWhisperXEngine:
 				"beam_size": WHISPERX_BEAM_SIZE,
 				"best_of": WHISPERX_BEAM_SIZE,
 			},
-			vad_method="pyannote",
+			vad_method=vad_method,
+			vad_options={
+				"chunk_size": _get_env_int(
+					"LOCAL_TRANSCRIBE_ASR_VAD_CHUNK_SIZE",
+					DEFAULT_ASR_VAD_CHUNK_SIZE,
+				),
+				"vad_onset": _get_env_float(
+					"LOCAL_TRANSCRIBE_ASR_VAD_ONSET",
+					DEFAULT_ASR_VAD_ONSET,
+				),
+				"vad_offset": _get_env_float(
+					"LOCAL_TRANSCRIBE_ASR_VAD_OFFSET",
+					DEFAULT_ASR_VAD_OFFSET,
+				),
+			},
 			language=effective_language,
 		)
 		self._model_cache[key] = asr_model
@@ -380,24 +459,38 @@ class LocalWhisperXEngine:
 		compute_type: str,
 		vad_filter: bool,
 		language: str | None,
+		initial_prompt: str | None,
 	) -> dict[str, Any]:
+		effective_language = (language or "").strip().lower() or None
+		vad_method = DEFAULT_ASR_VAD_METHOD
 		asr_model = self._get_asr_model(
 			model=model,
 			device=device,
 			compute_type=compute_type,
 			language=language,
+			vad_method=vad_method,
 		)
-		effective_language = (language or "").strip().lower() or None
-		asr_result = asr_model.transcribe(
-			audio,
-			batch_size=WHISPERX_BATCH_SIZE,
-			language=effective_language,
-		)
+		original_options = asr_model.options
+		prompt = (initial_prompt or "").strip() or None
+		try:
+			if prompt:
+				asr_model.options = replace(original_options, initial_prompt=prompt)
+			asr_result = asr_model.transcribe(
+				audio,
+				batch_size=WHISPERX_BATCH_SIZE,
+				language=effective_language,
+			)
+		finally:
+			asr_model.options = original_options
+
 		segments: list[dict[str, Any]] = []
 		for segment in asr_result.get("segments", []) or []:
 			text = (segment.get("text") or "").strip()
 			start = max(0.0, float(segment.get("start") or 0.0))
-			end = max(start + MIN_WORD_DURATION_SECONDS, float(segment.get("end") or start))
+			end = max(
+				start + MIN_WORD_DURATION_SECONDS,
+				float(segment.get("end") or start),
+			)
 			if not text:
 				continue
 			segments.append(
@@ -407,10 +500,13 @@ class LocalWhisperXEngine:
 					"text": text,
 				}
 			)
+		if len(segments) == 0:
+			raise RuntimeError("ASR produced no speech segments")
 		return {
 			"segments": segments,
 			"words": [],
 			"language": str(asr_result.get("language") or "en"),
+			"vad_method": vad_method,
 		}
 
 	def transcribe_file_with_alignment(
@@ -439,6 +535,7 @@ class LocalWhisperXEngine:
 				compute_type=config.compute_type,
 				vad_filter=config.vad_filter,
 				language=config.language,
+				initial_prompt=config.initial_prompt,
 			)
 			used_model = config.model
 			used_compute = config.compute_type
@@ -466,6 +563,7 @@ class LocalWhisperXEngine:
 				{
 					"device": used_device,
 					"model": used_model,
+					"vad_method": asr_result.get("vad_method"),
 					"detected_language": language,
 					"requested_language": config.language,
 					"error": str(error),
@@ -547,13 +645,22 @@ class LocalWhisperXEngine:
 				continue
 			start_f = max(0.0, float(start))
 			end_f = max(start_f + 0.01, float(end))
+			speaker_id = (
+				str(speaker).strip()
+				if speaker is not None and str(speaker).strip()
+				else _resolve_word_speaker_from_segments(
+					word_start=start_f,
+					word_end=end_f,
+					segments=speaker_segments,
+				)
+			)
 			word_entry = {
 				"word": word,
 				"start": start_f,
 				"end": end_f,
 			}
-			if speaker is not None and str(speaker).strip():
-				word_entry["speakerId"] = str(speaker).strip()
+			if speaker_id:
+				word_entry["speakerId"] = speaker_id
 			words.append(word_entry)
 		timings_ms["postprocess"] = (time.perf_counter() - postprocess_started_at) * 1000.0
 		total_ms = (time.perf_counter() - total_started_at) * 1000.0
@@ -581,6 +688,7 @@ class LocalWhisperXEngine:
 			"compute_type": used_compute,
 			"device": used_device,
 			"engine": "whisperx",
+			"vad_method": asr_result.get("vad_method"),
 			"diarization": diarization_used,
 			"timings_ms": timings_ms,
 			"audio_duration_seconds": audio_duration_seconds,
@@ -605,6 +713,7 @@ class LocalWhisperXEngine:
 			device=resolved_device,
 			compute_type=compute_type,
 			language=language,
+			vad_method=DEFAULT_ASR_VAD_METHOD,
 		)
 		effective_language = (language or "").strip().lower() or "en"
 		self._get_align_model(
