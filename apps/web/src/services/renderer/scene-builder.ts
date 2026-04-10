@@ -23,6 +23,7 @@ import {
 	getTranscriptApplied,
 	getTranscriptDraft,
 } from "@/lib/transcript-editor/state";
+import { MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import { normalizeTimelineElementForInvariants } from "@/lib/timeline/element-timing";
 
 const PREVIEW_MAX_IMAGE_SIZE = 2048;
@@ -172,6 +173,48 @@ function resolveCaptionSourceMediaHeuristically({
 	return best;
 }
 
+function buildCaptionVisibilityWindowsFromVisibleWordTimings({
+	timings,
+	clipStartTime,
+	clipEndTime,
+}: {
+	timings: Array<{
+		startTime: number;
+		endTime: number;
+		hidden?: boolean;
+	}>;
+	clipStartTime: number;
+	clipEndTime: number;
+}): Array<{ startTime: number; endTime: number }> {
+	const visibleTimings = timings
+		.filter((timing) => !timing.hidden)
+		.map((timing) => ({
+			startTime: Math.max(clipStartTime, timing.startTime),
+			endTime: Math.min(clipEndTime, timing.endTime),
+		}))
+		.filter((timing) => timing.endTime - timing.startTime > 0.001)
+		.sort((left, right) => left.startTime - right.startTime);
+
+	if (visibleTimings.length === 0) return [];
+
+	return visibleTimings.reduce<Array<{ startTime: number; endTime: number }>>(
+		(merged, timing) => {
+			const previous = merged[merged.length - 1];
+			if (
+				previous &&
+				timing.startTime - previous.endTime <=
+					MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS
+			) {
+				previous.endTime = Math.max(previous.endTime, timing.endTime);
+				return merged;
+			}
+			merged.push({ ...timing });
+			return merged;
+		},
+		[],
+	);
+}
+
 export function resolveLiveCaptionElementFromTranscriptSource({
 	element,
 	sourceMedia,
@@ -214,32 +257,11 @@ export function resolveLiveCaptionElementFromTranscriptSource({
 	const timings = snapshot.captionPayload.wordTimings;
 	const clipStartTime = sourceMedia.startTime;
 	const clipEndTime = sourceMedia.startTime + sourceMedia.duration;
-	const rawVisibilityWindows = transcriptApplied.keptSegments
-		.map((segment) => ({
-			startTime: Math.max(
-				clipStartTime,
-				sourceMedia.startTime + snapshot.timeMap.toCompressedTime(segment.start),
-			),
-			endTime: Math.min(
-				clipEndTime,
-				sourceMedia.startTime + snapshot.timeMap.toCompressedTime(segment.end),
-			),
-		}))
-		.filter((segment) => segment.endTime - segment.startTime > 0.001);
-	const visibilityWindows = rawVisibilityWindows.reduce<
-		Array<{ startTime: number; endTime: number }>
-	>((merged, segment) => {
-		const previous = merged[merged.length - 1];
-		if (
-			previous &&
-			Math.abs(previous.endTime - segment.startTime) <= 0.01
-		) {
-			previous.endTime = Math.max(previous.endTime, segment.endTime);
-			return merged;
-		}
-		merged.push({ ...segment });
-		return merged;
-	}, []);
+	const visibilityWindows = buildCaptionVisibilityWindowsFromVisibleWordTimings({
+		timings,
+		clipStartTime,
+		clipEndTime,
+	});
 
 	return {
 		...element,

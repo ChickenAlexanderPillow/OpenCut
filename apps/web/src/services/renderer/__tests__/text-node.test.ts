@@ -173,6 +173,30 @@ describe("TextNode caption gap rendering", () => {
 		expect(operations).toEqual([]);
 	});
 
+	test("hides captions before the first explicit visibility window", async () => {
+		const node = new TextNode({
+			...createCaptionNode().params,
+			captionVisibilityWindows: [{ startTime: 10.8, endTime: 11.6 }],
+		});
+		const { operations, renderer } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.2 });
+
+		expect(operations).toEqual([]);
+	});
+
+	test("hides captions after the last explicit visibility window", async () => {
+		const node = new TextNode({
+			...createCaptionNode().params,
+			captionVisibilityWindows: [{ startTime: 10.0, endTime: 10.4 }],
+		});
+		const { operations, renderer } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.8 });
+
+		expect(operations).toEqual([]);
+	});
+
 	test("still renders captions at word boundaries without a visibility gap", async () => {
 		const node = createCaptionNode();
 		const { operations, renderer } = createFakeRenderer();

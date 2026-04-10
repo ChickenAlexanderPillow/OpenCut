@@ -92,10 +92,10 @@ describe("scene builder live caption source resolution", () => {
 		if (!resolved) return;
 		expect(resolved.content).toBe("go");
 		expect(resolved.startTime).toBeCloseTo(10.0, 3);
-		expect(resolved.captionWordTimings?.[0]?.startTime).toBeCloseTo(10.0, 3);
-		expect(resolved.captionWordTimings?.[0]?.endTime).toBeCloseTo(10.4, 3);
+		expect(resolved.captionWordTimings?.[0]?.startTime).toBeCloseTo(10.05, 3);
+		expect(resolved.captionWordTimings?.[0]?.endTime).toBeCloseTo(10.45, 3);
 		expect(resolved.captionVisibilityWindows).toEqual([
-			{ startTime: 10.5, endTime: 12 },
+			{ startTime: 10.05, endTime: 10.45 },
 		]);
 	});
 
@@ -319,10 +319,10 @@ describe("scene builder live caption source resolution", () => {
 		expect(resolved.captionWordTimings?.[0]?.word).toBe("first");
 		expect(resolved.captionWordTimings?.[0]?.startTime).toBeCloseTo(5.0, 3);
 		expect(resolved.captionWordTimings?.[1]?.word).toBe("third");
-		// Removed gap is compressed out, so third starts immediately after first.
+		// Removed gap is compressed out aside from the transcript resume guard.
 		const firstEnd = resolved.captionWordTimings?.[0]?.endTime ?? 0;
 		const thirdStart = resolved.captionWordTimings?.[1]?.startTime ?? 0;
-		expect(Math.abs(thirdStart - firstEnd)).toBeLessThanOrEqual(0.011);
+		expect(Math.abs(thirdStart - firstEnd)).toBeLessThanOrEqual(0.051);
 	});
 
 	test("recomputes caption timing when media moves without transcript edit changes", () => {
@@ -423,7 +423,30 @@ describe("scene builder live caption source resolution", () => {
 		});
 
 		expect(resolved?.captionVisibilityWindows).toEqual([
-			{ startTime: 20, endTime: 21 },
+			{ startTime: 20, endTime: 20.8 },
+		]);
+	});
+
+	test("visibility windows start and end with the visible spoken words", () => {
+		const source = createAudioElement({
+			id: "audio-1",
+			startTime: 10,
+			duration: 3,
+			words: [
+				{ id: "w0", text: "alpha", startTime: 0.6, endTime: 0.9 },
+				{ id: "w1", text: "beta", startTime: 1.8, endTime: 2.1 },
+			],
+		});
+		const caption = createCaption({ sourceMediaElementId: source.id });
+
+		const resolved = resolveLiveCaptionElementFromTranscriptSource({
+			element: caption,
+			sourceMedia: source,
+		});
+
+		expect(resolved?.captionVisibilityWindows).toEqual([
+			{ startTime: 10.6, endTime: 10.9 },
+			{ startTime: 11.8, endTime: 12.1 },
 		]);
 	});
 
