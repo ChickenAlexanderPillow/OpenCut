@@ -4,6 +4,7 @@ export type CanvasRendererParams = {
 	width: number;
 	height: number;
 	fps: number;
+	alpha?: boolean;
 };
 
 export class CanvasRenderer {
@@ -12,11 +13,13 @@ export class CanvasRenderer {
 	width: number;
 	height: number;
 	fps: number;
+	alpha: boolean;
 
-	constructor({ width, height, fps }: CanvasRendererParams) {
+	constructor({ width, height, fps, alpha = false }: CanvasRendererParams) {
 		this.width = width;
 		this.height = height;
 		this.fps = fps;
+		this.alpha = alpha;
 
 		try {
 			this.canvas = new OffscreenCanvas(width, height);
@@ -27,7 +30,7 @@ export class CanvasRenderer {
 		}
 
 		const context = this.canvas.getContext("2d", {
-			alpha: false,
+			alpha: this.alpha,
 			desynchronized: true,
 		});
 		if (!context) {
@@ -51,7 +54,7 @@ export class CanvasRenderer {
 		}
 
 		const context = this.canvas.getContext("2d", {
-			alpha: false,
+			alpha: this.alpha,
 			desynchronized: true,
 		});
 		if (!context) {
@@ -64,6 +67,10 @@ export class CanvasRenderer {
 
 	private clear() {
 		this.context.setTransform(1, 0, 0, 1, 0, 0);
+		if (this.alpha) {
+			this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+			return;
+		}
 		this.context.fillStyle = "black";
 		this.context.fillRect(0, 0, this.canvas.width, this.canvas.height);
 	}

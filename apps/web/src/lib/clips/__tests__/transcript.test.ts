@@ -1,13 +1,23 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
 	buildClipTranscriptCacheEntryForAsset,
+	buildChunkInitialPrompt,
 	clipTranscriptSegmentsForWindow,
 	clipTranscriptWordsForWindow,
 	getOrCreateClipTranscriptForAsset,
 	PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
+	transcribeChunkWavBlobWithFallback,
 } from "@/lib/clips/transcript";
 import type { MediaAsset } from "@/types/assets";
 import type { TProject } from "@/types/project";
+
+const originalFetch = globalThis.fetch;
+const originalWindow = globalThis.window;
+
+afterEach(() => {
+	globalThis.fetch = originalFetch;
+	globalThis.window = originalWindow;
+});
 
 function buildTestAsset(): MediaAsset {
 	return {
@@ -223,5 +233,101 @@ describe("clipTranscriptSegmentsForWindow", () => {
 
 		expect(result.source).toBe("cache");
 		expect(result.transcript.words?.[0]?.speakerId).toBe("SPEAKER_00");
+	});
+});
+
+describe("transcribeChunkWavBlobWithFallback", () => {
+	test("retries a chunk without diarization before dropping it", async () => {
+		globalThis.window = {
+			setTimeout,
+			clearTimeout,
+			location: { origin: "http://localhost:3000" },
+		} as typeof window;
+		const fetchMock = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+			const form = init?.body as FormData;
+			const diarize = form.get("diarize");
+			if (diarize === "true") {
+				return new Response("no word-level timestamps were produced", {
+					status: 500,
+				});
+			}
+			return Response.json({
+				granularity: "word",
+				segments: [{ text: "Recovered chunk", start: 0, end: 1.2 }],
+				words: [
+					{ word: "Recovered", start: 0, end: 0.6 },
+					{ word: "chunk", start: 0.6, end: 1.2 },
+				],
+				wordCount: 2,
+				diarization: false,
+			});
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		const result = await transcribeChunkWavBlobWithFallback({
+			wavBlob: new Blob([new Uint8Array(3200)], { type: "audio/wav" }),
+			language: "en",
+			modelId: "whisper-large-v3",
+			cacheKey: "chunk-retry",
+			endpointPath: "/api/test-transcribe",
+			initialPrompt: "prior chunk context",
+			assetId: "asset-1",
+			chunkIndex: 2,
+			decodeStart: 15,
+			decodeEnd: 30,
+		});
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		const firstRequestForm = fetchMock.mock.calls[0]?.[1]?.body as FormData;
+		const secondRequestForm = fetchMock.mock.calls[1]?.[1]?.body as FormData;
+		expect(firstRequestForm.get("diarize")).toBe("true");
+		expect(secondRequestForm.get("diarize")).toBe("false");
+		expect(firstRequestForm.get("initialPrompt")).toBe("prior chunk context");
+		expect(secondRequestForm.get("initialPrompt")).toBe("prior chunk context");
+		expect(result.words.map((word) => word.word)).toEqual(["Recovered", "chunk"]);
+	});
+
+	test("only skips a chunk after both diarized and non-diarized attempts report silence", async () => {
+		globalThis.window = {
+			setTimeout,
+			clearTimeout,
+			location: { origin: "http://localhost:3000" },
+		} as typeof window;
+		const fetchMock = mock(async () => {
+			return new Response("asr produced no speech segments", {
+				status: 500,
+			});
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		const result = await transcribeChunkWavBlobWithFallback({
+			wavBlob: new Blob([new Uint8Array(3200)], { type: "audio/wav" }),
+			language: "en",
+			modelId: "whisper-large-v3",
+			cacheKey: "chunk-silent",
+			endpointPath: "/api/test-transcribe",
+		});
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(result).toEqual({
+			text: "",
+			segments: [],
+			words: [],
+		});
+	});
+});
+
+describe("buildChunkInitialPrompt", () => {
+	test("keeps only the trailing chunk context within prompt limits", () => {
+		const prompt = buildChunkInitialPrompt({
+			previousChunkText:
+				"one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty thirtyone thirtytwo thirtythree thirtyfour thirtyfive thirtysix thirtyseven thirtyeight thirtynine forty fortyone fortytwo fortythree fortythreefortyfour",
+		});
+
+		expect(prompt).toBeDefined();
+		expect(prompt!.split(/\s+/).length).toBeLessThanOrEqual(40);
+		expect(prompt!.length).toBeLessThanOrEqual(240);
+		expect(prompt).not.toContain("one two three");
+		expect(prompt).toContain("fortyone");
 	});
 });

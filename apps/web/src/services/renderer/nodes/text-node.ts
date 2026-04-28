@@ -59,6 +59,112 @@ function quoteFontFamily({ fontFamily }: { fontFamily: string }): string {
 	return `"${fontFamily.replace(/"/g, '\\"')}"`;
 }
 
+function clampUnitOpacity(value: number | undefined, fallback = 1): number {
+	if (!Number.isFinite(value)) return fallback;
+	return Math.max(0, Math.min(1, value as number));
+}
+
+function degreesToRadians(value: number | undefined): number {
+	return ((Number.isFinite(value) ? (value as number) : 90) * Math.PI) / 180;
+}
+
+function resetCanvasShadow({
+	ctx,
+}: {
+	ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+}): void {
+	ctx.shadowColor = "transparent";
+	ctx.shadowBlur = 0;
+	ctx.shadowOffsetX = 0;
+	ctx.shadowOffsetY = 0;
+}
+
+function drawTextFillWithEffects({
+	ctx,
+	text,
+	x,
+	y,
+	fillStyle,
+	shadowColor,
+	shadowOpacity,
+	shadowDistance,
+	shadowAngle,
+	shadowSoftness,
+}: {
+	ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+	text: string;
+	x: number;
+	y: number;
+	fillStyle: string;
+	shadowColor: string;
+	shadowOpacity: number;
+	shadowDistance: number;
+	shadowAngle: number;
+	shadowSoftness: number;
+}): void {
+	const resolvedShadowOpacity = clampUnitOpacity(shadowOpacity, 0);
+	const resolvedShadowDistance = Math.max(0, shadowDistance);
+	const resolvedShadowSoftness = Math.max(0, shadowSoftness);
+	if (
+		resolvedShadowOpacity > 0 &&
+		(resolvedShadowDistance > 0 || resolvedShadowSoftness > 0)
+	) {
+		const previousAlpha = ctx.globalAlpha;
+		const angle = degreesToRadians(shadowAngle);
+		ctx.save();
+		ctx.fillStyle = shadowColor;
+		ctx.globalAlpha = previousAlpha * resolvedShadowOpacity;
+		resetCanvasShadow({ ctx });
+		ctx.shadowColor = shadowColor;
+		ctx.shadowBlur = resolvedShadowSoftness;
+		ctx.fillText(
+			text,
+			x + Math.cos(angle) * resolvedShadowDistance,
+			y + Math.sin(angle) * resolvedShadowDistance,
+		);
+		ctx.restore();
+		ctx.globalAlpha = previousAlpha;
+	}
+
+	ctx.save();
+	ctx.fillStyle = fillStyle;
+	resetCanvasShadow({ ctx });
+	ctx.fillText(text, x, y);
+	ctx.restore();
+}
+
+function drawTextStroke({
+	ctx,
+	text,
+	x,
+	y,
+	strokeStyle,
+	lineWidth,
+	strokeSoftness,
+}: {
+	ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+	text: string;
+	x: number;
+	y: number;
+	strokeStyle: string;
+	lineWidth: number;
+	strokeSoftness: number;
+}): void {
+	if (!(lineWidth > 0)) return;
+	ctx.save();
+	ctx.strokeStyle = strokeStyle;
+	ctx.lineWidth = lineWidth;
+	ctx.lineJoin = "round";
+	ctx.miterLimit = 2;
+	resetCanvasShadow({ ctx });
+	if (strokeSoftness > 0) {
+		ctx.shadowColor = strokeStyle;
+		ctx.shadowBlur = strokeSoftness;
+	}
+	ctx.strokeText(text, x, y);
+	ctx.restore();
+}
+
 function drawTextDecoration({
 	ctx,
 	textDecoration,
@@ -233,21 +339,6 @@ function resolveActiveWordIndices({
 		}
 	}
 	return indices;
-}
-
-function resolveNextWordIndex({
-	captionWordTimings,
-	time,
-}: {
-	captionWordTimings: Array<{ startTime: number }>;
-	time: number;
-}): number {
-	for (let i = 0; i < captionWordTimings.length; i++) {
-		if (time < captionWordTimings[i].startTime) {
-			return i;
-		}
-	}
-	return -1;
 }
 
 type CaptionRenderToken = {
@@ -725,13 +816,16 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		renderer.context.textAlign = this.params.textAlign;
 		renderer.context.fillStyle = this.params.color;
 		const strokeWidth = Math.max(0, this.params.strokeWidth ?? 0);
+		const strokeSoftness = Math.max(0, this.params.strokeSoftness ?? 0);
 		const hasStroke = strokeWidth > 0;
-		if (hasStroke) {
-			renderer.context.strokeStyle = this.params.strokeColor ?? "#000000";
-			renderer.context.lineWidth = strokeWidth;
-			renderer.context.lineJoin = "round";
-			renderer.context.miterLimit = 2;
-		}
+		const shadowColor = this.params.shadowColor ?? "#000000";
+		const shadowOpacity = clampUnitOpacity(this.params.shadowOpacity, 0.6);
+		const shadowDistance = Math.max(0, this.params.shadowDistance ?? 0);
+		const shadowAngle = Number.isFinite(this.params.shadowAngle)
+			? (this.params.shadowAngle as number)
+			: 90;
+		const shadowSoftness = Math.max(0, this.params.shadowSoftness ?? 0);
+		resetCanvasShadow({ ctx: renderer.context });
 
 		const letterSpacing = this.params.letterSpacing ?? 0;
 		const lineHeight = this.params.lineHeight ?? DEFAULT_LINE_HEIGHT;
@@ -744,9 +838,50 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		const karaokeWordHighlight = captionStyle.karaokeWordHighlight === true;
 		const karaokeHighlightMode = captionStyle.karaokeHighlightMode ?? "block";
 		const captionWordTimings = this.getTimelineCaptionTimings();
-		const visibleCaptionWordTimings = captionWordTimings.filter(
+		const visibleCaptionWordTimingsAll = captionWordTimings.filter(
 			(timing) => !timing.hidden,
 		);
+		const visibleCaptionWordsAll = this.getTimelineCaptionWords().filter(
+			(token) => !token.hidden,
+		);
+		const activeVisibilityWindow =
+			(this.params.captionVisibilityWindows ?? []).find(
+				(window) => time >= window.startTime && time < window.endTime,
+			) ?? null;
+		const activeWindowStartIndex =
+			activeVisibilityWindow && visibleCaptionWordTimingsAll.length > 0
+				? visibleCaptionWordTimingsAll.findIndex(
+						(timing) =>
+							timing.startTime >= activeVisibilityWindow.startTime &&
+							timing.startTime < activeVisibilityWindow.endTime,
+					)
+				: -1;
+		const activeWindowEndIndexExclusive =
+			activeVisibilityWindow && activeWindowStartIndex >= 0
+				? visibleCaptionWordTimingsAll.findIndex(
+						(timing, index) =>
+							index >= activeWindowStartIndex &&
+							timing.startTime >= activeVisibilityWindow.endTime,
+					)
+				: -1;
+		const visibleCaptionWordTimings =
+			activeWindowStartIndex >= 0
+				? visibleCaptionWordTimingsAll.slice(
+						activeWindowStartIndex,
+						activeWindowEndIndexExclusive >= 0
+							? activeWindowEndIndexExclusive
+							: visibleCaptionWordTimingsAll.length,
+					)
+				: visibleCaptionWordTimingsAll;
+		const captionWords =
+			activeWindowStartIndex >= 0
+				? visibleCaptionWordsAll.slice(
+						activeWindowStartIndex,
+						activeWindowEndIndexExclusive >= 0
+							? activeWindowEndIndexExclusive
+							: visibleCaptionWordsAll.length,
+					)
+				: visibleCaptionWordsAll;
 		const latestStartedWordIndex = resolveLatestStartedWordIndex({
 			captionWordTimings: visibleCaptionWordTimings,
 			time,
@@ -756,10 +891,6 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			time,
 		});
 		const strictActiveWordIndices = resolveActiveWordIndices({
-			captionWordTimings: visibleCaptionWordTimings,
-			time,
-		});
-		const nextWordIndex = resolveNextWordIndex({
 			captionWordTimings: visibleCaptionWordTimings,
 			time,
 		});
@@ -777,9 +908,6 @@ export class TextNode extends BaseNode<TextNodeParams> {
 					time,
 				})
 			: fallbackWordIndex;
-		const captionWords = this.getTimelineCaptionWords().filter(
-			(token) => !token.hidden,
-		);
 		const wordsOnScreenRaw = captionStyle.wordsOnScreen;
 		const wordsOnScreen =
 			typeof wordsOnScreenRaw === "number"
@@ -798,11 +926,9 @@ export class TextNode extends BaseNode<TextNodeParams> {
 		const activeWordForWindow =
 			activeWordIndex >= 0
 				? activeWordIndex
-				: nextWordIndex >= 0
-					? nextWordIndex
-					: latestStartedWordIndex >= 0
-						? latestStartedWordIndex
-						: 0;
+				: latestStartedWordIndex >= 0
+					? latestStartedWordIndex
+					: 0;
 		const lineHeightPx = scaledFontSize * lineHeight;
 		const fontSizeRatio = getBackgroundFontSizeRatio({
 			fontSize,
@@ -1097,9 +1223,28 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			renderer.context.textAlign = lineTextAlign;
 			renderer.context.fillStyle = this.params.color;
 			if (hasStroke) {
-				renderer.context.strokeText(line, lineX, lineY);
+				drawTextStroke({
+					ctx: renderer.context,
+					text: line,
+					x: lineX,
+					y: lineY,
+					strokeStyle: this.params.strokeColor ?? "#000000",
+					lineWidth: strokeWidth,
+					strokeSoftness,
+				});
 			}
-			renderer.context.fillText(line, lineX, lineY);
+			drawTextFillWithEffects({
+				ctx: renderer.context,
+				text: line,
+				x: lineX,
+				y: lineY,
+				fillStyle: this.params.color,
+				shadowColor,
+				shadowOpacity,
+				shadowDistance,
+				shadowAngle,
+				shadowSoftness,
+			});
 
 			if (karaokeWordHighlight && lineTokens.length > 0) {
 				let visibleWordIndex = 0;
@@ -1238,8 +1383,29 @@ export class TextNode extends BaseNode<TextNodeParams> {
 						renderer.context.translate(wordLeft + wordWidth / 2, lineY);
 						renderer.context.scale(highlightedWordScale, highlightedWordScale);
 						renderer.context.textAlign = "left";
-						renderer.context.fillStyle = highlightTextColor;
-						renderer.context.fillText(word, -wordWidth / 2, 0);
+						if (hasStroke) {
+							drawTextStroke({
+								ctx: renderer.context,
+								text: word,
+								x: -wordWidth / 2,
+								y: 0,
+								strokeStyle: this.params.strokeColor ?? "#000000",
+								lineWidth: strokeWidth,
+								strokeSoftness,
+							});
+						}
+						drawTextFillWithEffects({
+							ctx: renderer.context,
+							text: word,
+							x: -wordWidth / 2,
+							y: 0,
+							fillStyle: highlightTextColor,
+							shadowColor,
+							shadowOpacity,
+							shadowDistance,
+							shadowAngle,
+							shadowSoftness,
+						});
 						renderer.context.restore();
 						renderer.context.textAlign = originalAlign;
 						renderer.context.fillStyle = this.params.color;
@@ -1286,9 +1452,30 @@ export class TextNode extends BaseNode<TextNodeParams> {
 						renderer.context.translate(wordLeft + wordWidth / 2, lineY);
 						renderer.context.scale(highlightedWordScale, highlightedWordScale);
 						renderer.context.textAlign = "left";
-						renderer.context.fillStyle = highlightColor;
 						renderer.context.globalAlpha = highlightAlpha;
-						renderer.context.fillText(word, -wordWidth / 2, 0);
+						if (hasStroke) {
+							drawTextStroke({
+								ctx: renderer.context,
+								text: word,
+								x: -wordWidth / 2,
+								y: 0,
+								strokeStyle: this.params.strokeColor ?? "#000000",
+								lineWidth: strokeWidth,
+								strokeSoftness,
+							});
+						}
+						drawTextFillWithEffects({
+							ctx: renderer.context,
+							text: word,
+							x: -wordWidth / 2,
+							y: 0,
+							fillStyle: highlightColor,
+							shadowColor,
+							shadowOpacity,
+							shadowDistance,
+							shadowAngle,
+							shadowSoftness,
+						});
 						renderer.context.restore();
 						renderer.context.textAlign = originalAlign;
 						renderer.context.fillStyle = this.params.color;

@@ -340,6 +340,12 @@ export interface TextElement extends BaseTimelineElement {
 	color: string;
 	strokeColor?: string;
 	strokeWidth?: number;
+	strokeSoftness?: number;
+	shadowColor?: string;
+	shadowOpacity?: number;
+	shadowDistance?: number;
+	shadowAngle?: number;
+	shadowSoftness?: number;
 	background: {
 		color: string;
 		cornerRadius?: number;
@@ -374,6 +380,7 @@ export interface TextElement extends BaseTimelineElement {
 		backgroundFitMode?: "block" | "line-fit";
 		wordsOnScreen?: number;
 		maxLinesOnScreen?: number;
+		keepVisibleDuringPausesForSeconds?: number;
 		wordDisplayPreset?: "compact" | "balanced" | "extended" | "custom";
 		linkedToCaptionGroup?: boolean;
 		isSceneTitle?: boolean;

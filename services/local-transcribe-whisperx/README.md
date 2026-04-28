@@ -84,7 +84,7 @@ curl http://127.0.0.1:8765/healthz
 
 ## Notes
 
-- The service does not downgrade to a smaller Whisper model on failure.
+- The service now retries CUDA ASR OOMs with a smaller GPU batch and can fall back to CPU instead of failing the whole request.
 - Keep ffmpeg available on PATH for best audio compatibility.
 - Keeping `LOCAL_TRANSCRIBE_VAD_FILTER=false` generally preserves short filler words like `uh`/`um` better.
 - For tighter memory control in long sessions:
@@ -103,6 +103,10 @@ curl http://127.0.0.1:8765/healthz
   - `LOCAL_TRANSCRIBE_DIARIZATION=true`
   - `LOCAL_TRANSCRIBE_DIARIZATION_DEVICE=cuda`
   - `LOCAL_TRANSCRIBE_HF_TOKEN=<hugging-face-read-token>`
+- To tune CUDA OOM recovery:
+  - `LOCAL_TRANSCRIBE_CUDA_OOM_RETRY_BATCH_SIZE=8`
+  - `LOCAL_TRANSCRIBE_ENABLE_CPU_FALLBACK=true`
+  - `LOCAL_TRANSCRIBE_CPU_FALLBACK_BATCH_SIZE=4`
 
 ## Docker GPU checks
 

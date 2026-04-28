@@ -31,11 +31,13 @@ const CHUNKED_TRANSCRIPTION_MIN_WINDOW_SECONDS = 15;
 const CHUNKED_TRANSCRIPTION_MAX_WINDOW_SECONDS = 20;
 const CHUNKED_TRANSCRIPTION_TARGET_CHUNK_COUNT = 24;
 const CHUNKED_TRANSCRIPTION_TARGET_UPLOAD_BYTES = 2 * 1024 * 1024;
-const CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS = 1.5;
+const CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS = 3;
 const CHUNK_PROGRESS_HEARTBEAT_MS = 1200;
 const CHUNK_TRANSCRIPTION_CONCURRENCY = 1;
 const CLIP_TRANSCRIPTION_API_TIMEOUT_MS = 900000;
 const CLIP_TRANSCRIPTION_TARGET_SAMPLE_RATE = 16000;
+const CHUNK_TRANSCRIPTION_PROMPT_MAX_WORDS = 40;
+const CHUNK_TRANSCRIPTION_PROMPT_MAX_CHARS = 240;
 
 function nowMs(): number {
 	if (
@@ -324,6 +326,103 @@ function isSilentChunkTranscriptionError(error: Error): boolean {
 	);
 }
 
+type ChunkTranscriptionResult = {
+	text: string;
+	segments: TranscriptionSegment[];
+	words: TranscriptionWord[];
+};
+
+export async function transcribeChunkWavBlobWithFallback({
+	wavBlob,
+	language,
+	modelId,
+	cacheKey,
+	bypassCache = false,
+	endpointPath,
+	initialPrompt,
+	assetId,
+	chunkIndex,
+	decodeStart,
+	decodeEnd,
+}: {
+	wavBlob: Blob;
+	language: TranscriptionLanguage;
+	modelId: TranscriptionModelId;
+	cacheKey: string;
+	bypassCache?: boolean;
+	endpointPath?: string;
+	initialPrompt?: string;
+	assetId?: string;
+	chunkIndex?: number;
+	decodeStart?: number;
+	decodeEnd?: number;
+}): Promise<ChunkTranscriptionResult> {
+	try {
+		return await transcribeWavBlobWithClipApi({
+			wavBlob,
+			language,
+			modelId,
+			cacheKey,
+			bypassCache,
+			endpointPath,
+			initialPrompt,
+			diarize: true,
+		});
+	} catch (error) {
+		const resolvedError =
+			error instanceof Error ? error : new Error("Chunk transcription failed");
+		if (!isSilentChunkTranscriptionError(resolvedError)) {
+			throw resolvedError;
+		}
+
+		console.warn("Retrying transcript chunk without diarization", {
+			assetId,
+			chunkIndex,
+			decodeStart,
+			decodeEnd,
+			error: resolvedError.message,
+		});
+
+		try {
+			const fallbackResult = await transcribeWavBlobWithClipApi({
+				wavBlob,
+				language,
+				modelId,
+				cacheKey,
+				bypassCache,
+				endpointPath,
+				initialPrompt,
+				diarize: false,
+			});
+			console.info("Recovered transcript chunk without diarization", {
+				assetId,
+				chunkIndex,
+				decodeStart,
+				decodeEnd,
+				wordCount: fallbackResult.words.length,
+				segmentCount: fallbackResult.segments.length,
+			});
+			return fallbackResult;
+		} catch (fallbackError) {
+			const resolvedFallbackError =
+				fallbackError instanceof Error
+					? fallbackError
+					: new Error("Chunk transcription fallback failed");
+			if (!isSilentChunkTranscriptionError(resolvedFallbackError)) {
+				throw resolvedFallbackError;
+			}
+			console.warn("Skipping silent transcript chunk after fallback", {
+				assetId,
+				chunkIndex,
+				decodeStart,
+				decodeEnd,
+				error: resolvedFallbackError.message,
+			});
+			return { text: "", segments: [], words: [] };
+		}
+	}
+}
+
 async function transcribeWithClipApi({
 	samples,
 	sampleRate,
@@ -370,6 +469,7 @@ async function transcribeWavBlobWithClipApi({
 	cacheKey,
 	bypassCache = false,
 	endpointPath = "/api/clips/transcribe",
+	initialPrompt,
 	diarize = true,
 }: {
 	wavBlob: Blob;
@@ -378,6 +478,7 @@ async function transcribeWavBlobWithClipApi({
 	cacheKey: string;
 	bypassCache?: boolean;
 	endpointPath?: string;
+	initialPrompt?: string;
 	diarize?: boolean;
 }): Promise<{
 	text: string;
@@ -425,6 +526,9 @@ async function transcribeWavBlobWithClipApi({
 			}
 			form.append("sourceModel", modelId);
 			form.append("diarize", diarize ? "true" : "false");
+			if ((initialPrompt ?? "").trim().length > 0) {
+				form.append("initialPrompt", initialPrompt!.trim());
+			}
 
 			const response = await fetch(endpoint, {
 				method: "POST",
@@ -794,6 +898,21 @@ function buildChunkDecodePlans({
 	return plans;
 }
 
+export function buildChunkInitialPrompt({
+	previousChunkText,
+}: {
+	previousChunkText: string | null | undefined;
+}): string | undefined {
+	const trimmed = (previousChunkText ?? "").replace(/\s+/g, " ").trim();
+	if (trimmed.length === 0) return undefined;
+	const words = trimmed.split(" ").filter(Boolean);
+	const tailWords = words.slice(-CHUNK_TRANSCRIPTION_PROMPT_MAX_WORDS).join(" ");
+	if (tailWords.length <= CHUNK_TRANSCRIPTION_PROMPT_MAX_CHARS) {
+		return tailWords;
+	}
+	return tailWords.slice(-CHUNK_TRANSCRIPTION_PROMPT_MAX_CHARS).trim();
+}
+
 function mergeToMonoSamples({
 	chunks,
 }: {
@@ -985,6 +1104,7 @@ async function transcribeAssetInChunks({
 	let nextChunkIndex = 0;
 	let completedChunks = 0;
 	let activeChunks = 0;
+	let previousChunkPrompt: string | undefined;
 	const transcriptionStartedAt = nowMs();
 	const workerCount = Math.min(CHUNK_TRANSCRIPTION_CONCURRENCY, chunkCount);
 	onProgress?.({
@@ -1032,31 +1152,18 @@ async function transcribeAssetInChunks({
 							words: TranscriptionWord[];
 						};
 						if (prepared && prepared.wavBlob.size > 0) {
-							try {
-								chunkResult = await transcribeWavBlobWithClipApi({
-									wavBlob: prepared.wavBlob,
-									language,
-									modelId,
-									cacheKey: `${asset.id}:${modelId}:${language}:chunk:${plan.chunkIndex}:${plan.decodeStart.toFixed(3)}:${plan.decodeEnd.toFixed(3)}`,
-									bypassCache,
-									diarize: true,
-								});
-							} catch (error) {
-								const resolvedError =
-									error instanceof Error
-										? error
-										: new Error("Chunk transcription failed");
-								if (!isSilentChunkTranscriptionError(resolvedError)) {
-									throw resolvedError;
-								}
-								console.warn("Skipping silent transcript chunk", {
-									assetId: asset.id,
-									chunkIndex: plan.chunkIndex,
-									decodeStart: plan.decodeStart,
-									decodeEnd: plan.decodeEnd,
-									error: resolvedError.message,
-								});
-							}
+							chunkResult = await transcribeChunkWavBlobWithFallback({
+								wavBlob: prepared.wavBlob,
+								language,
+								modelId,
+								cacheKey: `${asset.id}:${modelId}:${language}:chunk:${plan.chunkIndex}:${plan.decodeStart.toFixed(3)}:${plan.decodeEnd.toFixed(3)}`,
+								bypassCache,
+								initialPrompt: previousChunkPrompt,
+								assetId: asset.id,
+								chunkIndex: plan.chunkIndex,
+								decodeStart: plan.decodeStart,
+								decodeEnd: plan.decodeEnd,
+							});
 						}
 
 						const adjustedSegments = chunkResult.segments
@@ -1101,6 +1208,9 @@ async function transcribeAssetInChunks({
 							segments: adjustedSegments,
 							words: adjustedWords,
 							textPart: chunkResult.text.trim(),
+						});
+						previousChunkPrompt = buildChunkInitialPrompt({
+							previousChunkText: chunkResult.text,
 						});
 						completedChunks += 1;
 						const progress = 50 + (completedChunks / chunkCount) * 50;

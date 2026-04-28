@@ -15,6 +15,7 @@ import {
 	getVideoSplitScreenDividers,
 	getVideoSplitScreenViewports,
 	getActiveReframePresetId,
+	hasVideoReframeAnalysisData,
 	getVideoAngleSectionAtTime,
 	getVideoSplitScreenSectionAtTime,
 	remapSplitSlotTransformBetweenViewportBalances,
@@ -48,6 +49,7 @@ const baseElement: VideoElement = {
 		rotate: 12,
 	},
 	opacity: 1,
+	reframeSeededBy: "subject-aware-v1",
 	reframePresets: [
 		{
 			id: "wide",
@@ -502,6 +504,8 @@ test("uses the default preset before the first switch", () => {
 				duration: splitElement.duration,
 				splitScreen: splitElement.splitScreen,
 				defaultReframePresetId: splitElement.defaultReframePresetId,
+				reframePresets: splitElement.reframePresets,
+				reframeSeededBy: splitElement.reframeSeededBy,
 				reframeSwitches: splitElement.reframeSwitches,
 				localTime: 5,
 			}),
@@ -609,6 +613,56 @@ test("uses the default preset before the first switch", () => {
 			},
 		]);
 		expect(resolved?.viewportBalance).toBe("balanced");
+	});
+
+	test("disables split-screen resolution before analysis data exists", () => {
+		const element: VideoElement = {
+			...baseElement,
+			reframeSeededBy: undefined,
+			reframePresets: baseElement.reframePresets?.map((preset) => ({
+				...preset,
+				subjectSeed: undefined,
+				motionTracking: undefined,
+			})),
+			splitScreen: {
+				enabled: true,
+				layoutPreset: "top-bottom",
+				slots: [
+					{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+					{ slotId: "bottom", mode: "follow-active", presetId: null },
+				],
+				sections: [
+					{
+						id: "section-1",
+						startTime: 2,
+						slots: [
+							{ slotId: "top", mode: "fixed-preset", presetId: "wide" },
+							{ slotId: "bottom", mode: "fixed-preset", presetId: "subject" },
+						],
+					},
+				],
+			},
+		};
+
+		expect(hasVideoReframeAnalysisData({ element })).toBeFalse();
+		expect(resolveVideoSplitScreenAtTime({ element, localTime: 5 })).toBeNull();
+		expect(
+			resolveVideoSplitScreenAtTimeFromState({
+				duration: element.duration,
+				splitScreen: element.splitScreen,
+				defaultReframePresetId: element.defaultReframePresetId,
+				reframePresets: element.reframePresets,
+				reframeSeededBy: element.reframeSeededBy,
+				reframeSwitches: element.reframeSwitches,
+				localTime: 5,
+			}),
+		).toBeNull();
+		expect(
+			getVideoSplitScreenSectionAtTime({ element, localTime: 5 }),
+		).toBeNull();
+		expect(deriveVideoSplitScreenSectionRanges({ element })).toEqual([
+			{ startTime: 0, endTime: 10, sectionId: null, enabled: false },
+		]);
 	});
 
 	test("prefers subject left and subject right for default split-screen bindings", () => {

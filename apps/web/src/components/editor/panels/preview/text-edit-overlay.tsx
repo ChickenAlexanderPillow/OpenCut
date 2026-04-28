@@ -98,6 +98,33 @@ export function TextEditOverlay({
 	const fontWeight = element.fontWeight === "bold" ? "bold" : "normal";
 	const fontStyle = element.fontStyle === "italic" ? "italic" : "normal";
 	const letterSpacing = element.letterSpacing ?? 0;
+	const strokeWidth = Math.max(0, element.strokeWidth ?? 0);
+	const strokeSoftness = Math.max(0, element.strokeSoftness ?? 0);
+	const shadowOpacity = Math.max(
+		0,
+		Math.min(1, element.shadowOpacity ?? 0.6),
+	);
+	const shadowDistance = Math.max(0, element.shadowDistance ?? 0);
+	const shadowAngleRadians = ((element.shadowAngle ?? 90) * Math.PI) / 180;
+	const shadowOffsetX = Math.cos(shadowAngleRadians) * shadowDistance;
+	const shadowOffsetY = Math.sin(shadowAngleRadians) * shadowDistance;
+	const textShadowParts: string[] = [];
+	if (
+		shadowOpacity > 0 &&
+		(shadowDistance > 0 || (element.shadowSoftness ?? 0) > 0)
+	) {
+		textShadowParts.push(
+			`${shadowOffsetX}px ${shadowOffsetY}px ${Math.max(0, element.shadowSoftness ?? 0)}px ${element.shadowColor ?? "#000000"}`,
+		);
+	}
+	if (strokeWidth > 0 && strokeSoftness <= 0) {
+		textShadowParts.push(
+			`${-strokeWidth}px 0 0 ${element.strokeColor ?? "#000000"}`,
+			`${strokeWidth}px 0 0 ${element.strokeColor ?? "#000000"}`,
+			`0 ${-strokeWidth}px 0 ${element.strokeColor ?? "#000000"}`,
+			`0 ${strokeWidth}px 0 ${element.strokeColor ?? "#000000"}`,
+		);
+	}
 	const backgroundColor =
 		element.background.color === "transparent"
 			? "transparent"
@@ -131,6 +158,11 @@ export function TextEditOverlay({
 					letterSpacing: `${letterSpacing}px`,
 					lineHeight,
 					color: element.color,
+					WebkitTextStroke:
+						strokeWidth > 0
+							? `${strokeWidth}px ${element.strokeColor ?? "#000000"}`
+							: undefined,
+					textShadow: textShadowParts.length > 0 ? textShadowParts.join(", ") : undefined,
 					backgroundColor,
 					minHeight: displayFontSize * lineHeight,
 					textDecoration: element.textDecoration ?? "none",

@@ -322,6 +322,14 @@ function resolveCaptionSeedStyle({
 	| "lineHeight"
 	| "letterSpacing"
 	| "color"
+	| "strokeColor"
+	| "strokeWidth"
+	| "strokeSoftness"
+	| "shadowColor"
+	| "shadowOpacity"
+	| "shadowDistance"
+	| "shadowAngle"
+	| "shadowSoftness"
 	| "background"
 	| "textAlign"
 	| "textDecoration"
@@ -342,6 +350,14 @@ function resolveCaptionSeedStyle({
 			lineHeight: seed.lineHeight,
 			letterSpacing: seed.letterSpacing,
 			color: seed.color,
+			strokeColor: seed.strokeColor,
+			strokeWidth: seed.strokeWidth,
+			strokeSoftness: seed.strokeSoftness,
+			shadowColor: seed.shadowColor,
+			shadowOpacity: seed.shadowOpacity,
+			shadowDistance: seed.shadowDistance,
+			shadowAngle: seed.shadowAngle,
+			shadowSoftness: seed.shadowSoftness,
 			background: seed.background,
 			textAlign: seed.textAlign,
 			textDecoration: seed.textDecoration,
@@ -360,6 +376,18 @@ function resolveCaptionSeedStyle({
 		letterSpacing:
 			blue.textProps.letterSpacing ?? DEFAULT_TEXT_ELEMENT.letterSpacing,
 		color: blue.textProps.color ?? DEFAULT_TEXT_ELEMENT.color,
+		strokeColor: blue.textProps.strokeColor ?? DEFAULT_TEXT_ELEMENT.strokeColor,
+		strokeWidth: blue.textProps.strokeWidth ?? DEFAULT_TEXT_ELEMENT.strokeWidth,
+		strokeSoftness:
+			blue.textProps.strokeSoftness ?? DEFAULT_TEXT_ELEMENT.strokeSoftness,
+		shadowColor: blue.textProps.shadowColor ?? DEFAULT_TEXT_ELEMENT.shadowColor,
+		shadowOpacity:
+			blue.textProps.shadowOpacity ?? DEFAULT_TEXT_ELEMENT.shadowOpacity,
+		shadowDistance:
+			blue.textProps.shadowDistance ?? DEFAULT_TEXT_ELEMENT.shadowDistance,
+		shadowAngle: blue.textProps.shadowAngle ?? DEFAULT_TEXT_ELEMENT.shadowAngle,
+		shadowSoftness:
+			blue.textProps.shadowSoftness ?? DEFAULT_TEXT_ELEMENT.shadowSoftness,
 		background: blue.textProps.background ?? DEFAULT_TEXT_ELEMENT.background,
 		textAlign: blue.textProps.textAlign ?? DEFAULT_TEXT_ELEMENT.textAlign,
 		textDecoration:

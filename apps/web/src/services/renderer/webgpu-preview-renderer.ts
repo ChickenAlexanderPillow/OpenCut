@@ -92,6 +92,39 @@ export class WebGPUPreviewRenderer {
 	private static readonly TEXTURE_IDLE_TTL_MS = 10_000;
 	private static readonly MOTION_BLUR_TRAIL_OPACITY_FACTOR = 0.52;
 
+	private getResolvedScissorRect({
+		clipRect,
+	}: {
+		clipRect?: WebGPUVisualDrawData["clipRect"];
+	}):
+		| {
+				x: number;
+				y: number;
+				width: number;
+				height: number;
+		  }
+		| null {
+		const left = Math.max(0, Math.floor(clipRect?.x ?? 0));
+		const top = Math.max(0, Math.floor(clipRect?.y ?? 0));
+		const right = Math.min(
+			this.width,
+			Math.ceil((clipRect?.x ?? 0) + (clipRect?.width ?? this.width)),
+		);
+		const bottom = Math.min(
+			this.height,
+			Math.ceil((clipRect?.y ?? 0) + (clipRect?.height ?? this.height)),
+		);
+		if (right <= left || bottom <= top) {
+			return null;
+		}
+		return {
+			x: left,
+			y: top,
+			width: right - left,
+			height: bottom - top,
+		};
+	}
+
 	constructor({
 		width,
 		height,
@@ -1044,24 +1077,17 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 				typeof VideoFrame !== "undefined" &&
 				resolvedSource.source instanceof VideoFrame;
 			const usePlusBlend = draw.blendMode === "plus-lighter";
-			const clipRect = draw.clipRect;
+			const scissorRect = this.getResolvedScissorRect({
+				clipRect: draw.clipRect,
+			});
+			if (!scissorRect) {
+				continue;
+			}
 			pass.setScissorRect(
-				Math.max(0, Math.floor(clipRect?.x ?? 0)),
-				Math.max(0, Math.floor(clipRect?.y ?? 0)),
-				Math.max(
-					1,
-					Math.min(
-						this.width - Math.max(0, Math.floor(clipRect?.x ?? 0)),
-						Math.ceil(clipRect?.width ?? this.width),
-					),
-				),
-				Math.max(
-					1,
-					Math.min(
-						this.height - Math.max(0, Math.floor(clipRect?.y ?? 0)),
-						Math.ceil(clipRect?.height ?? this.height),
-					),
-				),
+				scissorRect.x,
+				scissorRect.y,
+				scissorRect.width,
+				scissorRect.height,
 			);
 
 			const uniformBuffer = this.uniformBufferPool[index];

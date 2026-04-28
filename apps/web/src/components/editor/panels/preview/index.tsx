@@ -31,6 +31,9 @@ import {
 	getPreviewCanvasSize,
 	PORTRAIT_PREVIEW_SIZE,
 	remapCaptionTransformsForPreviewVariant,
+	remapSquareSourceVideoTransformsForSquarePreview,
+	remapVideoAdjustmentsForPreviewVariant,
+	resolveSquarePreviewStrategy,
 } from "@/lib/preview/preview-format";
 import {
 	applySelectedReframePresetPreviewToTracks,
@@ -67,120 +70,6 @@ const PREVIEW_PROFILES = {
 		videoProxyScale: 1,
 	},
 } as const;
-
-function getCoverToContainScaleRatio({
-	canvasWidth,
-	canvasHeight,
-	sourceWidth,
-	sourceHeight,
-}: {
-	canvasWidth: number;
-	canvasHeight: number;
-	sourceWidth: number;
-	sourceHeight: number;
-}): number {
-	if (
-		canvasWidth <= 0 ||
-		canvasHeight <= 0 ||
-		sourceWidth <= 0 ||
-		sourceHeight <= 0
-	) {
-		return 1;
-	}
-	const widthRatio = canvasWidth / sourceWidth;
-	const heightRatio = canvasHeight / sourceHeight;
-	const contain = Math.min(widthRatio, heightRatio);
-	const cover = Math.max(widthRatio, heightRatio);
-	if (contain <= 0 || !Number.isFinite(contain) || !Number.isFinite(cover)) {
-		return 1;
-	}
-	return cover / contain;
-}
-
-function remapLandscapeVideoScalesForSquarePreview({
-	tracks,
-	mediaById,
-	projectCanvas,
-	previewCanvas,
-}: {
-	tracks: TimelineTrack[];
-	mediaById: Map<
-		string,
-		{
-			width?: number;
-			height?: number;
-		}
-	>;
-	projectCanvas: { width: number; height: number };
-	previewCanvas: { width: number; height: number };
-}): TimelineTrack[] {
-	const projectIsPortrait = projectCanvas.height > projectCanvas.width;
-	return tracks.map((track) => {
-		if (track.type !== "video") return track;
-		return {
-			...track,
-			elements: track.elements.map((element) => {
-				if (element.type !== "video") return element;
-				const asset = mediaById.get(element.mediaId);
-				const sourceWidth = asset?.width ?? 0;
-				const sourceHeight = asset?.height ?? 0;
-				const hasKnownDimensions = sourceWidth > 0 && sourceHeight > 0;
-				const hasKnownLandscape =
-					hasKnownDimensions && sourceWidth > sourceHeight;
-				const canApplyUnknownFallback =
-					!hasKnownDimensions &&
-					projectIsPortrait &&
-					((element.reframePresets?.some(
-						(preset) => preset.transform.scale > 1,
-					) ??
-						false) ||
-						element.transform.scale > 1);
-				if (!hasKnownLandscape && !canApplyUnknownFallback) {
-					return element;
-				}
-				const effectiveSourceWidth = hasKnownDimensions ? sourceWidth : 16;
-				const effectiveSourceHeight = hasKnownDimensions ? sourceHeight : 9;
-
-				const projectCoverRatio = getCoverToContainScaleRatio({
-					canvasWidth: projectCanvas.width,
-					canvasHeight: projectCanvas.height,
-					sourceWidth: effectiveSourceWidth,
-					sourceHeight: effectiveSourceHeight,
-				});
-				const previewCoverRatio = getCoverToContainScaleRatio({
-					canvasWidth: previewCanvas.width,
-					canvasHeight: previewCanvas.height,
-					sourceWidth: effectiveSourceWidth,
-					sourceHeight: effectiveSourceHeight,
-				});
-				const ratio =
-					projectCoverRatio > 0 ? previewCoverRatio / projectCoverRatio : 1;
-				const nextScale = Math.max(
-					0.01,
-					element.transform.scale * (Number.isFinite(ratio) ? ratio : 1),
-				);
-
-				return {
-					...element,
-					transform: {
-						...element.transform,
-						scale: nextScale,
-					},
-					reframePresets: element.reframePresets?.map((preset) => ({
-						...preset,
-						transform: {
-							...preset.transform,
-							scale: Math.max(
-								0.01,
-								preset.transform.scale * (Number.isFinite(ratio) ? ratio : 1),
-							),
-						},
-					})),
-				};
-			}),
-		};
-	});
-}
 
 function hasMotionBlurTransitionInTracks({
 	tracks,
@@ -393,22 +282,14 @@ function RenderTreeController() {
 	const previewVideoProxyScale = hasMotionBlurTransition
 		? 1
 		: previewProfile.videoProxyScale;
-	const hasLandscapeVideoSource = useMemo(() => {
-		const mediaById = new Map(mediaAssets.map((asset) => [asset.id, asset]));
-		for (const track of tracks) {
-			for (const element of track.elements) {
-				if (element.type !== "video") continue;
-				const asset = mediaById.get(element.mediaId);
-				if (!asset) continue;
-				const width = asset.width ?? 0;
-				const height = asset.height ?? 0;
-				if (width > height && height > 0) {
-					return true;
-				}
-			}
-		}
-		return false;
-	}, [mediaAssets, tracks]);
+	const squarePreviewStrategy = useMemo(
+		() =>
+			resolveSquarePreviewStrategy({
+				tracks,
+				mediaAssets,
+			}),
+		[mediaAssets, tracks],
+	);
 
 	const { width, height } = usePreviewSize();
 
@@ -565,18 +446,18 @@ function RenderTreeController() {
 		const duration = editor.timeline.getTotalDuration();
 		const projectWidth = activeProject.settings.canvasSize.width;
 		const projectHeight = activeProject.settings.canvasSize.height;
-		const mediaById = new Map(mediaAssets.map((asset) => [asset.id, asset]));
 		const squareCoverScale =
 			Math.max(projectWidth, projectHeight) /
 			Math.max(1, Math.min(projectWidth, projectHeight));
 		const previewBackground: TBackground =
 			previewFormatVariant === "square"
-				? hasLandscapeVideoSource
+				? squarePreviewStrategy.backgroundMode === "black"
 					? {
 							type: "color",
 							color: "#000000",
 						}
-					: {
+					: squarePreviewStrategy.backgroundMode === "blur"
+						? {
 							type: "blur",
 							blurIntensity: squareFormatSettings.blurIntensity,
 							blurScale: Math.max(
@@ -585,6 +466,7 @@ function RenderTreeController() {
 									Math.max(1, squareFormatSettings.coverOverscanPercent / 100),
 							),
 						}
+						: activeProject.settings.background
 				: activeProject.settings.background;
 		const captionMappedTracks =
 			previewFormatVariant !== "project"
@@ -594,15 +476,23 @@ function RenderTreeController() {
 						previewCanvas: { width, height },
 					})
 				: tracks;
-		const previewTracks =
-			previewFormatVariant === "square" && hasLandscapeVideoSource
-				? remapLandscapeVideoScalesForSquarePreview({
+		const squareSourceRemappedTracks =
+			previewFormatVariant === "square"
+				? remapSquareSourceVideoTransformsForSquarePreview({
 						tracks: captionMappedTracks,
-						mediaById,
-						projectCanvas: { width: projectWidth, height: projectHeight },
-						previewCanvas: { width, height },
+						mediaAssets,
+						sourceCanvas: { width: projectWidth, height: projectHeight },
 					})
 				: captionMappedTracks;
+		const previewTracks =
+			previewFormatVariant === "square" &&
+			squarePreviewStrategy.remapVideoAdjustments
+				? remapVideoAdjustmentsForPreviewVariant({
+						tracks: squareSourceRemappedTracks,
+						sourceCanvas: { width: projectWidth, height: projectHeight },
+						previewCanvas: { width, height },
+					})
+				: squareSourceRemappedTracks;
 		const shouldApplyReframePreview = !isPlaying;
 		const previewTracksWithSelectedReframe =
 			applySelectedReframePresetPreviewToTracks({
@@ -638,7 +528,7 @@ function RenderTreeController() {
 		activeProject?.brandOverlays,
 		previewFormatVariant,
 		squareFormatSettings,
-		hasLandscapeVideoSource,
+		squarePreviewStrategy,
 		playbackQuality,
 		selectedElements,
 		selectedPresetIdByElementId,

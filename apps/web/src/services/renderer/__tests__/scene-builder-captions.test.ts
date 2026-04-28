@@ -450,6 +450,84 @@ describe("scene builder live caption source resolution", () => {
 		]);
 	});
 
+	test("can keep a caption visible through longer pauses when configured", () => {
+		const source = createAudioElement({
+			id: "audio-1",
+			startTime: 10,
+			duration: 3,
+			words: [
+				{ id: "w0", text: "The", startTime: 0.0, endTime: 0.25 },
+				{ id: "w1", text: "man", startTime: 0.3, endTime: 0.55 },
+				{ id: "w2", text: "went", startTime: 1.35, endTime: 1.6 },
+				{ id: "w3", text: "home", startTime: 1.65, endTime: 1.9 },
+			],
+		});
+		const caption = {
+			...createCaption({ sourceMediaElementId: source.id }),
+			captionStyle: {
+				keepVisibleDuringPausesForSeconds: 1,
+			},
+		} satisfies TextElement;
+
+		const resolved = resolveLiveCaptionElementFromTranscriptSource({
+			element: caption,
+			sourceMedia: source,
+		});
+
+		expect(resolved?.captionVisibilityWindows).toEqual([
+			{ startTime: 10.0, endTime: 11.9 },
+		]);
+	});
+
+	test("defaults to hiding captions across longer pauses", () => {
+		const source = createAudioElement({
+			id: "audio-1",
+			startTime: 10,
+			duration: 3,
+			words: [
+				{ id: "w0", text: "The", startTime: 0.0, endTime: 0.25 },
+				{ id: "w1", text: "man", startTime: 0.3, endTime: 0.55 },
+				{ id: "w2", text: "went", startTime: 1.35, endTime: 1.6 },
+				{ id: "w3", text: "home", startTime: 1.65, endTime: 1.9 },
+			],
+		});
+		const caption = createCaption({ sourceMediaElementId: source.id });
+
+		const resolved = resolveLiveCaptionElementFromTranscriptSource({
+			element: caption,
+			sourceMedia: source,
+		});
+
+		expect(resolved?.captionVisibilityWindows).toEqual([
+			{ startTime: 10.0, endTime: 10.55 },
+			{ startTime: 11.35, endTime: 11.9 },
+		]);
+	});
+
+	test("transparent captions export preserves short pauses between caption windows", () => {
+		const source = createAudioElement({
+			id: "audio-1",
+			startTime: 10,
+			duration: 2,
+			words: [
+				{ id: "w0", text: "alpha", startTime: 0.0, endTime: 0.3 },
+				{ id: "w1", text: "beta", startTime: 0.34, endTime: 0.6 },
+			],
+		});
+		const caption = createCaption({ sourceMediaElementId: source.id });
+
+		const resolved = resolveLiveCaptionElementFromTranscriptSource({
+			element: caption,
+			sourceMedia: source,
+			mergeShortVisibilityGaps: false,
+		});
+
+		expect(resolved?.captionVisibilityWindows).toEqual([
+			{ startTime: 10.0, endTime: 10.3 },
+			{ startTime: 10.34, endTime: 10.6 },
+		]);
+	});
+
 	test("uses the strongly aligned split companion transcript instead of an adjacent sibling", () => {
 		const leftVideo = {
 			id: "video-left",
@@ -727,6 +805,38 @@ describe("scene builder live caption source resolution", () => {
 		expect(
 			textNode?.params?.captionSourceVideo?.splitScreen?.layoutPreset,
 		).toBe("top-bottom");
+	});
+
+	test("transparent captions-only export excludes background and brand overlays", () => {
+		const caption = createCaption({ sourceMediaElementId: "audio-1" });
+
+		const scene = buildScene({
+			tracks: [
+				{
+					id: "text-track",
+					type: "text",
+					name: "Captions",
+					hidden: false,
+					elements: [caption],
+				},
+			],
+			mediaAssets: [],
+			duration: 5,
+			canvasSize: { width: 1080, height: 1920 },
+			background: { type: "color", color: "#000000" },
+			exportContent: "captions_only_transparent",
+			brandOverlays: {
+				selectedBrandId: "brand-1",
+				logo: {
+					enabled: true,
+					preset: "top-right",
+					sourceUrl: "https://example.com/logo.png",
+				},
+			},
+		});
+
+		expect(scene.children).toHaveLength(1);
+		expect(scene.children[0]?.constructor.name).toBe("TextNode");
 	});
 
 	test("uses aligned split-screen video companion for audio-linked caption placement", () => {

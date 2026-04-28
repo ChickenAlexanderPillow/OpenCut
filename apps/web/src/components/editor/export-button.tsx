@@ -17,8 +17,12 @@ import { cn } from "@/utils/ui";
 import { getExportMimeType, getExportFileExtension } from "@/lib/export";
 import { Check, Copy, Download, RotateCcw } from "lucide-react";
 import {
+	EXPORT_CONTENT_VALUES,
 	EXPORT_FORMAT_VALUES,
+	EXPORT_ASPECT_VALUES,
 	EXPORT_QUALITY_VALUES,
+	type ExportAspect,
+	type ExportContent,
 	type ExportFormat,
 	type ExportQuality,
 	type ExportResult,
@@ -91,6 +95,12 @@ function ExportPopover({
 	const [quality, setQuality] = useState<ExportQuality>(
 		DEFAULT_EXPORT_OPTIONS.quality,
 	);
+	const [content, setContent] = useState<ExportContent>(
+		DEFAULT_EXPORT_OPTIONS.content,
+	);
+	const [aspect, setAspect] = useState<ExportAspect>(
+		DEFAULT_EXPORT_OPTIONS.aspect,
+	);
 	const [includeAudio, setIncludeAudio] = useState<boolean>(
 		DEFAULT_EXPORT_OPTIONS.includeAudio ?? true,
 	);
@@ -114,6 +124,8 @@ function ExportPopover({
 	const exportEndTime = outPoint ?? timelineDuration;
 	const hasRangeExport =
 		(inPoint !== null || outPoint !== null) && exportEndTime > exportStartTime;
+	const isTransparentCaptionsOnly = content === "captions_only_transparent";
+	const effectiveIncludeAudio = isTransparentCaptionsOnly ? false : includeAudio;
 
 	const handleExport = async () => {
 		if (!activeProject) return;
@@ -141,8 +153,10 @@ function ExportPopover({
 				options: {
 					format,
 					quality,
+					content,
+					aspect,
 					fps: activeProject.settings.fps,
-					includeAudio,
+					includeAudio: effectiveIncludeAudio,
 					startTime: hasRangeExport ? exportStartTime : undefined,
 					endTime: hasRangeExport ? exportEndTime : undefined,
 					onProgress: ({ progress }) => {
@@ -224,6 +238,75 @@ function ExportPopover({
 							<>
 								<div className="flex flex-col">
 									<Section collapsible defaultOpen={false} hasBorderTop={false}>
+										<SectionHeader title="Content" />
+										<SectionContent>
+											<RadioGroup
+												value={content}
+												onValueChange={(value) => {
+													if (!isExportContent(value)) return;
+													setContent(value);
+													if (
+														value === "captions_only_transparent" &&
+														format !== "mov"
+													) {
+														setFormat("mov");
+													}
+													if (value === "full" && format === "mov") {
+														setFormat("mp4");
+													}
+												}}
+											>
+												<div className="flex items-center space-x-2">
+													<RadioGroupItem value="full" id="content-full" />
+													<Label htmlFor="content-full">
+														Full video export
+													</Label>
+												</div>
+												<div className="flex items-center space-x-2">
+													<RadioGroupItem
+														value="captions_only_transparent"
+														id="content-captions-only"
+													/>
+													<Label htmlFor="content-captions-only">
+														Captions only with transparent background
+													</Label>
+												</div>
+											</RadioGroup>
+											{isTransparentCaptionsOnly && (
+												<p className="text-muted-foreground text-xs">
+													Exports generated captions as a transparent
+													Premiere-compatible QuickTime MOV overlay.
+													Background, video, images, stickers, and brand
+													overlays are excluded.
+												</p>
+											)}
+									</SectionContent>
+								</Section>
+
+								<Section collapsible defaultOpen={false}>
+									<SectionHeader title="Aspect" />
+									<SectionContent>
+										<RadioGroup
+											value={aspect}
+											onValueChange={(value) => {
+												if (isExportAspect(value)) {
+													setAspect(value);
+												}
+											}}
+										>
+											<div className="flex items-center space-x-2">
+												<RadioGroupItem value="project" id="aspect-project" />
+												<Label htmlFor="aspect-project">Project</Label>
+											</div>
+											<div className="flex items-center space-x-2">
+												<RadioGroupItem value="square" id="aspect-square" />
+												<Label htmlFor="aspect-square">Square</Label>
+											</div>
+										</RadioGroup>
+									</SectionContent>
+								</Section>
+
+									<Section collapsible defaultOpen={false}>
 										<SectionHeader title="Format" />
 										<SectionContent>
 											<RadioGroup
@@ -235,18 +318,58 @@ function ExportPopover({
 												}}
 											>
 												<div className="flex items-center space-x-2">
-													<RadioGroupItem value="mp4" id="mp4" />
+													<RadioGroupItem
+														value="mp4"
+														id="mp4"
+														disabled={isTransparentCaptionsOnly}
+													/>
 													<Label htmlFor="mp4">
 														MP4 (H.264) - Better compatibility
 													</Label>
 												</div>
 												<div className="flex items-center space-x-2">
-													<RadioGroupItem value="webm" id="webm" />
+													<RadioGroupItem
+														value="webm"
+														id="webm"
+														disabled={isTransparentCaptionsOnly}
+													/>
 													<Label htmlFor="webm">
 														WebM (VP9) - Smaller file size
 													</Label>
 												</div>
+												<div className="flex items-center space-x-2">
+													<RadioGroupItem
+														value="mkv"
+														id="mkv"
+														disabled={isTransparentCaptionsOnly}
+													/>
+													<Label htmlFor="mkv">
+														MKV (Matroska) - Best for alpha overlays
+													</Label>
+												</div>
+												<div className="flex items-center space-x-2">
+													<RadioGroupItem
+														value="mov"
+														id="mov"
+														disabled={!isTransparentCaptionsOnly}
+													/>
+													<Label htmlFor="mov">
+														QuickTime MOV - Premiere-compatible alpha export
+													</Label>
+												</div>
 											</RadioGroup>
+											{isTransparentCaptionsOnly && (
+												<p className="text-muted-foreground text-xs">
+													OpenCut renders an alpha-safe intermediate and then
+													transcodes it to ProRes 4444 MOV for Premiere Pro.
+												</p>
+											)}
+											{!isTransparentCaptionsOnly && format === "mov" && (
+												<p className="text-muted-foreground text-xs">
+													QuickTime MOV is reserved for transparent captions
+													overlays.
+												</p>
+											)}
 										</SectionContent>
 									</Section>
 
@@ -289,13 +412,16 @@ function ExportPopover({
 											<div className="flex items-center space-x-2">
 												<Checkbox
 													id="include-audio"
-													checked={includeAudio}
+													checked={effectiveIncludeAudio}
+													disabled={isTransparentCaptionsOnly}
 													onCheckedChange={(checked) =>
 														setIncludeAudio(!!checked)
 													}
 												/>
 												<Label htmlFor="include-audio">
-													Include audio in export
+													{isTransparentCaptionsOnly
+														? "Audio is excluded for captions-only export"
+														: "Include audio in export"}
 												</Label>
 											</div>
 										</SectionContent>
@@ -352,6 +478,14 @@ function ExportPopover({
 
 function isExportFormat(value: string): value is ExportFormat {
 	return EXPORT_FORMAT_VALUES.some((formatValue) => formatValue === value);
+}
+
+function isExportContent(value: string): value is ExportContent {
+	return EXPORT_CONTENT_VALUES.some((contentValue) => contentValue === value);
+}
+
+function isExportAspect(value: string): value is ExportAspect {
+	return EXPORT_ASPECT_VALUES.some((aspectValue) => aspectValue === value);
 }
 
 function isExportQuality(value: string): value is ExportQuality {

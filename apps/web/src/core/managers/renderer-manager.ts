@@ -1,6 +1,10 @@
 import type { EditorCore } from "@/core";
 import type { RootNode } from "@/services/renderer/nodes/root-node";
-import type { ExportOptions, ExportResult } from "@/types/export";
+import type {
+	ExportContent,
+	ExportOptions,
+	ExportResult,
+} from "@/types/export";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { SceneExporter } from "@/services/renderer/scene-exporter";
 import { buildScene } from "@/services/renderer/scene-builder";
@@ -13,9 +17,22 @@ import type {
 	RendererCapabilities,
 } from "@/services/renderer/webgpu-types";
 import { getRendererCapabilities } from "@/services/renderer/scene-partition";
-import type { TimelineTrack } from "@/types/timeline";
+import type { TextTrack, TimelineTrack } from "@/types/timeline";
+import type { MediaAsset } from "@/types/assets";
+import type { TBackground, TCanvasSize } from "@/types/project";
+import { isGeneratedCaptionElement } from "@/lib/captions/caption-track";
+import { transcodeTransparentOverlayExport } from "@/services/export-transcoding/service";
+import {
+	getPreviewCanvasSize,
+	remapCaptionTransformsForPreviewVariant,
+	remapSquareSourceVideoTransformsForSquarePreview,
+	remapVideoAdjustmentsForPreviewVariant,
+	resolveSquarePreviewStrategy,
+} from "@/lib/preview/preview-format";
 
 const EXPORT_AUDIO_BUILD_TIMEOUT_MS = 20_000;
+const SQUARE_EXPORT_BLUR_INTENSITY = 18;
+const SQUARE_EXPORT_COVER_OVERSCAN_PERCENT = 103;
 
 function rangesOverlap({
 	startA,
@@ -128,6 +145,121 @@ export function getLastMediaEndTime({
 	return lastMediaEndTime;
 }
 
+export function filterTracksByExportContent({
+	tracks,
+	content,
+}: {
+	tracks: TimelineTrack[];
+	content: ExportContent;
+}): TimelineTrack[] {
+	if (content === "full") return tracks;
+
+	const filteredTracks: TimelineTrack[] = [];
+	for (const track of tracks) {
+		if (track.type === "audio") {
+			filteredTracks.push(track);
+			continue;
+		}
+		if (track.type !== "text") {
+			continue;
+		}
+		const elements = track.elements.filter((element) =>
+			isGeneratedCaptionElement(element),
+		);
+		if (elements.length === 0) continue;
+		filteredTracks.push({
+			...(track as TextTrack),
+			elements,
+		});
+	}
+
+	return filteredTracks;
+}
+
+export function resolveExportRenderPlan({
+	tracks,
+	mediaAssets,
+	projectCanvasSize,
+	projectBackground,
+	aspect,
+}: {
+	tracks: TimelineTrack[];
+	mediaAssets: MediaAsset[];
+	projectCanvasSize: TCanvasSize;
+	projectBackground: TBackground;
+	aspect: ExportOptions["aspect"];
+}): {
+	canvasSize: TCanvasSize;
+	background: TBackground;
+	tracks: TimelineTrack[];
+	backgroundReferenceCanvasSize: TCanvasSize;
+} {
+	if (aspect === "project") {
+		return {
+			canvasSize: projectCanvasSize,
+			background: projectBackground,
+			tracks,
+			backgroundReferenceCanvasSize: projectCanvasSize,
+		};
+	}
+
+	const canvasSize = getPreviewCanvasSize({
+		projectWidth: projectCanvasSize.width,
+		projectHeight: projectCanvasSize.height,
+		previewFormatVariant: "square",
+	});
+	const squarePreviewStrategy = resolveSquarePreviewStrategy({
+		tracks,
+		mediaAssets,
+	});
+	const squareCoverScale =
+		Math.max(projectCanvasSize.width, projectCanvasSize.height) /
+		Math.max(1, Math.min(projectCanvasSize.width, projectCanvasSize.height));
+	const background: TBackground =
+		squarePreviewStrategy.backgroundMode === "black"
+			? {
+					type: "color",
+					color: "#000000",
+			  }
+			: squarePreviewStrategy.backgroundMode === "blur"
+				? {
+						type: "blur",
+						blurIntensity: SQUARE_EXPORT_BLUR_INTENSITY,
+						blurScale: Math.max(
+							1.4,
+							squareCoverScale *
+								Math.max(1, SQUARE_EXPORT_COVER_OVERSCAN_PERCENT / 100),
+						),
+				  }
+				: projectBackground;
+
+	const captionMappedTracks = remapCaptionTransformsForPreviewVariant({
+		tracks,
+		sourceCanvas: projectCanvasSize,
+		previewCanvas: canvasSize,
+	});
+	const squareSourceRemappedTracks =
+		remapSquareSourceVideoTransformsForSquarePreview({
+			tracks: captionMappedTracks,
+			mediaAssets,
+			sourceCanvas: projectCanvasSize,
+		});
+	const resolvedTracks = squarePreviewStrategy.remapVideoAdjustments
+		? remapVideoAdjustmentsForPreviewVariant({
+				tracks: squareSourceRemappedTracks,
+				sourceCanvas: projectCanvasSize,
+				previewCanvas: canvasSize,
+			})
+		: squareSourceRemappedTracks;
+
+	return {
+		canvasSize,
+		background,
+		tracks: resolvedTracks,
+		backgroundReferenceCanvasSize: projectCanvasSize,
+	};
+}
+
 export class RendererManager {
 	private renderTree: RootNode | null = null;
 	private listeners = new Set<() => void>();
@@ -227,6 +359,9 @@ export class RendererManager {
 	}): Promise<ExportResult> {
 		const { format, quality, fps, includeAudio, onProgress, onCancel } =
 			options;
+		const isTransparentCaptionsOnly =
+			options.content === "captions_only_transparent";
+		const shouldIncludeAudio = Boolean(includeAudio) && !isTransparentCaptionsOnly;
 
 		const exportVideoCache = new VideoCache();
 		try {
@@ -236,6 +371,20 @@ export class RendererManager {
 
 			if (!activeProject) {
 				return { success: false, error: "No active project" };
+			}
+			if (isTransparentCaptionsOnly && format !== "mov") {
+				return {
+					success: false,
+					error:
+						"Transparent captions-only export requires QuickTime MOV.",
+				};
+			}
+			if (!isTransparentCaptionsOnly && format === "mov") {
+				return {
+					success: false,
+					error:
+						"QuickTime MOV export is only supported for transparent captions overlays.",
+				};
 			}
 
 			const timelineDuration = this.editor.timeline.getTotalDuration();
@@ -265,22 +414,42 @@ export class RendererManager {
 			if (duration <= 0) {
 				return { success: false, error: "Export range is empty" };
 			}
-			const tracks = filterTracksByExportRegion({
+			const regionTracks = filterTracksByExportRegion({
 				tracks: timelineTracks,
 				startTime,
 				endTime,
 			});
+			const tracks = filterTracksByExportContent({
+				tracks: regionTracks,
+				content: options.content,
+			});
+			if (
+				options.content === "captions_only_transparent" &&
+				!tracks.some((track) => track.type === "text")
+			) {
+				return {
+					success: false,
+					error:
+						"No generated captions were found in the selected export range.",
+				};
+			}
 
 			const exportFps = fps || activeProject.settings.fps;
-			const canvasSize = activeProject.settings.canvasSize;
+			const renderPlan = resolveExportRenderPlan({
+				tracks,
+				mediaAssets,
+				projectCanvasSize: activeProject.settings.canvasSize,
+				projectBackground: activeProject.settings.background,
+				aspect: options.aspect,
+			});
 
 			let audioBuffer: AudioBuffer | null = null;
-			if (includeAudio) {
+			if (shouldIncludeAudio) {
 				onProgress?.({ progress: 0.05 });
 				try {
 					audioBuffer = await Promise.race([
 						createTimelineAudioBuffer({
-							tracks,
+							tracks: regionTracks,
 							mediaAssets,
 							duration,
 							startTime,
@@ -305,29 +474,32 @@ export class RendererManager {
 			}
 
 			const scene = buildScene({
-				tracks,
+				tracks: renderPlan.tracks,
 				mediaAssets,
 				duration: endTime,
-				canvasSize,
-				background: activeProject.settings.background,
+				canvasSize: renderPlan.canvasSize,
+				backgroundReferenceCanvasSize: renderPlan.backgroundReferenceCanvasSize,
+				background: renderPlan.background,
 				brandOverlays: activeProject.brandOverlays,
 				videoCache: exportVideoCache,
+				exportContent: options.content,
 			});
 
 			const exporter = new SceneExporter({
-				width: canvasSize.width,
-				height: canvasSize.height,
+				width: renderPlan.canvasSize.width,
+				height: renderPlan.canvasSize.height,
 				fps: exportFps,
-				format,
+				format: isTransparentCaptionsOnly ? "mkv" : format,
 				quality,
 				startTime,
 				duration,
-				shouldIncludeAudio: !!includeAudio,
-				audioBuffer: audioBuffer || undefined,
+				shouldIncludeAudio,
+				audioBuffer: shouldIncludeAudio ? (audioBuffer ?? undefined) : undefined,
+				alpha: isTransparentCaptionsOnly,
 			});
 
 			exporter.on("progress", (progress) => {
-				const adjustedProgress = includeAudio
+				const adjustedProgress = shouldIncludeAudio
 					? 0.05 + progress * 0.95
 					: progress;
 				onProgress?.({ progress: adjustedProgress });
@@ -353,6 +525,18 @@ export class RendererManager {
 
 				if (!buffer) {
 					return { success: false, error: "Export failed to produce buffer" };
+				}
+				if (isTransparentCaptionsOnly) {
+					onProgress?.({ progress: 0.98 });
+					const transcodedBuffer = await transcodeTransparentOverlayExport({
+						buffer,
+						fileName: `${activeProject.metadata.name || "captions-overlay"}.mkv`,
+					});
+					onProgress?.({ progress: 1 });
+					return {
+						success: true,
+						buffer: transcodedBuffer,
+					};
 				}
 
 				return {

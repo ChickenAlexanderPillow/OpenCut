@@ -5,6 +5,7 @@ import type {
 	VideoElement,
 } from "@/types/timeline";
 import type { MediaAsset } from "@/types/assets";
+import type { ExportContent } from "@/types/export";
 import { RootNode } from "./nodes/root-node";
 import { VideoNode } from "./nodes/video-node";
 import { ImageNode } from "./nodes/image-node";
@@ -177,6 +178,8 @@ function buildCaptionVisibilityWindowsFromVisibleWordTimings({
 	timings,
 	clipStartTime,
 	clipEndTime,
+	mergeShortGaps = true,
+	maxMergedGapSeconds = MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS,
 }: {
 	timings: Array<{
 		startTime: number;
@@ -185,6 +188,8 @@ function buildCaptionVisibilityWindowsFromVisibleWordTimings({
 	}>;
 	clipStartTime: number;
 	clipEndTime: number;
+	mergeShortGaps?: boolean;
+	maxMergedGapSeconds?: number;
 }): Array<{ startTime: number; endTime: number }> {
 	const visibleTimings = timings
 		.filter((timing) => !timing.hidden)
@@ -201,9 +206,10 @@ function buildCaptionVisibilityWindowsFromVisibleWordTimings({
 		(merged, timing) => {
 			const previous = merged[merged.length - 1];
 			if (
+				mergeShortGaps &&
 				previous &&
 				timing.startTime - previous.endTime <=
-					MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS
+					Math.max(0, maxMergedGapSeconds)
 			) {
 				previous.endTime = Math.max(previous.endTime, timing.endTime);
 				return merged;
@@ -218,9 +224,11 @@ function buildCaptionVisibilityWindowsFromVisibleWordTimings({
 export function resolveLiveCaptionElementFromTranscriptSource({
 	element,
 	sourceMedia,
+	mergeShortVisibilityGaps = true,
 }: {
 	element: TextElement;
 	sourceMedia: VideoElement | AudioElement;
+	mergeShortVisibilityGaps?: boolean;
 }): TextElement | null {
 	const transcriptDraft = getTranscriptDraft(sourceMedia);
 	const transcriptApplied = getTranscriptApplied(sourceMedia);
@@ -257,10 +265,17 @@ export function resolveLiveCaptionElementFromTranscriptSource({
 	const timings = snapshot.captionPayload.wordTimings;
 	const clipStartTime = sourceMedia.startTime;
 	const clipEndTime = sourceMedia.startTime + sourceMedia.duration;
+	const keepVisibleDuringPausesForSeconds = Math.max(
+		0,
+		element.captionStyle?.keepVisibleDuringPausesForSeconds ??
+			MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS,
+	);
 	const visibilityWindows = buildCaptionVisibilityWindowsFromVisibleWordTimings({
 		timings,
 		clipStartTime,
 		clipEndTime,
+		mergeShortGaps: mergeShortVisibilityGaps,
+		maxMergedGapSeconds: keepVisibleDuringPausesForSeconds,
 	});
 
 	return {
@@ -289,11 +304,15 @@ export type BuildSceneParams = {
 	previewFrameRateCap?: number;
 	previewProxyScale?: number;
 	videoCache?: VideoCache;
+	exportContent?: ExportContent;
 };
 
 export function buildScene(params: BuildSceneParams) {
 	const { mediaAssets, duration, canvasSize, background } = params;
 	const tracks = params.tracks;
+	const exportContent = params.exportContent ?? "full";
+	const isCaptionsOnlyTransparent =
+		exportContent === "captions_only_transparent";
 
 	const rootNode = new RootNode({ duration });
 	const mediaMap = new Map(mediaAssets.map((m) => [m.id, m]));
@@ -440,6 +459,7 @@ export function buildScene(params: BuildSceneParams) {
 						? resolveLiveCaptionElementFromTranscriptSource({
 								element: stableElement,
 								sourceMedia,
+								mergeShortVisibilityGaps: !isCaptionsOnlyTransparent,
 							})
 						: stableElement;
 				if (!resolvedTextElement) {
@@ -493,7 +513,7 @@ export function buildScene(params: BuildSceneParams) {
 
 	const overlayNodes = [];
 	const logoOverlay = params.brandOverlays?.logo ?? DEFAULT_BRAND_OVERLAYS.logo;
-	if (logoOverlay.enabled) {
+	if (!isCaptionsOnlyTransparent && logoOverlay.enabled) {
 		const legacyMediaId =
 			(logoOverlay as unknown as { mediaId?: string | null }).mediaId ?? null;
 		const legacyAsset = legacyMediaId ? mediaMap.get(legacyMediaId) : null;
@@ -523,7 +543,11 @@ export function buildScene(params: BuildSceneParams) {
 		}
 	}
 
-	if (background.type === "blur") {
+	if (isCaptionsOnlyTransparent) {
+		for (const node of contentNodes) {
+			rootNode.add(node);
+		}
+	} else if (background.type === "blur") {
 		rootNode.add(
 			new BlurBackgroundNode({
 				blurIntensity: background.blurIntensity ?? DEFAULT_BLUR_INTENSITY,

@@ -19,6 +19,7 @@ function createVideoElement(): VideoElement {
 		muted: false,
 		transform: { scale: 1, position: { x: 0, y: 0 }, rotate: 0 },
 		opacity: 1,
+		reframeSeededBy: "subject-aware-v1",
 		reframePresets: [
 			{
 				id: "preset-top",
@@ -158,6 +159,28 @@ describe("split slot edit regions", () => {
 			viewportBalance: "balanced",
 		});
 
-		expect(updated).toEqual(element.splitScreen?.slots ?? []);
+		expect(updated).toEqual([
+			{
+				slotId: "top",
+				mode: "fixed-preset",
+				presetId: "preset-top",
+				transformOverride: {
+					position: { x: 42, y: -18 },
+					scale: 1.65,
+				},
+				transformOverridesBySlotId: {
+					"balanced:top": {
+						position: { x: 42, y: -18 },
+						scale: 1.65,
+					},
+				},
+				transformAdjustmentsBySlotId: undefined,
+			},
+			{
+				slotId: "bottom",
+				mode: "fixed-preset",
+				presetId: "preset-bottom",
+			},
+		]);
 	});
 });

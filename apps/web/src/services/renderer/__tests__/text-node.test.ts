@@ -26,6 +26,10 @@ type FakeContext = {
 	lineWidth: number;
 	lineJoin: CanvasLineJoin;
 	miterLimit: number;
+	shadowColor: string;
+	shadowBlur: number;
+	shadowOffsetX: number;
+	shadowOffsetY: number;
 	textBaseline: CanvasTextBaseline;
 	globalAlpha: number;
 	letterSpacing?: string;
@@ -34,6 +38,7 @@ type FakeContext = {
 function createFakeRenderer() {
 	const operations: string[] = [];
 	const translations: Array<[number, number]> = [];
+	const filledTexts: string[] = [];
 	const context: FakeContext = {
 		save: () => operations.push("save"),
 		restore: () => operations.push("restore"),
@@ -43,7 +48,10 @@ function createFakeRenderer() {
 				actualBoundingBoxAscent: 10,
 				actualBoundingBoxDescent: 2,
 			}) as TextMetrics,
-		fillText: () => operations.push("fillText"),
+		fillText: (...args) => {
+			operations.push("fillText");
+			filledTexts.push(String(args[0] ?? ""));
+		},
 		strokeText: () => operations.push("strokeText"),
 		fillRect: () => operations.push("fillRect"),
 		roundRect: () => operations.push("roundRect"),
@@ -64,6 +72,10 @@ function createFakeRenderer() {
 		lineWidth: 0,
 		lineJoin: "round",
 		miterLimit: 0,
+		shadowColor: "transparent",
+		shadowBlur: 0,
+		shadowOffsetX: 0,
+		shadowOffsetY: 0,
 		textBaseline: "alphabetic",
 		globalAlpha: 1,
 	};
@@ -72,6 +84,7 @@ function createFakeRenderer() {
 		context,
 		operations,
 		translations,
+		filledTexts,
 		renderer: {
 			context,
 			width: 1280,
@@ -229,6 +242,130 @@ describe("TextNode caption gap rendering", () => {
 		await node.render({ renderer, time: 10.8 });
 
 		expect(operations).toEqual([]);
+	});
+
+	test("does not preload post-pause words during a long pause when words on screen is limited", async () => {
+		const node = new TextNode({
+			...DEFAULT_TEXT_ELEMENT,
+			id: "caption-window-long-pause",
+			name: "Caption Window Long Pause",
+			content: "hello world later",
+			startTime: 10,
+			duration: 2,
+			canvasCenter: { x: 640, y: 360 },
+			canvasWidth: 1280,
+			canvasHeight: 720,
+			captionStyle: {
+				wordsOnScreen: 2,
+			},
+			captionWordTimings: [
+				{ word: "hello", startTime: 10.0, endTime: 10.2 },
+				{ word: "world", startTime: 10.2, endTime: 10.4 },
+				{ word: "later", startTime: 11.0, endTime: 11.3 },
+			],
+		});
+		const { filledTexts, renderer } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.6 });
+
+		expect(filledTexts).toContain("hello");
+		expect(filledTexts).toContain("world");
+		expect(filledTexts).not.toContain("later");
+	});
+
+	test("keeps only already-started words visible during a short merged pause", async () => {
+		const node = new TextNode({
+			...DEFAULT_TEXT_ELEMENT,
+			id: "caption-window-short-pause",
+			name: "Caption Window Short Pause",
+			content: "hello world later",
+			startTime: 10,
+			duration: 2,
+			canvasCenter: { x: 640, y: 360 },
+			canvasWidth: 1280,
+			canvasHeight: 720,
+			captionStyle: {
+				wordsOnScreen: 2,
+			},
+			captionVisibilityWindows: [{ startTime: 10.0, endTime: 11.0 }],
+			captionWordTimings: [
+				{ word: "hello", startTime: 10.0, endTime: 10.2 },
+				{ word: "world", startTime: 10.2, endTime: 10.4 },
+				{ word: "later", startTime: 10.75, endTime: 11.0 },
+			],
+		});
+		const { filledTexts, renderer } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.6 });
+
+		expect(filledTexts).toContain("hello");
+		expect(filledTexts).toContain("world");
+		expect(filledTexts).not.toContain("later");
+	});
+
+	test("reveals the next word exactly at its start time after a pause", async () => {
+		const node = new TextNode({
+			...DEFAULT_TEXT_ELEMENT,
+			id: "caption-window-boundary",
+			name: "Caption Window Boundary",
+			content: "hello world later",
+			startTime: 10,
+			duration: 2,
+			canvasCenter: { x: 640, y: 360 },
+			canvasWidth: 1280,
+			canvasHeight: 720,
+			captionStyle: {
+				wordsOnScreen: 2,
+			},
+			captionWordTimings: [
+				{ word: "hello", startTime: 10.0, endTime: 10.2 },
+				{ word: "world", startTime: 10.2, endTime: 10.4 },
+				{ word: "later", startTime: 11.0, endTime: 11.3 },
+			],
+		});
+		const beforeBoundary = createFakeRenderer();
+		await node.render({ renderer: beforeBoundary.renderer, time: 10.999 });
+		expect(beforeBoundary.filledTexts).toContain("hello");
+		expect(beforeBoundary.filledTexts).toContain("world");
+		expect(beforeBoundary.filledTexts).not.toContain("later");
+
+		const atBoundary = createFakeRenderer();
+		await node.render({ renderer: atBoundary.renderer, time: 11.0 });
+		expect(atBoundary.filledTexts).toContain("later");
+	});
+
+	test("restarts caption paging from the resumed window after a pause split", async () => {
+		const node = new TextNode({
+			...DEFAULT_TEXT_ELEMENT,
+			id: "caption-window-resume",
+			name: "Caption Window Resume",
+			content: "looming in the uk market I think",
+			startTime: 10,
+			duration: 3,
+			canvasCenter: { x: 640, y: 360 },
+			canvasWidth: 1280,
+			canvasHeight: 720,
+			captionVisibilityWindows: [
+				{ startTime: 10.0, endTime: 10.9 },
+				{ startTime: 11.5, endTime: 12.2 },
+			],
+			captionWordTimings: [
+				{ word: "looming", startTime: 10.0, endTime: 10.2 },
+				{ word: "in", startTime: 10.2, endTime: 10.3 },
+				{ word: "the", startTime: 10.3, endTime: 10.4 },
+				{ word: "uk", startTime: 10.4, endTime: 10.55 },
+				{ word: "market", startTime: 10.55, endTime: 10.85 },
+				{ word: "I", startTime: 11.5, endTime: 11.65 },
+				{ word: "think", startTime: 11.65, endTime: 12.2 },
+			],
+		});
+		const { filledTexts, renderer } = createFakeRenderer();
+
+		await node.render({ renderer, time: 11.6 });
+
+		expect(filledTexts).toContain("I");
+		expect(filledTexts).not.toContain("looming");
+		expect(filledTexts).not.toContain("market");
 	});
 
 	test("anchors captions into the active split viewport when linked video is split", async () => {
@@ -582,5 +719,29 @@ test("anchors unbalanced split captions to the divider center", async () => {
 
 		expect(operations).toContain("fillText");
 		expect((translations[0]?.[1] ?? 0) < 240).toBe(true);
+	});
+
+	test("renders shadow and outline passes before the caption fill", async () => {
+		const node = createCaptionNode();
+		node.params.strokeWidth = 3;
+		node.params.strokeSoftness = 4;
+		node.params.shadowColor = "#000000";
+		node.params.shadowOpacity = 0.7;
+		node.params.shadowDistance = 8;
+		node.params.shadowAngle = 90;
+		node.params.shadowSoftness = 6;
+
+		const { operations, renderer } = createFakeRenderer();
+		await node.render({ renderer, time: 10.2 });
+
+		expect(
+			operations.filter((operation) => operation === "strokeText").length,
+		).toBeGreaterThanOrEqual(2);
+		expect(
+			operations.filter((operation) => operation === "fillText").length,
+		).toBeGreaterThanOrEqual(3);
+		expect(operations.indexOf("strokeText")).toBeLessThan(
+			operations.lastIndexOf("fillText"),
+		);
 	});
 });

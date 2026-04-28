@@ -177,6 +177,8 @@ export class VideoNode extends VisualNode<VideoNodeParams> {
 			duration: this.params.duration,
 			splitScreen: this.params.splitScreen,
 			defaultReframePresetId: this.params.defaultReframePresetId,
+			reframePresets: this.params.reframePresets,
+			reframeSeededBy: this.params.reframeSeededBy,
 			reframeSwitches: this.params.reframeSwitches,
 			localTime: clipElapsed,
 		});

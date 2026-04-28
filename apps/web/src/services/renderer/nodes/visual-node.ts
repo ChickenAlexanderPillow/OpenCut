@@ -5,6 +5,7 @@ import type {
 	ElementTransitions,
 	Transform,
 	VideoReframePreset,
+	VideoElement,
 	VideoReframeSwitch,
 	VideoSplitScreen,
 } from "@/types/timeline";
@@ -38,6 +39,7 @@ export interface VisualNodeParams {
 	animations?: ElementAnimations;
 	transitions?: ElementTransitions;
 	reframePresets?: VideoReframePreset[];
+	reframeSeededBy?: VideoElement["reframeSeededBy"];
 	reframeSwitches?: VideoReframeSwitch[];
 	defaultReframePresetId?: string | null;
 	splitScreen?: VideoSplitScreen;
@@ -295,6 +297,8 @@ export abstract class VisualNode<
 			duration: this.params.duration,
 			splitScreen: this.params.splitScreen,
 			defaultReframePresetId: this.params.defaultReframePresetId,
+			reframePresets: this.params.reframePresets,
+			reframeSeededBy: this.params.reframeSeededBy,
 			reframeSwitches: this.params.reframeSwitches,
 			localTime: clipElapsed,
 		});

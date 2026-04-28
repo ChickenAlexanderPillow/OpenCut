@@ -75,6 +75,7 @@ import {
 	Pencil,
 	RefreshCw,
 	RotateCcw,
+	Search,
 	X,
 } from "lucide-react";
 import { useTranscriptionStatusStore } from "@/stores/transcription-status-store";
@@ -114,6 +115,15 @@ type TranscriptPanelGap = {
 	compressedDurationSeconds: number;
 	compressedStartTime: number;
 	compressedEndTime: number;
+};
+
+type TranscriptSearchableToken = {
+	id: string;
+	wordIds: string[];
+	text: string;
+	anchorWordId: string;
+	startTime: number;
+	endTime: number;
 };
 
 const MAX_DISFLUENCY_REPEAT_GAP_SECONDS = 0.35;
@@ -604,6 +614,9 @@ export function TranscriptView() {
 		string | null
 	>(null);
 	const [editingSpeakerName, setEditingSpeakerName] = useState("");
+	const [isFindOpen, setIsFindOpen] = useState(false);
+	const [findQuery, setFindQuery] = useState("");
+	const [activeFindMatchIndex, setActiveFindMatchIndex] = useState(0);
 	const [isTimingToolbarExpanded, setIsTimingToolbarExpanded] = useState(true);
 	const [timingAnchorWordId, setTimingAnchorWordId] = useState<string | null>(
 		null,
@@ -634,6 +647,7 @@ export function TranscriptView() {
 	const editingSpeakerInputRef = useRef<HTMLInputElement | null>(null);
 	const editingWordInputRef = useRef<HTMLInputElement | null>(null);
 	const editingGapInputRef = useRef<HTMLInputElement | null>(null);
+	const findInputRef = useRef<HTMLInputElement | null>(null);
 	const transcriptSourceKeyRef = useRef<string | null>(null);
 	const transcriptScrollContainerRef = useRef<HTMLElement | null>(null);
 	const selectedWordIdsRef = useRef<string[]>([]);
@@ -1030,6 +1044,35 @@ export function TranscriptView() {
 			tone: speakerId ? speakerToneById.get(speakerId) : undefined,
 		};
 	});
+	const searchableTranscriptTokens = useMemo(() => {
+		const tokens: TranscriptSearchableToken[] = [];
+		for (const group of panelGroups) {
+			for (const word of group.words) {
+				if (coveredFillerWordIds.has(word.id)) continue;
+				const fillerCandidate = fillerCandidateByStartWordId.get(word.id);
+				if (fillerCandidate) {
+					tokens.push({
+						id: fillerCandidate.id,
+						wordIds: fillerCandidate.wordIds,
+						text: fillerCandidate.text,
+						anchorWordId: fillerCandidate.wordIds[0] ?? word.id,
+						startTime: fillerCandidate.startTime,
+						endTime: fillerCandidate.endTime,
+					});
+					continue;
+				}
+				tokens.push({
+					id: word.id,
+					wordIds: [word.id],
+					text: word.text,
+					anchorWordId: word.id,
+					startTime: word.startTime,
+					endTime: word.endTime,
+				});
+			}
+		}
+		return tokens;
+	}, [coveredFillerWordIds, fillerCandidateByStartWordId, panelGroups]);
 
 	const orderedPanelWords = useMemo(
 		() => panelGroups.flatMap((group) => group.words),
@@ -1188,6 +1231,26 @@ export function TranscriptView() {
 	const heldWordPreviewIds = useMemo(
 		() => new Set(heldWordPreview?.wordIds ?? []),
 		[heldWordPreview],
+	);
+	const normalizedFindQuery = useMemo(
+		() => normalizeTranscriptDisplayToken(findQuery),
+		[findQuery],
+	);
+	const findMatches = useMemo(() => {
+		if (!normalizedFindQuery) return [];
+		return searchableTranscriptTokens.filter((token) =>
+			normalizeTranscriptDisplayToken(token.text).includes(normalizedFindQuery),
+		);
+	}, [normalizedFindQuery, searchableTranscriptTokens]);
+	const activeFindMatch =
+		findMatches.length > 0
+			? findMatches[
+					Math.max(0, Math.min(activeFindMatchIndex, findMatches.length - 1))
+				]
+			: null;
+	const findMatchedTokenIds = useMemo(
+		() => new Set(findMatches.map((match) => match.id)),
+		[findMatches],
 	);
 	const timingToolbarWordId =
 		displayedTimingWordId ??
@@ -1351,42 +1414,54 @@ export function TranscriptView() {
 		selectedWordIdsRef.current = selectedWordIds;
 	}, [selectedWordIds]);
 
+	const scrollTranscriptWordIntoView = useCallback(
+		(wordId: string, behavior: ScrollBehavior = "smooth") => {
+			const selectionContainer = selectionContainerRef.current;
+			const scrollContainer = transcriptScrollContainerRef.current;
+			if (!selectionContainer || !scrollContainer) return;
+
+			const activeWordNode = selectionContainer.querySelector<HTMLElement>(
+				`[data-word-id="${wordId}"]`,
+			);
+			if (!activeWordNode) return;
+
+			const containerRect = scrollContainer.getBoundingClientRect();
+			const wordRect = activeWordNode.getBoundingClientRect();
+			const viewportHeight = scrollContainer.clientHeight;
+			if (viewportHeight <= 0) return;
+
+			const footerReservePx = 132;
+			const revealTop = containerRect.top + viewportHeight * 0.12;
+			const revealBottom =
+				containerRect.top +
+				Math.max(viewportHeight * 0.58, viewportHeight - footerReservePx);
+			if (wordRect.top >= revealTop && wordRect.bottom <= revealBottom) {
+				return;
+			}
+
+			const wordCenterY =
+				wordRect.top -
+				containerRect.top +
+				scrollContainer.scrollTop +
+				wordRect.height / 2;
+			const targetTop = Math.max(0, wordCenterY - viewportHeight * 0.35);
+			scrollContainer.scrollTo({
+				top: targetTop,
+				behavior,
+			});
+		},
+		[],
+	);
+
 	useEffect(() => {
 		if (!isPlaying || !currentWordId) return;
-		const selectionContainer = selectionContainerRef.current;
-		const scrollContainer = transcriptScrollContainerRef.current;
-		if (!selectionContainer || !scrollContainer) return;
+		scrollTranscriptWordIntoView(currentWordId);
+	}, [currentWordId, isPlaying, scrollTranscriptWordIntoView]);
 
-		const activeWordNode = selectionContainer.querySelector<HTMLElement>(
-			`[data-word-id="${currentWordId}"]`,
-		);
-		if (!activeWordNode) return;
-
-		const containerRect = scrollContainer.getBoundingClientRect();
-		const wordRect = activeWordNode.getBoundingClientRect();
-		const viewportHeight = scrollContainer.clientHeight;
-		if (viewportHeight <= 0) return;
-
-		const footerReservePx = 132;
-		const revealTop = containerRect.top + viewportHeight * 0.12;
-		const revealBottom =
-			containerRect.top +
-			Math.max(viewportHeight * 0.58, viewportHeight - footerReservePx);
-		if (wordRect.top >= revealTop && wordRect.bottom <= revealBottom) {
-			return;
-		}
-
-		const wordCenterY =
-			wordRect.top -
-			containerRect.top +
-			scrollContainer.scrollTop +
-			wordRect.height / 2;
-		const targetTop = Math.max(0, wordCenterY - viewportHeight * 0.35);
-		scrollContainer.scrollTo({
-			top: targetTop,
-			behavior: "smooth",
-		});
-	}, [currentWordId, isPlaying]);
+	useEffect(() => {
+		if (isPlaying || !focusedWordId) return;
+		scrollTranscriptWordIntoView(focusedWordId);
+	}, [focusedWordId, isPlaying, scrollTranscriptWordIntoView]);
 
 	useEffect(() => {
 		const captureSelectionWords = () => {
@@ -1511,6 +1586,81 @@ export function TranscriptView() {
 			});
 		},
 		[activeMedia, cuts, editor],
+	);
+
+	const jumpToFindMatch = useCallback(
+		(match: TranscriptSearchableToken | null) => {
+			if (!match) return;
+			const targetWord = wordById.get(match.anchorWordId);
+			if (!targetWord) return;
+			stopHeldWordPreview();
+			clearGapEditingState();
+			clearEditingState();
+			setFocusedGap(null);
+			setFocusedWordId(targetWord.id);
+			setSelectedWordIdsIfChanged([]);
+			setIsSelectionActive(false);
+			window.getSelection()?.removeAllRanges();
+			seekToTranscriptWord(targetWord);
+		},
+		[
+			clearEditingState,
+			clearGapEditingState,
+			seekToTranscriptWord,
+			setSelectedWordIdsIfChanged,
+			stopHeldWordPreview,
+			wordById,
+		],
+	);
+
+	const focusFindInput = useCallback((selectText = true) => {
+		findInputRef.current?.focus();
+		if (selectText) {
+			findInputRef.current?.select();
+		}
+	}, []);
+
+	const openFind = useCallback(() => {
+		setIsFindOpen(true);
+	}, []);
+
+	const closeFind = useCallback(() => {
+		setIsFindOpen(false);
+		setFindQuery("");
+		setActiveFindMatchIndex(0);
+	}, []);
+
+	const updateFindQuery = useCallback(
+		(nextQuery: string) => {
+			setFindQuery(nextQuery);
+			const normalizedQuery = normalizeTranscriptDisplayToken(nextQuery);
+			if (!normalizedQuery) {
+				setActiveFindMatchIndex(0);
+				return;
+			}
+			const matches = searchableTranscriptTokens.filter((token) =>
+				normalizeTranscriptDisplayToken(token.text).includes(normalizedQuery),
+			);
+			if (matches.length === 0) {
+				setActiveFindMatchIndex(0);
+				return;
+			}
+			setActiveFindMatchIndex(0);
+			jumpToFindMatch(matches[0] ?? null);
+		},
+		[jumpToFindMatch, searchableTranscriptTokens],
+	);
+
+	const stepFindMatch = useCallback(
+		(direction: -1 | 1) => {
+			if (findMatches.length === 0) return;
+			const nextIndex =
+				(activeFindMatchIndex + direction + findMatches.length) %
+				findMatches.length;
+			setActiveFindMatchIndex(nextIndex);
+			jumpToFindMatch(findMatches[nextIndex] ?? null);
+		},
+		[activeFindMatchIndex, findMatches, jumpToFindMatch],
 	);
 
 	const startHeldWordPreview = useCallback(
@@ -1781,7 +1931,52 @@ export function TranscriptView() {
 		setTimingAnchorWordId(null);
 		setPersistedTimingWordId(null);
 		setIsTimingToolbarExpanded(true);
+		setIsFindOpen(false);
+		setFindQuery("");
+		setActiveFindMatchIndex(0);
 	}, [activeTranscriptSourceKey, resetTranscriptPanelUi]);
+
+	useEffect(() => {
+		if (!isFindOpen) return;
+		focusFindInput();
+	}, [focusFindInput, isFindOpen]);
+
+	useEffect(() => {
+		if (!normalizedFindQuery) {
+			setActiveFindMatchIndex(0);
+			return;
+		}
+		if (findMatches.length === 0) {
+			setActiveFindMatchIndex(0);
+			return;
+		}
+		if (activeFindMatchIndex >= findMatches.length) {
+			setActiveFindMatchIndex(0);
+			jumpToFindMatch(findMatches[0] ?? null);
+		}
+	}, [
+		activeFindMatchIndex,
+		findMatches,
+		jumpToFindMatch,
+		normalizedFindQuery,
+	]);
+
+	useEffect(() => {
+		const onKeyDown = (event: KeyboardEvent) => {
+			if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+				event.preventDefault();
+				openFind();
+				return;
+			}
+			if (event.key === "Escape" && isFindOpen) {
+				closeFind();
+			}
+		};
+		window.addEventListener("keydown", onKeyDown);
+		return () => {
+			window.removeEventListener("keydown", onKeyDown);
+		};
+	}, [closeFind, isFindOpen, openFind]);
 
 	useEffect(() => {
 		if (!editingSpeakerGroupId) return;
@@ -2270,6 +2465,22 @@ export function TranscriptView() {
 			contentClassName="space-y-3 pb-3"
 			actions={
 				<div className="flex items-center gap-2">
+					<Button
+						variant={isFindOpen ? "default" : "outline"}
+						size="icon"
+						className="shrink-0"
+						onClick={() => {
+							if (isFindOpen) {
+								focusFindInput(false);
+								return;
+							}
+							openFind();
+						}}
+						aria-label="Find in transcript"
+						title="Find in transcript"
+					>
+						<Search className="size-4" />
+					</Button>
 					{activeMediaAsset && (
 						<Button
 							variant="outline"
@@ -2329,6 +2540,71 @@ export function TranscriptView() {
 				</div>
 			}
 		>
+			{isFindOpen ? (
+				<div className="sticky top-2 z-30 rounded-lg border border-zinc-700/90 bg-zinc-900/95 px-3 py-2 shadow-lg backdrop-blur-sm">
+					<div className="flex items-center gap-2">
+						<Search className="size-4 shrink-0 text-zinc-400" />
+						<input
+							ref={findInputRef}
+							type="text"
+							value={findQuery}
+							onChange={(event) => updateFindQuery(event.target.value)}
+							onKeyDown={(event) => {
+								if (event.key === "Enter") {
+									event.preventDefault();
+									stepFindMatch(event.shiftKey ? -1 : 1);
+								}
+								if (event.key === "Escape") {
+									event.preventDefault();
+									closeFind();
+								}
+							}}
+							placeholder="Find in transcript"
+							className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
+							spellCheck={false}
+						/>
+						<div className="min-w-14 text-right text-xs text-zinc-400">
+							{normalizedFindQuery
+								? findMatches.length > 0
+									? `${Math.min(activeFindMatchIndex + 1, findMatches.length)}/${findMatches.length}`
+									: "0/0"
+								: ""}
+						</div>
+						<Button
+							variant="ghost"
+							size="icon"
+							className="size-7 text-zinc-100 hover:bg-zinc-800"
+							onClick={() => stepFindMatch(-1)}
+							disabled={findMatches.length === 0}
+							aria-label="Previous match"
+							title="Previous match"
+						>
+							<ChevronUp className="size-4" />
+						</Button>
+						<Button
+							variant="ghost"
+							size="icon"
+							className="size-7 text-zinc-100 hover:bg-zinc-800"
+							onClick={() => stepFindMatch(1)}
+							disabled={findMatches.length === 0}
+							aria-label="Next match"
+							title="Next match"
+						>
+							<ChevronDown className="size-4" />
+						</Button>
+						<Button
+							variant="ghost"
+							size="icon"
+							className="size-7 text-zinc-100 hover:bg-zinc-800"
+							onClick={closeFind}
+							aria-label="Close find"
+							title="Close find"
+						>
+							<X className="size-4" />
+						</Button>
+					</div>
+				</div>
+			) : null}
 			{selectedWordIds.length > 1 && (
 				<div className="pointer-events-none sticky top-2 z-20 flex h-0 justify-center overflow-visible">
 					<div className="pointer-events-auto -translate-y-1 flex items-center justify-between gap-3 rounded-lg border border-zinc-700/90 bg-zinc-900/90 px-3 py-2 text-xs shadow-lg backdrop-blur-sm">
@@ -2583,6 +2859,7 @@ export function TranscriptView() {
 												const displayLastWord =
 													tokenWords[tokenWords.length - 1] ?? word;
 												const displayText = fillerCandidate?.text ?? word.text;
+												const searchTokenId = fillerCandidate?.id ?? displayWord.id;
 												const previousWord =
 													previousPanelWordById.get(word.id) ?? null;
 												const followingWord =
@@ -2614,6 +2891,11 @@ export function TranscriptView() {
 												const isFocusedWord =
 													focusedWordId != null &&
 													tokenWordIdSet.has(focusedWordId);
+												const isFindMatch = findMatchedTokenIds.has(
+													searchTokenId,
+												);
+												const isActiveFindMatch =
+													activeFindMatch?.id === searchTokenId;
 												const gap = nextPanelWordById.get(displayLastWord.id);
 												const nextWord = gap?.rightWord;
 												const gapId = gap?.id ?? null;
@@ -2753,6 +3035,11 @@ export function TranscriptView() {
 																	isEditingWord
 																		? "cursor-text"
 																		: "cursor-pointer",
+																	isFindMatch
+																		? isActiveFindMatch
+																			? "bg-amber-300/25 ring-1 ring-amber-300/90"
+																			: "bg-amber-200/12 ring-1 ring-amber-200/40"
+																		: "",
 																	!editingWordId && !isSelectionActive
 																		? ""
 																		: "",
@@ -2961,7 +3248,15 @@ export function TranscriptView() {
 																			spellCheck={false}
 																		/>
 																	) : (
-																		displayText
+																		<span
+																			className={
+																				isActiveFindMatch
+																					? "font-semibold text-amber-50"
+																					: undefined
+																			}
+																		>
+																			{displayText}
+																		</span>
 																	)}
 																</span>
 															</span>

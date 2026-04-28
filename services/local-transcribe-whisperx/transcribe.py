@@ -58,6 +58,11 @@ def _get_env_int(name: str, default: int) -> int:
 	return value if value > 0 else default
 
 
+def _is_cuda_oom_error(error: BaseException) -> bool:
+	message = str(error).strip().lower()
+	return "cuda" in message and "out of memory" in message
+
+
 def _resolve_word_speaker_from_segments(
 	*,
 	word_start: float,
@@ -152,6 +157,39 @@ class LocalWhisperXEngine:
 			self._release_runtime_memory(clear_cuda_cache=False)
 		return evicted
 
+	def _evict_device_caches(
+		self,
+		*,
+		device: str,
+		drop_asr: bool = False,
+		drop_align: bool = False,
+		drop_diarization: bool = False,
+	) -> bool:
+		evicted = False
+		resolved_device = (device or "").strip().lower()
+		if not resolved_device:
+			return False
+
+		if drop_asr:
+			for key in list(self._model_cache.keys()):
+				if len(key) >= 2 and str(key[1]).strip().lower() == resolved_device:
+					self._model_cache.pop(key, None)
+					evicted = True
+
+		if drop_align:
+			for key in list(self._align_cache.keys()):
+				if len(key) >= 2 and str(key[1]).strip().lower() == resolved_device:
+					self._align_cache.pop(key, None)
+					evicted = True
+
+		if drop_diarization:
+			if self._diarize_cache.pop(resolved_device, None) is not None:
+				evicted = True
+
+		if evicted:
+			self._release_runtime_memory(clear_cuda_cache=resolved_device.startswith("cuda"))
+		return evicted
+
 	def _resolve_device(self, requested: str) -> str:
 		device = (requested or "cpu").strip().lower()
 		if not device.startswith("cuda"):
@@ -224,10 +262,7 @@ class LocalWhisperXEngine:
 	def _get_diarization_pipeline(self, *, device: str) -> Any | None:
 		if not self._diarize_enabled or not self._hf_token:
 			return None
-		configured_device = (
-			os.getenv("LOCAL_TRANSCRIBE_DIARIZATION_DEVICE", "").strip().lower() or device
-		)
-		resolved_device = self._resolve_device(configured_device)
+		resolved_device = self._resolve_diarization_device(device=device)
 		existing = self._diarize_cache.get(resolved_device)
 		if existing:
 			self._diarize_cache.move_to_end(resolved_device)
@@ -239,6 +274,71 @@ class LocalWhisperXEngine:
 		self._diarize_cache[resolved_device] = diarization
 		self._trim_caches()
 		return diarization
+
+	def _resolve_diarization_device(self, *, device: str) -> str:
+		configured_device = (
+			os.getenv("LOCAL_TRANSCRIBE_DIARIZATION_DEVICE", "").strip().lower() or device
+		)
+		return self._resolve_device(configured_device)
+
+	def _resolve_cpu_fallback_compute_type(self, compute_type: str) -> str:
+		normalized = (compute_type or "").strip().lower()
+		if normalized in {"int8", "int8_float16", "int8_float32", "float32"}:
+			return normalized
+		return "int8"
+
+	def _build_asr_attempts(
+		self,
+		*,
+		config: TranscribeConfig,
+		resolved_device: str,
+	) -> list[dict[str, Any]]:
+		attempts: list[dict[str, Any]] = [
+			{
+				"device": resolved_device,
+				"compute_type": config.compute_type,
+				"batch_size": WHISPERX_BATCH_SIZE,
+				"label": "primary",
+			}
+		]
+		if not resolved_device.startswith("cuda"):
+			return attempts
+
+		cuda_retry_batch_size = _get_env_int(
+			"LOCAL_TRANSCRIBE_CUDA_OOM_RETRY_BATCH_SIZE",
+			max(1, WHISPERX_BATCH_SIZE // 2),
+		)
+		if cuda_retry_batch_size != WHISPERX_BATCH_SIZE:
+			attempts.append(
+				{
+					"device": resolved_device,
+					"compute_type": config.compute_type,
+					"batch_size": cuda_retry_batch_size,
+					"label": "cuda-oom-retry",
+				}
+			)
+
+		if (
+			os.getenv("LOCAL_TRANSCRIBE_ENABLE_CPU_FALLBACK", "true")
+			.strip()
+			.lower()
+			in {"1", "true", "yes", "on"}
+		):
+			attempts.append(
+				{
+					"device": "cpu",
+					"compute_type": self._resolve_cpu_fallback_compute_type(
+						config.compute_type
+					),
+					"batch_size": _get_env_int(
+						"LOCAL_TRANSCRIBE_CPU_FALLBACK_BATCH_SIZE",
+						max(1, min(8, cuda_retry_batch_size)),
+					),
+					"label": "cpu-fallback",
+				}
+			)
+
+		return attempts
 
 	def _build_alignment_language_candidates(
 		self,
@@ -460,6 +560,7 @@ class LocalWhisperXEngine:
 		vad_filter: bool,
 		language: str | None,
 		initial_prompt: str | None,
+		batch_size: int = WHISPERX_BATCH_SIZE,
 	) -> dict[str, Any]:
 		effective_language = (language or "").strip().lower() or None
 		vad_method = DEFAULT_ASR_VAD_METHOD
@@ -477,7 +578,7 @@ class LocalWhisperXEngine:
 				asr_model.options = replace(original_options, initial_prompt=prompt)
 			asr_result = asr_model.transcribe(
 				audio,
-				batch_size=WHISPERX_BATCH_SIZE,
+				batch_size=max(1, int(batch_size)),
 				language=effective_language,
 			)
 		finally:
@@ -527,23 +628,76 @@ class LocalWhisperXEngine:
 		)
 		used_device = self._resolve_device(config.device)
 		asr_started_at = time.perf_counter()
-		try:
-			asr_result = self._run_asr(
-				audio=audio,
-				model=config.model,
-				device=used_device,
-				compute_type=config.compute_type,
-				vad_filter=config.vad_filter,
-				language=config.language,
-				initial_prompt=config.initial_prompt,
-			)
-			used_model = config.model
-			used_compute = config.compute_type
-		except RuntimeError:
+		asr_attempt_errors: list[str] = []
+		used_model = config.model
+		used_compute = config.compute_type
+		asr_result: dict[str, Any] | None = None
+		for attempt in self._build_asr_attempts(
+			config=config,
+			resolved_device=used_device,
+		):
+			attempt_device = str(attempt["device"])
+			attempt_compute = str(attempt["compute_type"])
+			attempt_batch_size = int(attempt["batch_size"])
+			attempt_label = str(attempt["label"])
+			try:
+				asr_result = self._run_asr(
+					audio=audio,
+					model=config.model,
+					device=attempt_device,
+					compute_type=attempt_compute,
+					vad_filter=config.vad_filter,
+					language=config.language,
+					initial_prompt=config.initial_prompt,
+					batch_size=attempt_batch_size,
+				)
+				used_device = attempt_device
+				used_compute = attempt_compute
+				if attempt_label != "primary":
+					print(
+						"Local transcribe ASR recovered after fallback",
+						{
+							"model": config.model,
+							"device": used_device,
+							"compute_type": used_compute,
+							"batch_size": attempt_batch_size,
+							"attempt": attempt_label,
+						},
+						flush=True,
+					)
+				break
+			except RuntimeError as error:
+				if not (
+					attempt_device.startswith("cuda") and _is_cuda_oom_error(error)
+				):
+					raise
+				asr_attempt_errors.append(
+					f"{attempt_label}:{type(error).__name__}: {error}"
+				)
+				print(
+					"Local transcribe ASR CUDA OOM",
+					{
+						"model": config.model,
+						"device": attempt_device,
+						"compute_type": attempt_compute,
+						"batch_size": attempt_batch_size,
+						"attempt": attempt_label,
+					},
+					flush=True,
+				)
+				self._evict_device_caches(
+					device=attempt_device,
+					drop_align=True,
+					drop_diarization=True,
+				)
+				self._release_runtime_memory(clear_cuda_cache=True)
+				continue
+		if asr_result is None:
 			self._release_runtime_memory(clear_cuda_cache=used_device.startswith("cuda"))
-			raise
-		except Exception:
-			raise
+			raise RuntimeError(
+				"ASR failed after CUDA OOM recovery attempts: "
+				+ " | ".join(asr_attempt_errors)
+			)
 		timings_ms["asr"] = (time.perf_counter() - asr_started_at) * 1000.0
 
 		language = asr_result["language"] or "en"
@@ -580,6 +734,7 @@ class LocalWhisperXEngine:
 		speaker_segments: list[dict[str, Any]] = []
 		diarization_used = False
 		diarization_error: str | None = None
+		diarization_device: str | None = None
 		if config.diarize and len(word_segments) > 0:
 			if audio_duration_seconds < MIN_DIARIZATION_AUDIO_SECONDS:
 				diarization_error = (
@@ -593,6 +748,7 @@ class LocalWhisperXEngine:
 				)
 			else:
 				try:
+					diarization_device = self._resolve_diarization_device(device=used_device)
 					diarization = self._get_diarization_pipeline(device=used_device)
 					if diarization is not None:
 						diarize_segments = diarization(
@@ -633,6 +789,12 @@ class LocalWhisperXEngine:
 				except Exception as error:
 					diarization_used = False
 					diarization_error = f"{type(error).__name__}: {error}"
+				finally:
+					if diarization_device and diarization_device.startswith("cuda"):
+						self._evict_device_caches(
+							device=diarization_device,
+							drop_diarization=True,
+						)
 		timings_ms["diarization"] = (time.perf_counter() - diarization_started_at) * 1000.0
 		postprocess_started_at = time.perf_counter()
 		words = []

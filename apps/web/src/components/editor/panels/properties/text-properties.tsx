@@ -19,6 +19,7 @@ import {
 	createBlueHighlightCaptionStyle,
 	createBlueHighlightCaptionTextProps,
 } from "@/constants/caption-presets";
+import { MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import {
 	DEFAULT_LETTER_SPACING,
 	DEFAULT_LINE_HEIGHT,
@@ -97,6 +98,14 @@ type CaptionPresetSnapshot = {
 	fontSize: TextElement["fontSize"];
 	fontFamily: TextElement["fontFamily"];
 	color: TextElement["color"];
+	strokeColor?: TextElement["strokeColor"];
+	strokeWidth?: TextElement["strokeWidth"];
+	strokeSoftness?: TextElement["strokeSoftness"];
+	shadowColor?: TextElement["shadowColor"];
+	shadowOpacity?: TextElement["shadowOpacity"];
+	shadowDistance?: TextElement["shadowDistance"];
+	shadowAngle?: TextElement["shadowAngle"];
+	shadowSoftness?: TextElement["shadowSoftness"];
 	background: TextElement["background"];
 	textAlign: TextElement["textAlign"];
 	fontWeight: TextElement["fontWeight"];
@@ -134,6 +143,10 @@ function clampWordsOnScreen(value: number): number {
 
 function clampMaxLinesOnScreen(value: number): number {
 	return Math.max(1, Math.min(4, Math.round(value)));
+}
+
+function clampPauseVisibilitySeconds(value: number): number {
+	return Math.max(0, Math.min(5, Number(value.toFixed(2))));
 }
 
 function clampHighlightOpacity(value: number): number {
@@ -198,6 +211,14 @@ function captureCaptionPresetSnapshot({
 		fontSize: element.fontSize,
 		fontFamily: element.fontFamily,
 		color: element.color,
+		strokeColor: element.strokeColor,
+		strokeWidth: element.strokeWidth,
+		strokeSoftness: element.strokeSoftness,
+		shadowColor: element.shadowColor,
+		shadowOpacity: element.shadowOpacity,
+		shadowDistance: element.shadowDistance,
+		shadowAngle: element.shadowAngle,
+		shadowSoftness: element.shadowSoftness,
 		background: element.background,
 		textAlign: element.textAlign,
 		fontWeight: element.fontWeight,
@@ -237,6 +258,10 @@ function captureCaptionPresetSnapshot({
 			wordsOnScreen:
 				element.captionStyle?.wordsOnScreen ?? CAPTION_WORD_PRESETS.balanced,
 			maxLinesOnScreen: element.captionStyle?.maxLinesOnScreen ?? 2,
+			keepVisibleDuringPausesForSeconds: clampPauseVisibilitySeconds(
+				element.captionStyle?.keepVisibleDuringPausesForSeconds ??
+					MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS,
+			),
 			wordDisplayPreset:
 				element.captionStyle?.wordDisplayPreset ??
 				getPresetFromWords(
@@ -323,6 +348,7 @@ export function TextProperties({
 			<CanvasFittingSection element={element} trackId={trackId} />
 			<CaptionSection element={element} trackId={trackId} />
 			<TypographySection element={element} trackId={trackId} />
+			<EffectsSection element={element} trackId={trackId} />
 			<SpacingSection element={element} trackId={trackId} />
 			<BackgroundSection element={element} trackId={trackId} />
 		</div>
@@ -644,6 +670,14 @@ function CaptionSection({
 					fontSize: preset.snapshot.fontSize,
 					fontFamily: preset.snapshot.fontFamily,
 					color: preset.snapshot.color,
+					strokeColor: preset.snapshot.strokeColor,
+					strokeWidth: preset.snapshot.strokeWidth,
+					strokeSoftness: preset.snapshot.strokeSoftness,
+					shadowColor: preset.snapshot.shadowColor,
+					shadowOpacity: preset.snapshot.shadowOpacity,
+					shadowDistance: preset.snapshot.shadowDistance,
+					shadowAngle: preset.snapshot.shadowAngle,
+					shadowSoftness: preset.snapshot.shadowSoftness,
 					background: preset.snapshot.background,
 					textAlign: preset.snapshot.textAlign,
 					fontWeight: preset.snapshot.fontWeight,
@@ -787,6 +821,33 @@ function CaptionSection({
 							captionStyle: {
 								...(element.captionStyle ?? {}),
 								maxLinesOnScreen: value,
+							},
+						},
+					},
+				],
+			}),
+		onCommit: () => editor.timeline.commitPreview(),
+	});
+	const pauseVisibilitySeconds = usePropertyDraft({
+		displayValue: (
+			element.captionStyle?.keepVisibleDuringPausesForSeconds ??
+			MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS
+		).toFixed(2),
+		parse: (input) => {
+			const parsed = parseFloat(input);
+			if (Number.isNaN(parsed)) return null;
+			return clampPauseVisibilitySeconds(parsed);
+		},
+		onPreview: (value) =>
+			editor.timeline.previewElements({
+				updates: [
+					{
+						trackId,
+						elementId: element.id,
+						updates: {
+							captionStyle: {
+													...(element.captionStyle ?? {}),
+													keepVisibleDuringPausesForSeconds: value,
 							},
 						},
 					},
@@ -1185,6 +1246,46 @@ function CaptionSection({
 								) === 2
 							}
 							icon="L"
+						/>
+					</SectionField>
+					<SectionField label="Keep visible through pauses (s)">
+						<NumberField
+							value={pauseVisibilitySeconds.displayValue}
+							min={0}
+							max={5}
+							step={0.05}
+							onFocus={pauseVisibilitySeconds.onFocus}
+							onChange={pauseVisibilitySeconds.onChange}
+							onBlur={pauseVisibilitySeconds.onBlur}
+							onScrub={pauseVisibilitySeconds.scrubTo}
+							onScrubEnd={pauseVisibilitySeconds.commitScrub}
+							onReset={() =>
+								editor.timeline.updateElements({
+									updates: [
+										{
+											trackId,
+											elementId: element.id,
+											updates: {
+												captionStyle: {
+													...(element.captionStyle ?? {}),
+													keepVisibleDuringPausesForSeconds:
+														MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS,
+												},
+											},
+										},
+									],
+								})
+							}
+							isDefault={
+								clampPauseVisibilitySeconds(
+									element.captionStyle?.keepVisibleDuringPausesForSeconds ??
+										MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS,
+								) ===
+								clampPauseVisibilitySeconds(
+									MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS,
+								)
+							}
+							icon="P"
 						/>
 					</SectionField>
 					<div className="rounded-sm border p-2">
@@ -1868,6 +1969,338 @@ function TypographySection({
 											trackId,
 											elementId: element.id,
 											updates: { color: `#${color}` },
+										},
+									],
+								})
+							}
+							onChangeEnd={() => editor.timeline.commitPreview()}
+						/>
+					</SectionField>
+				</SectionFields>
+			</SectionContent>
+		</Section>
+	);
+}
+
+function EffectsSection({
+	element,
+	trackId,
+}: {
+	element: TextElement;
+	trackId: string;
+}) {
+	const editor = useEditor();
+
+	const outlineWidth = usePropertyDraft({
+		displayValue: Math.round(element.strokeWidth ?? 0).toString(),
+		parse: (input) => {
+			const parsed = parseFloat(input);
+			return Number.isNaN(parsed) ? null : Math.max(0, Math.round(parsed));
+		},
+		onPreview: (value) =>
+			editor.timeline.previewElements({
+				updates: [{ trackId, elementId: element.id, updates: { strokeWidth: value } }],
+			}),
+		onCommit: () => editor.timeline.commitPreview(),
+	});
+
+	const outlineSoftness = usePropertyDraft({
+		displayValue: Math.round(element.strokeSoftness ?? 0).toString(),
+		parse: (input) => {
+			const parsed = parseFloat(input);
+			return Number.isNaN(parsed) ? null : Math.max(0, Math.round(parsed));
+		},
+		onPreview: (value) =>
+			editor.timeline.previewElements({
+				updates: [
+					{ trackId, elementId: element.id, updates: { strokeSoftness: value } },
+				],
+			}),
+		onCommit: () => editor.timeline.commitPreview(),
+	});
+
+	const shadowOpacity = usePropertyDraft({
+		displayValue: Math.round((element.shadowOpacity ?? 0.6) * 100).toString(),
+		parse: (input) => {
+			const parsed = parseFloat(input);
+			return Number.isNaN(parsed)
+				? null
+				: clamp({ value: parsed / 100, min: 0, max: 1 });
+		},
+		onPreview: (value) =>
+			editor.timeline.previewElements({
+				updates: [
+					{ trackId, elementId: element.id, updates: { shadowOpacity: value } },
+				],
+			}),
+		onCommit: () => editor.timeline.commitPreview(),
+	});
+
+	const shadowDistance = usePropertyDraft({
+		displayValue: Math.round(element.shadowDistance ?? 0).toString(),
+		parse: (input) => {
+			const parsed = parseFloat(input);
+			return Number.isNaN(parsed) ? null : Math.max(0, Math.round(parsed));
+		},
+		onPreview: (value) =>
+			editor.timeline.previewElements({
+				updates: [
+					{ trackId, elementId: element.id, updates: { shadowDistance: value } },
+				],
+			}),
+		onCommit: () => editor.timeline.commitPreview(),
+	});
+
+	const shadowAngle = usePropertyDraft({
+		displayValue: Math.round(element.shadowAngle ?? 90).toString(),
+		parse: (input) => {
+			const parsed = parseFloat(input);
+			return Number.isNaN(parsed) ? null : Math.round(parsed);
+		},
+		onPreview: (value) =>
+			editor.timeline.previewElements({
+				updates: [
+					{ trackId, elementId: element.id, updates: { shadowAngle: value } },
+				],
+			}),
+		onCommit: () => editor.timeline.commitPreview(),
+	});
+
+	const shadowSoftness = usePropertyDraft({
+		displayValue: Math.round(element.shadowSoftness ?? 0).toString(),
+		parse: (input) => {
+			const parsed = parseFloat(input);
+			return Number.isNaN(parsed) ? null : Math.max(0, Math.round(parsed));
+		},
+		onPreview: (value) =>
+			editor.timeline.previewElements({
+				updates: [
+					{ trackId, elementId: element.id, updates: { shadowSoftness: value } },
+				],
+			}),
+		onCommit: () => editor.timeline.commitPreview(),
+	});
+
+	return (
+		<Section collapsible sectionKey="text:effects">
+			<SectionHeader title="Effects" />
+			<SectionContent>
+				<SectionFields>
+					<div className="flex items-start gap-2">
+						<SectionField label="Outline width" className="w-1/2">
+							<NumberField
+								icon="O"
+								value={outlineWidth.displayValue}
+								min={0}
+								onFocus={outlineWidth.onFocus}
+								onChange={outlineWidth.onChange}
+								onBlur={outlineWidth.onBlur}
+								onScrub={outlineWidth.scrubTo}
+								onScrubEnd={outlineWidth.commitScrub}
+								onReset={() =>
+									editor.timeline.updateElements({
+										updates: [
+											{
+												trackId,
+												elementId: element.id,
+												updates: { strokeWidth: DEFAULT_TEXT_ELEMENT.strokeWidth },
+											},
+										],
+									})
+								}
+								isDefault={
+									(element.strokeWidth ?? DEFAULT_TEXT_ELEMENT.strokeWidth) ===
+									DEFAULT_TEXT_ELEMENT.strokeWidth
+								}
+							/>
+						</SectionField>
+						<SectionField label="Outline softness" className="w-1/2">
+							<NumberField
+								icon="S"
+								value={outlineSoftness.displayValue}
+								min={0}
+								onFocus={outlineSoftness.onFocus}
+								onChange={outlineSoftness.onChange}
+								onBlur={outlineSoftness.onBlur}
+								onScrub={outlineSoftness.scrubTo}
+								onScrubEnd={outlineSoftness.commitScrub}
+								onReset={() =>
+									editor.timeline.updateElements({
+										updates: [
+											{
+												trackId,
+												elementId: element.id,
+												updates: {
+													strokeSoftness: DEFAULT_TEXT_ELEMENT.strokeSoftness,
+												},
+											},
+										],
+									})
+								}
+								isDefault={
+									(element.strokeSoftness ??
+										DEFAULT_TEXT_ELEMENT.strokeSoftness) ===
+									DEFAULT_TEXT_ELEMENT.strokeSoftness
+								}
+							/>
+						</SectionField>
+					</div>
+					<SectionField label="Outline color">
+						<ColorPicker
+							value={uppercase({
+								string: (
+									element.strokeColor ?? DEFAULT_TEXT_ELEMENT.strokeColor ?? "#000000"
+								).replace("#", ""),
+							})}
+							onChange={(color) =>
+								editor.timeline.previewElements({
+									updates: [
+										{
+											trackId,
+											elementId: element.id,
+											updates: { strokeColor: `#${color}` },
+										},
+									],
+								})
+							}
+							onChangeEnd={() => editor.timeline.commitPreview()}
+						/>
+					</SectionField>
+					<div className="flex items-start gap-2">
+						<SectionField label="Shadow distance" className="w-1/2">
+							<NumberField
+								icon="D"
+								value={shadowDistance.displayValue}
+								min={0}
+								onFocus={shadowDistance.onFocus}
+								onChange={shadowDistance.onChange}
+								onBlur={shadowDistance.onBlur}
+								onScrub={shadowDistance.scrubTo}
+								onScrubEnd={shadowDistance.commitScrub}
+								onReset={() =>
+									editor.timeline.updateElements({
+										updates: [
+											{
+												trackId,
+												elementId: element.id,
+												updates: {
+													shadowDistance: DEFAULT_TEXT_ELEMENT.shadowDistance,
+												},
+											},
+										],
+									})
+								}
+								isDefault={
+									(element.shadowDistance ??
+										DEFAULT_TEXT_ELEMENT.shadowDistance) ===
+									DEFAULT_TEXT_ELEMENT.shadowDistance
+								}
+							/>
+						</SectionField>
+						<SectionField label="Shadow angle" className="w-1/2">
+							<NumberField
+								icon="A"
+								value={shadowAngle.displayValue}
+								onFocus={shadowAngle.onFocus}
+								onChange={shadowAngle.onChange}
+								onBlur={shadowAngle.onBlur}
+								onScrub={shadowAngle.scrubTo}
+								onScrubEnd={shadowAngle.commitScrub}
+								onReset={() =>
+									editor.timeline.updateElements({
+										updates: [
+											{
+												trackId,
+												elementId: element.id,
+												updates: { shadowAngle: DEFAULT_TEXT_ELEMENT.shadowAngle },
+											},
+										],
+									})
+								}
+								isDefault={
+									(element.shadowAngle ?? DEFAULT_TEXT_ELEMENT.shadowAngle) ===
+									DEFAULT_TEXT_ELEMENT.shadowAngle
+								}
+							/>
+						</SectionField>
+					</div>
+					<div className="flex items-start gap-2">
+						<SectionField label="Shadow softness" className="w-1/2">
+							<NumberField
+								icon="S"
+								value={shadowSoftness.displayValue}
+								min={0}
+								onFocus={shadowSoftness.onFocus}
+								onChange={shadowSoftness.onChange}
+								onBlur={shadowSoftness.onBlur}
+								onScrub={shadowSoftness.scrubTo}
+								onScrubEnd={shadowSoftness.commitScrub}
+								onReset={() =>
+									editor.timeline.updateElements({
+										updates: [
+											{
+												trackId,
+												elementId: element.id,
+												updates: {
+													shadowSoftness: DEFAULT_TEXT_ELEMENT.shadowSoftness,
+												},
+											},
+										],
+									})
+								}
+								isDefault={
+									(element.shadowSoftness ??
+										DEFAULT_TEXT_ELEMENT.shadowSoftness) ===
+									DEFAULT_TEXT_ELEMENT.shadowSoftness
+								}
+							/>
+						</SectionField>
+						<SectionField label="Shadow opacity" className="w-1/2">
+							<NumberField
+								icon="%"
+								value={shadowOpacity.displayValue}
+								min={0}
+								max={100}
+								onFocus={shadowOpacity.onFocus}
+								onChange={shadowOpacity.onChange}
+								onBlur={shadowOpacity.onBlur}
+								onScrub={shadowOpacity.scrubTo}
+								onScrubEnd={shadowOpacity.commitScrub}
+								onReset={() =>
+									editor.timeline.updateElements({
+										updates: [
+											{
+												trackId,
+												elementId: element.id,
+												updates: {
+													shadowOpacity: DEFAULT_TEXT_ELEMENT.shadowOpacity,
+												},
+											},
+										],
+									})
+								}
+								isDefault={
+									(element.shadowOpacity ??
+										DEFAULT_TEXT_ELEMENT.shadowOpacity) ===
+									DEFAULT_TEXT_ELEMENT.shadowOpacity
+								}
+							/>
+						</SectionField>
+					</div>
+					<SectionField label="Shadow color">
+						<ColorPicker
+							value={uppercase({
+								string: (
+									element.shadowColor ?? DEFAULT_TEXT_ELEMENT.shadowColor ?? "#000000"
+								).replace("#", ""),
+							})}
+							onChange={(color) =>
+								editor.timeline.previewElements({
+									updates: [
+										{
+											trackId,
+											elementId: element.id,
+											updates: { shadowColor: `#${color}` },
 										},
 									],
 								})

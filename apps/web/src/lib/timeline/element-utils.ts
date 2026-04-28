@@ -159,6 +159,27 @@ export function buildTextElement({
 			typeof t.strokeWidth === "number"
 				? t.strokeWidth
 				: DEFAULT_TEXT_ELEMENT.strokeWidth,
+		strokeSoftness:
+			typeof t.strokeSoftness === "number"
+				? t.strokeSoftness
+				: DEFAULT_TEXT_ELEMENT.strokeSoftness,
+		shadowColor: t.shadowColor ?? DEFAULT_TEXT_ELEMENT.shadowColor,
+		shadowOpacity:
+			typeof t.shadowOpacity === "number"
+				? t.shadowOpacity
+				: DEFAULT_TEXT_ELEMENT.shadowOpacity,
+		shadowDistance:
+			typeof t.shadowDistance === "number"
+				? t.shadowDistance
+				: DEFAULT_TEXT_ELEMENT.shadowDistance,
+		shadowAngle:
+			typeof t.shadowAngle === "number"
+				? t.shadowAngle
+				: DEFAULT_TEXT_ELEMENT.shadowAngle,
+		shadowSoftness:
+			typeof t.shadowSoftness === "number"
+				? t.shadowSoftness
+				: DEFAULT_TEXT_ELEMENT.shadowSoftness,
 		background: {
 		color: t.background?.color ?? DEFAULT_TEXT_ELEMENT.background.color,
 		cornerRadius: t.background?.cornerRadius,

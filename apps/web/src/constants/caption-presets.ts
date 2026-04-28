@@ -2,6 +2,7 @@ import {
 	DEFAULT_TEXT_BACKGROUND,
 	DEFAULT_TEXT_ELEMENT,
 } from "@/constants/text-constants";
+import { MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import type { TextElement } from "@/types/timeline";
 
 export const BLUE_HIGHLIGHT_CAPTION_STYLE: NonNullable<TextElement["captionStyle"]> =
@@ -20,6 +21,7 @@ export const BLUE_HIGHLIGHT_CAPTION_STYLE: NonNullable<TextElement["captionStyle
 		backgroundFitMode: "line-fit",
 		wordsOnScreen: 6,
 		maxLinesOnScreen: 1,
+		keepVisibleDuringPausesForSeconds: MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS,
 		wordDisplayPreset: "custom",
 		linkedToCaptionGroup: true,
 		anchorToSafeAreaBottom: true,
@@ -45,6 +47,14 @@ export const BLUE_HIGHLIGHT_CAPTION_TEXT_PROPS: Pick<
 	| "fontSize"
 	| "fontFamily"
 	| "color"
+	| "strokeColor"
+	| "strokeWidth"
+	| "strokeSoftness"
+	| "shadowColor"
+	| "shadowOpacity"
+	| "shadowDistance"
+	| "shadowAngle"
+	| "shadowSoftness"
 	| "background"
 	| "textAlign"
 	| "fontWeight"
@@ -59,6 +69,14 @@ export const BLUE_HIGHLIGHT_CAPTION_TEXT_PROPS: Pick<
 	fontSize: 5,
 	fontFamily: "Arial",
 	color: DEFAULT_TEXT_ELEMENT.color,
+	strokeColor: DEFAULT_TEXT_ELEMENT.strokeColor,
+	strokeWidth: DEFAULT_TEXT_ELEMENT.strokeWidth,
+	strokeSoftness: DEFAULT_TEXT_ELEMENT.strokeSoftness,
+	shadowColor: DEFAULT_TEXT_ELEMENT.shadowColor,
+	shadowOpacity: DEFAULT_TEXT_ELEMENT.shadowOpacity,
+	shadowDistance: DEFAULT_TEXT_ELEMENT.shadowDistance,
+	shadowAngle: DEFAULT_TEXT_ELEMENT.shadowAngle,
+	shadowSoftness: DEFAULT_TEXT_ELEMENT.shadowSoftness,
 	background: {
 		...DEFAULT_TEXT_ELEMENT.background,
 		color: "#000000e5",
@@ -79,6 +97,14 @@ export function createBlueHighlightCaptionTextProps(): Pick<
 	| "fontSize"
 	| "fontFamily"
 	| "color"
+	| "strokeColor"
+	| "strokeWidth"
+	| "strokeSoftness"
+	| "shadowColor"
+	| "shadowOpacity"
+	| "shadowDistance"
+	| "shadowAngle"
+	| "shadowSoftness"
 	| "background"
 	| "textAlign"
 	| "fontWeight"
@@ -116,6 +142,14 @@ export function resolveBlueHighlightCaptionPreset(): {
 		| "fontSize"
 		| "fontFamily"
 		| "color"
+		| "strokeColor"
+		| "strokeWidth"
+		| "strokeSoftness"
+		| "shadowColor"
+		| "shadowOpacity"
+		| "shadowDistance"
+		| "shadowAngle"
+		| "shadowSoftness"
 		| "background"
 		| "textAlign"
 		| "fontWeight"

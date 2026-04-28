@@ -182,6 +182,21 @@ export interface VideoSplitScreenDivider {
 	height: number;
 }
 
+export function hasVideoReframeAnalysisData({
+	element,
+}: {
+	element: Pick<VideoElement, "reframeSeededBy" | "reframePresets">;
+}): boolean {
+	if (element.reframeSeededBy === "subject-aware-v1") {
+		return true;
+	}
+	return (element.reframePresets ?? []).some(
+		(preset) =>
+			Boolean(preset.subjectSeed) ||
+			((preset.motionTracking?.keyframes?.length ?? 0) > 0),
+	);
+}
+
 function normalizeSplitSlotTransformOverride(
 	override: VideoSplitScreenSlotBinding["transformOverride"],
 ): VideoSplitScreenSlotBinding["transformOverride"] {
@@ -2484,7 +2499,11 @@ export function getVideoSplitScreenSectionAtTime({
 	element: VideoElement;
 	localTime: number;
 }): VideoSplitScreenSection | null {
-	const splitScreen = normalizeVideoReframeState({ element }).splitScreen;
+	const normalized = normalizeVideoReframeState({ element });
+	if (!hasVideoReframeAnalysisData({ element: normalized })) {
+		return null;
+	}
+	const splitScreen = normalized.splitScreen;
 	if (!splitScreen?.sections?.length) return null;
 	const safeTime = Math.max(0, Math.min(element.duration, localTime));
 	const sections = splitScreen.sections;
@@ -2511,8 +2530,12 @@ export function getVideoSplitScreenSectionByStartTime({
 	startTime: number | null | undefined;
 }): VideoSplitScreenSection | null {
 	if (startTime === null || startTime === undefined) return null;
+	const normalized = normalizeVideoReframeState({ element });
+	if (!hasVideoReframeAnalysisData({ element: normalized })) {
+		return null;
+	}
 	return (
-		normalizeVideoReframeState({ element }).splitScreen?.sections?.find(
+		normalized.splitScreen?.sections?.find(
 			(section) =>
 				Math.abs(section.startTime - startTime) <= REFRAME_SWITCH_TIME_EPSILON,
 		) ?? null
@@ -2524,7 +2547,18 @@ export function deriveVideoSplitScreenSectionRanges({
 }: {
 	element: VideoElement;
 }): VideoSplitScreenSectionRange[] {
-	const splitScreen = normalizeVideoReframeState({ element }).splitScreen;
+	const normalized = normalizeVideoReframeState({ element });
+	const splitScreen = normalized.splitScreen;
+	if (!hasVideoReframeAnalysisData({ element: normalized })) {
+		return [
+			{
+				startTime: 0,
+				endTime: element.duration,
+				sectionId: null,
+				enabled: false,
+			},
+		];
+	}
 	if (!splitScreen?.sections?.length) {
 		return [
 			{
@@ -2579,6 +2613,9 @@ export function resolveVideoSplitScreenAtTime({
 	localTime: number;
 }): VideoSplitScreen | null {
 	const normalized = normalizeVideoReframeState({ element });
+	if (!hasVideoReframeAnalysisData({ element: normalized })) {
+		return null;
+	}
 	const splitScreen = normalized.splitScreen;
 	const section = getVideoSplitScreenSectionAtTime({
 		element: normalized,
@@ -2633,16 +2670,30 @@ export function resolveVideoSplitScreenAtTimeFromState({
 	duration,
 	splitScreen,
 	defaultReframePresetId,
+	reframePresets,
+	reframeSeededBy,
 	reframeSwitches,
 	localTime,
 }: {
 	duration: number;
 	splitScreen?: VideoElement["splitScreen"];
 	defaultReframePresetId?: string | null;
+	reframePresets?: VideoElement["reframePresets"];
+	reframeSeededBy?: VideoElement["reframeSeededBy"];
 	reframeSwitches?: VideoElement["reframeSwitches"];
 	localTime: number;
 }): VideoSplitScreen | null {
 	if (!splitScreen) return null;
+	if (
+		!hasVideoReframeAnalysisData({
+			element: {
+				reframePresets,
+				reframeSeededBy,
+			},
+		})
+	) {
+		return null;
+	}
 	const safeTime = Math.max(0, Math.min(duration, localTime));
 	const sections = splitScreen.sections ?? [];
 	let activeSection: VideoSplitScreenSection | null = null;

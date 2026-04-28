@@ -335,4 +335,125 @@ describe("WebGPUPreviewRenderer", () => {
 			),
 		).toBe(true);
 	});
+
+	test("clamps partially out-of-bounds clip rects before issuing WebGPU scissor commands", async () => {
+		gpuDrawFactory = () => [
+			{
+				source: drawSourceFactory() as GPUCopyExternalImageSource,
+				sourceWidth: 1920,
+				sourceHeight: 1080,
+				x: 0,
+				y: 0,
+				width: 1920,
+				height: 1080,
+				clipRect: { x: -120, y: 100, width: 500, height: 1200 },
+				rotation: 0,
+				opacity: 1,
+				blendMode: "normal",
+			},
+		];
+
+		const { WebGPUPreviewRenderer } = await import(
+			"../webgpu-preview-renderer"
+		);
+
+		const renderer = new WebGPUPreviewRenderer({
+			width: 300,
+			height: 400,
+			fps: 30,
+		});
+
+		const targetWebGPUContext = {
+			configure: () => {},
+			getCurrentTexture: () => ({
+				createView: () => ({}),
+			}),
+		};
+		const targetCanvas = {
+			width: 300,
+			height: 400,
+			getContext: (kind: string) =>
+				kind === "webgpu" ? targetWebGPUContext : null,
+		} as unknown as HTMLCanvasElement;
+
+		const result = await renderer.renderToCanvas({
+			rootNode: {} as never,
+			time: 0,
+			targetCanvas,
+		});
+
+		expect(result.usedWebGPU).toBe(true);
+		expect(passDraw.mock.calls.length).toBe(1);
+		expect(passSetScissorRect).toHaveBeenCalledWith(0, 100, 300, 300);
+	});
+
+	test("skips draws whose clip rect falls completely outside the render target", async () => {
+		gpuDrawFactory = () => [
+			{
+				source: drawSourceFactory() as GPUCopyExternalImageSource,
+				sourceWidth: 1920,
+				sourceHeight: 1080,
+				x: 0,
+				y: 0,
+				width: 1920,
+				height: 1080,
+				clipRect: { x: 600, y: 0, width: 100, height: 100 },
+				rotation: 0,
+				opacity: 1,
+				blendMode: "normal",
+			},
+			{
+				source: drawSourceFactory() as GPUCopyExternalImageSource,
+				sourceWidth: 1920,
+				sourceHeight: 1080,
+				x: 0,
+				y: 0,
+				width: 1920,
+				height: 1080,
+				clipRect: { x: 0, y: 0, width: 300, height: 400 },
+				rotation: 0,
+				opacity: 1,
+				blendMode: "normal",
+			},
+		];
+
+		const { WebGPUPreviewRenderer } = await import(
+			"../webgpu-preview-renderer"
+		);
+
+		const renderer = new WebGPUPreviewRenderer({
+			width: 300,
+			height: 400,
+			fps: 30,
+		});
+
+		const targetWebGPUContext = {
+			configure: () => {},
+			getCurrentTexture: () => ({
+				createView: () => ({}),
+			}),
+		};
+		const targetCanvas = {
+			width: 300,
+			height: 400,
+			getContext: (kind: string) =>
+				kind === "webgpu" ? targetWebGPUContext : null,
+		} as unknown as HTMLCanvasElement;
+
+		const result = await renderer.renderToCanvas({
+			rootNode: {} as never,
+			time: 0,
+			targetCanvas,
+		});
+
+		expect(result.usedWebGPU).toBe(true);
+		expect(passDraw.mock.calls.length).toBe(1);
+		expect(
+			passSetScissorRect.mock.calls.some(
+				([x, y, width, height]) =>
+					x === 600 && y === 0 && width === 100 && height === 100,
+			),
+		).toBe(false);
+		expect(passSetScissorRect).toHaveBeenCalledWith(0, 0, 300, 400);
+	});
 });

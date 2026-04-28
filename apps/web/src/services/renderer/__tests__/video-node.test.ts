@@ -17,6 +17,7 @@ describe("VideoNode split-screen placement", () => {
 			url: "blob:test",
 			file: new File(["test"], "clip.mp4", { type: "video/mp4" }),
 			mediaId: "media-1",
+			reframeSeededBy: "subject-aware-v1",
 			reframePresets: [
 				{
 					id: "subject-left",
@@ -97,6 +98,7 @@ describe("VideoNode split-screen placement", () => {
 			url: "blob:test",
 			file: new File(["test"], "clip.mp4", { type: "video/mp4" }),
 			mediaId: "media-1",
+			reframeSeededBy: "subject-aware-v1",
 			reframePresets: [
 				{
 					id: "subject-left",
@@ -177,6 +179,7 @@ describe("VideoNode split-screen placement", () => {
 			url: "blob:test",
 			file: new File(["test"], "clip.mp4", { type: "video/mp4" }),
 			mediaId: "media-1",
+			reframeSeededBy: "subject-aware-v1",
 			reframePresets: [
 				{
 					id: "subject-left",

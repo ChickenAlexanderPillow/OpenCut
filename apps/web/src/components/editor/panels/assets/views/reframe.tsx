@@ -47,6 +47,7 @@ import {
 	getSelectedOrActiveReframePresetId,
 	getVideoReframeSectionAtTime,
 	getVideoReframeSectionByStartTime,
+	hasVideoReframeAnalysisData,
 	getVideoSplitScreenSectionAtTime,
 	getVideoSplitScreenViewports,
 	normalizeVideoReframeState,
@@ -232,6 +233,13 @@ export function ReframeView() {
 				return !hasSplitSubjectAngles;
 			});
 		},
+		[normalizedVideo],
+	);
+	const hasClipAnalysis = useMemo(
+		() =>
+			normalizedVideo
+				? hasVideoReframeAnalysisData({ element: normalizedVideo.element })
+				: false,
 		[normalizedVideo],
 	);
 
@@ -1035,7 +1043,8 @@ export function ReframeView() {
 		});
 	};
 
-	const splitScreen = normalizedVideo?.element.splitScreen ?? null;
+	const splitScreen =
+		hasClipAnalysis ? (normalizedVideo?.element.splitScreen ?? null) : null;
 	const combinedMarkerSections = useMemo(() => {
 		if (!normalizedVideo) return [];
 		const splitSectionsByStartTime = new Map(
@@ -1134,9 +1143,10 @@ export function ReframeView() {
 					slots: previewSplitBindings,
 				};
 	const selectedAngleMode: "preset" | "split" =
-		previewSplitBindings?.length ||
-		activeSplitSection ||
-		angleSectionAtFocus?.isSplit
+		(hasClipAnalysis &&
+			(previewSplitBindings?.length ||
+				activeSplitSection ||
+				angleSectionAtFocus?.isSplit))
 			? "split"
 			: "preset";
 	const effectiveSplitViewportBalance =
@@ -1253,10 +1263,12 @@ export function ReframeView() {
 		},
 	});
 	const editableSplitBindings = resolveConcreteSplitBindings(
-		previewSplitBindings ??
-			editingSplitSection?.slots ??
-			splitScreen?.slots ??
-			[],
+		hasClipAnalysis
+			? (previewSplitBindings ??
+				editingSplitSection?.slots ??
+				splitScreen?.slots ??
+				[])
+			: [],
 	);
 	const updateBaseSplitBindings = ({
 		slots,
@@ -1265,6 +1277,7 @@ export function ReframeView() {
 		slots: VideoSplitScreenSlotBinding[];
 		pushHistory?: boolean;
 	}) => {
+		if (!hasClipAnalysis) return;
 		if (!normalizedVideo) return;
 		editor.timeline.updateVideoSplitScreen({
 			trackId: normalizedVideo.trackId,
@@ -1306,6 +1319,7 @@ export function ReframeView() {
 		slotId: string;
 		presetId: string | null;
 	}) => {
+		if (!hasClipAnalysis) return;
 		if (!normalizedVideo) return;
 		const availablePresetIds = visibleReframePresets.map((preset) => preset.id);
 		const nextBindings = (
@@ -1374,6 +1388,7 @@ export function ReframeView() {
 		slotId: string;
 		isTransparent: boolean;
 	}) => {
+		if (!hasClipAnalysis) return;
 		updateBaseSplitBindings({
 			slots: (splitScreen?.slots ?? buildInitialSplitScreen().slots).map((binding) =>
 				binding.slotId === slotId
@@ -1391,6 +1406,7 @@ export function ReframeView() {
 	}: {
 		viewportBalance: VideoSplitScreenViewportBalance;
 	}) => {
+		if (!hasClipAnalysis) return;
 		if (!normalizedVideo) return;
 		const currentViewportBalance =
 			previewSplitViewportBalance ?? splitScreen?.viewportBalance ?? "balanced";
@@ -1555,6 +1571,7 @@ export function ReframeView() {
 		}>;
 		pushHistory: boolean;
 	}) => {
+		if (!hasClipAnalysis) return;
 		if (!ENABLE_MANUAL_SPLIT_SLOT_ADJUSTMENTS) return;
 		if (!normalizedVideo) return;
 		if (
@@ -1862,6 +1879,7 @@ export function ReframeView() {
 	);
 
 	const handleSplitPresetSelection = useCallback(() => {
+		if (!hasClipAnalysis) return;
 		if (!normalizedVideo) return;
 		setSelectedPresetId({
 			elementId: normalizedVideo.element.id,
@@ -1888,6 +1906,7 @@ export function ReframeView() {
 		buildInitialSplitScreen,
 		editingSplitSection?.slots,
 		focusedSectionStartTime,
+		hasClipAnalysis,
 		normalizedVideo,
 		previewSplitViewportBalance,
 		resolveConcreteSplitBindings,
@@ -2367,23 +2386,24 @@ export function ReframeView() {
 									</div>
 								);
 							})}
-							<div
-								role="option"
-								tabIndex={0}
-								aria-selected={selectedAngleMode === "split"}
-								className={cn(
-									"rounded-lg border p-2 transition-colors",
-									selectedAngleMode === "split" &&
-										"border-primary bg-primary/5",
-								)}
-								onClick={handleSplitPresetSelection}
-								onKeyDown={(event) => {
-									if (event.key === "Enter" || event.key === " ") {
-										event.preventDefault();
-										handleSplitPresetSelection();
-									}
-								}}
-							>
+							{hasClipAnalysis ? (
+								<div
+									role="option"
+									tabIndex={0}
+									aria-selected={selectedAngleMode === "split"}
+									className={cn(
+										"rounded-lg border p-2 transition-colors",
+										selectedAngleMode === "split" &&
+											"border-primary bg-primary/5",
+									)}
+									onClick={handleSplitPresetSelection}
+									onKeyDown={(event) => {
+										if (event.key === "Enter" || event.key === " ") {
+											event.preventDefault();
+											handleSplitPresetSelection();
+										}
+									}}
+								>
 								<div className="flex items-center gap-2">
 									<div className="flex min-w-0 flex-1 items-center gap-2">
 										<SplitScreenPresetGlyph />
@@ -2601,7 +2621,12 @@ export function ReframeView() {
 										))}
 									</div>
 								</div>
-							</div>
+								</div>
+							) : (
+								<div className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
+									Run Analyze to enable split screen slots for this clip.
+								</div>
+							)}
 						</div>
 
 						<div className="space-y-2 rounded-lg border p-3">

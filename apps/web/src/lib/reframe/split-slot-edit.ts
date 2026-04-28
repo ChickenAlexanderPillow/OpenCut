@@ -10,6 +10,7 @@ import {
 	buildDefaultVideoSplitScreenBindings,
 	getActiveReframePresetIdFromState,
 	getVideoSplitScreenViewports,
+	hasVideoReframeAnalysisData,
 	normalizeVideoReframeState,
 	resolveVideoSplitScreenAtTimeFromState,
 	resolveVideoSplitScreenSlotTransformFromState,
@@ -101,6 +102,9 @@ export function resolveEditableSplitSlotState({
 	preferredSlotId?: string | null;
 }): EditableSplitSlotState | null {
 	const normalizedElement = normalizeVideoReframeState({ element });
+	if (!hasVideoReframeAnalysisData({ element: normalizedElement })) {
+		return null;
+	}
 	const previewSlots = splitPreview?.slots ?? null;
 	const previewViewportBalance =
 		splitPreview?.viewportBalance ??
@@ -131,6 +135,8 @@ export function resolveEditableSplitSlotState({
 		duration: normalizedElement.duration,
 		splitScreen,
 		defaultReframePresetId: normalizedElement.defaultReframePresetId,
+		reframePresets: normalizedElement.reframePresets,
+		reframeSeededBy: normalizedElement.reframeSeededBy,
 		reframeSwitches: normalizedElement.reframeSwitches,
 		localTime,
 	});

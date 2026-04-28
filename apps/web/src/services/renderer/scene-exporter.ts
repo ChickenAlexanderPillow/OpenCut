@@ -1,12 +1,14 @@
 import EventEmitter from "eventemitter3";
 
 import {
+	MkvOutputFormat,
 	Output,
 	Mp4OutputFormat,
 	WebMOutputFormat,
 	BufferTarget,
 	CanvasSource,
 	AudioBufferSource,
+	canEncodeVideo,
 	QUALITY_LOW,
 	QUALITY_MEDIUM,
 	QUALITY_HIGH,
@@ -26,6 +28,7 @@ type ExportParams = {
 	duration?: number;
 	shouldIncludeAudio?: boolean;
 	audioBuffer?: AudioBuffer;
+	alpha?: boolean;
 };
 
 const qualityMap = {
@@ -50,6 +53,7 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 	private duration: number | null;
 	private shouldIncludeAudio: boolean;
 	private audioBuffer?: AudioBuffer;
+	private alpha: boolean;
 
 	private isCancelled = false;
 
@@ -63,12 +67,15 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		duration,
 		shouldIncludeAudio,
 		audioBuffer,
+		alpha,
 	}: ExportParams) {
 		super();
+		this.alpha = alpha ?? false;
 		this.renderer = new CanvasRenderer({
 			width,
 			height,
 			fps,
+			alpha: this.alpha,
 		});
 
 		this.format = format;
@@ -93,7 +100,27 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		const frameCount = Math.max(1, Math.ceil(sceneDuration * fps));
 
 		const outputFormat =
-			this.format === "webm" ? new WebMOutputFormat() : new Mp4OutputFormat();
+			this.format === "webm"
+				? new WebMOutputFormat()
+				: this.format === "mkv"
+					? new MkvOutputFormat()
+				: new Mp4OutputFormat();
+
+		const videoCodec =
+			this.format === "webm" || this.format === "mkv"
+				? "vp9"
+				: "avc";
+		const canEncodeSelectedCodec = await canEncodeVideo(videoCodec, {
+			width: this.renderer.width,
+			height: this.renderer.height,
+			bitrate: qualityMap[this.quality],
+			alpha: this.alpha ? "keep" : "discard",
+		});
+		if (!canEncodeSelectedCodec) {
+			throw new Error(
+				`This browser cannot encode ${videoCodec.toUpperCase()} video exports.`,
+			);
+		}
 
 		const output = new Output({
 			format: outputFormat,
@@ -101,8 +128,9 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		});
 
 		const videoSource = new CanvasSource(this.renderer.canvas, {
-			codec: this.format === "webm" ? "vp9" : "avc",
+			codec: videoCodec,
 			bitrate: qualityMap[this.quality],
+			alpha: this.alpha ? "keep" : "discard",
 		});
 
 		output.addVideoTrack(videoSource, { frameRate: fps });
@@ -110,7 +138,8 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		let audioSource: AudioBufferSource | null = null;
 		if (this.shouldIncludeAudio && this.audioBuffer) {
 			audioSource = new AudioBufferSource({
-				codec: this.format === "webm" ? "opus" : "aac",
+				codec:
+					this.format === "webm" || this.format === "mkv" ? "opus" : "aac",
 				bitrate: qualityMap[this.quality],
 			});
 			output.addAudioTrack(audioSource);
