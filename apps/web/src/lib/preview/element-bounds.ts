@@ -386,17 +386,15 @@ function clampLineCount(value: number): number {
 	return Math.max(1, Math.min(4, Math.round(value)));
 }
 
-function buildLinesFromWords({
+function buildBalancedLinesForCount({
 	words,
-	maxLines,
+	lineCount,
 }: {
 	words: string[];
-	maxLines: number;
+	lineCount: number;
 }): string[] {
-	if (words.length === 0) return [];
-	const clampedMaxLines = clampLineCount(maxLines);
-	const lineCount = Math.min(clampedMaxLines, words.length);
-	const wordsPerLine = Math.ceil(words.length / lineCount);
+	const normalizedLineCount = Math.max(1, Math.min(lineCount, words.length));
+	const wordsPerLine = Math.ceil(words.length / normalizedLineCount);
 	const lines: string[] = [];
 
 	for (let i = 0; i < words.length; i += wordsPerLine) {
@@ -404,6 +402,100 @@ function buildLinesFromWords({
 	}
 
 	return lines;
+}
+
+function buildLinesFromWords({
+	words,
+	maxLines,
+	maxWidth,
+	measure,
+}: {
+	words: string[];
+	maxLines: number;
+	maxWidth?: number;
+	measure?: (candidate: string) => number;
+}): string[] {
+	if (words.length === 0) return [];
+	const clampedMaxLines = clampLineCount(maxLines);
+	const singleLine = [words.join(" ")];
+
+	if (
+		clampedMaxLines === 1 ||
+		words.length === 1 ||
+		!measure ||
+		!Number.isFinite(maxWidth) ||
+		(maxWidth ?? 0) <= 0
+	) {
+		return singleLine;
+	}
+
+	if (measure(singleLine[0] ?? "") <= (maxWidth ?? 0)) {
+		return singleLine;
+	}
+
+	const maxAllowedLines = Math.min(clampedMaxLines, words.length);
+	const sliceCache = new Map<string, { text: string; width: number }>();
+	const getSlice = (start: number, end: number) => {
+		const key = `${start}:${end}`;
+		const cached = sliceCache.get(key);
+		if (cached) return cached;
+		const text = words.slice(start, end).join(" ");
+		const next = { text, width: measure(text) };
+		sliceCache.set(key, next);
+		return next;
+	};
+
+	const buildBestSplitForLineCount = (lineCount: number): string[] | null => {
+		let bestLines: string[] | null = null;
+		let bestWidestLineWidth = Number.POSITIVE_INFINITY;
+		let bestBalancePenalty = Number.POSITIVE_INFINITY;
+
+		const visit = (start: number, remainingLines: number, lines: string[]) => {
+			if (remainingLines === 1) {
+				const slice = getSlice(start, words.length);
+				if (slice.width > (maxWidth ?? 0)) return;
+				const nextLines = [...lines, slice.text];
+				const lineWidths = nextLines.map((line) => measure(line));
+				const widestLineWidth = Math.max(...lineWidths);
+				const balancePenalty = lineWidths.reduce(
+					(total, width) => total + Math.abs(widestLineWidth - width),
+					0,
+				);
+				if (
+					widestLineWidth < bestWidestLineWidth ||
+					(widestLineWidth === bestWidestLineWidth &&
+						balancePenalty < bestBalancePenalty)
+				) {
+					bestLines = nextLines;
+					bestWidestLineWidth = widestLineWidth;
+					bestBalancePenalty = balancePenalty;
+				}
+				return;
+			}
+
+			const maxEnd = words.length - (remainingLines - 1);
+			for (let end = start + 1; end <= maxEnd; end++) {
+				const slice = getSlice(start, end);
+				if (slice.width > (maxWidth ?? 0)) continue;
+				visit(end, remainingLines - 1, [...lines, slice.text]);
+			}
+		};
+
+		visit(0, lineCount, []);
+		return bestLines;
+	};
+
+	for (let lineCount = 2; lineCount <= maxAllowedLines; lineCount++) {
+		const split = buildBestSplitForLineCount(lineCount);
+		if (split) {
+			return split;
+		}
+	}
+
+	return buildBalancedLinesForCount({
+		words,
+		lineCount: maxAllowedLines,
+	});
 }
 
 function resolveLatestStartedWordIndex({
@@ -583,6 +675,8 @@ export function getElementBounds({
 			const activeWordForWindow =
 				latestStartedWordIndex >= 0 ? latestStartedWordIndex : 0;
 			const backgroundMode = effectiveCaptionStyle.backgroundFitMode ?? "block";
+			const maxWrapWidth =
+				canvasWidth - Math.min(canvasWidth, canvasHeight) * 0.08;
 			const pagePlanSignature = [
 				captionTimingData.signature,
 				canvasWidth,
@@ -641,6 +735,8 @@ export function getElementBounds({
 					const candidateLines = buildLinesFromWords({
 						words: candidateWords,
 						maxLines: maxLinesOnScreen,
+						maxWidth: maxWrapWidth,
+						measure: (candidate) => ctx.measureText(candidate).width,
 					});
 					const candidateMetrics = candidateLines.map((line) =>
 						ctx.measureText(line),
@@ -717,6 +813,8 @@ export function getElementBounds({
 									content: buildLinesFromWords({
 										words: captionWords,
 										maxLines: maxLinesOnScreen,
+										maxWidth: maxWrapWidth,
+										measure: (candidate) => ctx.measureText(candidate).width,
 									}).join("\n"),
 								});
 								return nextPages;
@@ -741,6 +839,8 @@ export function getElementBounds({
 									content: buildLinesFromWords({
 										words: renderWords,
 										maxLines: maxLinesOnScreen,
+										maxWidth: maxWrapWidth,
+										measure: (candidate) => ctx.measureText(candidate).width,
 									}).join("\n"),
 								});
 								pageStart += pageSize;
@@ -781,10 +881,10 @@ export function getElementBounds({
 						buildLinesFromWords({
 							words: renderWords,
 							maxLines: maxLinesOnScreen,
+							maxWidth: maxWrapWidth,
+							measure: (candidate) => ctx.measureText(candidate).width,
 						}).join("\n"))
 					: element.content;
-			const maxWrapWidth =
-				canvasWidth - Math.min(canvasWidth, canvasHeight) * 0.08;
 			const shouldWrapToMaintainFontSize =
 				captionWords.length === 0 && Boolean(fitInCanvas);
 			const wrappedContent = shouldWrapToMaintainFontSize

@@ -210,6 +210,52 @@ describe("TextNode caption gap rendering", () => {
 		expect(operations).toEqual([]);
 	});
 
+	test("keeps the final caption state on screen briefly after a visibility window ends", async () => {
+		const node = new TextNode({
+			...createCaptionNode().params,
+			captionVisibilityWindows: [{ startTime: 10.0, endTime: 10.4 }],
+		});
+		const { filledTexts, renderer } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.65 });
+
+		expect(filledTexts).toContain("hello");
+	});
+
+	test("does not extend a caption window into the next sentence window", async () => {
+		const node = new TextNode({
+			...DEFAULT_TEXT_ELEMENT,
+			id: "caption-visibility-window-overlap",
+			name: "Caption Visibility Window Overlap",
+			content: "hello world again now",
+			startTime: 10,
+			duration: 2,
+			canvasCenter: { x: 640, y: 360 },
+			canvasWidth: 1280,
+			canvasHeight: 720,
+			captionVisibilityWindows: [
+				{ startTime: 10.0, endTime: 10.4 },
+				{ startTime: 10.55, endTime: 11.0 },
+			],
+			captionWordTimings: [
+				{ word: "hello", startTime: 10.0, endTime: 10.2 },
+				{ word: "world", startTime: 10.2, endTime: 10.4 },
+				{ word: "again", startTime: 10.55, endTime: 10.75 },
+				{ word: "now", startTime: 10.75, endTime: 11.0 },
+			],
+		});
+		const beforeNextWindow = createFakeRenderer();
+		await node.render({ renderer: beforeNextWindow.renderer, time: 10.5 });
+		expect(beforeNextWindow.filledTexts).toContain("hello");
+		expect(beforeNextWindow.filledTexts).toContain("world");
+		expect(beforeNextWindow.filledTexts).not.toContain("again");
+
+		const atNextWindow = createFakeRenderer();
+		await node.render({ renderer: atNextWindow.renderer, time: 10.56 });
+		expect(atNextWindow.filledTexts).toContain("again");
+		expect(atNextWindow.filledTexts).not.toContain("hello");
+	});
+
 	test("still renders captions at word boundaries without a visibility gap", async () => {
 		const node = createCaptionNode();
 		const { operations, renderer } = createFakeRenderer();
@@ -227,6 +273,17 @@ describe("TextNode caption gap rendering", () => {
 		await node.render({ renderer, time: 11.8 });
 
 		expect(operations).toEqual([]);
+	});
+
+	test("keeps the final caption state on screen briefly without explicit visibility windows", async () => {
+		const node = createCaptionNode();
+		const { filledTexts, renderer } = createFakeRenderer();
+
+		await node.render({ renderer, time: 11.75 });
+
+		expect(filledTexts.join(" ")).toContain("hello");
+		expect(filledTexts.join(" ")).toContain("world");
+		expect(filledTexts).toContain("again");
 	});
 
 	test("does not keep the last visible caption on screen for trailing hidden timings", async () => {

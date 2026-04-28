@@ -25,19 +25,19 @@ export const TRANSCRIPT_SPEAKER_ANNOTATION_VERSION = 1;
 export const PROJECT_MEDIA_TRANSCRIPT_MODEL: TranscriptionModelId =
 	DEFAULT_TRANSCRIPTION_MODEL;
 export const PROJECT_MEDIA_TRANSCRIPT_LANGUAGE: TranscriptionLanguage = "en";
-const CHUNKED_TRANSCRIPTION_DURATION_THRESHOLD_SECONDS = 4 * 60;
-const CHUNKED_TRANSCRIPTION_FILE_SIZE_THRESHOLD_BYTES = 180 * 1024 * 1024;
-const CHUNKED_TRANSCRIPTION_MIN_WINDOW_SECONDS = 15;
-const CHUNKED_TRANSCRIPTION_MAX_WINDOW_SECONDS = 20;
-const CHUNKED_TRANSCRIPTION_TARGET_CHUNK_COUNT = 24;
+const CHUNKED_TRANSCRIPTION_MIN_WINDOW_SECONDS = 30;
+const CHUNKED_TRANSCRIPTION_MAX_WINDOW_SECONDS = 45;
+const CHUNKED_TRANSCRIPTION_TARGET_CHUNK_COUNT = 12;
 const CHUNKED_TRANSCRIPTION_TARGET_UPLOAD_BYTES = 2 * 1024 * 1024;
-const CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS = 3;
+const SINGLE_UPLOAD_TRANSCRIPTION_TARGET_BYTES = 12 * 1024 * 1024;
+const CHUNKED_TRANSCRIPTION_OVERLAP_SECONDS = 5;
 const CHUNK_PROGRESS_HEARTBEAT_MS = 1200;
 const CHUNK_TRANSCRIPTION_CONCURRENCY = 1;
 const CLIP_TRANSCRIPTION_API_TIMEOUT_MS = 900000;
 const CLIP_TRANSCRIPTION_TARGET_SAMPLE_RATE = 16000;
 const CHUNK_TRANSCRIPTION_PROMPT_MAX_WORDS = 40;
 const CHUNK_TRANSCRIPTION_PROMPT_MAX_CHARS = 240;
+const CHUNK_WORD_DUPLICATE_TIME_TOLERANCE_SECONDS = 0.45;
 
 function nowMs(): number {
 	if (
@@ -692,20 +692,80 @@ function normalizeTranscriptionWords({
 		.sort((a, b) => a.start - b.start);
 }
 
+function normalizeTranscriptTokenForDedup(word: string): string {
+	return word
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}']+/gu, "")
+		.trim();
+}
+
+function areLikelyDuplicateChunkWords(
+	left: TranscriptionWord,
+	right: TranscriptionWord,
+): boolean {
+	const leftToken = normalizeTranscriptTokenForDedup(left.word);
+	const rightToken = normalizeTranscriptTokenForDedup(right.word);
+	if (!leftToken || leftToken !== rightToken) return false;
+	const startDelta = Math.abs(left.start - right.start);
+	const endDelta = Math.abs(left.end - right.end);
+	const overlap = Math.min(left.end, right.end) - Math.max(left.start, right.start);
+	return (
+		(startDelta <= CHUNK_WORD_DUPLICATE_TIME_TOLERANCE_SECONDS &&
+			endDelta <= CHUNK_WORD_DUPLICATE_TIME_TOLERANCE_SECONDS) ||
+		overlap >= -0.02
+	);
+}
+
+export function dedupeChunkedTranscriptionWords({
+	words,
+}: {
+	words: TranscriptionWord[];
+}): TranscriptionWord[] {
+	const normalized = normalizeTranscriptionWords({ words });
+	if (normalized.length <= 1) return normalized;
+	const deduped: TranscriptionWord[] = [];
+	for (const word of normalized) {
+		const previous = deduped[deduped.length - 1];
+		if (!previous || !areLikelyDuplicateChunkWords(previous, word)) {
+			deduped.push({ ...word });
+			continue;
+		}
+		previous.start = Math.min(previous.start, word.start);
+		previous.end = Math.max(previous.end, word.end);
+		if (!previous.speakerId && word.speakerId) {
+			previous.speakerId = word.speakerId;
+		}
+	}
+	return deduped;
+}
+
+export function estimateTranscriptionWavBytes({
+	durationSeconds,
+	sampleRate = CLIP_TRANSCRIPTION_TARGET_SAMPLE_RATE,
+}: {
+	durationSeconds: number;
+	sampleRate?: number;
+}): number {
+	if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+		return 0;
+	}
+	const resolvedSampleRate =
+		Number.isFinite(sampleRate) && sampleRate > 0
+			? sampleRate
+			: CLIP_TRANSCRIPTION_TARGET_SAMPLE_RATE;
+	return Math.round(durationSeconds * resolvedSampleRate * 2 + 44);
+}
+
 function shouldUseChunkedTranscription({
 	asset,
 }: {
 	asset: MediaAsset;
 }): boolean {
-	if (asset.file.size >= CHUNKED_TRANSCRIPTION_FILE_SIZE_THRESHOLD_BYTES) {
-		return true;
-	}
-	if (
-		(asset.duration ?? 0) >= CHUNKED_TRANSCRIPTION_DURATION_THRESHOLD_SECONDS
-	) {
-		return true;
-	}
-	return false;
+	return (
+		estimateTranscriptionWavBytes({
+			durationSeconds: asset.duration ?? 0,
+		}) > SINGLE_UPLOAD_TRANSCRIPTION_TARGET_BYTES
+	);
 }
 
 export async function transcribeClipTranscriptLocallyForAsset({
@@ -823,7 +883,11 @@ export async function transcribeClipTranscriptLocallyForAsset({
 			})();
 }
 
-function resolveChunkWindowSeconds({ duration }: { duration: number }): number {
+export function resolveChunkWindowSeconds({
+	duration,
+}: {
+	duration: number;
+}): number {
 	if (!Number.isFinite(duration) || duration <= 0) {
 		return CHUNKED_TRANSCRIPTION_MIN_WINDOW_SECONDS;
 	}
@@ -863,7 +927,7 @@ type PreparedChunkAudio = ChunkDecodePlan & {
 	wavBlob: Blob;
 };
 
-function buildChunkDecodePlans({
+export function buildChunkDecodePlans({
 	duration,
 	windowSeconds,
 }: {
@@ -1192,16 +1256,6 @@ async function transcribeAssetInChunks({
 								end: word.end + plan.decodeStart,
 								speakerId: word.speakerId,
 							}))
-							.filter(
-								(word) =>
-									word.end > plan.logicalStart && word.start < plan.logicalEnd,
-							)
-							.map((word) => ({
-								word: word.word,
-								start: clamp(word.start, plan.logicalStart, plan.logicalEnd),
-								end: clamp(word.end, plan.logicalStart, plan.logicalEnd),
-								speakerId: word.speakerId,
-							}))
 							.filter((word) => word.end > word.start);
 
 						adjustedByChunk.set(plan.chunkIndex, {
@@ -1260,7 +1314,7 @@ async function transcribeAssetInChunks({
 	const normalizedSegments = normalizeTranscriptionSegments({
 		segments: mergedSegments,
 	});
-	const normalizedWords = normalizeTranscriptionWords({
+	const normalizedWords = dedupeChunkedTranscriptionWords({
 		words: mergedWords,
 	});
 	if (
@@ -1290,10 +1344,9 @@ async function transcribeAssetInChunks({
 
 	return {
 		text:
-			normalizedSegments
-				.map((segment) => segment.text)
-				.join(" ")
-				.trim() || mergedTextParts.join(" ").trim(),
+			normalizedWords.map((word) => word.word).join(" ").trim() ||
+			normalizedSegments.map((segment) => segment.text).join(" ").trim() ||
+			mergedTextParts.join(" ").trim(),
 		segments: normalizedSegments,
 		words: normalizedWords,
 	};

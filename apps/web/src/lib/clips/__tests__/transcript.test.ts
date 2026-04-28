@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
 	buildClipTranscriptCacheEntryForAsset,
+	buildChunkDecodePlans,
 	buildChunkInitialPrompt,
 	clipTranscriptSegmentsForWindow,
 	clipTranscriptWordsForWindow,
+	dedupeChunkedTranscriptionWords,
+	estimateTranscriptionWavBytes,
 	getOrCreateClipTranscriptForAsset,
 	PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
+	resolveChunkWindowSeconds,
 	transcribeChunkWavBlobWithFallback,
 } from "@/lib/clips/transcript";
 import type { MediaAsset } from "@/types/assets";
@@ -329,5 +333,72 @@ describe("buildChunkInitialPrompt", () => {
 		expect(prompt!.length).toBeLessThanOrEqual(240);
 		expect(prompt).not.toContain("one two three");
 		expect(prompt).toContain("fortyone");
+	});
+});
+
+describe("dedupeChunkedTranscriptionWords", () => {
+	test("collapses duplicate overlap words from adjacent chunks", () => {
+		const result = dedupeChunkedTranscriptionWords({
+			words: [
+				{ word: "speaking", start: 43.2, end: 43.6 },
+				{ word: "to", start: 43.6, end: 43.8 },
+				{ word: "speaking", start: 43.23, end: 43.58 },
+				{ word: "to", start: 43.59, end: 43.82 },
+				{ word: "commission", start: 44.0, end: 44.5 },
+			],
+		});
+
+		expect(result.map((word) => word.word)).toEqual([
+			"speaking",
+			"to",
+			"commission",
+		]);
+	});
+
+	test("keeps repeated real words when their timings are distinct", () => {
+		const result = dedupeChunkedTranscriptionWords({
+			words: [
+				{ word: "to", start: 43.6, end: 43.8 },
+				{ word: "to", start: 44.5, end: 44.7 },
+			],
+		});
+
+		expect(result.map((word) => word.word)).toEqual(["to", "to"]);
+	});
+});
+
+describe("chunked transcription planning", () => {
+	test("keeps medium clips on single-pass transcription when normalized audio stays small enough", () => {
+		const estimatedBytes = estimateTranscriptionWavBytes({
+			durationSeconds: 309.066667,
+		});
+
+		expect(estimatedBytes).toBeLessThan(12 * 1024 * 1024);
+	});
+
+	test("still expects chunking for much longer clips", () => {
+		const estimatedBytes = estimateTranscriptionWavBytes({
+			durationSeconds: 10 * 60,
+		});
+
+		expect(estimatedBytes).toBeGreaterThan(12 * 1024 * 1024);
+	});
+
+	test("uses larger chunk windows for medium-length assets to reduce boundary loss", () => {
+		const windowSeconds = resolveChunkWindowSeconds({ duration: 309.066667 });
+		const plans = buildChunkDecodePlans({
+			duration: 309.066667,
+			windowSeconds,
+		});
+
+		expect(windowSeconds).toBeGreaterThanOrEqual(30);
+		expect(plans.length).toBeLessThanOrEqual(11);
+		expect(plans[0]).toEqual({
+			chunkIndex: 0,
+			logicalStart: 0,
+			logicalEnd: windowSeconds,
+			decodeStart: 0,
+			decodeEnd: Math.min(309.066667, windowSeconds + 5),
+		});
 	});
 });

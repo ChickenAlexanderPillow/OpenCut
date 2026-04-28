@@ -126,6 +126,11 @@ type TranscriptSearchableToken = {
 	endTime: number;
 };
 
+type FindInputSelection = {
+	start: number | null;
+	end: number | null;
+};
+
 const MAX_DISFLUENCY_REPEAT_GAP_SECONDS = 0.35;
 const HOLD_TO_PREVIEW_CANCEL_DISTANCE_PX = 5;
 const HOLD_TO_PREVIEW_CANCEL_DISTANCE_SQUARED_PX =
@@ -1589,7 +1594,13 @@ export function TranscriptView() {
 	);
 
 	const jumpToFindMatch = useCallback(
-		(match: TranscriptSearchableToken | null) => {
+		(
+			match: TranscriptSearchableToken | null,
+			options?: {
+				preserveFindFocus?: boolean;
+				selection?: FindInputSelection;
+			},
+		) => {
 			if (!match) return;
 			const targetWord = wordById.get(match.anchorWordId);
 			if (!targetWord) return;
@@ -1602,6 +1613,18 @@ export function TranscriptView() {
 			setIsSelectionActive(false);
 			window.getSelection()?.removeAllRanges();
 			seekToTranscriptWord(targetWord);
+			if (options?.preserveFindFocus) {
+				window.requestAnimationFrame(() => {
+					const input = findInputRef.current;
+					if (!input) return;
+					input.focus();
+					const selectionStart = options.selection?.start;
+					const selectionEnd = options.selection?.end;
+					if (selectionStart != null && selectionEnd != null) {
+						input.setSelectionRange(selectionStart, selectionEnd);
+					}
+				});
+			}
 		},
 		[
 			clearEditingState,
@@ -1631,7 +1654,10 @@ export function TranscriptView() {
 	}, []);
 
 	const updateFindQuery = useCallback(
-		(nextQuery: string) => {
+		(
+			nextQuery: string,
+			selection?: FindInputSelection,
+		) => {
 			setFindQuery(nextQuery);
 			const normalizedQuery = normalizeTranscriptDisplayToken(nextQuery);
 			if (!normalizedQuery) {
@@ -1646,7 +1672,10 @@ export function TranscriptView() {
 				return;
 			}
 			setActiveFindMatchIndex(0);
-			jumpToFindMatch(matches[0] ?? null);
+			jumpToFindMatch(matches[0] ?? null, {
+				preserveFindFocus: true,
+				selection,
+			});
 		},
 		[jumpToFindMatch, searchableTranscriptTokens],
 	);
@@ -1658,7 +1687,9 @@ export function TranscriptView() {
 				(activeFindMatchIndex + direction + findMatches.length) %
 				findMatches.length;
 			setActiveFindMatchIndex(nextIndex);
-			jumpToFindMatch(findMatches[nextIndex] ?? null);
+			jumpToFindMatch(findMatches[nextIndex] ?? null, {
+				preserveFindFocus: true,
+			});
 		},
 		[activeFindMatchIndex, findMatches, jumpToFindMatch],
 	);
@@ -2471,7 +2502,7 @@ export function TranscriptView() {
 						className="shrink-0"
 						onClick={() => {
 							if (isFindOpen) {
-								focusFindInput(false);
+								focusFindInput(true);
 								return;
 							}
 							openFind();
@@ -2548,8 +2579,17 @@ export function TranscriptView() {
 							ref={findInputRef}
 							type="text"
 							value={findQuery}
-							onChange={(event) => updateFindQuery(event.target.value)}
+							onChange={(event) =>
+								updateFindQuery(event.target.value, {
+									start: event.currentTarget.selectionStart,
+									end: event.currentTarget.selectionEnd,
+								})
+							}
+							onFocus={(event) => {
+								event.currentTarget.select();
+							}}
 							onKeyDown={(event) => {
+								event.stopPropagation();
 								if (event.key === "Enter") {
 									event.preventDefault();
 									stepFindMatch(event.shiftKey ? -1 : 1);
@@ -2558,6 +2598,12 @@ export function TranscriptView() {
 									event.preventDefault();
 									closeFind();
 								}
+							}}
+							onKeyUp={(event) => {
+								event.stopPropagation();
+							}}
+							onKeyPress={(event) => {
+								event.stopPropagation();
 							}}
 							placeholder="Find in transcript"
 							className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-500"

@@ -26,6 +26,8 @@ import {
 	resolveVideoSplitScreenAtTime,
 } from "@/lib/reframe/video-reframe";
 
+const MIN_CAPTION_FINAL_STATE_HOLD_SECONDS = 0.4;
+
 function scaleFontSize({
 	fontSize,
 	canvasHeight,
@@ -349,20 +351,108 @@ type CaptionRenderToken = {
 function buildLineTokenGroups({
 	tokens,
 	maxLines,
+	maxWidth,
+	measure,
 }: {
 	tokens: CaptionRenderToken[];
 	maxLines: number;
+	maxWidth?: number;
+	measure?: (candidate: string) => number;
 }): CaptionRenderToken[][] {
 	if (tokens.length === 0) return [];
 	const clampedMaxLines = clampLineCount(maxLines);
-	const lineCount = Math.min(clampedMaxLines, tokens.length);
-	const wordsPerLine = Math.ceil(tokens.length / lineCount);
-	const groups: CaptionRenderToken[][] = [];
+	const singleLine = [tokens];
 
+	if (
+		clampedMaxLines === 1 ||
+		tokens.length === 1 ||
+		!measure ||
+		!Number.isFinite(maxWidth) ||
+		(maxWidth ?? 0) <= 0
+	) {
+		return singleLine;
+	}
+
+	if (measure(stringifyVisibleLineTokens(tokens)) <= (maxWidth ?? 0)) {
+		return singleLine;
+	}
+
+	const maxAllowedLines = Math.min(clampedMaxLines, tokens.length);
+	const sliceCache = new Map<string, { tokens: CaptionRenderToken[]; width: number }>();
+	const getSlice = (start: number, end: number) => {
+		const key = `${start}:${end}`;
+		const cached = sliceCache.get(key);
+		if (cached) return cached;
+		const sliceTokens = tokens.slice(start, end);
+		const next = {
+			tokens: sliceTokens,
+			width: measure(stringifyVisibleLineTokens(sliceTokens)),
+		};
+		sliceCache.set(key, next);
+		return next;
+	};
+
+	const buildBestSplitForLineCount = (
+		lineCount: number,
+	): CaptionRenderToken[][] | null => {
+		let bestGroups: CaptionRenderToken[][] | null = null;
+		let bestWidestLineWidth = Number.POSITIVE_INFINITY;
+		let bestBalancePenalty = Number.POSITIVE_INFINITY;
+
+		const visit = (
+			start: number,
+			remainingLines: number,
+			groups: CaptionRenderToken[][],
+		) => {
+			if (remainingLines === 1) {
+				const slice = getSlice(start, tokens.length);
+				if (slice.width > (maxWidth ?? 0)) return;
+				const nextGroups = [...groups, slice.tokens];
+				const lineWidths = nextGroups.map((group) =>
+					measure(stringifyVisibleLineTokens(group)),
+				);
+				const widestLineWidth = Math.max(...lineWidths);
+				const balancePenalty = lineWidths.reduce(
+					(total, width) => total + Math.abs(widestLineWidth - width),
+					0,
+				);
+				if (
+					widestLineWidth < bestWidestLineWidth ||
+					(widestLineWidth === bestWidestLineWidth &&
+						balancePenalty < bestBalancePenalty)
+				) {
+					bestGroups = nextGroups;
+					bestWidestLineWidth = widestLineWidth;
+					bestBalancePenalty = balancePenalty;
+				}
+				return;
+			}
+
+			const maxEnd = tokens.length - (remainingLines - 1);
+			for (let end = start + 1; end <= maxEnd; end++) {
+				const slice = getSlice(start, end);
+				if (slice.width > (maxWidth ?? 0)) continue;
+				visit(end, remainingLines - 1, [...groups, slice.tokens]);
+			}
+		};
+
+		visit(0, lineCount, []);
+		return bestGroups;
+	};
+
+	for (let lineCount = 2; lineCount <= maxAllowedLines; lineCount++) {
+		const split = buildBestSplitForLineCount(lineCount);
+		if (split) {
+			return split;
+		}
+	}
+
+	const fallbackLineCount = Math.min(maxAllowedLines, tokens.length);
+	const wordsPerLine = Math.ceil(tokens.length / fallbackLineCount);
+	const groups: CaptionRenderToken[][] = [];
 	for (let i = 0; i < tokens.length; i += wordsPerLine) {
 		groups.push(tokens.slice(i, i + wordsPerLine));
 	}
-
 	return groups;
 }
 
@@ -377,6 +467,31 @@ function isSentenceEndingWord(word: string): boolean {
 	const trimmed = word.trim();
 	if (!trimmed) return false;
 	return /[.!?]["')\]]*$/.test(trimmed);
+}
+
+type EffectiveCaptionVisibilityWindow = {
+	startTime: number;
+	contentEndTime: number;
+	renderEndTime: number;
+};
+
+function buildEffectiveCaptionVisibilityWindows({
+	visibilityWindows,
+}: {
+	visibilityWindows: Array<{ startTime: number; endTime: number }>;
+}): EffectiveCaptionVisibilityWindow[] {
+	return visibilityWindows.map((window, index) => {
+		const nextWindow = visibilityWindows[index + 1];
+		const nextStartTime = nextWindow?.startTime ?? Number.POSITIVE_INFINITY;
+		return {
+			startTime: window.startTime,
+			contentEndTime: window.endTime,
+			renderEndTime: Math.min(
+				nextStartTime,
+				window.endTime + MIN_CAPTION_FINAL_STATE_HOLD_SECONDS,
+			),
+		};
+	});
 }
 
 function resolveSentenceBoundedPageSize({
@@ -763,10 +878,12 @@ export class TextNode extends BaseNode<TextNodeParams> {
 	}
 
 	isInRange({ time }: { time: number }) {
-		const visibilityWindows = this.params.captionVisibilityWindows ?? [];
+		const visibilityWindows = buildEffectiveCaptionVisibilityWindows({
+			visibilityWindows: this.params.captionVisibilityWindows ?? [],
+		});
 		if (visibilityWindows.length > 0) {
 			return visibilityWindows.some(
-				(window) => time >= window.startTime && time < window.endTime,
+				(window) => time >= window.startTime && time < window.renderEndTime,
 			);
 		}
 		const captionWordTimings = this.getTimelineCaptionTimings();
@@ -784,7 +901,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 				time <
 					Math.min(
 						this.params.startTime + this.params.duration,
-						lastCaptionEndTime,
+						lastCaptionEndTime + MIN_CAPTION_FINAL_STATE_HOLD_SECONDS,
 					)
 			);
 		}
@@ -845,15 +962,17 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			(token) => !token.hidden,
 		);
 		const activeVisibilityWindow =
-			(this.params.captionVisibilityWindows ?? []).find(
-				(window) => time >= window.startTime && time < window.endTime,
+			buildEffectiveCaptionVisibilityWindows({
+				visibilityWindows: this.params.captionVisibilityWindows ?? [],
+			}).find(
+				(window) => time >= window.startTime && time < window.renderEndTime,
 			) ?? null;
 		const activeWindowStartIndex =
 			activeVisibilityWindow && visibleCaptionWordTimingsAll.length > 0
 				? visibleCaptionWordTimingsAll.findIndex(
 						(timing) =>
 							timing.startTime >= activeVisibilityWindow.startTime &&
-							timing.startTime < activeVisibilityWindow.endTime,
+							timing.startTime < activeVisibilityWindow.contentEndTime,
 					)
 				: -1;
 		const activeWindowEndIndexExclusive =
@@ -861,7 +980,7 @@ export class TextNode extends BaseNode<TextNodeParams> {
 				? visibleCaptionWordTimingsAll.findIndex(
 						(timing, index) =>
 							index >= activeWindowStartIndex &&
-							timing.startTime >= activeVisibilityWindow.endTime,
+							timing.startTime >= activeVisibilityWindow.contentEndTime,
 					)
 				: -1;
 		const visibleCaptionWordTimings =
@@ -883,10 +1002,6 @@ export class TextNode extends BaseNode<TextNodeParams> {
 					)
 				: visibleCaptionWordsAll;
 		const latestStartedWordIndex = resolveLatestStartedWordIndex({
-			captionWordTimings: visibleCaptionWordTimings,
-			time,
-		});
-		const strictActiveWordIndex = resolveActiveWordIndex({
 			captionWordTimings: visibleCaptionWordTimings,
 			time,
 		});
@@ -959,6 +1074,10 @@ export class TextNode extends BaseNode<TextNodeParams> {
 				const candidateLines = buildLineTokenGroups({
 					tokens: candidateWords,
 					maxLines: maxLinesOnScreen,
+					maxWidth:
+						this.params.canvasWidth -
+						Math.min(this.params.canvasWidth, this.params.canvasHeight) * 0.08,
+					measure: (candidate) => renderer.context.measureText(candidate).width,
 				}).map((lineTokens) => stringifyVisibleLineTokens(lineTokens));
 				const candidateMetrics = candidateLines.map((line) =>
 					renderer.context.measureText(line),
@@ -1053,11 +1172,16 @@ export class TextNode extends BaseNode<TextNodeParams> {
 						windowed.chunkStart + windowed.pageSize,
 					)
 				: [];
+		const maxWrapWidth =
+			this.params.canvasWidth -
+			Math.min(this.params.canvasWidth, this.params.canvasHeight) * 0.08;
 		const renderTokenLines =
 			renderWords.length > 0
 				? buildLineTokenGroups({
 						tokens: renderWords,
 						maxLines: maxLinesOnScreen,
+						maxWidth: maxWrapWidth,
+						measure: (candidate) => renderer.context.measureText(candidate).width,
 					})
 				: [];
 		const renderContent =
@@ -1066,9 +1190,6 @@ export class TextNode extends BaseNode<TextNodeParams> {
 						.map((lineTokens) => stringifyVisibleLineTokens(lineTokens))
 						.join("\n")
 				: this.params.content;
-		const maxWrapWidth =
-			this.params.canvasWidth -
-			Math.min(this.params.canvasWidth, this.params.canvasHeight) * 0.08;
 		const shouldWrapToMaintainFontSize =
 			!hasWordTimings && Boolean(fitInCanvas) && renderWords.length === 0;
 		const wrappedContent = shouldWrapToMaintainFontSize
