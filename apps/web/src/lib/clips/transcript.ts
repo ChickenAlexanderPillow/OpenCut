@@ -38,6 +38,8 @@ const CLIP_TRANSCRIPTION_TARGET_SAMPLE_RATE = 16000;
 const CHUNK_TRANSCRIPTION_PROMPT_MAX_WORDS = 40;
 const CHUNK_TRANSCRIPTION_PROMPT_MAX_CHARS = 240;
 const CHUNK_WORD_DUPLICATE_TIME_TOLERANCE_SECONDS = 0.45;
+const CHUNK_SPEAKER_MATCH_TIME_TOLERANCE_SECONDS = 0.6;
+const CHUNK_SPEAKER_MIN_MATCH_SCORE = 0.2;
 
 function nowMs(): number {
 	if (
@@ -672,9 +674,20 @@ function normalizeTranscriptionWords({
 	words: TranscriptionWord[];
 }): TranscriptionWord[] {
 	return [...words]
+		.map((word) => {
+			const normalizedWord =
+				typeof word.word === "string"
+					? word.word
+					: typeof word.word === "number" && Number.isFinite(word.word)
+						? String(word.word)
+						: "";
+			return {
+				...word,
+				word: normalizedWord,
+			};
+		})
 		.filter(
 			(word) =>
-				typeof word.word === "string" &&
 				word.word.trim().length > 0 &&
 				Number.isFinite(word.start) &&
 				Number.isFinite(word.end) &&
@@ -697,6 +710,151 @@ function normalizeTranscriptTokenForDedup(word: string): string {
 		.toLowerCase()
 		.replace(/[^\p{L}\p{N}']+/gu, "")
 		.trim();
+}
+
+function addSpeakerMatchScore({
+	scores,
+	currentSpeakerId,
+	previousSpeakerId,
+	score,
+}: {
+	scores: Map<string, Map<string, number>>;
+	currentSpeakerId: string;
+	previousSpeakerId: string;
+	score: number;
+}) {
+	if (score <= 0) return;
+	const previousScores = scores.get(currentSpeakerId) ?? new Map<string, number>();
+	previousScores.set(
+		previousSpeakerId,
+		(previousScores.get(previousSpeakerId) ?? 0) + score,
+	);
+	scores.set(currentSpeakerId, previousScores);
+}
+
+function buildChunkSpeakerIdRemap({
+	previousWords,
+	currentWords,
+	previousSegments,
+	currentSegments,
+}: {
+	previousWords: TranscriptionWord[];
+	currentWords: TranscriptionWord[];
+	previousSegments: TranscriptionSegment[];
+	currentSegments: TranscriptionSegment[];
+}): Map<string, string> {
+	const scores = new Map<string, Map<string, number>>();
+
+	for (const currentWord of currentWords) {
+		const currentSpeakerId = currentWord.speakerId?.trim();
+		const currentToken = normalizeTranscriptTokenForDedup(currentWord.word);
+		if (!currentSpeakerId || !currentToken) continue;
+		for (const previousWord of previousWords) {
+			const previousSpeakerId = previousWord.speakerId?.trim();
+			if (!previousSpeakerId) continue;
+			if (
+				normalizeTranscriptTokenForDedup(previousWord.word) !== currentToken
+			) {
+				continue;
+			}
+			const startDelta = Math.abs(previousWord.start - currentWord.start);
+			const endDelta = Math.abs(previousWord.end - currentWord.end);
+			const overlap =
+				Math.min(previousWord.end, currentWord.end) -
+				Math.max(previousWord.start, currentWord.start);
+			if (
+				startDelta > CHUNK_SPEAKER_MATCH_TIME_TOLERANCE_SECONDS &&
+				endDelta > CHUNK_SPEAKER_MATCH_TIME_TOLERANCE_SECONDS &&
+				overlap < -0.02
+			) {
+				continue;
+			}
+			addSpeakerMatchScore({
+				scores,
+				currentSpeakerId,
+				previousSpeakerId,
+				score: Math.max(0.25, overlap, 0.6 - Math.min(startDelta, endDelta)),
+			});
+		}
+	}
+
+	for (const currentSegment of currentSegments) {
+		const currentSpeakerId = currentSegment.speakerId?.trim();
+		if (!currentSpeakerId) continue;
+		for (const previousSegment of previousSegments) {
+			const previousSpeakerId = previousSegment.speakerId?.trim();
+			if (!previousSpeakerId) continue;
+			const overlap =
+				Math.min(previousSegment.end, currentSegment.end) -
+				Math.max(previousSegment.start, currentSegment.start);
+			if (overlap <= 0) continue;
+			addSpeakerMatchScore({
+				scores,
+				currentSpeakerId,
+				previousSpeakerId,
+				score: overlap,
+			});
+		}
+	}
+
+	const resolved = new Map<string, string>();
+	const usedPreviousSpeakerIds = new Set<string>();
+	const rankedMatches = Array.from(scores.entries())
+		.flatMap(([currentSpeakerId, previousScores]) =>
+			Array.from(previousScores.entries()).map(([previousSpeakerId, score]) => ({
+				currentSpeakerId,
+				previousSpeakerId,
+				score,
+			})),
+		)
+		.sort((left, right) => right.score - left.score);
+
+	for (const match of rankedMatches) {
+		if (match.score < CHUNK_SPEAKER_MIN_MATCH_SCORE) continue;
+		if (resolved.has(match.currentSpeakerId)) continue;
+		if (usedPreviousSpeakerIds.has(match.previousSpeakerId)) continue;
+		resolved.set(match.currentSpeakerId, match.previousSpeakerId);
+		usedPreviousSpeakerIds.add(match.previousSpeakerId);
+	}
+
+	return resolved;
+}
+
+export function reconcileChunkSpeakerLabels<
+	T extends {
+		segments: TranscriptionSegment[];
+		words: TranscriptionWord[];
+	},
+>({
+	previous,
+	current,
+}: {
+	previous: {
+		segments: TranscriptionSegment[];
+		words: TranscriptionWord[];
+	};
+	current: T;
+}): T {
+	const remap = buildChunkSpeakerIdRemap({
+		previousWords: previous.words,
+		currentWords: current.words,
+		previousSegments: previous.segments,
+		currentSegments: current.segments,
+	});
+	if (remap.size === 0) {
+		return current;
+	}
+	return {
+		...current,
+		segments: current.segments.map((segment) => ({
+			...segment,
+			speakerId: segment.speakerId ? remap.get(segment.speakerId) ?? segment.speakerId : undefined,
+		})),
+		words: current.words.map((word) => ({
+			...word,
+			speakerId: word.speakerId ? remap.get(word.speakerId) ?? word.speakerId : undefined,
+		})),
+	} satisfies T;
 }
 
 function areLikelyDuplicateChunkWords(
@@ -1301,14 +1459,30 @@ async function transcribeAssetInChunks({
 	}
 	const transcriptionDurationMs = Math.round(nowMs() - transcriptionStartedAt);
 
+	let previousCanonicalChunk: {
+		segments: TranscriptionSegment[];
+		words: TranscriptionWord[];
+		textPart: string;
+	} | null = null;
 	for (const plan of plans) {
 		const adjusted = adjustedByChunk.get(plan.chunkIndex);
 		if (!adjusted) continue;
-		mergedSegments.push(...adjusted.segments);
-		mergedWords.push(...adjusted.words);
-		if (adjusted.textPart.length > 0) {
-			mergedTextParts.push(adjusted.textPart);
+		const canonicalChunk: {
+			segments: TranscriptionSegment[];
+			words: TranscriptionWord[];
+			textPart: string;
+		} = previousCanonicalChunk
+			? reconcileChunkSpeakerLabels({
+					previous: previousCanonicalChunk,
+					current: adjusted,
+				})
+			: adjusted;
+		mergedSegments.push(...canonicalChunk.segments);
+		mergedWords.push(...canonicalChunk.words);
+		if (canonicalChunk.textPart.length > 0) {
+			mergedTextParts.push(canonicalChunk.textPart);
 		}
+		previousCanonicalChunk = canonicalChunk;
 	}
 
 	const normalizedSegments = normalizeTranscriptionSegments({

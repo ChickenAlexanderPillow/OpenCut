@@ -100,6 +100,49 @@ def _resolve_word_speaker_from_segments(
 	return None
 
 
+def _build_segment_fallback_words(
+	*,
+	text: str,
+	start: float,
+	end: float,
+) -> list[dict[str, Any]]:
+	tokens = re.findall(r"\S+", text)
+	if len(tokens) == 0:
+		return []
+
+	start_f = max(0.0, float(start))
+	end_f = max(start_f + MIN_WORD_DURATION_SECONDS, float(end))
+	duration = end_f - start_f
+	if duration <= MIN_WORD_DURATION_SECONDS:
+		return [
+			{
+				"word": " ".join(tokens),
+				"start": start_f,
+				"end": end_f,
+			}
+		]
+
+	weights = [max(1, len(token.strip())) for token in tokens]
+	total_weight = sum(weights)
+	if total_weight <= 0:
+		return []
+
+	words: list[dict[str, Any]] = []
+	accumulated_weight = 0
+	for index, token in enumerate(tokens):
+		word_start = start_f + duration * (accumulated_weight / total_weight)
+		accumulated_weight += weights[index]
+		word_end = start_f + duration * (accumulated_weight / total_weight)
+		words.append(
+			{
+				"word": token,
+				"start": word_start,
+				"end": max(word_start + MIN_WORD_DURATION_SECONDS, word_end),
+			}
+		)
+	return words
+
+
 @dataclass
 class TranscribeConfig:
 	model: str = "large-v2"
@@ -412,7 +455,8 @@ class LocalWhisperXEngine:
 
 		merged: list[dict[str, Any]] = []
 		asr_index = 0
-		for aligned_word in aligned_words:
+		matched_asr_indices: set[int] = set()
+		for aligned_order, aligned_word in enumerate(aligned_words):
 			word = (aligned_word.get("word") or "").strip()
 			start = aligned_word.get("start")
 			end = aligned_word.get("end")
@@ -433,6 +477,7 @@ class LocalWhisperXEngine:
 					if self._normalize_word_token(candidate.get("word") or "") != normalized_word:
 						continue
 					matched_asr_word = candidate
+					matched_asr_indices.add(candidate_index)
 					asr_index = candidate_index + 1
 					break
 
@@ -449,9 +494,71 @@ class LocalWhisperXEngine:
 				"word": word,
 				"start": start_f,
 				"end": max(start_f + MIN_WORD_DURATION_SECONDS, end_f),
+				"_matched_asr_index": matched_asr_word.get("_asr_index")
+				if matched_asr_word is not None
+				else None,
+				"_aligned_order": aligned_order,
 			}
 			merged.append(next_entry)
 
+		for candidate_index, asr_word in enumerate(asr_words):
+			if candidate_index in matched_asr_indices:
+				continue
+			word = str(asr_word.get("word") or "").strip()
+			start = asr_word.get("start")
+			end = asr_word.get("end")
+			if not word or start is None or end is None:
+				continue
+			normalized_word = self._normalize_word_token(word)
+			if not normalized_word:
+				continue
+			start_f = max(0.0, float(start))
+			end_f = max(start_f + MIN_WORD_DURATION_SECONDS, float(end))
+			is_duplicate = False
+			for existing in merged:
+				existing_word = self._normalize_word_token(existing.get("word") or "")
+				if existing_word != normalized_word:
+					continue
+				existing_start = float(existing.get("start") or 0.0)
+				existing_end = max(
+					existing_start + MIN_WORD_DURATION_SECONDS,
+					float(existing.get("end") or existing_start),
+				)
+				overlap = min(existing_end, end_f) - max(existing_start, start_f)
+				if overlap >= -0.02:
+					is_duplicate = True
+					break
+			if is_duplicate:
+				continue
+			fallback_entry = {
+				**asr_word,
+				"word": word,
+				"start": start_f,
+				"end": end_f,
+				"_matched_asr_index": candidate_index,
+				"_aligned_order": None,
+			}
+			merged.append(fallback_entry)
+
+		def get_order_key(item: dict[str, Any]) -> tuple[float, int, int]:
+			matched_index = item.get("_matched_asr_index")
+			if matched_index is not None:
+				aligned_order = item.get("_aligned_order")
+				if aligned_order is None:
+					return (float(matched_index), 0, 0)
+				return (float(matched_index), 1, int(aligned_order))
+			aligned_order = item.get("_aligned_order")
+			if aligned_order is not None:
+				return (float(len(asr_words) + int(aligned_order)), 1, int(aligned_order))
+			return (float("inf"), 1, 0)
+
+		merged.sort(
+			key=lambda item: (
+				*get_order_key(item),
+				float(item["start"]),
+				float(item["end"]),
+			)
+		)
 		for index in range(len(merged) - 1):
 			current = merged[index]
 			next_item = merged[index + 1]
@@ -473,6 +580,8 @@ class LocalWhisperXEngine:
 				float(item["start"]) + MIN_WORD_DURATION_SECONDS,
 				float(item["end"]),
 			)
+			item.pop("_matched_asr_index", None)
+			item.pop("_aligned_order", None)
 
 		return merged
 
@@ -585,6 +694,7 @@ class LocalWhisperXEngine:
 			asr_model.options = original_options
 
 		segments: list[dict[str, Any]] = []
+		words: list[dict[str, Any]] = []
 		for segment in asr_result.get("segments", []) or []:
 			text = (segment.get("text") or "").strip()
 			start = max(0.0, float(segment.get("start") or 0.0))
@@ -601,11 +711,19 @@ class LocalWhisperXEngine:
 					"text": text,
 				}
 			)
+			fallback_words = _build_segment_fallback_words(
+					text=text,
+					start=start,
+					end=end,
+				)
+			for fallback_word in fallback_words:
+				fallback_word["_asr_index"] = len(words)
+				words.append(fallback_word)
 		if len(segments) == 0:
 			raise RuntimeError("ASR produced no speech segments")
 		return {
 			"segments": segments,
-			"words": [],
+			"words": words,
 			"language": str(asr_result.get("language") or "en"),
 			"vad_method": vad_method,
 		}

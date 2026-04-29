@@ -142,6 +142,38 @@ function createKaraokeCaptionNode(
 	});
 }
 
+function createPagedCaptionNode({
+	id,
+	wordsOnScreen,
+	captionWordTimings,
+}: {
+	id: string;
+	wordsOnScreen: number;
+	captionWordTimings: Array<{
+		word: string;
+		startTime: number;
+		endTime: number;
+	}>;
+}) {
+	return new TextNode({
+		...DEFAULT_TEXT_ELEMENT,
+		id,
+		name: id,
+		content: captionWordTimings.map((timing) => timing.word).join(" "),
+		startTime: captionWordTimings[0]?.startTime ?? 10,
+		duration:
+			(captionWordTimings[captionWordTimings.length - 1]?.endTime ?? 12) -
+			(captionWordTimings[0]?.startTime ?? 10),
+		canvasCenter: { x: 640, y: 360 },
+		canvasWidth: 1280,
+		canvasHeight: 720,
+		captionStyle: {
+			wordsOnScreen,
+		},
+		captionWordTimings,
+	});
+}
+
 describe("TextNode caption gap rendering", () => {
 	test("keeps karaoke highlight on the previous word during sub-threshold gaps", async () => {
 		const node = createKaraokeCaptionNode([
@@ -423,6 +455,53 @@ describe("TextNode caption gap rendering", () => {
 		expect(filledTexts).toContain("I");
 		expect(filledTexts).not.toContain("looming");
 		expect(filledTexts).not.toContain("market");
+	});
+
+	test("rebalances a final one-word page into a two-word last page", async () => {
+		const node = createPagedCaptionNode({
+			id: "caption-window-widow-four",
+			wordsOnScreen: 3,
+			captionWordTimings: [
+				{ word: "alpha", startTime: 10.0, endTime: 10.1 },
+				{ word: "beta", startTime: 10.1, endTime: 10.2 },
+				{ word: "gamma", startTime: 10.2, endTime: 10.3 },
+				{ word: "delta", startTime: 10.3, endTime: 10.4 },
+			],
+		});
+		const { filledTexts, renderer } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.3 });
+
+		const renderedText = filledTexts.join(" ");
+		expect(renderedText).toContain("gamma");
+		expect(renderedText).toContain("delta");
+		expect(renderedText).not.toContain("alpha");
+		expect(renderedText).not.toContain("beta");
+	});
+
+	test("rebalances a six-plus-one split into a two-word final page", async () => {
+		const node = createPagedCaptionNode({
+			id: "caption-window-widow-seven",
+			wordsOnScreen: 6,
+			captionWordTimings: [
+				{ word: "one", startTime: 10.0, endTime: 10.1 },
+				{ word: "two", startTime: 10.1, endTime: 10.2 },
+				{ word: "three", startTime: 10.2, endTime: 10.3 },
+				{ word: "four", startTime: 10.3, endTime: 10.4 },
+				{ word: "five", startTime: 10.4, endTime: 10.5 },
+				{ word: "six", startTime: 10.5, endTime: 10.6 },
+				{ word: "seven", startTime: 10.6, endTime: 10.7 },
+			],
+		});
+		const { filledTexts, renderer } = createFakeRenderer();
+
+		await node.render({ renderer, time: 10.6 });
+
+		const renderedText = filledTexts.join(" ");
+		expect(renderedText).toContain("six");
+		expect(renderedText).toContain("seven");
+		expect(renderedText).not.toContain("one");
+		expect(renderedText).not.toContain("five");
 	});
 
 	test("anchors captions into the active split viewport when linked video is split", async () => {

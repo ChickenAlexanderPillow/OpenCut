@@ -23,6 +23,11 @@ import { resolveElementTransformAtTime } from "@/lib/animation";
 import { resolveSafeAreaAnchoredPositionY } from "@/constants/safe-area-constants";
 import { toTimelineCaptionWordTimings } from "@/lib/captions/timing";
 import {
+	buildCaptionPages,
+	resolveCaptionPageForWordIndex,
+	resolveSentenceBoundedPageSize,
+} from "@/lib/captions/paging";
+import {
 	getVideoSplitScreenDividers,
 	getVideoSplitScreenViewports,
 	resolveVideoSplitScreenAtTime,
@@ -359,23 +364,6 @@ function getCachedCaptionTimingData({
 	captionTimingCacheByElementId.set(element.id, data);
 	evictOldestEntry(captionTimingCacheByElementId);
 	return data;
-}
-
-function resolveCaptionPageForWordIndex({
-	pages,
-	activeWordIndex,
-}: {
-	pages: Array<{ chunkStart: number; pageSize: number; content: string }>;
-	activeWordIndex: number;
-}): { chunkStart: number; pageSize: number; content: string } | null {
-	if (pages.length === 0) return null;
-	if (activeWordIndex < 0) return pages[0] ?? null;
-	for (const page of pages) {
-		if (activeWordIndex < page.chunkStart + page.pageSize) {
-			return page;
-		}
-	}
-	return pages[pages.length - 1] ?? null;
 }
 
 function clampWordCount(value: number): number {
@@ -796,7 +784,7 @@ export function getElementBounds({
 				return 1;
 			};
 
-			const pages =
+			const pagePlan =
 				cachedPagePlan?.signature === pagePlanSignature
 					? cachedPagePlan.pages
 					: (() => {
@@ -819,23 +807,30 @@ export function getElementBounds({
 								});
 								return nextPages;
 							}
-							let pageStart = 0;
-							while (pageStart < captionWords.length) {
-								const maxPageSize = Math.min(
-									cappedWordsOnScreen,
-									captionWords.length - pageStart,
-								);
-								const pageSize = getFitPageSize({
-									start: pageStart,
-									maxWords: maxPageSize,
-								});
+							const { pages } = buildCaptionPages({
+								totalWords: captionWords.length,
+								activeWordIndex: activeWordForWindow,
+								wordsOnScreen: cappedWordsOnScreen,
+								resolveMaxPageSize: ({ start, maxPageSize }) =>
+									resolveSentenceBoundedPageSize({
+										words: captionWords,
+										start,
+										maxPageSize,
+									}),
+								resolvePageSize: ({ start, maxWords }) =>
+									getFitPageSize({
+										start,
+										maxWords,
+									}),
+							});
+							for (const page of pages) {
 								const renderWords = captionWords.slice(
-									pageStart,
-									pageStart + pageSize,
+									page.chunkStart,
+									page.chunkStart + page.pageSize,
 								);
 								nextPages.push({
-									chunkStart: pageStart,
-									pageSize,
+									chunkStart: page.chunkStart,
+									pageSize: page.pageSize,
 									content: buildLinesFromWords({
 										words: renderWords,
 										maxLines: maxLinesOnScreen,
@@ -843,21 +838,24 @@ export function getElementBounds({
 										measure: (candidate) => ctx.measureText(candidate).width,
 									}).join("\n"),
 								});
-								pageStart += pageSize;
 							}
 							return nextPages;
 						})();
 			if (cachedPagePlan?.signature !== pagePlanSignature) {
 				captionPagePlanCacheByElementId.set(element.id, {
 					signature: pagePlanSignature,
-					pages,
+					pages: pagePlan,
 				});
 				evictOldestEntry(captionPagePlanCacheByElementId);
 			}
 			const activePage = resolveCaptionPageForWordIndex({
-				pages,
+				pages: pagePlan,
 				activeWordIndex: activeWordForWindow,
 			});
+			const activePageContent =
+				pagePlan.find(
+					(page) => page.chunkStart === activePage?.chunkStart,
+				)?.content ?? null;
 			const textLayoutSignature = [
 				pagePlanSignature,
 				activePage?.chunkStart ?? 0,
@@ -877,7 +875,7 @@ export function getElementBounds({
 					: [];
 			const renderContent =
 				renderWords.length > 0
-					? (activePage?.content ??
+					? (activePageContent ??
 						buildLinesFromWords({
 							words: renderWords,
 							maxLines: maxLinesOnScreen,
@@ -895,7 +893,7 @@ export function getElementBounds({
 					}).join("\n")
 				: renderContent;
 			const lines = wrappedContent.split("\n");
-			const lineMetrics = lines.map((line) => ctx.measureText(line));
+			const lineMetrics = lines.map((line: string) => ctx.measureText(line));
 			const block = measureTextBlock({
 				lineMetrics,
 				lineHeightPx,

@@ -9,6 +9,7 @@ import {
 	estimateTranscriptionWavBytes,
 	getOrCreateClipTranscriptForAsset,
 	PROJECT_MEDIA_TRANSCRIPT_LANGUAGE,
+	reconcileChunkSpeakerLabels,
 	resolveChunkWindowSeconds,
 	transcribeChunkWavBlobWithFallback,
 } from "@/lib/clips/transcript";
@@ -364,6 +365,92 @@ describe("dedupeChunkedTranscriptionWords", () => {
 		});
 
 		expect(result.map((word) => word.word)).toEqual(["to", "to"]);
+	});
+
+	test("preserves numeric transcript words returned as numbers", () => {
+		const result = dedupeChunkedTranscriptionWords({
+			words: [
+				{ word: 2026, start: 12.0, end: 12.4 },
+				{ word: "launch", start: 12.4, end: 12.8 },
+			] as unknown as Array<{
+				word: string;
+				start: number;
+				end: number;
+			}>,
+		});
+
+		expect(result.map((word) => word.word)).toEqual(["2026", "launch"]);
+	});
+});
+
+describe("reconcileChunkSpeakerLabels", () => {
+	test("maps flipped chunk-local speaker ids back onto earlier speakers", () => {
+		const result = reconcileChunkSpeakerLabels({
+			previous: {
+				segments: [
+					{
+						text: "Speaker one intro",
+						start: 298.9,
+						end: 300.4,
+						speakerId: "SPEAKER_00",
+					},
+					{
+						text: "Speaker two reply",
+						start: 300.4,
+						end: 302.2,
+						speakerId: "SPEAKER_01",
+					},
+				],
+				words: [
+					{ word: "I", start: 299.0, end: 299.2, speakerId: "SPEAKER_00" },
+					{ word: "have", start: 299.2, end: 299.5, speakerId: "SPEAKER_00" },
+					{ word: "2", start: 299.5, end: 299.7, speakerId: "SPEAKER_00" },
+					{ word: "questions", start: 299.7, end: 300.3, speakerId: "SPEAKER_00" },
+					{ word: "yes", start: 300.5, end: 300.8, speakerId: "SPEAKER_01" },
+				],
+			},
+			current: {
+				segments: [
+					{
+						text: "I have 2 questions",
+						start: 299.02,
+						end: 300.32,
+						speakerId: "SPEAKER_01",
+					},
+					{
+						text: "yes and later answer",
+						start: 300.5,
+						end: 303.8,
+						speakerId: "SPEAKER_00",
+					},
+				],
+				words: [
+					{ word: "I", start: 299.01, end: 299.2, speakerId: "SPEAKER_01" },
+					{ word: "have", start: 299.2, end: 299.5, speakerId: "SPEAKER_01" },
+					{ word: "2", start: 299.5, end: 299.68, speakerId: "SPEAKER_01" },
+					{
+						word: "questions",
+						start: 299.7,
+						end: 300.31,
+						speakerId: "SPEAKER_01",
+					},
+					{ word: "yes", start: 300.5, end: 300.81, speakerId: "SPEAKER_00" },
+					{
+						word: "later",
+						start: 302.9,
+						end: 303.2,
+						speakerId: "SPEAKER_00",
+					},
+				],
+			},
+		});
+
+		expect(result.words[0]?.speakerId).toBe("SPEAKER_00");
+		expect(result.words[2]?.word).toBe("2");
+		expect(result.words[2]?.speakerId).toBe("SPEAKER_00");
+		expect(result.words[4]?.speakerId).toBe("SPEAKER_01");
+		expect(result.segments[0]?.speakerId).toBe("SPEAKER_00");
+		expect(result.segments[1]?.speakerId).toBe("SPEAKER_01");
 	});
 });
 

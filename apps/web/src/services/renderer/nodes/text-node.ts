@@ -18,6 +18,10 @@ import {
 	wrapTextToWidth,
 } from "@/lib/text/layout";
 import { resolveSafeAreaAnchoredPositionY } from "@/constants/safe-area-constants";
+import {
+	buildCaptionPages,
+	resolveSentenceBoundedPageSize,
+} from "@/lib/captions/paging";
 import { toTimelineCaptionWordTimings } from "@/lib/captions/timing";
 import { MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS } from "@/lib/transcript-editor/constants";
 import {
@@ -463,12 +467,6 @@ function stringifyVisibleLineTokens(tokens: CaptionRenderToken[]): string {
 		.join(" ");
 }
 
-function isSentenceEndingWord(word: string): boolean {
-	const trimmed = word.trim();
-	if (!trimmed) return false;
-	return /[.!?]["')\]]*$/.test(trimmed);
-}
-
 type EffectiveCaptionVisibilityWindow = {
 	startTime: number;
 	contentEndTime: number;
@@ -492,25 +490,6 @@ function buildEffectiveCaptionVisibilityWindows({
 			),
 		};
 	});
-}
-
-function resolveSentenceBoundedPageSize({
-	words,
-	start,
-	maxPageSize,
-}: {
-	words: string[];
-	start: number;
-	maxPageSize: number;
-}): number {
-	if (maxPageSize <= 1) return Math.max(1, maxPageSize);
-	const endExclusive = Math.min(words.length, start + maxPageSize);
-	for (let i = start; i < endExclusive; i++) {
-		if (isSentenceEndingWord(words[i] ?? "")) {
-			return Math.max(1, i - start + 1);
-		}
-	}
-	return maxPageSize;
 }
 
 export type TextNodeParams = TextElement & {
@@ -1115,56 +1094,23 @@ export class TextNode extends BaseNode<TextNodeParams> {
 			return 1;
 		};
 
-		const getWindow = (): { chunkStart: number; pageSize: number } => {
-			if (!shouldLimitWordsOnScreen) {
-				return {
-					chunkStart: 0,
-					pageSize: captionWords.length > 0 ? captionWords.length : 0,
-				};
-			}
-
-			let pageStart = 0;
-			while (pageStart < captionWords.length) {
-				const unsnappedMaxPageSize = Math.min(
-					cappedWordsOnScreen,
-					captionWords.length - pageStart,
-				);
-				const maxPageSize = resolveSentenceBoundedPageSize({
+		const { activePage } = buildCaptionPages({
+			totalWords: captionWords.length,
+			activeWordIndex: activeWordForWindow,
+			wordsOnScreen: shouldLimitWordsOnScreen ? cappedWordsOnScreen : null,
+			resolveMaxPageSize: ({ start, maxPageSize }) =>
+				resolveSentenceBoundedPageSize({
 					words: captionWords.map((token) => token.word),
-					start: pageStart,
-					maxPageSize: unsnappedMaxPageSize,
-				});
-				const pageSize = getFitPageSize({
-					start: pageStart,
-					maxWords: maxPageSize,
-				});
-				if (activeWordForWindow < pageStart + pageSize) {
-					return { chunkStart: pageStart, pageSize };
-				}
-				pageStart += pageSize;
-			}
-
-			const fallbackStart = Math.max(
-				0,
-				captionWords.length - cappedWordsOnScreen,
-			);
-			return {
-				chunkStart: fallbackStart,
-				pageSize: getFitPageSize({
-					start: fallbackStart,
-					maxWords: resolveSentenceBoundedPageSize({
-						words: captionWords.map((token) => token.word),
-						start: fallbackStart,
-						maxPageSize: Math.min(
-							cappedWordsOnScreen,
-							captionWords.length - fallbackStart,
-						),
-					}),
+					start,
+					maxPageSize,
 				}),
-			};
-		};
-
-		const windowed = getWindow();
+			resolvePageSize: ({ start, maxWords }) =>
+				getFitPageSize({
+					start,
+					maxWords,
+				}),
+		});
+		const windowed = activePage ?? { chunkStart: 0, pageSize: 0 };
 		const renderWords: CaptionRenderToken[] =
 			captionWords.length > 0
 				? captionWords.slice(
