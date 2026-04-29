@@ -15,6 +15,7 @@ import { MIN_PLAYABLE_TRANSCRIPT_GAP_SECONDS } from "@/lib/transcript-editor/con
 import {
 	buildTranscriptGapId,
 	detectTranscriptFillerCandidates,
+	mapCompressedTimeToSourceTime,
 	mapSourceTimeToCompressedTime,
 } from "@/lib/transcript-editor/core";
 import { clampTranscriptWordBoundaryTime } from "@/lib/transcript-editor/timing";
@@ -152,32 +153,28 @@ function getCompressedTime(
 function mapLocalDisplayTimeToSourceTime({
 	displayTime,
 	localWords,
+	cuts,
 }: {
 	displayTime: number;
 	localWords: LocalWord[];
+	cuts: TranscriptEditCutRange[];
 }): number {
 	const firstWord = localWords[0]?.word ?? null;
 	const lastWord = localWords[localWords.length - 1]?.word ?? null;
 	if (!firstWord || !lastWord) return 0;
-
-	for (const item of localWords) {
-		if (displayTime > item.displayEndTime) continue;
-		const displayDuration = Math.max(
-			0.0001,
-			item.displayEndTime - item.displayStartTime,
-		);
-		const sourceDuration = Math.max(
-			0.0001,
-			item.word.endTime - item.word.startTime,
-		);
-		const ratio = Math.max(
-			0,
-			Math.min(1, (displayTime - item.displayStartTime) / displayDuration),
-		);
-		return item.word.startTime + ratio * sourceDuration;
-	}
-
-	return lastWord.endTime;
+	const firstCompressedStart = getCompressedTime(firstWord.startTime, cuts);
+	const lastCompressedEnd = getCompressedTime(lastWord.endTime, cuts);
+	const clampedDisplayTime = Math.max(
+		0,
+		Math.min(
+			Math.max(0, lastCompressedEnd - firstCompressedStart),
+			displayTime,
+		),
+	);
+	return mapCompressedTimeToSourceTime({
+		compressedTime: firstCompressedStart + clampedDisplayTime,
+		cuts,
+	});
 }
 
 function mapSourceTimeToLocalDisplayTime({
@@ -219,11 +216,13 @@ export function buildTranscriptWaveformBars({
 	localWords,
 	localWindow,
 	barCount,
+	cuts,
 }: {
 	envelope: WaveformEnvelope;
 	localWords: LocalWord[];
 	localWindow: { startTime: number; duration: number };
 	barCount: number;
+	cuts: TranscriptEditCutRange[];
 }): TranscriptWaveformBar[] {
 	if (
 		barCount <= 0 ||
@@ -242,10 +241,12 @@ export function buildTranscriptWaveformBars({
 		const sourceStartTime = mapLocalDisplayTimeToSourceTime({
 			displayTime: displayStartTime,
 			localWords,
+			cuts,
 		});
 		const sourceEndTime = mapLocalDisplayTimeToSourceTime({
 			displayTime: displayEndTime,
 			localWords,
+			cuts,
 		});
 		const { min, max } = getWaveformMinMaxInRange({
 			envelope,
@@ -435,6 +436,10 @@ export function TranscriptTimingView({
 		pointerId: number;
 		side: "left" | "right";
 		sourceTime: number;
+		localWindow: {
+			startTime: number;
+			duration: number;
+		};
 	} | null>(null);
 	const tokens = useMemo(() => buildTimingTokens(words), [words]);
 	const originalTokens = useMemo(
@@ -569,8 +574,7 @@ export function TranscriptTimingView({
 		[currentSourceTime, localWords],
 	);
 	const focusedAnchorTime = focusedLayoutItem?.displayStartTime ?? null;
-	const shouldFollowTimelinePlayback =
-		isPlaying && heldWordPreview === null;
+	const shouldFollowTimelinePlayback = isPlaying && heldWordPreview === null;
 
 	const localWindow = useMemo(() => {
 		if (localWords.length === 0) return null;
@@ -592,15 +596,22 @@ export function TranscriptTimingView({
 			endTime,
 			duration: Math.max(0.01, duration),
 		};
-	}, [currentDisplayTime, focusedAnchorTime, localWords, shouldFollowTimelinePlayback]);
+	}, [
+		currentDisplayTime,
+		focusedAnchorTime,
+		localWords,
+		shouldFollowTimelinePlayback,
+	]);
+	const interactionLocalWindow = dragState?.localWindow ?? localWindow;
 	const visibleWords = useMemo(() => {
-		if (!localWindow) return [];
+		if (!interactionLocalWindow) return [];
 		return localWords.filter(
 			(item) =>
-				item.displayEndTime >= localWindow.startTime &&
-				item.displayStartTime <= localWindow.endTime,
+				item.displayEndTime >= interactionLocalWindow.startTime &&
+				item.displayStartTime <=
+					interactionLocalWindow.startTime + interactionLocalWindow.duration,
 		);
-	}, [localWindow, localWords]);
+	}, [interactionLocalWindow, localWords]);
 
 	const leftBoundaryDisplayTime =
 		previewPreviousWord && previewFocusedWord
@@ -615,15 +626,17 @@ export function TranscriptTimingView({
 
 	const getPercent = useCallback(
 		(time: number) => {
-			if (!localWindow) return 0;
+			if (!interactionLocalWindow) return 0;
 			const rawPercent =
-				((time - localWindow.startTime) / localWindow.duration) * 100;
+				((time - interactionLocalWindow.startTime) /
+					interactionLocalWindow.duration) *
+				100;
 			return (
 				TRACK_EDGE_PADDING_PERCENT +
 				rawPercent * ((100 - TRACK_EDGE_PADDING_PERCENT * 2) / 100)
 			);
 		},
-		[localWindow],
+		[interactionLocalWindow],
 	);
 
 	const beginBoundaryDrag = useCallback(
@@ -635,6 +648,7 @@ export function TranscriptTimingView({
 			event.preventDefault();
 			event.stopPropagation();
 			onClearInteractionState();
+			if (!localWindow) return;
 			try {
 				event.currentTarget.setPointerCapture(event.pointerId);
 			} catch {}
@@ -642,15 +656,19 @@ export function TranscriptTimingView({
 				pointerId: event.pointerId,
 				side,
 				sourceTime,
+				localWindow: {
+					startTime: localWindow.startTime,
+					duration: localWindow.duration,
+				},
 			});
 		},
-		[onClearInteractionState],
+		[localWindow, onClearInteractionState],
 	);
 
 	const updateBoundaryDrag = useCallback(
 		(pointerId: number, clientX: number) => {
 			const strip = stripRef.current;
-			if (!strip || !localWindow) return;
+			if (!strip) return;
 			setDragState((current) => {
 				if (!current || current.pointerId !== pointerId) return current;
 				const rect = strip.getBoundingClientRect();
@@ -668,10 +686,12 @@ export function TranscriptTimingView({
 								Math.min(1, (ratio - edgeRatio) / (1 - edgeRatio * 2)),
 							);
 				const displayTime =
-					localWindow.startTime + normalizedRatio * localWindow.duration;
+					current.localWindow.startTime +
+					normalizedRatio * current.localWindow.duration;
 				let sourceTime = mapLocalDisplayTimeToSourceTime({
 					displayTime,
 					localWords,
+					cuts,
 				});
 				const originalBoundaryTime =
 					current.side === "left"
@@ -690,7 +710,7 @@ export function TranscriptTimingView({
 				};
 			});
 		},
-		[localWindow, localWords, originalFocusedWord],
+		[cuts, localWords, originalFocusedWord],
 	);
 
 	const commitBoundaryDrag = useCallback(
@@ -776,14 +796,15 @@ export function TranscriptTimingView({
 	]);
 
 	const waveformBars = useMemo(() => {
-		if (!waveformEnvelope || !localWindow) return [];
+		if (!waveformEnvelope || !interactionLocalWindow) return [];
 		return buildTranscriptWaveformBars({
 			envelope: waveformEnvelope,
 			localWords,
-			localWindow,
+			localWindow: interactionLocalWindow,
 			barCount: 160,
+			cuts,
 		});
-	}, [localWindow, localWords, waveformEnvelope]);
+	}, [cuts, interactionLocalWindow, localWords, waveformEnvelope]);
 
 	useEffect(() => {
 		const canvas = waveformCanvasRef.current;
@@ -827,7 +848,8 @@ export function TranscriptTimingView({
 		}
 	}, [waveformBars]);
 
-	if (!focusedWord || !previewFocusedWord || !localWindow) return null;
+	if (!focusedWord || !previewFocusedWord || !interactionLocalWindow)
+		return null;
 
 	const focusedTone = focusedWord.speakerId
 		? speakerToneById.get(focusedWord.speakerId)
@@ -1075,10 +1097,9 @@ export function TranscriptTimingView({
 												? "transparent"
 												: "rgba(39,39,42,0.32)",
 										color: tone?.mutedText ?? undefined,
-										boxShadow:
-											emphasizeWordBoundary
-												? `0 0 0 1px ${tone?.accent ?? "rgba(228,228,231,0.95)"}`
-												: undefined,
+										boxShadow: emphasizeWordBoundary
+											? `0 0 0 1px ${tone?.accent ?? "rgba(228,228,231,0.95)"}`
+											: undefined,
 									}}
 									title={`${timingWord.text} ${timingWord.startTime.toFixed(2)}s-${timingWord.endTime.toFixed(2)}s`}
 									onClick={() => onSeekWord(timingWord.firstWord)}

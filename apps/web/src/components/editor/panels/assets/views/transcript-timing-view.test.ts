@@ -1,7 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-	buildTranscriptWaveformBars,
-} from "@/components/editor/panels/assets/views/transcript-timing-view";
+import { buildTranscriptWaveformBars } from "@/components/editor/panels/assets/views/transcript-timing-view";
 import { WAVEFORM_ENVELOPE_VERSION } from "@/lib/media/waveform-envelope";
 
 describe("buildTranscriptWaveformBars", () => {
@@ -10,7 +8,7 @@ describe("buildTranscriptWaveformBars", () => {
 		sourceDurationSeconds: 1,
 		bucketsPerSecond: 10,
 		peaks: Array.from({ length: 20 }, (_, index) =>
-			index % 2 === 0 ? -((index / 2) + 1) / 10 : ((index + 1) / 2) / 10,
+			index % 2 === 0 ? -(index / 2 + 1) / 10 : (index + 1) / 2 / 10,
 		),
 	} as const;
 
@@ -51,6 +49,7 @@ describe("buildTranscriptWaveformBars", () => {
 			localWords,
 			localWindow: { startTime: 0, duration: 0.8 },
 			barCount: 2,
+			cuts: [],
 		});
 
 		expect(bars).toEqual([
@@ -96,6 +95,7 @@ describe("buildTranscriptWaveformBars", () => {
 			localWords: previewWords,
 			localWindow: { startTime: 0, duration: 0.8 },
 			barCount: 2,
+			cuts: [],
 		});
 
 		expect(bars).toEqual([

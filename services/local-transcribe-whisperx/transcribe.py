@@ -887,7 +887,7 @@ class LocalWhisperXEngine:
 							if not speaker_id or start is None or end is None:
 								continue
 							start_f = max(0.0, float(start))
-							end_f = max(start_f + 0.01, float(end))
+							end_f = max(start_f + MIN_WORD_DURATION_SECONDS, float(end))
 							speaker_segments.append(
 								{
 									"text": text,
